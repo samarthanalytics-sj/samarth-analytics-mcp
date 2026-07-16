@@ -49,6 +49,7 @@ import type {
 import { suggestionToGroup, suggestionsToTemplateCsv, suggestionsToInstallRunbookMarkdown, installPlanNeedsAction, installPlanProgress, dedupeViewsByGtmName, TEMPLATE_HEADERS, applyTagEdit, TAG_TYPE_OPTIONS, STANDARD_TRIGGER_VARIABLES, CONDITION_LABELS, type TagEdit, type TriggerWhen, type InstallProgress } from '../../shared/tag-template';
 import { findMergeGroups, mergeGroup, mergeLabel, type MergeGroup } from '../../shared/tag-merge';
 import { parseCsvUrls, parseCsvUrlStats, CSV_URL_CAP } from '../../shared/csv-urls';
+import { MEMORY_KINDS, type Memory, type MemoryKind } from '../../shared/chat-memory';
 import { resolveChatInput, slashMenuMatches, type SlashCommand } from '../../shared/chat-commands';
 import { execSummaryHtml } from '../../shared/ga4-exec-html';
 import { stripDuplicateCharts } from '../../shared/ga4-visuals-html';
@@ -8441,6 +8442,118 @@ function NetworkLocationInline({ refreshKey }: { refreshKey?: unknown }): JSX.El
 
 /* ─────────────────────────── Settings ─────────────────────────── */
 
+/** Settings → Memory: the "remember what I told you" notes for the ACTIVE account. Add facts/preferences/
+ *  rules the chat then injects into its system prompt each turn. Secrets are stripped in the main process. */
+function MemoryCard({ active, onError }: { active: AccountView | undefined; onError: (m: string) => void }): JSX.Element {
+  const [items, setItems] = useState<Memory[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [text, setText] = useState('');
+  const [kind, setKind] = useState<MemoryKind>('fact');
+  const [scopeKind, setScopeKind] = useState<'account' | 'client'>('account');
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const gtm = active?.gtmContext;
+  const ga4 = active?.ga4Context;
+  const clientLabel = gtm?.containerId ? (gtm.containerName ?? gtm.containerId) : ga4?.property ? (ga4.propertyName ?? ga4.property) : '';
+  const canClientScope = Boolean(gtm?.containerId || ga4?.property);
+
+  function load(): void {
+    if (!active?.id) { setItems([]); return; }
+    setLoading(true);
+    window.desktop.memory.list().then(setItems).catch((e) => onError(e instanceof Error ? e.message : String(e))).finally(() => setLoading(false));
+  }
+  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [active?.id]);
+  useEffect(() => { if (!canClientScope) setScopeKind('account'); }, [canClientScope]);
+
+  async function add(): Promise<void> {
+    const t = text.trim();
+    if (!t || busy) return;
+    setBusy(true); setNote('');
+    try {
+      const scope = scopeKind === 'client'
+        ? (gtm?.containerId
+            ? { containerId: gtm.containerId, ...(gtm.containerName ? { label: gtm.containerName } : {}) }
+            : { property: ga4!.property!, ...(ga4?.propertyName ? { label: ga4.propertyName } : {}) })
+        : {};
+      const res = await window.desktop.memory.add({ kind, text: t, scope, source: 'manual' });
+      setText('');
+      setNote(res.redacted ? 'Saved. A secret was detected and removed before storing.' : res.deduped ? 'Already remembered (refreshed).' : 'Saved.');
+      load();
+    } catch (e) { onError(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(false); }
+  }
+
+  async function patch(id: string, p: { pinned?: boolean; enabled?: boolean }): Promise<void> {
+    try { await window.desktop.memory.update(id, p); load(); } catch (e) { onError(e instanceof Error ? e.message : String(e)); }
+  }
+  async function del(id: string): Promise<void> {
+    try { await window.desktop.memory.remove(id); load(); } catch (e) { onError(e instanceof Error ? e.message : String(e)); }
+  }
+
+  const badge: React.CSSProperties = { fontSize: 10, fontWeight: 700, padding: '1px 7px', borderRadius: 999, background: 'var(--surface-2)', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.3 };
+  const iconBtn: React.CSSProperties = { background: 'transparent', border: '1px solid var(--border-2)', borderRadius: 6, padding: '2px 7px', fontSize: 12, cursor: 'pointer', color: 'var(--text-dim)', whiteSpace: 'nowrap' };
+  const scopeText = (m: Memory): string =>
+    m.scope.containerId ? `container ${m.scope.label ?? m.scope.containerId}`
+      : m.scope.property ? `property ${m.scope.label ?? m.scope.property}`
+        : 'account-wide';
+
+  return (
+    <section style={styles.card}>
+      <h2 style={styles.h2}>Memory <span style={{ ...styles.muted, fontSize: 12, fontWeight: 400 }}>({items.length})</span></h2>
+      <p style={styles.settingsSub}>
+        Notes the assistant remembers about this account and uses in Chat. <b>Rules</b> and <b>preferences</b> steer its behavior; <b>facts</b> are context it verifies against live data. Secrets are stripped automatically and never stored.
+      </p>
+      {!active ? (
+        <p style={styles.muted}>Sign in to an account to save memories.</p>
+      ) : (
+        <>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8 }}>
+            <textarea
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              placeholder="e.g. Always use snake_case event names · This client's purchase fires on order_completed"
+              style={{ ...styles.input, width: '100%', minHeight: 46, resize: 'vertical' }}
+              maxLength={500}
+            />
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+              <select value={kind} onChange={(e) => setKind(e.target.value as MemoryKind)} style={{ ...styles.input, padding: '5px 8px' }}>
+                {MEMORY_KINDS.map((k) => <option key={k} value={k}>{k}</option>)}
+              </select>
+              <select value={scopeKind} onChange={(e) => setScopeKind(e.target.value as 'account' | 'client')} style={{ ...styles.input, padding: '5px 8px' }}>
+                <option value="account">All of this account</option>
+                {canClientScope && <option value="client">Only {clientLabel}</option>}
+              </select>
+              <button style={{ ...styles.primaryBtn, ...(busy || !text.trim() ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }} disabled={busy || !text.trim()} onClick={() => void add()}>Remember</button>
+              {note && <span style={{ ...styles.muted, fontSize: 12 }}>{note}</span>}
+            </div>
+          </div>
+          <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {loading ? (
+              <span style={styles.muted}>Loading…</span>
+            ) : items.length === 0 ? (
+              <span style={{ ...styles.muted, fontSize: 13 }}>No memories yet. Add one above, or just tell the assistant to remember something.</span>
+            ) : items.map((m) => (
+              <div key={m.id} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', padding: '7px 9px', border: '1px solid var(--border)', borderRadius: 8, background: 'var(--surface)', opacity: m.enabled ? 1 : 0.55 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, color: 'var(--text)', lineHeight: 1.4 }}>{m.pinned ? '★ ' : ''}{m.text}</div>
+                  <div style={{ display: 'flex', gap: 6, marginTop: 3, flexWrap: 'wrap', alignItems: 'center' }}>
+                    <span style={badge}>{m.kind}</span>
+                    <span style={{ ...styles.muted, fontSize: 11 }}>{scopeText(m)}</span>
+                  </div>
+                </div>
+                <button title={m.pinned ? 'Unpin' : 'Pin (rank first)'} style={iconBtn} onClick={() => void patch(m.id, { pinned: !m.pinned })}>{m.pinned ? '★' : '☆'}</button>
+                <button title={m.enabled ? 'Mute (keep but stop using)' : 'Enable'} style={iconBtn} onClick={() => void patch(m.id, { enabled: !m.enabled })}>{m.enabled ? 'On' : 'Muted'}</button>
+                <button title="Delete" style={{ ...iconBtn, color: 'var(--c-red)' }} onClick={() => void del(m.id)}>✕</button>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
 function SettingsView({
   active,
   accounts,
@@ -8500,6 +8613,8 @@ function SettingsView({
       </section>
 
       <NetworkLocationCard />
+
+      <MemoryCard active={active} onError={onError} />
 
       <section style={styles.card}>
         <h2 style={styles.h2}>Google sign-in (OAuth client)</h2>

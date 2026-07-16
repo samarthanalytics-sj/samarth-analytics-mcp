@@ -6,6 +6,7 @@ import { SafeStorageCryptor } from './storage/safe-storage-cryptor';
 import { ProviderKeyStore } from './storage/provider-keys';
 import { AuditHistoryStore } from './storage/audit-history';
 import { ManifestStore } from './storage/manifest-store';
+import { MemoryStore } from './storage/memory-store';
 import { RegistryService } from './services/registry-service';
 import { registerRegistryIpc } from './ipc/registry-ipc';
 import { registerProvidersIpc } from './ipc/providers-ipc';
@@ -18,6 +19,7 @@ import { registerDataIpc } from './ipc/data-ipc';
 import { ChatService } from './services/chat-service';
 import { buildToolRegistry } from './tools/registry';
 import { registerChatIpc } from './ipc/chat-ipc';
+import { registerMemoryIpc } from './ipc/memory-ipc';
 import { MonitorService } from './services/monitor-service';
 import { registerMonitorIpc } from './ipc/monitor-ipc';
 import { registerSuggestionsIpc } from './suggestions/suggestion-ipc';
@@ -157,6 +159,7 @@ app.whenReady().then(() => {
   const dataService = new GoogleDataService(registry, clientManager);
   const auditHistory = new AuditHistoryStore(join(dataDir, 'audit-history.json'));
   const manifests = new ManifestStore(join(dataDir, 'manifests.json'));
+  const memory = new MemoryStore(join(dataDir, 'memory-store.json'));
   // When a chat tool switches the active GTM workspace/container, tell every window to
   // re-fetch accounts so the GTM-bar dropdown reflects the new context.
   const broadcastAccountsChanged = (): void => {
@@ -164,7 +167,7 @@ app.whenReady().then(() => {
       if (!w.isDestroyed()) w.webContents.send('accounts:changed');
     }
   };
-  const chatService = new ChatService(registry, dataService, providerKeys, auditHistory, broadcastAccountsChanged, manifests);
+  const chatService = new ChatService(registry, dataService, providerKeys, auditHistory, broadcastAccountsChanged, manifests, memory);
 
   // Startup diagnostic — proves THIS running process loaded the current build. If the
   // GA4-edit tools are missing here, the main process is stale (electron-vite did not
@@ -220,6 +223,7 @@ app.whenReady().then(() => {
   registerGoogleIpc(googleAuth);
   registerDataIpc(dataService);
   registerChatIpc(chatService);
+  registerMemoryIpc(memory, registry);
   registerMonitorIpc(monitor);
   registerSuggestionsIpc(dataService);
   registerGtmAuditIpc(dataService);

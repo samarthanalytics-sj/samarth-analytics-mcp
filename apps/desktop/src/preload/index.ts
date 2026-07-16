@@ -58,6 +58,7 @@ import type {
   DetectedElementView,
   SuggestionScreenshotResult,
 } from '../shared/ipc';
+import type { Memory, MemoryInput, MemoryPatch, AddMemoryResult } from '../shared/chat-memory';
 
 // Tracks the in-flight streaming chat so llm.stop() can abort the right one.
 let activeChatRequestId: string | null = null;
@@ -174,6 +175,16 @@ const api = {
     // (possibly edited) args to apply, or null to decline.
     confirm: (confirmId: string, result: Record<string, unknown> | null): Promise<void> =>
       ipcRenderer.invoke('llm:confirm:respond', confirmId, result),
+  },
+
+  // Chat memory ("remember what I told you"): CRUD over the ACTIVE account's saved notes, which the chat
+  // injects into its system prompt each turn. Text is secret-redacted in the main process before storage.
+  memory: {
+    list: (): Promise<Memory[]> => ipcRenderer.invoke('memory:list'),
+    add: (input: MemoryInput): Promise<AddMemoryResult> => ipcRenderer.invoke('memory:add', input),
+    update: (id: string, patch: MemoryPatch): Promise<Memory | null> => ipcRenderer.invoke('memory:update', id, patch),
+    remove: (id: string): Promise<boolean> => ipcRenderer.invoke('memory:remove', id),
+    clear: (): Promise<number> => ipcRenderer.invoke('memory:clear'),
   },
 
   // Tag suggestions ("measurement plan from a URL"): scan a site (or paste a
