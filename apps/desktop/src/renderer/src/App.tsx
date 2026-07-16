@@ -1133,8 +1133,8 @@ function ChatView({
         </div>
       </div>
 
-      {product === 'gtm' && active && <GtmContextBar active={active} refresh={refresh} onError={onError} />}
-      {product === 'ga4' && active && <Ga4ContextBar active={active} refresh={refresh} onError={onError} />}
+      {product === 'gtm' && active && <GtmContextBar key={active.id} active={active} refresh={refresh} onError={onError} />}
+      {product === 'ga4' && active && <Ga4ContextBar key={active.id} active={active} refresh={refresh} onError={onError} />}
 
       <div style={styles.chatLog}>
         {messages.length === 0 && (
@@ -1283,7 +1283,7 @@ interface SearchOption { value: string; label: string; hint?: string }
  *  Purely presentational: value/onChange are controlled by the caller exactly like the <select> it
  *  replaces, so the existing pick* handlers are unchanged. */
 function SearchableSelect({
-  value, options, onChange, placeholder, disabled, chosen, searchPlaceholder, minWidth = 200,
+  value, options, onChange, placeholder, disabled, chosen, searchPlaceholder, minWidth = 200, emptyLabel,
 }: {
   value: string;
   options: SearchOption[];
@@ -1293,6 +1293,9 @@ function SearchableSelect({
   chosen?: boolean;
   searchPlaceholder?: string;
   minWidth?: number;
+  /** Shown when there are NO options at all (not a search miss) — e.g. "No containers for this account".
+   *  Keeps "No matches" for a non-empty search that filtered everything out. */
+  emptyLabel?: string;
 }): JSX.Element {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -1381,7 +1384,7 @@ function SearchableSelect({
           </div>
           <div ref={listRef} style={{ maxHeight: 280, overflowY: 'auto' }}>
             {filtered.length === 0 ? (
-              <div style={{ padding: '8px 10px', fontSize: 12.5, color: 'var(--text-muted)' }}>No matches</div>
+              <div style={{ padding: '8px 10px', fontSize: 12.5, color: 'var(--text-muted)' }}>{q ? 'No matches' : (emptyLabel ?? 'No matches')}</div>
             ) : (
               filtered.map((o, i) => (
                 <div
@@ -1439,11 +1442,15 @@ function GtmContextBar({
     try {
       const list = await window.desktop.data.listGtmContainers(accountId);
       setContainers(list);
-      // A silent empty dropdown looks broken - tell the user WHY nothing populated.
+      // A silent empty dropdown looks broken - tell the user WHY nothing populated, and DON'T mark the
+      // account as "loaded" so re-opening the picker (or the Retry link) re-fetches instead of staying blank.
       if (list.length === 0) {
-        onError('No GTM containers found for this account. This Google sign-in may not have access to its containers - check you picked the right account, or re-connect Google in Settings.');
+        loadedForAccount.current = '';
+        onError('No GTM containers found for this account. This Google sign-in may not have access to its containers - check you picked the right account, use ↻ Retry, or re-connect Google in Settings.');
       }
     } catch (e) {
+      // A failed fetch must be retryable — clear the once-per-account guard so it isn't stuck empty.
+      loadedForAccount.current = '';
       onError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading('');
@@ -1489,6 +1496,14 @@ function GtmContextBar({
     setContainers([]);
     setWorkspaces([]);
     // containers load via the effect above - the single fetch path (also covers a pre-selected account)
+  }
+
+  /** Re-fetch containers for the current account — used by the "Retry" link when the list came back empty
+   *  or a fetch failed. Clears the once-per-account guard so loadContainers runs again right away. */
+  function retryContainers(): void {
+    if (!sel.accountId) return;
+    loadedForAccount.current = '';
+    void loadContainers(sel.accountId);
   }
 
   function pickContainer(containerId: string): void {
@@ -1551,7 +1566,14 @@ function GtmContextBar({
         />
       </div>
       <div style={styles.ctxField}>
-        <span style={styles.ctxFieldLabel}>Container</span>
+        <span style={styles.ctxFieldLabel}>
+          Container
+          {/* When the list came back empty (no access, wrong account, or a transient fetch error) give a
+              one-click way to re-fetch instead of leaving the user stuck on an empty dropdown. */}
+          {sel.accountId && loading !== 'containers' && containers.length === 0 && (
+            <button style={{ ...styles.linkBtn, marginLeft: 8, fontSize: 11 }} onClick={retryContainers} title="Re-fetch containers for this account">↻ Retry</button>
+          )}
+        </span>
         <SearchableSelect
           value={sel.containerId ?? ''}
           chosen={!!sel.containerId}
@@ -1559,6 +1581,7 @@ function GtmContextBar({
           onChange={(v) => void pickContainer(v)}
           placeholder={loading === 'containers' ? 'Loading…' : !sel.accountId ? 'Pick an account first' : 'Select container…'}
           searchPlaceholder="Search by name or GTM-ID…"
+          emptyLabel={sel.accountId ? 'No containers for this account — check Google access or use ↻ Retry.' : undefined}
           options={containers.map((c) => ({ value: c.containerId, label: c.name, ...(c.publicId ? { hint: c.publicId } : {}) }))}
         />
       </div>
@@ -2414,7 +2437,7 @@ function GtmToolsView({
   return (
     <div style={styles.gtmWorkspace}>
       {active ? (
-        <GtmContextBar active={active} refresh={refresh} onError={onError} />
+        <GtmContextBar key={active.id} active={active} refresh={refresh} onError={onError} />
       ) : (
         <div style={{ ...styles.sideWarn, margin: '12px 20px' }}>Connect a Google account to choose a GTM container & workspace.</div>
       )}
