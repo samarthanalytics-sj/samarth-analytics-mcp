@@ -1156,6 +1156,25 @@ export function buildLookupTableVariable(
   return { name, type: 'smm', parameter };
 }
 
+/** A "Google Tag: Event Settings" variable (type "gtes"): a REUSABLE event-parameter table that
+ *  GA4 event tags / Google tags reference (their eventSettingsVariable field), instead of hand-
+ *  rolling a Custom JavaScript object. Rows land in `eventSettingsTable` as list-of-maps keyed
+ *  `parameter`/`parameterValue` - the SAME corpus-validated shape the gaawe tag builder writes
+ *  inline (5,127 of 8,148 real GA4 tags; the name/value list shape is silently ignored). PURE. */
+export function buildGoogleTagEventSettingsVariable(name: string, rows: Array<{ key: string; value: string }>): GtmVariableResource {
+  return {
+    name,
+    type: 'gtes',
+    parameter: [
+      {
+        type: 'list',
+        key: 'eventSettingsTable',
+        list: rows.map((r) => ({ type: 'map', map: [tpl('parameter', r.key), tpl('parameterValue', r.value)] })),
+      },
+    ],
+  };
+}
+
 /** A RegEx Table variable (type "remm") mapping a regex-matched input to output values. Corpus shape:
  *  setDefaultValue, input, fullMatch, replaceAfterMatch, ignoreCase [+ defaultValue], map. Defaults to
  *  partial match + ignoreCase (the corpus norm, 72/97 and 89/97) — use when many URLs under one

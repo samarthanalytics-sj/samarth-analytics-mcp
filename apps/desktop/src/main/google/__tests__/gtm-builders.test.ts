@@ -90,6 +90,7 @@ import {
   planTriggerRetarget,
 } from '../gtm-builders';
 import type { AuditTag as TAuditTag, ContainerSnapshot as TContainerSnapshot, ServerContainerSnapshot as TServerContainerSnapshot } from '../gtm-builders';
+import { buildGoogleTagEventSettingsVariable } from '../gtm-builders';
 import { classifyPixel } from '../pixel-signatures';
 
 let passed = 0;
@@ -3294,6 +3295,23 @@ test('house style: audit finding text never carries em/en dashes (web + server e
     const visible = JSON.stringify([r.findings.map((f) => [f.message, f.recommendation]), r.boundary, r.runtimeRequired]);
     assert.ok(!/[\u2014\u2013]/.test(visible), 'em/en dash leaked into audit output: ' + (visible.match(/.{0,60}[\u2014\u2013].{0,60}/) ?? [''])[0]);
   }
+});
+
+
+test('buildGoogleTagEventSettingsVariable: gtes eventSettingsTable keyed parameter/parameterValue', () => {
+  const v = buildGoogleTagEventSettingsVariable('Click Variable', [
+    { key: 'click_text', value: '{{Click Text}}' },
+    { key: 'previous_page', value: '{{Referrer}}' },
+  ]);
+  assert.equal(v.type, 'gtes');
+  const table = (v.parameter as Array<{ key?: string; type?: string; list?: Array<{ type?: string; map?: Array<{ type?: string; key?: string; value?: string }> }> }>).find((x) => x.key === 'eventSettingsTable')!;
+  assert.equal(table.type, 'list');
+  assert.equal(table.list!.length, 2);
+  assert.equal(table.list![0].type, 'map');
+  assert.deepEqual(table.list![1].map, [
+    { type: 'template', key: 'parameter', value: 'previous_page' },
+    { type: 'template', key: 'parameterValue', value: '{{Referrer}}' },
+  ]);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

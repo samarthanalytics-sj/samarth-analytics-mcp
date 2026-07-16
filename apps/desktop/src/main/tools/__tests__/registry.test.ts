@@ -1465,6 +1465,24 @@ async function main(): Promise<void> {
     await assert.rejects(() => reg.execute('create_gtm_variable_typed', { accountId: '1', containerId: '2', workspaceId: '3', kind: 'lookup_table', name: 'X' }), /requires input/);
   });
 
+  await test('create_gtm_variable_typed: google_tag_event_settings builds a gtes parameter table (never Custom JS)', async () => {
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data, approveAsIs);
+    const v = JSON.parse(await reg.execute('create_gtm_variable_typed', {
+      accountId: '1', containerId: '2', workspaceId: '3', kind: 'google_tag_event_settings', name: 'Click Variable',
+      rows: [
+        { key: 'click_text', value: '{{Click Text}}' },
+        { key: 'click_url', value: '{{Click URL}}' },
+        { key: 'page_url', value: '{{Page URL}}' },
+        { key: 'previous_page', value: '{{Referrer}}' },
+      ],
+    }));
+    assert.equal(v.type, 'gtes');
+    // The exact eventSettingsTable shape (parameter/parameterValue maps) is pinned in gtm-builders.test.ts.
+    assert.ok(fd.calls.some((c) => c.startsWith('createVar:1:2:3:gtes:Click Variable')), 'created the gtes variable');
+    await assert.rejects(() => reg.execute('create_gtm_variable_typed', { accountId: '1', containerId: '2', workspaceId: '3', kind: 'google_tag_event_settings', name: 'X' }), /requires rows/);
+  });
+
   await test('create_gtm_variable_typed builds a Custom JS variable', async () => {
     const fd = fakeData();
     const reg = buildToolRegistry(fd.data, approveAsIs);
