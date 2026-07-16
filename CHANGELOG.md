@@ -1,3 +1,13 @@
+## [1.343.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.342.0...v1.343.0) (2026-07-16)
+
+### Features
+
+* **desktop:** design-system refresh - semantic tokens, elevation, WCAG AA palettes, focus rings ([#592](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/592)) ([5b60dd8](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/5b60dd8adee29980630a6a8a9de706922b5e6f32)), closes [#93c5fd](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/93c5fd)
+
+### Bug Fixes
+
+* **desktop:** repair model-authored GTM trigger types and custom-event filters on create ([75b0a49](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/75b0a49ea5c3be965096e207861391188556bfa7))
+
 ## [1.342.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.341.1...v1.342.0) (2026-07-16)
 
 ### Features
