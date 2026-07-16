@@ -1,3 +1,9 @@
+## [1.346.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.345.0...v1.346.0) (2026-07-16)
+
+### Features
+
+* **desktop:** attach files to the chat - the model reads pdf/xlsx/csv/txt docs ([#595](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/595)) ([564ef3c](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/564ef3cc019b40340e0082f1145e1931fa6a4d25))
+
 ## [1.345.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.344.0...v1.345.0) (2026-07-16)
 
 ### Features
