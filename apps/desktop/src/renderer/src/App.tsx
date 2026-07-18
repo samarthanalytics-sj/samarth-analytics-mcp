@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ThemeToggle, useTheme } from './ThemeToggle';
 import { ShortcutsOverlay, EmptyState } from './ui';
 import type { AppInfo } from '../../preload';
@@ -31,6 +31,7 @@ import type {
   ServerDocView,
   LlmProvider,
   NetworkLocationView,
+  NetworkTestResultView,
   NetworkConnectionType,
   ProviderStatus,
   ScanProgressView,
@@ -8594,41 +8595,39 @@ function useNetworkLocation(refreshKey?: unknown): { loc: NetworkLocationView | 
   return { loc, loading, refresh: () => load(true) };
 }
 
-// Full detail rows for the Settings card.
-function NetworkLocationDetail({ loc, loading }: { loc: NetworkLocationView | null; loading: boolean }): JSX.Element {
-  if (!loc) return <p style={styles.muted}>{loading ? 'Checking your network location…' : 'Location not checked yet.'}</p>;
-  const t = loc.connectionType;
+// A small theme-aware switch (role=switch) for boolean settings - checkbox semantics, toggle look.
+function SettingSwitch({ on, onChange, label }: { on: boolean; onChange: (v: boolean) => void; label: string }): JSX.Element {
   return (
-    <>
-      <div style={styles.kv}><span>Public IP</span><b style={{ fontFamily: 'monospace' }}>{loc.ip ?? '-'}</b></div>
-      <div style={styles.kv}><span>Country</span><b>{loc.country ? `${flagEmoji(loc.countryCode)} ${loc.country}` : '-'}</b></div>
-      <div style={styles.kv}><span>Region / State</span><b>{loc.region ?? '-'}</b></div>
-      <div style={styles.kv}><span>City</span><b>{loc.city ?? '-'}</b></div>
-      <div style={styles.kv}><span>Connection</span><b style={{ color: connTypeColor(t) }}>{connTypeLabel(t)}</b></div>
-      <div style={styles.kv}><span>Provider</span><b>{loc.provider ?? (t === 'vpn' ? 'VPN (unidentified)' : '-')}</b></div>
-      {loc.org && (
-        <div style={styles.kv}>
-          <span>Network (ISP / org)</span>
-          <b style={{ fontWeight: 500, color: 'var(--text-dim)', textAlign: 'right' }}>{loc.org}{loc.asn ? ` · ${loc.asn}` : ''}</b>
-        </div>
-      )}
-      <div style={{ ...styles.kv, borderBottom: 'none' }}>
-        <span>Status</span>
-        <b style={{ color: loc.status === 'connected' ? 'var(--c-green)' : loc.status === 'offline' ? 'var(--c-amber)' : 'var(--c-red)' }}>
-          {loc.status === 'connected' ? '● Connected' : loc.status === 'offline' ? '○ Offline' : '✗ Error'}
-        </b>
-      </div>
-      {loc.detail && <p style={{ ...styles.settingsSub, color: 'var(--c-amber)', marginTop: 6 }}>{loc.detail}</p>}
-      {loc.status === 'connected' && loc.detectedVia.length > 0 && (
-        <p style={{ ...styles.settingsSub, marginTop: 6, opacity: 0.8 }}>
-          Detected via {loc.detectedVia.join(' + ')}{loc.confidence !== 'none' ? ` (${loc.confidence} confidence)` : ''}.
-        </p>
-      )}
-    </>
+    <button
+      role="switch"
+      aria-checked={on}
+      aria-label={label}
+      onClick={() => onChange(!on)}
+      style={{
+        width: 38, height: 20, borderRadius: 999, position: 'relative', padding: 0, flexShrink: 0,
+        border: `1px solid ${on ? 'var(--primary)' : 'var(--border-2)'}`,
+        background: on ? 'var(--primary)' : 'var(--surface-3)',
+        transition: 'background 0.15s ease, border-color 0.15s ease',
+        cursor: 'pointer',
+      }}
+    >
+      <span style={{ position: 'absolute', top: 2, left: on ? 19 : 2, width: 14, height: 14, borderRadius: 999, background: '#fff', transition: 'left 0.15s ease', boxShadow: 'var(--shadow-1)' }} />
+    </button>
   );
 }
 
-// The Settings → Network & Location card.
+// One labeled row of the Network Status grid.
+function NetKv({ label, children, mono }: { label: string; children: ReactNode; mono?: boolean }): JSX.Element {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, padding: '7px 0', borderBottom: '1px solid var(--border)', fontSize: 13 }}>
+      <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>{label}</span>
+      <b style={{ textAlign: 'right', fontWeight: 600, ...(mono ? { fontFamily: 'var(--font-mono)', fontWeight: 500 } : {}) }}>{children}</b>
+    </div>
+  );
+}
+
+// The Settings → Network & Location section: a Network Status card (status badge, two-column
+// facts grid, Refresh + Run Test) and an Auto Detect card with a switch.
 function NetworkLocationCard(): JSX.Element {
   const { loc, loading, refresh } = useNetworkLocation();
   // Auto-detect preference (persisted in the main process). When on, the main process watches for network
@@ -8640,30 +8639,117 @@ function NetworkLocationCard(): JSX.Element {
     void window.desktop.network.setAutoDetect(v);
     if (v) void refresh(); // give an immediate reading when auto-detect is switched on
   };
+  // "Run Test": timed reachability of the Google endpoints the app's features live on.
+  const [testing, setTesting] = useState(false);
+  const [testResults, setTestResults] = useState<NetworkTestResultView[] | null>(null);
+  const [testError, setTestError] = useState('');
+  const runTest = async (): Promise<void> => {
+    if (testing) return;
+    setTesting(true);
+    setTestError('');
+    try {
+      setTestResults(await window.desktop.network.runTest());
+    } catch (e) {
+      setTestResults(null);
+      setTestError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setTesting(false);
+    }
+  };
+  const t = loc?.connectionType ?? 'unknown';
+  const statusColor = !loc ? 'var(--text-faint)' : loc.status === 'connected' ? 'var(--c-green)' : loc.status === 'offline' ? 'var(--c-amber)' : 'var(--c-red)';
+  const badgeBg = t === 'vpn' ? 'var(--c-green-bg)' : t === 'proxy' ? 'var(--c-amber-bg)' : t === 'local' ? 'var(--c-blue-bg)' : 'var(--surface-3)';
+  const badgeBorder = t === 'vpn' ? 'var(--c-green-border)' : t === 'proxy' ? 'var(--c-amber-border)' : t === 'local' ? 'var(--c-blue-border)' : 'var(--border-2)';
+  const sysTz = Intl.DateTimeFormat().resolvedOptions().timeZone || '-';
   return (
-    <section style={styles.card}>
-      <h2 style={styles.h2}>Network &amp; Location</h2>
-      <p style={styles.settingsSub}>
-        Where this app&apos;s outbound traffic comes from. Website audits, form submissions and click events run from
-        this location, so confirm it is the network or VPN you intend before running an audit. With a full-tunnel VPN
-        this is also the route those browser actions take. Detected by querying a public IP-geolocation service.
-      </p>
-      <NetworkLocationDetail loc={loc} loading={loading} />
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 12, flexWrap: 'wrap' }}>
-        <button style={styles.ghostBtn} onClick={() => void refresh()} disabled={loading}>
-          {loading ? 'Checking…' : '↻ Refresh location'}
-        </button>
-        {loc && <span style={styles.settingsSub}>Last checked {relTimeAgo(loc.checkedAt)}</span>}
-      </div>
-      <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 12, cursor: 'pointer' }}>
-        <input type="checkbox" checked={auto} onChange={(e) => toggleAuto(e.target.checked)} style={{ marginTop: 2 }} />
-        <span style={styles.settingsSub}>
-          <b style={{ color: 'var(--text)' }}>Auto-detect network changes.</b> Recheck automatically when your VPN
-          connects, disconnects or switches server. Polls your adapters locally and re-checks your public IP
-          periodically while this is on.
-        </span>
-      </label>
-    </section>
+    <>
+      <section style={styles.card}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 4 }}>
+          <span style={{ width: 8, height: 8, borderRadius: 999, background: statusColor, flexShrink: 0 }} aria-hidden />
+          <h2 style={{ ...styles.h2, margin: 0 }}>Network Status</h2>
+          <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.3, color: connTypeColor(t), background: badgeBg, border: `1px solid ${badgeBorder}`, borderRadius: 999, padding: '2px 10px' }}>
+            {connTypeLabel(t)}{t === 'vpn' && loc?.provider ? ` · ${loc.provider}` : ''}
+          </span>
+          <span style={{ flex: 1 }} />
+          <button style={styles.ghostBtn} onClick={() => void refresh()} disabled={loading}>
+            {loading ? 'Checking…' : '↻ Refresh'}
+          </button>
+          <button style={styles.primaryBtnSm ?? styles.primaryBtn} onClick={() => void runTest()} disabled={testing}>
+            {testing ? 'Testing…' : 'Run Test'}
+          </button>
+        </div>
+        <p style={styles.settingsSub}>
+          Where this app&apos;s outbound traffic comes from - audits, form submissions and click events run from this
+          network, so confirm it is the one you intend. Detected via a public IP-geolocation service.
+        </p>
+        {!loc ? (
+          <p style={styles.muted}>{loading ? 'Checking your network location…' : 'Location not checked yet.'}</p>
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', columnGap: 28 }}>
+            <div>
+              <NetKv label="Public IP" mono>{loc.ip ?? '-'}</NetKv>
+              <NetKv label="Country">{loc.country ? `${flagEmoji(loc.countryCode)} ${loc.country}` : '-'}</NetKv>
+              <NetKv label="Region / State">{loc.region ?? '-'}</NetKv>
+              <NetKv label="City">{loc.city ?? '-'}</NetKv>
+            </div>
+            <div>
+              <NetKv label="ISP / network">{loc.org ? `${loc.org}${loc.asn ? ` · ${loc.asn}` : ''}` : '-'}</NetKv>
+              <NetKv label="Timezone (system)">{sysTz}</NetKv>
+              <NetKv label="VPN">
+                <span style={{ color: t === 'vpn' ? 'var(--c-green)' : 'var(--c-green)' }}>
+                  {t === 'vpn' ? `Detected${loc.provider ? ` - ${loc.provider}` : ''}` : 'Not detected'}
+                </span>
+              </NetKv>
+              <NetKv label="Proxy">
+                <span style={{ color: t === 'proxy' ? 'var(--c-amber)' : 'var(--c-green)' }}>
+                  {t === 'proxy' ? 'Detected' : 'Not detected'}
+                </span>
+              </NetKv>
+            </div>
+          </div>
+        )}
+        {loc?.detail && <p style={{ ...styles.settingsSub, color: 'var(--c-amber)', marginTop: 8 }}>{loc.detail}</p>}
+        {loc && loc.status === 'connected' && loc.detectedVia.length > 0 && (
+          <p style={{ ...styles.settingsSub, marginTop: 8, opacity: 0.8 }}>
+            Detected via {loc.detectedVia.join(' + ')}{loc.confidence !== 'none' ? ` (${loc.confidence} confidence)` : ''}.
+          </p>
+        )}
+        {loc && <p style={{ ...styles.settingsSub, marginTop: 4 }}>Last checked {relTimeAgo(loc.checkedAt)}.</p>}
+        {testError && <p style={{ ...styles.settingsSub, color: 'var(--c-red)', marginTop: 8 }}>Test failed: {testError}</p>}
+        {testResults && (
+          <div style={{ marginTop: 10, border: '1px solid var(--border)', borderRadius: 8, padding: '4px 12px' }}>
+            {testResults.map((r) => (
+              <div key={r.host} style={{ display: 'flex', alignItems: 'baseline', gap: 8, padding: '6px 0', borderBottom: '1px solid var(--border)', fontSize: 12.5 }}>
+                <span style={{ color: r.ok ? 'var(--c-green)' : 'var(--c-red)', fontWeight: 700, flexShrink: 0 }}>{r.ok ? '✓' : '✗'}</span>
+                <span style={{ fontWeight: 600 }}>{r.label}</span>
+                <span style={{ color: 'var(--text-faint)', fontFamily: 'var(--font-mono)', fontSize: 11.5 }}>{r.host}</span>
+                <span style={{ marginLeft: 'auto', fontFamily: 'var(--font-mono)', color: r.ok ? 'var(--text-dim)' : 'var(--c-red)', flexShrink: 0 }}>
+                  {r.ok ? `${r.ms} ms` : r.error ?? 'failed'}
+                </span>
+              </div>
+            ))}
+            <p style={{ ...styles.settingsSub, margin: '6px 0', border: 'none' }}>
+              Reachability of the services this app depends on. Any HTTP response counts - it proves DNS, TLS and the
+              network route; it is not a speed test.
+            </p>
+          </div>
+        )}
+      </section>
+      <section style={styles.card}>
+        <h2 style={styles.h2}>Auto Detect</h2>
+        <p style={styles.settingsSub}>Continuously monitor VPN and proxy changes.</p>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 6 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 600 }}>Enable Auto Detect</div>
+            <div style={styles.settingsSub}>
+              Automatically re-detect on change: your VPN connecting, disconnecting or switching server updates this
+              card and the &quot;Running from&quot; banner live. Polls adapters locally and re-checks the public IP periodically.
+            </div>
+          </div>
+          <SettingSwitch on={auto} onChange={toggleAuto} label="Enable auto detect" />
+        </div>
+      </section>
+    </>
   );
 }
 
