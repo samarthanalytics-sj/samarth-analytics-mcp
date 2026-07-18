@@ -85,10 +85,21 @@ export interface ChatToolCall {
   args: Record<string, unknown>;
 }
 
+/** One memory that was injected into a chat turn's context — the provenance for "why did you say that".
+ *  A snapshot (id + kind + text at use time), so the answer's provenance stays truthful even if the
+ *  memory is later edited or deleted. */
+export interface ChatMemoryUsed {
+  id: string;
+  kind: string;
+  text: string;
+}
+
 export interface ChatReply {
   text: string;
   /** Tools the model invoked while answering (for display). */
   toolCalls: ChatToolCall[];
+  /** Memories injected into this turn's context (provenance). Absent when none applied. */
+  memoriesUsed?: ChatMemoryUsed[];
 }
 
 /** Incremental events pushed during a streaming chat. */
@@ -96,6 +107,7 @@ export type ChatStreamEvent =
   | { type: 'text'; delta: string }
   | { type: 'tool'; name: string }
   | { type: 'tool_result'; name: string; ok: boolean; error?: string }
+  | { type: 'memories'; used: ChatMemoryUsed[] }
   | {
       type: 'confirm';
       confirmId: string;

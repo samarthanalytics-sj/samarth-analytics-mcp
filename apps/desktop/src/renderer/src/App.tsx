@@ -929,6 +929,9 @@ interface ChatMessage {
   attachment?: { name: string; chars: number };
   /** Native media (pdf/image bytes) replayed with history so follow-ups keep seeing the file. */
   media?: ChatMediaPart[];
+  /** Provenance: the memories injected into this reply's context ("why did you say that"). A snapshot
+   *  at answer time, so it stays truthful even if a memory is later edited or deleted. */
+  memoriesUsed?: Array<{ id: string; kind: string; text: string }>;
 }
 
 /** Short timestamp shown under a chat bubble: just the time for today's messages, date + time
@@ -1213,6 +1216,8 @@ function ChatView({
             copy[copy.length - 1] = { ...last, tools: [...(last.tools ?? []), ev.name] };
           else if (ev.type === 'tool_result' && !ev.ok)
             copy[copy.length - 1] = { ...last, toolErrors: [...(last.toolErrors ?? []), { name: ev.name, error: ev.error ?? 'failed' }] };
+          else if (ev.type === 'memories')
+            copy[copy.length - 1] = { ...last, memoriesUsed: ev.used };
           return copy;
         });
         if (ev.type === 'confirm') {
@@ -1369,6 +1374,23 @@ function ChatView({
                 <div style={styles.msgTime} title={new Date(m.ts).toLocaleString()}>
                   {formatMsgTime(m.ts)}
                 </div>
+              )}
+              {/* Provenance — "why did you say that": the memories that were in this reply's context. */}
+              {m.role === 'assistant' && m.memoriesUsed && m.memoriesUsed.length > 0 && (
+                <details style={{ marginTop: 2, maxWidth: '100%' }}>
+                  <summary style={{ fontSize: 11, color: 'var(--text-faint)', cursor: 'pointer', listStylePosition: 'inside' }} title="Saved memories that were part of this answer's context">
+                    🧠 {m.memoriesUsed.length} memor{m.memoriesUsed.length === 1 ? 'y' : 'ies'} used
+                  </summary>
+                  <div style={{ marginTop: 4, padding: '6px 9px', border: '1px solid var(--border-2)', borderRadius: 8, background: 'var(--surface-2)', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {m.memoriesUsed.map((u) => (
+                      <div key={u.id} style={{ fontSize: 11.5, color: 'var(--text-dim)', lineHeight: 1.45, display: 'flex', gap: 6, alignItems: 'flex-start' }}>
+                        <span style={{ fontSize: 9.5, fontWeight: 700, padding: '0px 6px', borderRadius: 999, background: 'var(--surface)', border: '1px solid var(--border-2)', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.3, flexShrink: 0, marginTop: 1 }}>{u.kind}</span>
+                        <span style={{ minWidth: 0 }}>{u.text}</span>
+                      </div>
+                    ))}
+                    <div style={{ fontSize: 10.5, color: 'var(--text-faint)' }}>Manage these in Settings → Memory.</div>
+                  </div>
+                </details>
               )}
             </div>
           ))}
@@ -8890,6 +8912,17 @@ function MemoryCard({ active, onError }: { active: AccountView | undefined; onEr
                   <div style={{ display: 'flex', gap: 6, marginTop: 3, flexWrap: 'wrap', alignItems: 'center' }}>
                     <span style={badge}>{m.kind}</span>
                     <span style={{ ...styles.muted, fontSize: 11 }}>{scopeText(m)}</span>
+                    {/* Usage log: how often + how recently this note was injected into a chat. */}
+                    {(m.useCount ?? 0) > 0 ? (
+                      <span style={{ ...styles.muted, fontSize: 11 }} title={m.lastUsedAt ? `Last used ${new Date(m.lastUsedAt).toLocaleString()}` : undefined}>
+                        · used {m.useCount}×{m.lastUsedAt ? ` · last ${new Date(m.lastUsedAt).toLocaleDateString()}` : ''}
+                      </span>
+                    ) : (
+                      /* "no recorded use", NOT "never used" — memories saved before usage tracking existed
+                         were injected into chats without being counted, so an absent count is only honest
+                         about what was RECORDED. */
+                      <span style={{ ...styles.muted, fontSize: 11, opacity: 0.7 }}>· no recorded use</span>
+                    )}
                   </div>
                 </div>
                 <button title={m.pinned ? 'Unpin' : 'Pin (rank first)'} style={iconBtn} onClick={() => void patch(m.id, { pinned: !m.pinned })}>{m.pinned ? '★' : '☆'}</button>

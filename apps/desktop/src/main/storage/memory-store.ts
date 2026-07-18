@@ -119,6 +119,23 @@ export class MemoryStore {
     return m;
   }
 
+  /** Record that these memories were injected into a chat turn (provenance/usage log). Bumps useCount +
+   *  lastUsedAt only — deliberately NOT updatedAt, which orders eviction (a read must never make an old
+   *  note look freshly edited, nor churn the eviction order). Unknown ids are ignored. */
+  recordUse(accountId: string, ids: string[]): void {
+    if (!ids.length) return;
+    const want = new Set(ids);
+    const now = this.clock();
+    let touched = false;
+    for (const m of this.bucket(accountId)) {
+      if (!want.has(m.id)) continue;
+      m.useCount = (m.useCount ?? 0) + 1;
+      m.lastUsedAt = now;
+      touched = true;
+    }
+    if (touched) this.persist();
+  }
+
   /** Delete one memory. Returns true if it existed. */
   remove(accountId: string, id: string): boolean {
     const list = this.bucket(accountId);

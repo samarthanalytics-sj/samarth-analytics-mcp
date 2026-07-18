@@ -4,7 +4,7 @@ import type { ProviderKeyStore } from '../storage/provider-keys';
 import type { AuditHistoryStore } from '../storage/audit-history';
 import type { ManifestStore } from '../storage/manifest-store';
 import type { MemoryStore } from '../storage/memory-store';
-import { selectRelevantMemories, formatMemoriesForPrompt } from '../../shared/chat-memory';
+import { selectRelevantMemories, formatMemoriesForPrompt, type Memory } from '../../shared/chat-memory';
 import { MEMORY_EXTRACT_SYSTEM, buildExtractionTranscript, parseMemoryCandidates, type MemoryCandidate } from '../../shared/memory-extract';
 import { buildToolRegistry } from '../tools/registry';
 import type { ConfirmFn } from '../tools/registry';
@@ -124,15 +124,16 @@ export class ChatService {
    *  PRODUCT-GATED: a container-scoped memory only applies in a GTM turn and a property-scoped one only in a
    *  GA4 turn (gtmContext / ga4Context are independent per-account fields, so the inactive product's context
    *  can be stale and point at a DIFFERENT client — using it would leak one client's notes into another's chat). */
-  private memoryBlock(active: { id: string; gtmContext?: GtmContext; ga4Context?: { property?: string } }, product: GoogleProduct, message: string): string {
-    if (!this.memory) return '';
+  private memoryBlock(active: { id: string; gtmContext?: GtmContext; ga4Context?: { property?: string } }, product: GoogleProduct, message: string): { block: string; used: Memory[] } {
+    if (!this.memory) return { block: '', used: [] };
     const all = this.memory.list(active.id);
-    if (!all.length) return '';
+    if (!all.length) return { block: '', used: [] };
     const ctx = {
       containerId: product === 'gtm' ? active.gtmContext?.containerId : undefined,
       property: product === 'ga4' ? active.ga4Context?.property : undefined,
     };
-    return formatMemoriesForPrompt(selectRelevantMemories(all, ctx, message));
+    const used = selectRelevantMemories(all, ctx, message);
+    return { block: formatMemoriesForPrompt(used), used };
   }
 
   /** Non-streaming: returns the final reply only. */
@@ -226,6 +227,10 @@ export class ChatService {
         }
       : undefined;
     const tools = buildToolRegistry(this.data, confirm, product, this.history, ctxControl, this.manifests, memoryCtx);
+
+    // The memories injected into THIS turn — kept for provenance: streamed to the UI ("why did you say
+    // that"), recorded in the usage log, and returned on the reply.
+    const mem = this.memoryBlock(active, product, message);
 
     const productLabel = product === 'gtm' ? 'Google Tag Manager (GTM)' : 'Google Analytics 4 (GA4)';
     const system =
@@ -349,7 +354,7 @@ export class ChatService {
           'Use THIS property id for every GA4 tool call (audits, reports, data quality) - do not ask ' +
           'which property and do not re-list properties unless the user asks to switch. '
         : '') +
-      this.memoryBlock(active, product, message) +
+      mem.block +
       (this.memory
         ? 'MEMORY: you have a persistent, per-client memory (any saved notes appear above under REMEMBERED CONTEXT). ' +
           'When the user tells you to REMEMBER something, or states a durable preference, correction, or decision ' +
@@ -383,6 +388,26 @@ export class ChatService {
     // SAFETY ceiling, not a target — a normal turn returns a final answer well before it; it only bites
     // pathological loops. Idempotent precheck (findExistingByName) means a re-run safely resumes.
     const MAX_TOOL_STEPS = 40;
+    // Provenance: tell the UI which memories are in this turn's context (before the answer streams), and
+    // log the use on each memory. A snapshot of the text, so the record stays truthful if edited later —
+    // dash-stripped (house style: no em dashes on any UI surface) and clamped to 200 chars so the per-reply
+    // snapshot persisted in the renderer's chat thread stays small.
+    const snapText = (t: string): string => {
+      const s = t.replace(/[—–]/g, '-');
+      return s.length > 200 ? `${s.slice(0, 200)}...` : s;
+    };
+    const memoriesUsed = mem.used.map((u) => ({ id: u.id, kind: u.kind, text: snapText(u.text) }));
+    if (memoriesUsed.length) {
+      emit?.({ type: 'memories', used: memoriesUsed });
+      // Best-effort usage log: a provenance side-write must NEVER kill the chat turn (a transient
+      // disk-full / AV file-lock on memory-store.json would otherwise abort before the LLM is called).
+      try {
+        this.memory?.recordUse(active.id, memoriesUsed.map((u) => u.id));
+      } catch (e) {
+        console.error('[chat] memory usage log failed (continuing):', e instanceof Error ? e.message : e);
+      }
+    }
+
     const result = await runChat(client, { system, model: active.llm.model, apiKey, messages, signal }, tools, {
       // House style: never surface em dashes. Strip them from the live stream (a "—" is a single code
       // unit, so it can't span chunks) as a hard guarantee on top of the system-prompt instruction.
@@ -394,6 +419,6 @@ export class ChatService {
       onToolResult: emit ? (r) => emit({ type: 'tool_result', name: r.name, ok: r.ok, error: r.error }) : undefined,
     }, MAX_TOOL_STEPS);
 
-    return { text: result.text.replace(/—/g, '-'), toolCalls };
+    return { text: result.text.replace(/—/g, '-'), toolCalls, ...(memoriesUsed.length ? { memoriesUsed } : {}) };
   }
 }
