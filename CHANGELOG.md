@@ -1,3 +1,9 @@
+## [1.354.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.353.0...v1.354.0) (2026-07-18)
+
+### Features
+
+* **desktop:** Network & Location refresh - status card, VPN/proxy verdict rows, Run Test, Auto Detect switch ([#603](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/603)) ([8d6f30c](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/8d6f30cf7580a7c645309e68067d6334e5ea6a4d))
+
 ## [1.353.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.352.0...v1.353.0) (2026-07-18)
 
 ### Features
