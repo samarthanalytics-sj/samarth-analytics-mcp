@@ -1,3 +1,22 @@
+## [1.351.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.350.0...v1.351.0) (2026-07-18)
+
+### Features
+
+* **desktop:** chat memory Phase 3 — auto-seed durable facts from the container ([9602552](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/96025528cb802ecc7a024d6e9a8db02a174b2f93))
+
+## [1.350.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.349.0...v1.350.0) (2026-07-16)
+
+### Features
+
+* **desktop:** chat tab redesign, icon-rail sidebar, two-pane settings ([5c8eaff](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/5c8eaff3c7d08800edafd33ab06a6be2250ae859))
+* **desktop:** monitor check icons + explainers for consent_signal, freshness, bigquery ([5f24546](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/5f245467cda15a405210e6391b50ec76fb38f9f3))
+
+## [1.349.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.348.0...v1.349.0) (2026-07-16)
+
+### Features
+
+* **desktop:** chat memory tools — the model remembers/forgets from natural language (replaces the per-message button) ([623aa25](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/623aa2550b8f974cd3b238bcfd94ebe344a4a7b1))
+
 ## [1.348.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.347.0...v1.348.0) (2026-07-16)
 
 ### Features

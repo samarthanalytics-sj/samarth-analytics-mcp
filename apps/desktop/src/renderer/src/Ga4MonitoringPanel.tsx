@@ -72,6 +72,9 @@ const CHECK_ICON: Record<string, JSX.Element> = {
   referral_hygiene: <><path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1.5 1.5" /><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1.5-1.5" /></>,
   pii: <><rect x="4" y="11" width="16" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></>,
   channel_shift: <><path d="M16 3h5v5" /><path d="M21 3l-8 8" /><path d="M8 21H3v-5" /><path d="M3 21l8-8" /></>,
+  consent_signal: <><circle cx="12" cy="12" r="1.8" /><path d="M15.5 8.5a5 5 0 0 1 0 7" /><path d="M8.5 15.5a5 5 0 0 1 0-7" /><path d="M18.4 5.6a9 9 0 0 1 0 12.8" /><path d="M5.6 18.4a9 9 0 0 1 0-12.8" /></>,
+  freshness: <><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 3" /></>,
+  bigquery: <><path d="M20.4 18.4A5 5 0 0 0 18 9h-1.3A8 8 0 1 0 3 16.3" /><path d="M12 12v9" /><path d="M8 16l4-4 4 4" /></>,
 };
 function CheckTypeIcon({ id, size = 18 }: { id: string; size?: number }): JSX.Element {
   const inner = CHECK_ICON[id] ?? (<><circle cx="12" cy="12" r="9" /><path d="M9 12l2 2 4-4" /></>);
@@ -277,6 +280,9 @@ const CHECK_EXPLAIN: Record<string, string> = {
   referral_hygiene: 'Checks referral sources for self-referrals and payment-gateway domains that break attribution and pad referral traffic.',
   pii: 'Scans page paths for personal data (emails, names, ids) in URLs - a privacy risk that also fragments your reports.',
   channel_shift: 'Watches for a large shift in the channel mix versus the prior window, which can signal a tagging change rather than a real audience shift.',
+  consent_signal: 'Probes live GA4 hits for the Consent Mode gcs= parameter, so a site collecting data without consent signals (a Consent Mode v2 gap) is caught.',
+  freshness: 'Measures how far behind GA4’s processed data is running; a lag beyond the normal 24-48 hour window means reports are showing stale numbers.',
+  bigquery: 'Verifies the property’s BigQuery links are still present and actually exporting (daily or streaming), so a silently broken pipeline is caught early.',
 };
 
 // Bold the key figure in an insight - a percentage ("55% higher", "down 12%") or a currency amount
