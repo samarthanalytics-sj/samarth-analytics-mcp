@@ -50,6 +50,7 @@ import { suggestionToGroup, suggestionsToTemplateCsv, suggestionsToInstallRunboo
 import { findMergeGroups, mergeGroup, mergeLabel, type MergeGroup } from '../../shared/tag-merge';
 import { parseCsvUrls, parseCsvUrlStats, CSV_URL_CAP } from '../../shared/csv-urls';
 import { MEMORY_KINDS, type Memory, type MemoryKind } from '../../shared/chat-memory';
+import type { SeedCandidate } from '../../shared/memory-seed';
 import { resolveChatInput, slashMenuMatches, type SlashCommand } from '../../shared/chat-commands';
 import { execSummaryHtml } from '../../shared/ga4-exec-html';
 import { stripDuplicateCharts } from '../../shared/ga4-visuals-html';
@@ -8713,6 +8714,9 @@ function MemoryCard({ active, onError }: { active: AccountView | undefined; onEr
   const [scopeKind, setScopeKind] = useState<'account' | 'client'>('account');
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
+  // Phase 3 auto-seed: facts derived from the active container's own config, awaiting the user's OK.
+  const [seeds, setSeeds] = useState<SeedCandidate[] | null>(null);
+  const [seeding, setSeeding] = useState(false);
 
   const gtm = active?.gtmContext;
   const ga4 = active?.ga4Context;
@@ -8743,6 +8747,35 @@ function MemoryCard({ active, onError }: { active: AccountView | undefined; onEr
       load();
     } catch (e) { onError(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
+  }
+
+  // Read the active container's configuration and propose durable facts from it (no LLM, read-only).
+  async function runSeed(): Promise<void> {
+    if (seeding) return;
+    setSeeding(true); setNote('');
+    try { setSeeds(await window.desktop.memory.seed()); }
+    catch (e) { onError(e instanceof Error ? e.message : String(e)); }
+    finally { setSeeding(false); }
+  }
+  // Seeded facts describe THIS container, so they are always saved client-scoped. A candidate carrying
+  // supersedesId REPLACES that stale auto-seeded note (the container changed since the last seed). Each
+  // candidate is dropped from the review list as soon as ITS save lands, so a mid-batch failure never
+  // leaves an already-saved item behind to be double-added on retry.
+  async function addSeeds(list: SeedCandidate[]): Promise<void> {
+    if (busy || !list.length) return;
+    setBusy(true);
+    let added = 0;
+    try {
+      const scope = gtm?.containerId ? { containerId: gtm.containerId, ...(gtm.containerName ? { label: gtm.containerName } : {}) } : {};
+      for (const c of list) {
+        if (c.supersedesId) await window.desktop.memory.remove(c.supersedesId);
+        await window.desktop.memory.add({ kind: c.kind, text: c.text, scope, source: 'auto' });
+        added += 1;
+        setSeeds((s) => (s ? s.filter((x) => x !== c) : s));
+      }
+      setNote(`Added ${added} fact${added === 1 ? '' : 's'} from the container.`);
+    } catch (e) { onError(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(false); load(); }
   }
 
   async function patch(id: string, p: { pinned?: boolean; enabled?: boolean }): Promise<void> {
@@ -8786,9 +8819,52 @@ function MemoryCard({ active, onError }: { active: AccountView | undefined; onEr
                 {canClientScope && <option value="client">Only {clientLabel}</option>}
               </select>
               <button style={{ ...styles.primaryBtn, ...(busy || !text.trim() ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }} disabled={busy || !text.trim()} onClick={() => void add()}>Remember</button>
+              {gtm?.containerId && (
+                <button
+                  style={{ ...styles.toggleOff, ...(seeding ? { opacity: 0.6, cursor: 'wait' } : {}) }}
+                  disabled={seeding}
+                  onClick={() => void runSeed()}
+                  title="Read this container's configuration and propose durable facts (Measurement IDs, platforms, consent, ecommerce, naming)"
+                >
+                  {seeding ? 'Reading container…' : '🌱 Seed from container'}
+                </button>
+              )}
               {note && <span style={{ ...styles.muted, fontSize: 12 }}>{note}</span>}
             </div>
           </div>
+
+          {/* Auto-seed proposals: derived from the container's own config. Nothing is saved until you add it. */}
+          {seeds !== null && (
+            seeds.length === 0 ? (
+              <div style={{ ...styles.muted, fontSize: 12.5, marginTop: 8 }}>
+                Nothing new to seed from this container (everything it tells us is already remembered).{' '}
+                <button style={{ ...styles.linkBtn, fontSize: 12 }} onClick={() => setSeeds(null)}>dismiss</button>
+              </div>
+            ) : (
+              <div className="sheet-in" style={{ marginTop: 8, padding: 10, border: '1px solid var(--c-blue-border)', borderRadius: 10, background: 'var(--c-blue-bg)' }}>
+                <div style={{ fontSize: 12.5, color: 'var(--text)', marginBottom: 8 }}>
+                  <b>From {clientLabel || 'this container'}.</b> Facts read straight from its configuration. They save scoped to this container.
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {seeds.map((c, i) => (
+                    <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', padding: '7px 9px', border: '1px solid var(--border-2)', borderRadius: 8, background: 'var(--surface)' }}>
+                      <span style={{ ...badge, flexShrink: 0, marginTop: 1 }}>{c.kind}</span>
+                      <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: 'var(--text)', lineHeight: 1.45 }}>
+                        {c.text}
+                        {c.supersedesId ? <span style={{ ...styles.muted, fontSize: 11 }}> · replaces an earlier note</span> : null}
+                      </span>
+                      <button style={{ ...iconBtn, ...(busy ? { opacity: 0.5 } : {}) }} disabled={busy} onClick={() => void addSeeds([c])}>Add</button>
+                      <button style={iconBtn} onClick={() => setSeeds((s) => (s ? s.filter((x) => x !== c) : s))}>Skip</button>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ marginTop: 8, display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <button style={{ ...styles.primaryBtn, padding: '4px 12px', fontSize: 12.5, ...(busy ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }} disabled={busy} onClick={() => void addSeeds(seeds)}>Add all {seeds.length}</button>
+                  <button style={{ ...styles.linkBtn, fontSize: 12 }} onClick={() => setSeeds(null)}>Dismiss</button>
+                </div>
+              </div>
+            )
+          )}
           <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
             {loading ? (
               <span style={styles.muted}>Loading…</span>
