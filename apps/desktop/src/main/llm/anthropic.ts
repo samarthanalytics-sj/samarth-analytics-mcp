@@ -12,6 +12,7 @@ interface AnthropicBlock {
   tool_use_id?: string;
   content?: string;
   is_error?: boolean;
+  source?: { type: 'base64'; media_type: string; data: string };
 }
 interface AnthropicMessage {
   role: 'user' | 'assistant';
@@ -21,7 +22,15 @@ interface AnthropicMessage {
 export function toAnthropicMessages(messages: LlmTurn[]): AnthropicMessage[] {
   return messages.map((turn): AnthropicMessage => {
     if (turn.role === 'user') {
-      return { role: 'user', content: [{ type: 'text', text: turn.text }] };
+      // Native media first (Claude reads figures/charts/tables/scans from the actual pages),
+      // then the user's text.
+      const content: AnthropicBlock[] = (turn.media ?? []).map((m) =>
+        m.kind === 'pdf'
+          ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: m.base64 } }
+          : { type: 'image', source: { type: 'base64', media_type: m.mimeType, data: m.base64 } },
+      );
+      content.push({ type: 'text', text: turn.text });
+      return { role: 'user', content };
     }
     if (turn.role === 'assistant') {
       const content: AnthropicBlock[] = [];

@@ -3,7 +3,7 @@ import { writeFile, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import ExcelJS from 'exceljs';
-import { extractAttachmentText, MAX_ATTACHMENT_CHARS } from '../attachments';
+import { extractAttachmentText, htmlTablesToText, MAX_ATTACHMENT_CHARS } from '../attachments';
 
 let passed = 0;
 let failed = 0;
@@ -73,6 +73,52 @@ test('a .doc that is really HTML (this app exports) reads as text', async () => 
 test('a corrupt .docx fails with a parser error, never "Unsupported"', async () => {
   const p = await tmp('broken.docx', 'this is not a zip');
   await assert.rejects(() => extractAttachmentText(p), (e: Error) => !/Unsupported file type/.test(e.message));
+});
+
+test('an image attaches as NATIVE media (base64 + mime), never as fabricated text', async () => {
+  // Tiny valid 1x1 PNG.
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+  const p = await tmp('shot.png', png);
+  const a = await extractAttachmentText(p);
+  assert.equal(a.media!.kind, 'image');
+  assert.equal(a.media!.mimeType, 'image/png');
+  assert.equal(a.media!.base64, png.toString('base64'));
+  assert.equal(a.chars, 0, 'no fabricated text for an image');
+  assert.ok(/cannot view images/.test(a.media!.fallbackText ?? ''), 'honest fallback for non-vision providers');
+});
+
+test('an unparseable (scanned-style) pdf still attaches NATIVELY with an honest fallback note', async () => {
+  // Not a well-formed PDF body - extraction yields nothing, which must NOT refuse the attach:
+  // vision providers can still read the pages; others get the honest scanned-PDF note.
+  const p = await tmp('scan.pdf', '%PDF-1.4 not really parseable');
+  const a = await extractAttachmentText(p);
+  assert.equal(a.media!.kind, 'pdf');
+  assert.equal(a.chars, 0, 'no text layer extracted');
+  assert.ok(/Scanned PDF/.test(a.media!.fallbackText ?? ''), 'fallback says WHY non-vision providers see nothing');
+});
+
+test('docx TABLES come out in table format (pipe rows), built with a real docx zip', async () => {
+  const { default: JSZip } = await import('jszip');
+  const zip = new JSZip();
+  zip.file('[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>');
+  zip.file('_rels/.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>');
+  const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+  const cell = (t: string): string => `<w:tc><w:p><w:r><w:t>${t}</w:t></w:r></w:p></w:tc>`;
+  zip.file('word/document.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="${W}"><w:body><w:p><w:r><w:t>Tag inventory</w:t></w:r></w:p><w:tbl><w:tr>${cell('Tag')}${cell('Status')}</w:tr><w:tr>${cell('GA4 - Purchase')}${cell('fired')}</w:tr></w:tbl></w:body></w:document>`);
+  const buf = await zip.generateAsync({ type: 'nodebuffer' });
+  const p = await tmp('table.docx', buf);
+  const a = await extractAttachmentText(p);
+  assert.ok(a.text.includes('| Tag | Status |'), 'header row as pipes: ' + a.text);
+  assert.ok(a.text.includes('| GA4 - Purchase | fired |'), 'data row as pipes: ' + a.text);
+});
+
+test('htmlTablesToText: cells to pipe rows, entities decoded, tags stripped', () => {
+  return Promise.resolve().then(() => {
+    const out = htmlTablesToText('<h1>T</h1><table><tr><th>A&amp;B</th><th>C</th></tr><tr><td>1</td><td>2</td></tr></table>');
+    assert.ok(out.includes('| A&B | C |'));
+    assert.ok(out.includes('| 1 | 2 |'));
+    assert.ok(!/[<>]/.test(out.replace(/&/g, '')));
+  });
 });
 
 test('unsupported extension is refused with the supported list', async () => {

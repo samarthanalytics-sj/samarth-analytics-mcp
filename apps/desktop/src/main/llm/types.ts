@@ -1,4 +1,6 @@
-import type { LlmProvider } from '../../shared/ipc';
+import type { LlmProvider, ChatMediaPart } from '../../shared/ipc';
+
+export type { ChatMediaPart };
 
 export type { LlmProvider };
 
@@ -27,7 +29,7 @@ export interface LlmToolResult {
 }
 
 export type LlmTurn =
-  | { role: 'user'; text: string }
+  | { role: 'user'; text: string; media?: ChatMediaPart[] }
   | { role: 'assistant'; text?: string; toolCalls?: LlmToolCall[] }
   | { role: 'tool'; results: LlmToolResult[] };
 

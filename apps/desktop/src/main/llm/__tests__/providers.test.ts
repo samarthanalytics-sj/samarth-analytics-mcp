@@ -142,5 +142,52 @@ test('OpenAI: request body OMITS tools/tool_choice when there are no tools (empt
   assert.equal(withTool.tool_choice, 'auto', 'tool_choice auto when tools present');
 });
 
+
+// ── Native media mapping (pdf/image attachments) ──
+const mediaTurn: LlmTurn[] = [
+  { role: 'user', text: 'what does the chart show?', media: [
+    { kind: 'pdf', mimeType: 'application/pdf', base64: 'UERG', name: 'report.pdf', fallbackText: 'extracted words' },
+    { kind: 'image', mimeType: 'image/png', base64: 'UE5H', name: 'shot.png', fallbackText: '[Image attached]' },
+  ] },
+];
+
+test('Anthropic: pdf -> document block, image -> image block, text last (Claude SEES the pages)', () => {
+  const msgs = toAnthropicMessages(mediaTurn);
+  const content = msgs[0].content;
+  assert.equal(content[0].type, 'document');
+  assert.equal(content[0].source!.media_type, 'application/pdf');
+  assert.equal(content[0].source!.data, 'UERG');
+  assert.equal(content[1].type, 'image');
+  assert.equal(content[1].source!.media_type, 'image/png');
+  assert.equal(content[2].type, 'text');
+});
+
+test('Gemini: media -> inlineData parts before the text', () => {
+  const contents = toGeminiContents(mediaTurn);
+  const parts = contents[0].parts as Array<{ inlineData?: { mimeType: string; data: string }; text?: string }>;
+  assert.equal(parts[0].inlineData!.mimeType, 'application/pdf');
+  assert.equal(parts[1].inlineData!.mimeType, 'image/png');
+  assert.equal(parts[2].text, 'what does the chart show?');
+});
+
+test('OpenAI: image rides as image_url; pdf falls back to its extracted text (no native slot)', () => {
+  const msgs = toOpenAiMessages('SYS', mediaTurn);
+  const user = msgs[1];
+  assert.ok(Array.isArray(user.content), 'content becomes parts when an image is present');
+  const parts = user.content as Array<{ type: string; text?: string; image_url?: { url: string } }>;
+  assert.equal(parts[0].type, 'image_url');
+  assert.ok(parts[0].image_url!.url.startsWith('data:image/png;base64,'));
+  const textPart = parts.find((x) => x.type === 'text')!;
+  assert.ok(textPart.text!.includes('extracted words'), 'pdf fallback text included');
+  assert.ok(textPart.text!.includes('what does the chart show?'));
+});
+
+test('all three: a plain text turn is untouched by the media path', () => {
+  const plain: LlmTurn[] = [{ role: 'user', text: 'hi' }];
+  assert.deepEqual(toAnthropicMessages(plain)[0].content, [{ type: 'text', text: 'hi' }]);
+  assert.deepEqual(toGeminiContents(plain)[0].parts, [{ text: 'hi' }]);
+  assert.equal(toOpenAiMessages('S', plain)[1].content, 'hi');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

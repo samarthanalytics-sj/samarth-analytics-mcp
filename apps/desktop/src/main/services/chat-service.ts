@@ -10,7 +10,7 @@ import { buildToolRegistry } from '../tools/registry';
 import type { ConfirmFn } from '../tools/registry';
 import { createProvider, runChat } from '../llm/gateway';
 import { changeJournal } from '../google/change-journal';
-import type { ChatReply, ChatStreamEvent, ChatToolCall, ChatTurn, GoogleProduct, GtmContext } from '../../shared/ipc';
+import type { ChatMediaPart, ChatReply, ChatStreamEvent, ChatToolCall, ChatTurn, GoogleProduct, GtmContext } from '../../shared/ipc';
 import type { LlmTurn } from '../llm/types';
 // Shared GA4/GTM creation methodology — the SAME rules the tag-suggestion engine + AI scan follow,
 // so chat tag creation stays consistent with what the audit/suggestion surfaces propose. Re-exported
@@ -136,8 +136,8 @@ export class ChatService {
   }
 
   /** Non-streaming: returns the final reply only. */
-  chat(history: ChatTurn[], message: string, product: GoogleProduct): Promise<ChatReply> {
-    return this.run(history, message, product);
+  chat(history: ChatTurn[], message: string, product: GoogleProduct, media?: ChatMediaPart[]): Promise<ChatReply> {
+    return this.run(history, message, product, undefined, undefined, undefined, media);
   }
 
   /**
@@ -151,9 +151,10 @@ export class ChatService {
     product: GoogleProduct,
     emit: (event: ChatStreamEvent) => void,
     confirm?: ConfirmFn,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    media?: ChatMediaPart[]
   ): Promise<ChatReply> {
-    return this.run(history, message, product, emit, confirm, signal);
+    return this.run(history, message, product, emit, confirm, signal, media);
   }
 
   /** Phase 2b: propose durable memories from a conversation. Runs ONE plain LLM completion (no tools) with
@@ -182,7 +183,8 @@ export class ChatService {
     product: GoogleProduct,
     emit?: (event: ChatStreamEvent) => void,
     confirm?: ConfirmFn,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    media?: ChatMediaPart[]
   ): Promise<ChatReply> {
     const active = this.registry.getActiveView();
     if (!active) throw new Error('No active account. Connect and activate a Google account.');
@@ -367,8 +369,9 @@ export class ChatService {
       'Style: do NOT use em dashes (the "—" character) anywhere in your replies; use commas, colons, parentheses, or a hyphen "-" instead.';
 
     const messages: LlmTurn[] = [
-      ...history.map((h): LlmTurn => ({ role: h.role, text: h.text })),
-      { role: 'user', text: message },
+      // History replays each user turn's media too, so follow-up questions keep seeing the doc.
+      ...history.map((h): LlmTurn => (h.role === 'user' && h.media?.length ? { role: 'user', text: h.text, media: h.media } : { role: h.role, text: h.text })),
+      { role: 'user', text: message, ...(media?.length ? { media } : {}) },
     ];
 
     const toolCalls: ChatToolCall[] = [];
