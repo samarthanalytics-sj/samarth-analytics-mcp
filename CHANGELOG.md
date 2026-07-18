@@ -1,3 +1,9 @@
+## [1.353.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.352.0...v1.353.0) (2026-07-18)
+
+### Features
+
+* **desktop:** chat memory provenance — "why did you say that" + a usage log ([134176e](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/134176e7829ce6b5018b44de377cd4577f3364a5))
+
 ## [1.352.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.351.0...v1.352.0) (2026-07-18)
 
 ### Features
