@@ -31,6 +31,10 @@ export interface Memory {
   enabled: boolean;
   createdAt: number;
   updatedAt: number;
+  /** Provenance/usage: when this memory was last injected into a chat turn (epoch ms). */
+  lastUsedAt?: number;
+  /** Provenance/usage: how many chat turns this memory has been injected into. */
+  useCount?: number;
 }
 
 /** What the caller supplies to create a memory (the store fills id/timestamps/defaults). */

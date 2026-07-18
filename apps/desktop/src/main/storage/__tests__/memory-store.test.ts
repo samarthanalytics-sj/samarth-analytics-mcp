@@ -121,6 +121,28 @@ test('persists across reloads (atomic file)', () => {
   assert.equal(list[0].pinned, true);
 });
 
+test('recordUse bumps useCount + lastUsedAt but NEVER updatedAt (eviction order must not churn on read)', () => {
+  let now = 1000;
+  const s = new MemoryStore(join(dir, 'use.json'), 500, () => now);
+  const a = s.add('acct1', { kind: 'fact', text: 'used note' }).memory;
+  const b = s.add('acct1', { kind: 'fact', text: 'unused note' }).memory;
+  now = 2000;
+  s.recordUse('acct1', [a.id, 'nope-unknown-id']);
+  now = 3000;
+  s.recordUse('acct1', [a.id]);
+  const got = s.list('acct1').find((m) => m.id === a.id)!;
+  assert.equal(got.useCount, 2);
+  assert.equal(got.lastUsedAt, 3000);
+  assert.equal(got.updatedAt, 1000, 'updatedAt untouched by use');
+  const other = s.list('acct1').find((m) => m.id === b.id)!;
+  assert.equal(other.useCount ?? 0, 0, 'unlisted memory untouched');
+  // Usage survives a reload (persisted).
+  const s2 = new MemoryStore(join(dir, 'use.json'), 500, () => now);
+  assert.equal(s2.list('acct1').find((m) => m.id === a.id)!.useCount, 2);
+  // Empty ids: a no-op that never throws.
+  s.recordUse('acct1', []);
+});
+
 console.log(`\nMemoryStore: ${passed} passed, ${failed} failed`);
 rmSync(dir, { recursive: true, force: true });
 if (failed) process.exit(1);
