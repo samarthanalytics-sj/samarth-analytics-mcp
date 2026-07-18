@@ -61,6 +61,7 @@ import type {
 } from '../shared/ipc';
 import type { Memory, MemoryInput, MemoryPatch, AddMemoryResult } from '../shared/chat-memory';
 import type { MemoryCandidate } from '../shared/memory-extract';
+import type { SeedCandidate } from '../shared/memory-seed';
 
 // Tracks the in-flight streaming chat so llm.stop() can abort the right one.
 let activeChatRequestId: string | null = null;
@@ -193,6 +194,9 @@ const api = {
     // Phase 2b: propose durable memories from a conversation (LLM extraction). Returns candidates to REVIEW
     // — nothing is saved until the user approves each one via memory.add.
     suggest: (history: ChatTurn[]): Promise<MemoryCandidate[]> => ipcRenderer.invoke('memory:suggest', history),
+    // Phase 3: derive durable facts from the active GTM container's own config (no LLM). Proposals only;
+    // a candidate carrying supersedesId REPLACES that stale auto-seeded note when approved.
+    seed: (): Promise<SeedCandidate[]> => ipcRenderer.invoke('memory:seed'),
   },
 
   // Tag suggestions ("measurement plan from a URL"): scan a site (or paste a
