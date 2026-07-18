@@ -7,6 +7,7 @@ import type { LlmChatInput, LlmClient, LlmReply, LlmToolCall, LlmTurn, StreamAcc
 
 interface GeminiPart {
   text?: string;
+  inlineData?: { mimeType: string; data: string };
   functionCall?: { name: string; args?: Record<string, unknown> };
   functionResponse?: { name: string; response: Record<string, unknown> };
 }
@@ -17,7 +18,12 @@ interface GeminiContent {
 
 export function toGeminiContents(messages: LlmTurn[]): GeminiContent[] {
   return messages.map((turn): GeminiContent => {
-    if (turn.role === 'user') return { role: 'user', parts: [{ text: turn.text }] };
+    if (turn.role === 'user') {
+      // Native media first (Gemini reads PDFs and images from the bytes), then the text.
+      const parts: GeminiPart[] = (turn.media ?? []).map((m) => ({ inlineData: { mimeType: m.mimeType, data: m.base64 } }));
+      parts.push({ text: turn.text });
+      return { role: 'user', parts };
+    }
     if (turn.role === 'assistant') {
       const parts: GeminiPart[] = [];
       if (turn.text) parts.push({ text: turn.text });

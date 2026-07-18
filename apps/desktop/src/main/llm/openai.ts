@@ -10,16 +10,37 @@ interface OpenAiToolCall {
 }
 interface OpenAiMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string | null;
+  content: string | null | OpenAiContentPart[];
   tool_calls?: OpenAiToolCall[];
   tool_call_id?: string;
 }
+
+export type OpenAiContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } };
 
 export function toOpenAiMessages(system: string, messages: LlmTurn[]): OpenAiMessage[] {
   const out: OpenAiMessage[] = [{ role: 'system', content: system }];
   for (const turn of messages) {
     if (turn.role === 'user') {
-      out.push({ role: 'user', content: turn.text });
+      // Images ride natively (vision models); PDFs have no slot in chat completions, so their
+      // extracted fallback text is prepended - the model still reads the document's words.
+      const images = (turn.media ?? []).filter((m) => m.kind === 'image');
+      const docTexts = (turn.media ?? [])
+        .filter((m) => m.kind === 'pdf')
+        .map((m) => `[Attached file: ${m.name}]\n<file-content>\n${m.fallbackText ?? '(no extractable text)'}\n</file-content>`);
+      const text = docTexts.length ? `${docTexts.join('\n\n')}\n\n${turn.text}` : turn.text;
+      if (images.length) {
+        out.push({
+          role: 'user',
+          content: [
+            ...images.map((m): OpenAiContentPart => ({ type: 'image_url', image_url: { url: `data:${m.mimeType};base64,${m.base64}` } })),
+            { type: 'text', text },
+          ],
+        });
+      } else {
+        out.push({ role: 'user', content: text });
+      }
     } else if (turn.role === 'assistant') {
       const msg: OpenAiMessage = { role: 'assistant', content: turn.text ?? null };
       if (turn.toolCalls?.length) {

@@ -1,6 +1,6 @@
 import { ipcMain, dialog, BrowserWindow } from 'electron';
 import type { ChatService } from '../services/chat-service';
-import type { ChatTurn, GoogleProduct } from '../../shared/ipc';
+import type { ChatMediaPart, ChatTurn, GoogleProduct } from '../../shared/ipc';
 import type { WriteProposal } from '../tools/registry';
 
 // Pending write-confirmations keyed by confirmId. A write tool registers a
@@ -22,7 +22,7 @@ export function registerChatIpc(service: ChatService): void {
       title: 'Attach a file to the chat',
       properties: ['openFile' as const],
       filters: [
-        { name: 'Documents', extensions: ['pdf', 'docx', 'doc', 'xlsx', 'csv', 'tsv', 'txt', 'md', 'json', 'log', 'html', 'xml', 'yml', 'yaml'] },
+        { name: 'Documents & images', extensions: ['pdf', 'docx', 'doc', 'xlsx', 'csv', 'tsv', 'txt', 'md', 'json', 'log', 'html', 'xml', 'yml', 'yaml', 'png', 'jpg', 'jpeg', 'webp', 'gif'] },
         { name: 'All files', extensions: ['*'] },
       ],
     };
@@ -35,11 +35,11 @@ export function registerChatIpc(service: ChatService): void {
   // Non-streaming, read-only (no confirm → write tools unavailable).
   ipcMain.handle(
     'llm:chat',
-    (_event, history: ChatTurn[], message: string, product: GoogleProduct) => {
+    (_event, history: ChatTurn[], message: string, product: GoogleProduct, media?: ChatMediaPart[]) => {
       if (typeof message !== 'string' || message.trim().length === 0) {
         throw new Error('Message cannot be empty.');
       }
-      return service.chat(Array.isArray(history) ? history : [], message, product === 'ga4' ? 'ga4' : 'gtm');
+      return service.chat(Array.isArray(history) ? history : [], message, product === 'ga4' ? 'ga4' : 'gtm', Array.isArray(media) ? media : undefined);
     }
   );
 
@@ -47,7 +47,7 @@ export function registerChatIpc(service: ChatService): void {
   // Write tools pause on a 'confirm' event until the renderer responds.
   ipcMain.handle(
     'llm:chat:start',
-    (event, requestId: string, history: ChatTurn[], message: string, product: GoogleProduct) => {
+    (event, requestId: string, history: ChatTurn[], message: string, product: GoogleProduct, media?: ChatMediaPart[]) => {
       if (typeof message !== 'string' || message.trim().length === 0) {
         throw new Error('Message cannot be empty.');
       }
@@ -79,7 +79,8 @@ export function registerChatIpc(service: ChatService): void {
           scopedProduct,
           (ev) => send({ requestId, ...ev }),
           confirm,
-          controller.signal
+          controller.signal,
+          Array.isArray(media) ? media : undefined
         )
         .finally(() => activeChats.delete(requestId));
     }

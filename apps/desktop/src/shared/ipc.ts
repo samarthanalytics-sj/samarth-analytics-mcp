@@ -64,6 +64,20 @@ export interface SecretSelfTest {
 export interface ChatTurn {
   role: 'user' | 'assistant';
   text: string;
+  /** Native media riding with a USER turn (replayed in history so follow-ups keep seeing it). */
+  media?: ChatMediaPart[];
+}
+
+/** Native media for a chat message. Providers that can SEE documents get the real bytes
+ *  (Anthropic + Gemini read charts, figures, tables, and scans from the pixels); providers
+ *  that can't take the format natively fall back to `fallbackText`. */
+export interface ChatMediaPart {
+  kind: 'pdf' | 'image';
+  mimeType: string;
+  base64: string;
+  name: string;
+  /** Extracted text (or an honest can't-view note) for providers without native support. */
+  fallbackText?: string;
 }
 
 export interface ChatToolCall {
@@ -1051,6 +1065,9 @@ export interface ChatAttachmentView {
   chars: number;
   text: string;
   truncated: boolean;
+  /** Present when the file can ALSO be sent natively (pdf under 8 MB, images under 5 MB):
+   *  vision-capable providers then read figures/charts/tables from the actual pages. */
+  media?: ChatMediaPart | null;
 }
 
 export interface ServerDocView {

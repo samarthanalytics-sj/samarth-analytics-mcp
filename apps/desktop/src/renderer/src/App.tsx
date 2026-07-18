@@ -14,6 +14,7 @@ import type {
   MergeStatus,
   ChatTurn,
   ChatAttachmentView,
+  ChatMediaPart,
   CreateTagOutcome,
   DiscoverResult,
   Ga4MonitorRun,
@@ -924,8 +925,10 @@ interface ChatMessage {
   /** The exact text SENT to the model when it differs from the display (attachment injected).
    *  History replays `sent` so follow-up questions still see the document. */
   sent?: string;
-  /** Attached-file chip data for the bubble (the content itself lives only in `sent`). */
+  /** Attached-file chip data for the bubble (the content itself lives only in `sent`/`media`). */
   attachment?: { name: string; chars: number };
+  /** Native media (pdf/image bytes) replayed with history so follow-ups keep seeing the file. */
+  media?: ChatMediaPart[];
 }
 
 /** Short timestamp shown under a chat bubble: just the time for today's messages, date + time
@@ -1176,17 +1179,23 @@ function ChatView({
     const resolved = text ? resolveChatInput(text, product) : { display: '', sent: '', product };
     if (resolved.product !== product) { setProduct(resolved.product); return; }
     onError('');
-    // Attachment: the document text rides in the SENT message only; the bubble shows a chip.
-    // History replays m.sent so follow-up questions still see the document.
+    // Attachment: NATIVE media (pdf/image) rides as provider blocks - the model sees the actual
+    // pages/pixels (figures, charts, tables, scans) - so only a marker goes into the text. Text
+    // formats inject the extracted text as before. History replays m.sent + m.media so follow-up
+    // questions still see the document.
     const att = attachment;
+    const askDefault = att?.media?.kind === 'image' ? 'Please describe what this image shows.' : 'Please read the attached file and summarize what it contains.';
     const sentText = att
-      ? `[Attached file: ${att.name}]\n\n<file-content>\n${att.text}\n</file-content>\n\n${resolved.sent || 'Please read the attached file and summarize what it contains.'}`
+      ? att.media
+        ? `[Attached file: ${att.name}]\n\n${resolved.sent || askDefault}`
+        : `[Attached file: ${att.name}]\n\n<file-content>\n${att.text}\n</file-content>\n\n${resolved.sent || askDefault}`
       : resolved.sent;
-    const history: ChatTurn[] = messages.map((m) => ({ role: m.role, text: m.sent ?? m.text }));
+    const mediaParts = att?.media ? [att.media] : undefined;
+    const history: ChatTurn[] = messages.map((m) => ({ role: m.role, text: m.sent ?? m.text, ...(m.media ? { media: m.media } : {}) }));
     const now = Date.now();
     setMessages((m) => [
       ...m,
-      { role: 'user', text: resolved.display, ...(att ? { sent: sentText, attachment: { name: att.name, chars: att.chars } } : {}), ts: now },
+      { role: 'user', text: resolved.display, ...(att ? { sent: sentText, attachment: { name: att.name, chars: att.chars }, ...(mediaParts ? { media: mediaParts } : {}) } : {}), ts: now },
       { role: 'assistant', text: '', tools: [], ts: now },
     ]);
     setInput('');
@@ -1216,7 +1225,7 @@ function ChatView({
             requireTextConfirm: ev.requireTextConfirm,
           });
         }
-      });
+      }, mediaParts);
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
       setMessages((m) => (m[m.length - 1]?.role === 'assistant' && !m[m.length - 1].text ? m.slice(0, -1) : m));
@@ -1349,7 +1358,7 @@ function ChatView({
                       <div style={styles.msgAttach}>
                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" /></svg>
                         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.attachment.name}</span>
-                        <span style={{ opacity: 0.75, flexShrink: 0 }}>{m.attachment.chars.toLocaleString('en-US')} chars</span>
+                        {m.attachment.chars > 0 && <span style={{ opacity: 0.75, flexShrink: 0 }}>{m.attachment.chars.toLocaleString('en-US')} chars</span>}
                       </div>
                     )}
                     <div style={{ whiteSpace: 'pre-wrap' }}>{m.text || (m.attachment ? 'Read the attached file.' : '…')}</div>
@@ -1425,7 +1434,11 @@ function ChatView({
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" /></svg>
             <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{attachment.name}</span>
             <span style={{ color: 'var(--text-faint)', flexShrink: 0 }}>
-              {attachment.chars.toLocaleString('en-US')} chars{attachment.truncated ? ' · truncated' : ''}
+              {attachment.media
+                ? attachment.media.kind === 'image'
+                  ? 'image · read visually'
+                  : `${attachment.chars.toLocaleString('en-US')} chars · read visually`
+                : `${attachment.chars.toLocaleString('en-US')} chars${attachment.truncated ? ' · truncated' : ''}`}
             </span>
             <button style={styles.attachRemove} aria-label="Remove attachment" title="Remove attachment" onClick={() => setAttachment(null)}>×</button>
           </div>
@@ -1435,7 +1448,7 @@ function ChatView({
             style={styles.attachBtn}
             disabled={!ready || busy || attaching}
             onClick={() => void pickAttachment()}
-            title="Attach a file - pdf, docx, xlsx, csv, txt, md, json… (the model reads its text)"
+            title="Attach a file - pdf, docx, xlsx, csv, images… (Claude/Gemini read pages and images natively)"
             aria-label="Attach a file"
           >
             {attaching ? (

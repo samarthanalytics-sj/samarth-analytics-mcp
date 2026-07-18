@@ -13,6 +13,7 @@ import type {
   ChatStreamEvent,
   ChatTurn,
   ChatAttachmentView,
+  ChatMediaPart,
   CreateTagOutcome,
   Ga4AccountView,
   Ga4AuditWindow,
@@ -139,8 +140,8 @@ const api = {
   },
 
   llm: {
-    chat: (history: ChatTurn[], message: string, product: GoogleProduct): Promise<ChatReply> =>
-      ipcRenderer.invoke('llm:chat', history, message, product),
+    chat: (history: ChatTurn[], message: string, product: GoogleProduct, media?: ChatMediaPart[]): Promise<ChatReply> =>
+      ipcRenderer.invoke('llm:chat', history, message, product, media),
 
     // OS file picker + main-process text extraction for a chat attachment (null = cancelled).
     pickAttachment: (): Promise<ChatAttachmentView | null> => ipcRenderer.invoke('llm:pickAttachment'),
@@ -151,7 +152,8 @@ const api = {
       history: ChatTurn[],
       message: string,
       product: GoogleProduct,
-      onEvent: (event: ChatStreamEvent) => void
+      onEvent: (event: ChatStreamEvent) => void,
+      media?: ChatMediaPart[]
     ): Promise<ChatReply> => {
       const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
       activeChatRequestId = requestId;
@@ -165,7 +167,7 @@ const api = {
       };
       ipcRenderer.on('llm:chat:event', listener);
       return ipcRenderer
-        .invoke('llm:chat:start', requestId, history, message, product)
+        .invoke('llm:chat:start', requestId, history, message, product, media)
         .finally(() => {
           ipcRenderer.removeListener('llm:chat:event', listener);
           if (activeChatRequestId === requestId) activeChatRequestId = null;
