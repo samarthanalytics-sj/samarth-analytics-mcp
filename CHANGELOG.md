@@ -1,3 +1,9 @@
+## [1.351.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.350.0...v1.351.0) (2026-07-18)
+
+### Features
+
+* **desktop:** chat memory Phase 3 — auto-seed durable facts from the container ([9602552](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/96025528cb802ecc7a024d6e9a8db02a174b2f93))
+
 ## [1.350.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.349.0...v1.350.0) (2026-07-16)
 
 ### Features
