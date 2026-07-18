@@ -31,6 +31,13 @@ export function registerNetworkIpc(opts: { configPath: string }): void {
   // Force a fresh check — the Refresh button, and run-start after the user may have switched VPN server.
   ipcMain.handle('network:refreshLocation', (): Promise<NetworkLocationView> => getNetworkLocation({ force: true }));
 
+  // "Run Test": timed reachability of the service endpoints the app depends on (any HTTP response
+  // counts - DNS + TCP + TLS + route is what is being proven).
+  ipcMain.handle('network:runTest', async () => {
+    const { runNetworkTest } = await import('./network-test');
+    return runNetworkTest();
+  });
+
   ipcMain.handle('network:getAutoDetect', (): boolean => readAuto());
   ipcMain.handle('network:setAutoDetect', (_e, enabled: unknown): boolean => {
     const v = enabled === true;

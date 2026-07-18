@@ -34,6 +34,7 @@ import type {
   MonitorConfig,
   MonitorStatus,
   NetworkLocationView,
+  NetworkTestResultView,
   Ga4MonitorConfig,
   Ga4MonitorStatus,
   Ga4MonitorRun,
@@ -505,6 +506,8 @@ const api = {
     refreshLocation: (): Promise<NetworkLocationView> => ipcRenderer.invoke('network:refreshLocation'),
     // Auto-detect: when on, the main process watches for network changes (VPN connect/disconnect or
     // server switch) and pushes the new location via onChange. Persisted; default off.
+    // Timed reachability of the Google endpoints the app's features live on.
+    runTest: (): Promise<NetworkTestResultView[]> => ipcRenderer.invoke('network:runTest'),
     getAutoDetect: (): Promise<boolean> => ipcRenderer.invoke('network:getAutoDetect'),
     setAutoDetect: (enabled: boolean): Promise<boolean> => ipcRenderer.invoke('network:setAutoDetect', enabled),
     // Subscribe to pushed location changes (only fire while auto-detect is on); returns an unsubscribe fn.

@@ -1430,6 +1430,15 @@ export type NetworkConnectionType = 'local' | 'vpn' | 'proxy' | 'unknown';
  * originate from. This reflects THIS app's egress; with a full-tunnel OS VPN it is also the route the
  * website audits, form submissions, and click events take (they share the OS routing table).
  */
+/** One row of the Network "Run Test": reachability + latency of a service endpoint the app uses. */
+export interface NetworkTestResultView {
+  host: string;
+  label: string;
+  ok: boolean;
+  ms: number;
+  error?: string;
+}
+
 export interface NetworkLocationView {
   /** Public IP as seen by the geolocation service, or null when the check couldn't reach the network. */
   ip: string | null;
