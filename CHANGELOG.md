@@ -1,3 +1,9 @@
+## [1.352.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.351.0...v1.352.0) (2026-07-18)
+
+### Features
+
+* **desktop:** chat attachments go NATIVE - Claude/Gemini see PDF pages and images (figures, charts, tables) ([#601](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/601)) ([ee841df](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/ee841dfd7f5b57492a0e8ecb6a786ca46edfbade))
+
 ## [1.351.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.350.0...v1.351.0) (2026-07-18)
 
 ### Features
