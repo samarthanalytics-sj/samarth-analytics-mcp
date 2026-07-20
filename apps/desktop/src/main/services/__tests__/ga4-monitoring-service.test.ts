@@ -560,3 +560,63 @@ test('runOnce is a no-op without an active signed-in account or any monitored pr
   noAcct.configure({ targets: [{ propertyId: 'properties/1', propertyLabel: '', enabled: true }], enabled: false });
   assert.deepEqual(await noAcct.runOnce(), [], 'no active account → empty sweep');
 });
+
+test('run history: each sweep appends one entry (score/counts/duration/trigger); manual vs scheduled recorded', async () => {
+  let now = Date.parse('2026-07-02T09:00:00Z');
+  const svc = new Ga4MonitoringService({
+    registry: { getActiveView: () => account },
+    data: fakeData(),
+    secrets: makeSecrets(),
+    emit: () => {},
+    now: () => now,
+  });
+  svc.configure({ targets: [{ propertyId: 'properties/1', propertyLabel: 'Acme', enabled: true }], enabled: false });
+
+  const [r1] = await svc.runOnce(); // default: a timer/boot sweep → scheduled
+  assert.equal(r1.trigger, 'scheduled', 'default trigger is scheduled');
+  assert.ok(typeof r1.score === 'number' && r1.score >= 0 && r1.score <= 100, `score in range: ${r1.score}`);
+  assert.ok(typeof r1.durationMs === 'number' && r1.durationMs >= 0, 'duration stamped');
+
+  now += 60_000;
+  await svc.runOnce('properties/1', 'manual'); // the Run-now click path
+
+  const t = svc.status().targetStatuses[0];
+  const hist = t.history ?? [];
+  assert.equal(hist.length, 2, 'one entry per completed run');
+  assert.equal(hist[0].trigger, 'scheduled');
+  assert.equal(hist[1].trigger, 'manual');
+  assert.equal(hist[1].at, now, 'entry timestamped with the run time');
+  assert.equal(hist[1].score, t.lastRun?.score, 'history score matches the run');
+  assert.equal(hist[1].health, t.lastRun?.health, 'history health matches the run');
+  assert.equal(
+    hist[1].critical,
+    (t.lastRun?.alerts ?? []).filter((a) => a.severity === 'critical' || a.severity === 'high').length,
+    'critical column counts critical + high alerts',
+  );
+  assert.equal(
+    hist[1].warnings,
+    (t.lastRun?.alerts ?? []).filter((a) => a.severity === 'medium' || a.severity === 'low').length,
+    'warnings column counts medium + low alerts',
+  );
+});
+
+test('configure() echo of a STALE targets copy never rolls back server-owned fields (history survives)', async () => {
+  const svc = new Ga4MonitoringService({
+    registry: { getActiveView: () => account },
+    data: fakeData(),
+    secrets: makeSecrets(),
+    emit: () => {},
+    now: () => Date.parse('2026-07-02T09:00:00Z'),
+  });
+  svc.configure({ targets: [{ propertyId: 'properties/1', propertyLabel: 'Acme', enabled: true }], enabled: false });
+  // The renderer snapshots targets (e.g. for a later Pause click) BEFORE the run records history.
+  const stale = JSON.parse(JSON.stringify(svc.status().targets)) as typeof svc.status.prototype;
+  await svc.runOnce();
+  const before = svc.status().targetStatuses[0].history?.length ?? 0;
+  assert.ok(before >= 1, 'run recorded history');
+  // The stale echo (with a legitimate renderer-owned change: pause) must not erase the history.
+  svc.configure({ targets: (stale as unknown as Array<Record<string, unknown>>).map((x) => ({ ...x, enabled: false })) as never });
+  const t = svc.status().targetStatuses[0];
+  assert.equal(t.enabled, false, 'renderer-owned field (pause) applied');
+  assert.equal(t.history?.length ?? 0, before, 'server-owned history preserved despite the stale echo');
+});
