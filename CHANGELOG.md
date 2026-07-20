@@ -1,3 +1,9 @@
+## [1.355.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.354.0...v1.355.0) (2026-07-20)
+
+### Features
+
+* **desktop:** GA4 Monitoring dashboard redesign - score gauge, checks grid, recent alerts, run history ([c220a40](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c220a4082c4f822d98f8cf150348dfdbae8920fc)), closes [#b45309](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/b45309)
+
 ## [1.354.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.353.0...v1.354.0) (2026-07-18)
 
 ### Features
