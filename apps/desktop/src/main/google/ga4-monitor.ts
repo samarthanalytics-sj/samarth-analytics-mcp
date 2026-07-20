@@ -119,6 +119,20 @@ export interface Ga4MonitorResult {
 }
 
 const SEV_RANK: Record<Severity, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
+
+/** Penalty per open alert, by severity, for the derived health score. */
+const SCORE_PENALTY: Record<Severity, number> = { critical: 30, high: 15, medium: 7, low: 3, info: 0 };
+
+/** A DERIVED 0-100 health score for one run: 100 minus a per-alert severity penalty (critical -30,
+ *  high -15, medium -7, low -3; info free), clamped to [0, 100]. Purely a presentation of the run's
+ *  own alerts — nothing is measured beyond what the checks already found (the all-checks-skipped case
+ *  already surfaces as an alert, so it penalizes itself). Deterministic + unit-tested. */
+export function monitorHealthScore(r: Pick<Ga4MonitorResult, 'alerts'>): number {
+  let s = 100;
+  for (const a of r.alerts) s -= SCORE_PENALTY[a.severity] ?? 0;
+  return Math.max(0, Math.min(100, s));
+}
+
 const norm = (d?: string): string => (d ?? '').replace(/-/g, '');
 /** A slug safe for a stable alert id (used to dedup ongoing issues across runs). */
 const slug = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 60);

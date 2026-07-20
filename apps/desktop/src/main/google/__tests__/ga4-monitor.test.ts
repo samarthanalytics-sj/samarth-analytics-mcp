@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { ga4DataLagDays, monitorGa4, firstMetric, type Ga4MonitorInput } from '../ga4-monitor';
+import { ga4DataLagDays, monitorGa4, monitorHealthScore, firstMetric, type Ga4MonitorInput, type Ga4MonitorAlert } from '../ga4-monitor';
 import type { Ga4Baseline } from '../data-service';
 import type { DataQualityCounts } from '../ga4-data-quality';
 
@@ -474,6 +474,17 @@ test('alerts speak to the owner: consequence-first plain voice, forwardable acti
 
   assert.ok(!/serious/.test(r.summary), 'no third severity word: ' + r.summary);
   assert.ok(/\d+ (critical|high)/.test(r.summary), 'summary counts in the alert vocabulary: ' + r.summary);
+});
+
+test('monitorHealthScore: derived 0-100 from the run alerts, clamped, info-free', () => {
+  const alert = (severity: Ga4MonitorAlert['severity']): Ga4MonitorAlert =>
+    ({ id: 'x', kind: 'k', severity, title: 't', detail: 'd' });
+  assert.equal(monitorHealthScore({ alerts: [] }), 100, 'clean run scores 100');
+  assert.equal(monitorHealthScore({ alerts: [alert('critical')] }), 70, 'critical -30');
+  assert.equal(monitorHealthScore({ alerts: [alert('critical'), alert('high')] }), 55, 'critical + high');
+  assert.equal(monitorHealthScore({ alerts: [alert('medium'), alert('low')] }), 90, 'medium -7, low -3');
+  assert.equal(monitorHealthScore({ alerts: [alert('info')] }), 100, 'info is free');
+  assert.equal(monitorHealthScore({ alerts: [alert('critical'), alert('critical'), alert('critical'), alert('critical')] }), 0, 'clamped at 0');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

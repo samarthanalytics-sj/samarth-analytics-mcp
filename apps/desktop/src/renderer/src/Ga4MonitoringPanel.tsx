@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { AccountView, Ga4MonitorStatus, Ga4MonitorRun, Ga4MonitorTargetStatus, Ga4MonitorAlertView, Ga4MonitorCheckView, Ga4PropertyListItem } from '../../shared/ipc';
+import type { AccountView, Ga4MonitorStatus, Ga4MonitorRun, Ga4MonitorTargetStatus, Ga4MonitorAlertView, Ga4MonitorCheckView, Ga4MonitorHistoryEntry, Ga4PropertyListItem } from '../../shared/ipc';
 
 // GA4 Monitoring tab - a dashboard-per-property layout that answers, top to bottom:
 //   What is the problem? → the CRITICAL ALERT hero (the single worst finding, or an all-clear).
@@ -31,14 +31,6 @@ const CHECK_PILL: Record<string, { label: string; color: string }> = {
   warn: { label: 'Warning', color: 'var(--c-amber, #b8860b)' },
   fail: { label: 'Issue', color: 'var(--c-red)' },
   skip: { label: 'Not run', color: 'var(--text-muted)' },
-};
-/** Status tone for a KPI tile - colours the big number and the thin left accent border.
- *  `neutral` has no status (border falls back to the default). */
-const TONE: Record<'red' | 'amber' | 'green' | 'neutral', { color: string }> = {
-  red: { color: 'var(--c-red)' },
-  amber: { color: 'var(--c-amber, #b8860b)' },
-  green: { color: 'var(--c-green)' },
-  neutral: { color: 'var(--text)' },
 };
 
 /** The Slack mark (official four-colour logo), inlined as SVG so it renders crisply at any size and
@@ -180,20 +172,6 @@ function tallyChecks(checks: Ga4MonitorCheckView[]): Record<'pass' | 'warn' | 'f
   return c;
 }
 
-/** One overview metric - label + number + one line of context, in a plain (box-less) column. A thin
- *  vertical rule separates it from the previous metric (skip on the first). Colour lives only on the
- *  number (status tone). */
-function Kpi({ heading, value, sub, tone = 'neutral', divider = false }: { heading: string; value: React.ReactNode; sub?: string; tone?: 'red' | 'amber' | 'green' | 'neutral'; divider?: boolean }): JSX.Element {
-  const t = TONE[tone];
-  return (
-    <div style={{ flex: '1 1 160px', minWidth: 140, padding: divider ? '2px 0 2px 22px' : '2px 0', borderLeft: divider ? '1px solid var(--border)' : undefined }}>
-      <div style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.6, color: 'var(--text-muted)' }}>{heading}</div>
-      <div style={{ fontSize: 24, fontWeight: 700, lineHeight: 1.2, marginTop: 6, color: t.color }}>{value}</div>
-      {sub && <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 3, lineHeight: 1.4 }}>{sub}</div>}
-    </div>
-  );
-}
-
 /** THE HERO - the one thing the operator should look at first: the worst open finding, or an
  *  all-clear when the run is healthy. Answers "what is the problem, and how serious is it?" */
 function HeroCard({ run, isRunning, disabled, onRun }: { run: Ga4MonitorRun; isRunning: boolean; disabled: boolean; onRun: () => void }): JSX.Element {
@@ -214,19 +192,34 @@ function HeroCard({ run, isRunning, disabled, onRun }: { run: Ga4MonitorRun; isR
   }
 
   const solid = SEV_SOLID[top.severity] ?? 'var(--danger)';
+  // Real supporting lines only: the engine's structured metric lines as "evidence", its impact line
+  // when it exists, and the recommended actions. Nothing here is fabricated for the layout.
+  const evidence = (top.summaryLines ?? []).slice(0, 3);
+  const actions = top.actions?.length ? top.actions : top.recommendation ? [top.recommendation] : [];
   return (
-    <div style={{ ...card, padding: 18 }}>
+    <div style={{ ...card, padding: 18, borderLeft: `4px solid ${solid}` }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.6, textTransform: 'uppercase', color: '#fff', background: solid, borderRadius: 6, padding: '3px 10px' }}>{top.severity}</span>
         <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-faint)' }}>Most urgent finding</span>
+        <span style={{ fontSize: 11, fontFamily: MONO, color: 'var(--text-faint)' }}>· {fmtAgo(run.at)}</span>
         {isNew && <span style={{ fontSize: 10, fontWeight: 800, color: 'var(--c-blue)', background: 'var(--c-blue-bg, rgba(59,130,246,.15))', borderRadius: 999, padding: '1px 8px' }}>NEW</span>}
       </div>
       <div style={{ fontSize: 16, fontWeight: 700, marginTop: 10, lineHeight: 1.3 }}>{top.title}</div>
       <div style={{ fontSize: 14, color: 'var(--text-dim)', marginTop: 8, lineHeight: 1.55 }}>{emphasize(top.detail)}</div>
-      {top.recommendation && (
+      {(evidence.length > 0 || top.impact) && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 3, marginTop: 10 }}>
+          {evidence.map((l, i) => (
+            <div key={i} style={{ fontSize: 12.5, color: 'var(--text-dim)', lineHeight: 1.5 }}>{emphasize(l)}</div>
+          ))}
+          {top.impact && <div style={{ fontSize: 12.5, color: SEV_COLOR[top.severity] ?? 'var(--c-red)', fontWeight: 600, lineHeight: 1.5 }}>⚠ Impact: {emphasize(top.impact)}</div>}
+        </div>
+      )}
+      {actions.length > 0 && (
         <div style={{ marginTop: 12, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: '10px 14px' }}>
-          <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-faint)', marginBottom: 3 }}>Recommended fix</div>
-          <div style={{ fontSize: 13.5, color: 'var(--text)', lineHeight: 1.5 }}>{top.recommendation}</div>
+          <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-faint)', marginBottom: 3 }}>Recommended action</div>
+          {actions.slice(0, 3).map((a, i) => (
+            <div key={i} style={{ fontSize: 13.5, color: 'var(--text)', lineHeight: 1.55 }}>{actions.length > 1 ? '· ' : ''}{a}</div>
+          ))}
         </div>
       )}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginTop: 14 }}>
@@ -297,65 +290,187 @@ function emphasize(text: string): React.ReactNode {
   );
 }
 
-/** One health check as a TABLE ROW: a status pill, the neutral category icon + label, and the insight
- *  (key figures emphasised, long ones clamped to three lines). "Details" un-clamps the insight and
- *  reveals a plain-language explainer of what the check verifies. The only colour is the status pill. */
-function CheckRow({ c, last }: { c: Ga4MonitorCheckView; last: boolean }): JSX.Element {
-  const [open, setOpen] = useState(false);
-  const p = CHECK_PILL[c.status] ?? CHECK_PILL.skip;
-  const explain = CHECK_EXPLAIN[c.id] ?? 'An additional health signal for this property.';
-  const regionId = `ga4-check-${c.id}`;
-  const cell: React.CSSProperties = { padding: '11px 16px', borderBottom: last ? 'none' : '1px solid var(--border)', verticalAlign: 'top' };
-  const clamp: React.CSSProperties = open ? {} : { display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' };
+/** The derived 0-100 health score as a compact gauge card, with the change vs the PREVIOUS recorded
+ *  run. Honestly labeled: the score is computed from this run's alerts (see monitorHealthScore), not a
+ *  metric GA4 reports. */
+function HealthScoreCard({ score, history }: { score: number; history: Ga4MonitorHistoryEntry[] }): JSX.Element {
+  const prev = history.length >= 2 ? history[history.length - 2] : null;
+  const delta = prev ? score - prev.score : null;
+  // Theme tokens only (WCAG-verified in both themes) — never raw hexes for colored text/graphics here.
+  const color = score >= 85 ? 'var(--c-green)' : score >= 60 ? 'var(--c-amber, #b8860b)' : 'var(--c-red)';
+  // SVG arc: a 3/4 circle from 135° to 405°, filled proportionally to the score.
+  const R = 34;
+  const C = 2 * Math.PI * R;
+  const arc = C * 0.75;
   return (
-    <tr>
-      <td style={{ ...cell, width: 96, whiteSpace: 'nowrap' }}>
-        <span style={{ fontSize: 10.5, fontWeight: 700, color: p.color, background: 'var(--surface-2)', border: `1px solid ${p.color}`, borderRadius: 999, padding: '2px 9px' }}>{p.label}</span>
-      </td>
-      <td style={{ ...cell, whiteSpace: 'nowrap' }}>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ color: 'var(--text-muted)', display: 'inline-flex', flexShrink: 0 }}><CheckTypeIcon id={c.id} size={16} /></span>
-          <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--text)' }}>{c.label}</span>
-        </span>
-      </td>
-      <td style={{ ...cell, color: 'var(--text-muted)', lineHeight: 1.5, minWidth: 240 }}>
-        <div style={{ ...clamp }}>{emphasize(c.detail)}</div>
-        <button
-          type="button"
-          aria-expanded={open}
-          aria-controls={regionId}
-          onClick={() => setOpen((o) => !o)}
-          style={{ display: 'inline-flex', alignItems: 'center', gap: 5, marginTop: 6, padding: 0, background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: 11.5, fontWeight: 600, color: 'var(--c-blue)' }}
-        >
-          <span aria-hidden="true" style={{ display: 'inline-block', transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .12s ease' }}>▸</span>
-          {open ? 'Hide details' : 'Details'}
-        </button>
-        {open && <div id={regionId} style={{ marginTop: 6, paddingTop: 6, borderTop: '1px dashed var(--border)', fontSize: 12, color: 'var(--text-dim)', lineHeight: 1.5 }}>{explain}</div>}
-      </td>
-    </tr>
+    <div style={{ ...card, display: 'flex', alignItems: 'center', gap: 14, padding: 16 }}>
+      <svg width="88" height="88" viewBox="0 0 88 88" role="img" aria-label={`Health score ${score} of 100`}>
+        <g transform="rotate(135 44 44)">
+          <circle cx="44" cy="44" r={R} fill="none" stroke="var(--border)" strokeWidth="8" strokeDasharray={`${arc} ${C}`} strokeLinecap="round" />
+          {/* score 0 renders NO progress arc — a zero-length round-capped dash would still paint a dot. */}
+          {score > 0 && <circle cx="44" cy="44" r={R} fill="none" stroke={color} strokeWidth="8" strokeDasharray={`${arc * (score / 100)} ${C}`} strokeLinecap="round" />}
+        </g>
+        <text x="44" y="42" textAnchor="middle" style={{ fontSize: 20, fontWeight: 800, fill: 'var(--text)', fontFamily: 'inherit' }}>{score}</text>
+        <text x="44" y="56" textAnchor="middle" style={{ fontSize: 9, fill: 'var(--text-faint)', fontFamily: 'inherit' }}>/100</text>
+      </svg>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--text-faint)' }}>Health score</div>
+        {delta !== null && delta !== 0 && (
+          <div style={{ fontSize: 12, fontWeight: 700, marginTop: 3, color: delta < 0 ? 'var(--c-red)' : 'var(--c-green)' }}>
+            {delta < 0 ? '↓' : '↑'} {Math.abs(delta)} pts vs previous check
+          </div>
+        )}
+        {(delta === null || delta === 0) && <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 3 }}>{delta === 0 ? 'unchanged vs previous check' : 'first recorded check'}</div>}
+        <div style={{ fontSize: 10.5, color: 'var(--text-faint)', marginTop: 4, lineHeight: 1.4 }}>Derived from this run&apos;s alerts</div>
+      </div>
+    </div>
   );
 }
 
-/** The full alert list (below the hero) - one compact row per alert, worst first, so nothing hides. */
-function AlertList({ run }: { run: Ga4MonitorRun }): JSX.Element {
+/** One big-number stat tile (the CRITICAL / WARNINGS / LAST SCAN column of the hero row). */
+function StatTile({ value, label: lbl, color }: { value: React.ReactNode; label: string; color?: string }): JSX.Element {
+  return (
+    <div style={{ ...card, flex: 1, minWidth: 88, padding: '12px 14px', textAlign: 'center' }}>
+      <div style={{ fontSize: 22, fontWeight: 800, lineHeight: 1.1, color: color ?? 'var(--text)' }}>{value}</div>
+      <div style={{ fontSize: 9.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.6, color: 'var(--text-faint)', marginTop: 4 }}>{lbl}</div>
+    </div>
+  );
+}
+
+/** One health check as a GRID CARD (mockup format): status chip + icon + label, the finding clamped,
+ *  and an expandable plain-language explainer. Content identical to the old table row. */
+function CheckCard({ c }: { c: Ga4MonitorCheckView }): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const p = CHECK_PILL[c.status] ?? CHECK_PILL.skip;
+  const explain = CHECK_EXPLAIN[c.id] ?? 'An additional health signal for this property.';
+  const clamp: React.CSSProperties = open ? {} : { display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' };
+  return (
+    <div style={{ ...card, padding: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ color: 'var(--text-muted)', display: 'inline-flex', flexShrink: 0 }}><CheckTypeIcon id={c.id} size={16} /></span>
+        <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--text)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.label}</span>
+        <span style={{ fontSize: 10.5, fontWeight: 700, color: p.color, background: 'var(--surface-2)', border: `1px solid ${p.color}`, borderRadius: 999, padding: '2px 9px', flexShrink: 0 }}>{p.label}</span>
+      </div>
+      <div style={{ fontSize: 12.5, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+        <div style={{ ...clamp }}>{emphasize(c.detail)}</div>
+      </div>
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        style={{ alignSelf: 'flex-start', display: 'inline-flex', alignItems: 'center', gap: 5, padding: 0, background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: 11.5, fontWeight: 600, color: 'var(--c-blue)' }}
+      >
+        <span aria-hidden="true" style={{ display: 'inline-block', transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .12s ease' }}>▸</span>
+        {open ? 'Hide details' : 'Details'}
+      </button>
+      {open && <div style={{ paddingTop: 6, borderTop: '1px dashed var(--border)', fontSize: 12, color: 'var(--text-dim)', lineHeight: 1.5 }}>{explain}</div>}
+    </div>
+  );
+}
+
+/** Recent alerts (mockup format): the run's alerts, worst first, each with its severity chip and — when
+ *  the persisted issue log knows it — WHEN it opened. All fields real (title/detail/fix from the engine,
+ *  openedAt from the issue log). */
+function RecentAlerts({ run, issueLog }: { run: Ga4MonitorRun; issueLog: Array<{ id: string; openedAt: number }> }): JSX.Element {
   const newIds = new Set(run.newAlertIds);
+  const openedAt = new Map(issueLog.map((e) => [e.id, e.openedAt] as const));
   const alerts = [...run.alerts].sort((a, b) => (SEV_RANK[b.severity] ?? 0) - (SEV_RANK[a.severity] ?? 0));
   return (
+    <div style={{ ...card, padding: 16, flex: 1, minWidth: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+        <span style={{ fontSize: 13, fontWeight: 700 }}>Recent alerts</span>
+        {alerts.length > 0 && (
+          <span style={{ fontSize: 10.5, fontWeight: 800, color: '#fff', background: 'var(--danger)', borderRadius: 999, padding: '1px 8px' }}>{alerts.length} active</span>
+        )}
+      </div>
+      {alerts.length === 0 ? (
+        <div style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>No open alerts - everything this monitor checks looks normal.</div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
+          {alerts.map((a, i) => {
+            const opened = openedAt.get(a.id);
+            return (
+              <div key={a.id} style={{ padding: '10px 2px', borderTop: i === 0 ? 'none' : '1px solid var(--border)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 10, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.4, color: SEV_COLOR[a.severity] ?? 'var(--text)', border: `1px solid ${SEV_COLOR[a.severity] ?? 'var(--border)'}`, borderRadius: 999, padding: '1px 8px' }}>{a.severity}</span>
+                  {opened != null && <span style={{ fontSize: 11, fontFamily: MONO, color: 'var(--text-faint)' }}>{fmtAgo(opened)}</span>}
+                  {newIds.has(a.id) && <span style={{ fontSize: 10, background: 'var(--c-blue-bg, rgba(59,130,246,.15))', color: 'var(--c-blue)', borderRadius: 999, padding: '1px 7px', fontWeight: 800 }}>NEW</span>}
+                </div>
+                <div style={{ fontWeight: 700, fontSize: 13, marginTop: 4 }}>{a.title}</div>
+                <div style={{ fontSize: 12.5, color: 'var(--text-dim)', marginTop: 3, lineHeight: 1.5 }}>{emphasize(a.detail)}</div>
+                {a.recommendation && <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 3 }}><b>Fix:</b> {a.recommendation}</div>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const fmtDuration = (ms: number): string => (ms < 1000 ? '<1s' : `${Math.round(ms / 1000)}s`);
+
+/** Monitoring history (mockup format): one row per recorded run — status, derived score, alert counts,
+ *  duration and what triggered it. Data comes from the persisted per-target run history. */
+function HistoryTable({ history }: { history: Ga4MonitorHistoryEntry[] }): JSX.Element | null {
+  const [filter, setFilter] = useState<'all' | 'healthy' | 'warning' | 'critical'>('all');
+  if (!history.length) return null;
+  const rows = [...history].reverse().filter((e) => filter === 'all' || e.health === filter);
+  const th: React.CSSProperties = { textAlign: 'left', padding: '9px 14px', fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--text-faint)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' };
+  const td: React.CSSProperties = { padding: '9px 14px', borderBottom: '1px solid var(--border)', fontSize: 12.5, whiteSpace: 'nowrap' };
+  return (
     <div>
-      <div style={sectionTitle}>All alerts ({alerts.length})</div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {alerts.map((a) => (
-          <div key={a.id} style={{ borderLeft: `3px solid ${SEV_COLOR[a.severity] ?? 'var(--border)'}`, background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 14px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <span style={{ fontWeight: 800, color: SEV_COLOR[a.severity] ?? 'var(--text)', fontSize: 10.5, textTransform: 'uppercase', letterSpacing: 0.4 }}>{a.severity}</span>
-              <span style={{ fontWeight: 700, fontSize: 13.5 }}>{a.title}</span>
-              {newIds.has(a.id) && <span style={{ fontSize: 10, background: 'var(--c-blue-bg, rgba(59,130,246,.15))', color: 'var(--c-blue)', borderRadius: 999, padding: '1px 7px', fontWeight: 800 }}>NEW</span>}
-            </div>
-            <div style={{ fontSize: 12.5, color: 'var(--text-dim)', marginTop: 4, lineHeight: 1.5 }}>{a.detail}</div>
-            {a.recommendation && <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}><b>Fix:</b> {a.recommendation}</div>}
-          </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
+        <span style={sectionTitle}>Monitoring history</span>
+        <span style={{ flex: 1 }} />
+        {(['all', 'healthy', 'warning', 'critical'] as const).map((f) => (
+          <button
+            key={f}
+            onClick={() => setFilter(f)}
+            style={{ ...ghostBtn, padding: '3px 10px', fontSize: 11.5, ...(filter === f ? { background: 'var(--surface-3)', color: 'var(--text)', fontWeight: 700 } : {}) }}
+          >
+            {f === 'all' ? 'All' : HEALTH[f].label}
+          </button>
         ))}
       </div>
+      <div style={{ ...card, padding: 0, overflowX: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr>{['Timestamp', 'Status', 'Health score', 'Critical', 'Warnings', 'Duration', 'Trigger'].map((h) => <th key={h} style={th}>{h}</th>)}</tr>
+          </thead>
+          <tbody>
+            {rows.map((e, i) => {
+              const h = HEALTH[e.health] ?? HEALTH.healthy;
+              const barColor = e.score >= 85 ? 'var(--c-green)' : e.score >= 60 ? 'var(--c-amber, #b8860b)' : 'var(--c-red)';
+              const last = i === rows.length - 1;
+              const cell = last ? { ...td, borderBottom: 'none' } : td;
+              return (
+                <tr key={e.at}>
+                  <td style={{ ...cell, fontFamily: MONO, fontSize: 11.5, color: 'var(--text-muted)' }} title={fmtTime(e.at)}>{fmtTime(e.at)}</td>
+                  <td style={cell}>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 700, color: h.color, background: h.bg, borderRadius: 999, padding: '2px 9px' }}>{h.icon} {h.label}</span>
+                  </td>
+                  <td style={cell}>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ width: 56, height: 5, borderRadius: 999, background: 'var(--surface-3)', overflow: 'hidden', display: 'inline-block' }}>
+                        <span style={{ display: 'block', height: '100%', width: `${e.score}%`, background: barColor, borderRadius: 999 }} />
+                      </span>
+                      <span style={{ fontWeight: 700, fontSize: 12 }}>{e.score}</span>
+                    </span>
+                  </td>
+                  <td style={{ ...cell, fontWeight: 700, color: e.critical ? 'var(--c-red)' : 'var(--text-faint)' }}>{e.critical || '–'}</td>
+                  <td style={{ ...cell, fontWeight: 700, color: e.warnings ? 'var(--c-amber, #b8860b)' : 'var(--text-faint)' }}>{e.warnings || '–'}</td>
+                  <td style={{ ...cell, fontFamily: MONO, fontSize: 11.5, color: 'var(--text-muted)' }}>{fmtDuration(e.durationMs)}</td>
+                  <td style={cell}>
+                    <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-muted)', background: 'var(--surface-3)', borderRadius: 6, padding: '2px 8px', textTransform: 'capitalize' }}>{e.trigger}</span>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ fontSize: 10.5, color: 'var(--text-faint)', marginTop: 6 }}>Score is derived from each run&apos;s alerts (critical -30 · high -15 · medium -7 · low -3). Critical column counts critical + high alerts; Warnings counts medium + low.</div>
     </div>
   );
 }
@@ -383,43 +498,14 @@ function PropertyPanel({ t, runningId, busy, onRun, onTogglePause, onRemove, onS
   const runDisabled = runningId !== null;
   const run = t.lastRun;
   const counts = run ? tallyChecks(run.checks) : null;
-  const attention = counts ? counts.fail + counts.warn : 0;
+  // Stat tiles: critical/high vs medium/low alerts — the same split the run history records.
+  const criticalCount = run ? run.alerts.filter((a) => a.severity === 'critical' || a.severity === 'high').length : 0;
+  const warningCount = run ? run.alerts.filter((a) => a.severity === 'medium' || a.severity === 'low').length : 0;
 
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      {/* ── Property identity + controls ── */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-        <div style={{ minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-            <span style={{ fontWeight: 700, fontSize: 18 }}>{t.propertyLabel || t.propertyId}</span>
-            {h ? (
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: h.color, background: h.bg, borderRadius: 999, padding: '2px 10px' }}>
-                {h.icon} {h.label}
-              </span>
-            ) : (
-              <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)', background: 'var(--surface-3)', borderRadius: 999, padding: '2px 10px' }}>⚪ No check yet</span>
-            )}
-            {!t.enabled && <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', background: 'var(--surface-3)', borderRadius: 999, padding: '2px 8px' }}>PAUSED</span>}
-          </div>
-          <div style={{ fontFamily: MONO, fontSize: 11, color: 'var(--text-faint)', marginTop: 4, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-            <span>{t.propertyId.replace('properties/', '')}</span>
-            <span title={t.lastRunAt ? `Last check: ${fmtTime(t.lastRunAt)}` : undefined}>checked: {fmtAgo(t.lastRunAt)}</span>
-            <span title={t.lastSlackAt ? `Last Slack alert: ${fmtTime(t.lastSlackAt)}` : 'No alert has been posted for this property yet'}>📣 last alert: {t.lastSlackAt ? fmtAgo(t.lastSlackAt) : 'none yet'}</span>
-            {t.lastError && <span style={{ color: 'var(--c-red)', fontFamily: 'inherit' }} title={t.lastError}>last check failed</span>}
-          </div>
-        </div>
-        <span style={{ flex: 1 }} />
-        <div style={{ display: 'flex', gap: 6 }}>
-          <button style={{ ...ghostBtn, color: 'var(--c-blue)' }} disabled={runDisabled} onClick={onRun}>{isRunning ? 'Checking…' : '▶ Run check'}</button>
-          <button style={ghostBtn} disabled={busy || !run} title={run ? 'Download this report as a PDF' : 'Run a check first'} onClick={() => onExport('pdf')}>⬇ PDF</button>
-          <button style={ghostBtn} disabled={busy || !run} title={run ? 'Download this report as a CSV' : 'Run a check first'} onClick={() => onExport('csv')}>⬇ CSV</button>
-          <button style={ghostBtn} disabled={busy} title={t.enabled ? 'Pause background checks for this property' : 'Resume background checks'} onClick={onTogglePause}>{t.enabled ? '⏸ Pause' : '⏵ Resume'}</button>
-          <button style={{ ...ghostBtn, color: 'var(--c-red)' }} disabled={busy} title="Stop monitoring this property" onClick={onRemove}>Remove</button>
-        </div>
-      </div>
-
-      {/* ── This property's Slack channel ── */}
-      <div style={{ ...card, display: 'flex', flexDirection: 'column', gap: 10 }}>
+  // The property's Slack-channel card: rendered in the Configuration column beside Recent alerts when a
+  // run exists, else standalone under the header — so connecting a channel is always reachable.
+  const slackCard = (
+    <div style={{ ...card, display: 'flex', flexDirection: 'column', gap: 10, flex: '1 1 300px', minWidth: 280, alignSelf: 'flex-start' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-faint)' }}><SlackMark size={14} /> Slack channel</span>
           {t.hasWebhook ? (
@@ -486,74 +572,104 @@ function PropertyPanel({ t, runningId, busy, onRun, onTogglePause, onRemove, onS
             </span>
           </div>
         )}
+    </div>
+  );
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {/* ── Property identity + controls ── */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <span style={{ fontWeight: 700, fontSize: 18 }}>{t.propertyLabel || t.propertyId}</span>
+            {h ? (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: h.color, background: h.bg, borderRadius: 999, padding: '2px 10px' }}>
+                {h.icon} {h.label}
+              </span>
+            ) : (
+              <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)', background: 'var(--surface-3)', borderRadius: 999, padding: '2px 10px' }}>⚪ No check yet</span>
+            )}
+            {!t.enabled && <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', background: 'var(--surface-3)', borderRadius: 999, padding: '2px 8px' }}>PAUSED</span>}
+          </div>
+          <div style={{ fontFamily: MONO, fontSize: 11, color: 'var(--text-faint)', marginTop: 4, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            <span>{t.propertyId.replace('properties/', '')}</span>
+            <span title={t.lastRunAt ? `Last check: ${fmtTime(t.lastRunAt)}` : undefined}>checked: {fmtAgo(t.lastRunAt)}</span>
+            <span title={t.lastSlackAt ? `Last Slack alert: ${fmtTime(t.lastSlackAt)}` : 'No alert has been posted for this property yet'}>📣 last alert: {t.lastSlackAt ? fmtAgo(t.lastSlackAt) : 'none yet'}</span>
+            {t.lastError && <span style={{ color: 'var(--c-red)', fontFamily: 'inherit' }} title={t.lastError}>last check failed</span>}
+          </div>
+        </div>
+        <span style={{ flex: 1 }} />
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button style={{ ...ghostBtn, color: 'var(--c-blue)' }} disabled={runDisabled} onClick={onRun}>{isRunning ? 'Checking…' : '▶ Run check'}</button>
+          <button style={ghostBtn} disabled={busy || !run} title={run ? 'Download this report as a PDF' : 'Run a check first'} onClick={() => onExport('pdf')}>⬇ PDF</button>
+          <button style={ghostBtn} disabled={busy || !run} title={run ? 'Download this report as a CSV' : 'Run a check first'} onClick={() => onExport('csv')}>⬇ CSV</button>
+          <button style={ghostBtn} disabled={busy} title={t.enabled ? 'Pause background checks for this property' : 'Resume background checks'} onClick={onTogglePause}>{t.enabled ? '⏸ Pause' : '⏵ Resume'}</button>
+          <button style={{ ...ghostBtn, color: 'var(--c-red)' }} disabled={busy} title="Stop monitoring this property" onClick={onRemove}>Remove</button>
+        </div>
       </div>
 
       {run && counts ? (
         <>
-          {/* ── What is the problem? ── */}
-          <HeroCard run={run} isRunning={isRunning} disabled={runDisabled} onRun={onRun} />
-
-          {/* ── How serious / how much? - a plain, box-less metric row ── */}
-          <div style={{ display: 'flex', flexWrap: 'wrap', columnGap: 0, rowGap: 12, padding: '4px 0' }}>
-            <Kpi
-              heading="Open issues"
-              value={run.alerts.length}
-              tone={run.alerts.length ? (run.health === 'critical' ? 'red' : 'amber') : 'green'}
-              sub={run.alerts.length ? `${run.alerts.filter((a) => a.severity === 'critical' || a.severity === 'high').length} high-priority` : 'none open'}
-            />
-            <Kpi
-              divider
-              heading="Checks passing"
-              value={`${counts.pass}/${run.checks.length}`}
-              tone={counts.fail === 0 && counts.warn === 0 ? 'green' : 'amber'}
-              sub={counts.skip ? `${counts.skip} not run` : 'all checks ran'}
-            />
-            <Kpi
-              divider
-              heading="Needs attention"
-              value={attention}
-              tone={counts.fail ? 'red' : attention ? 'amber' : 'green'}
-              sub={attention ? `${counts.fail} failing · ${counts.warn} warning` : 'nothing flagged'}
-            />
-            <Kpi divider heading="Last checked" value={fmtAgo(run.at)} sub={fmtTime(run.at)} />
+          {/* ── Hero row (mockup format): the worst finding + the score / stat column ── */}
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'stretch' }}>
+            <div style={{ flex: '2 1 460px', minWidth: 0 }}>
+              <HeroCard run={run} isRunning={isRunning} disabled={runDisabled} onRun={onRun} />
+            </div>
+            <div style={{ flex: '1 1 260px', maxWidth: 380, display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {typeof run.score === 'number' && <HealthScoreCard score={run.score} history={t.history ?? []} />}
+              <div style={{ display: 'flex', gap: 10 }}>
+                <StatTile value={criticalCount} label="Critical / high" color={criticalCount ? 'var(--c-red)' : 'var(--text-faint)'} />
+                <StatTile value={warningCount} label="Warnings" color={warningCount ? 'var(--c-amber, #b8860b)' : 'var(--text-faint)'} />
+                <StatTile value={fmtAgo(run.at)} label="Last scan" />
+              </div>
+            </div>
           </div>
 
           {/* ── Why? ── */}
           <AiSummary run={run} />
 
-          {/* ── What next? - the checks as a table ── */}
+          {/* ── Monitoring checks as a card grid (mockup format) ── */}
           <div>
-            <div style={sectionTitle}>Health checks</div>
-            <div style={{ fontSize: 11.5, color: 'var(--text-muted)', margin: '2px 0 8px', lineHeight: 1.5 }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
+              <span style={sectionTitle}>Monitoring checks</span>
+              <span style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>
+                {counts.pass} pass · {counts.fail} fail · {counts.warn} warning{counts.skip ? ` · ${counts.skip} skipped` : ''}
+              </span>
+            </div>
+            <div style={{ fontSize: 11.5, color: 'var(--text-muted)', margin: '2px 0 10px', lineHeight: 1.5 }}>
               Realtime figures are live. Daily figures cover complete days in the property&apos;s reporting timezone{run.timeZone ? <> (<b>{run.timeZone}</b>)</> : null}; today is excluded until it completes.
             </div>
-            <div style={{ ...card, padding: 0, overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
-                <thead>
-                  <tr>
-                    {['Status', 'Check', 'What we found'].map((hh) => (
-                      <th key={hh} scope="col" style={{ textAlign: 'left', padding: '10px 16px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--text-faint)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' }}>{hh}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {run.checks.map((c, i) => <CheckRow key={c.id} c={c} last={i === run.checks.length - 1} />)}
-                </tbody>
-              </table>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 10 }}>
+              {run.checks.map((c) => <CheckCard key={c.id} c={c} />)}
             </div>
           </div>
 
-          {run.alerts.length > 1 && <AlertList run={run} />}
+          {/* ── Recent alerts + this property's channel/configuration (mockup two-column row) ── */}
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+            <RecentAlerts run={run} issueLog={t.issueLog ?? []} />
+            {slackCard}
+          </div>
         </>
       ) : (
-        <div style={{ ...card, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '36px 20px', color: 'var(--text-muted)' }}>
-          <span style={{ fontSize: 28 }}>🔍</span>
-          <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--text)' }}>No check has run for this property yet</div>
-          <div style={{ fontSize: 13, textAlign: 'center', maxWidth: 420, lineHeight: 1.5 }}>
-            Click <b>▶ Run check</b> above to verify data flow, key events, spikes/drops, conversion tracking and revenue integrity.
+        <>
+          {slackCard}
+          <div style={{ ...card, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '36px 20px', color: 'var(--text-muted)' }}>
+            <span style={{ fontSize: 28 }}>🔍</span>
+            <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--text)' }}>
+              {(t.history?.length ?? 0) > 0 ? 'No check has run in this session yet' : 'No check has run for this property yet'}
+            </div>
+            <div style={{ fontSize: 13, textAlign: 'center', maxWidth: 420, lineHeight: 1.5 }}>
+              Click <b>▶ Run check</b> above to verify data flow, key events, spikes/drops, conversion tracking and revenue integrity.
+              {(t.history?.length ?? 0) > 0 ? ' Earlier runs are in the history below.' : ''}
+            </div>
           </div>
-        </div>
+        </>
       )}
+
+      {/* ── Run history: OUTSIDE the has-run branch, because history is persisted across restarts while
+             the latest run itself is in-memory — the table must show even before this session's first
+             check. Renders nothing when there is no history. ── */}
+      <HistoryTable history={t.history ?? []} />
 
     </div>
   );

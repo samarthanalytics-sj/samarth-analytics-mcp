@@ -13,8 +13,9 @@ export function registerGa4MonitoringIpc(service: Ga4MonitoringService): void {
     service.configure(patch && typeof patch === 'object' ? patch : {})
   );
   // Optional propertyId: run one target on demand (even a paused one); omitted -> sweep all enabled.
+  // Always a MANUAL trigger (a user click) — the background timer/boot sweeps stamp 'scheduled'.
   ipcMain.handle('ga4monitoring:runNow', (_e, propertyId?: unknown) =>
-    service.runOnce(typeof propertyId === 'string' && propertyId ? propertyId : undefined)
+    service.runOnce(typeof propertyId === 'string' && propertyId ? propertyId : undefined, 'manual')
   );
   // Optional propertyId on all three: a property's OWN channel vs the account default.
   ipcMain.handle('ga4monitoring:setWebhook', (_e, url: unknown, propertyId?: unknown) =>

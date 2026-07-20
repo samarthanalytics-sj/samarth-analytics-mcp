@@ -25,6 +25,10 @@ export function monitorRunToCsv(run: Ga4MonitorRun): string {
   if (run.timeZone) lines.push(['Reporting timezone', run.timeZone].map(csvCell).join(','));
   lines.push(['Checked at', fmtWhen(run.at)].map(csvCell).join(','));
   lines.push(['Health', cap(run.health)].map(csvCell).join(','));
+  // Score/duration/trigger are optional (runs recorded before they existed lack them) — omit, not fake.
+  if (typeof run.score === 'number') lines.push(['Health score (derived from alerts)', `${run.score}/100`].map(csvCell).join(','));
+  if (typeof run.durationMs === 'number') lines.push(['Check duration', `${Math.max(1, Math.round(run.durationMs / 1000))}s`].map(csvCell).join(','));
+  if (run.trigger) lines.push(['Triggered by', run.trigger === 'manual' ? 'Manual run' : 'Schedule'].map(csvCell).join(','));
   lines.push(['Summary', run.summary].map(csvCell).join(','));
   lines.push('');
   lines.push(['Type', 'Status', 'Name', 'What we found', 'Technical detail', 'Recommendation'].join(','));
@@ -98,7 +102,7 @@ function monitorRunToHtmlRaw(run: Ga4MonitorRun): string {
   .foot { margin-top: 26px; color: #94a3b8; font-size: 10.5px; }
 </style></head><body>
   <h1>GA4 monitoring report: ${escHtml(run.propertyLabel)}</h1>
-  <div class="meta">Property ${escHtml(pid)}${run.timeZone ? ` &middot; reporting timezone ${escHtml(run.timeZone)}` : ''} &middot; checked ${escHtml(fmtWhen(run.at))}</div>
+  <div class="meta">Property ${escHtml(pid)}${run.timeZone ? ` &middot; reporting timezone ${escHtml(run.timeZone)}` : ''} &middot; checked ${escHtml(fmtWhen(run.at))}${typeof run.score === 'number' ? ` &middot; health score ${run.score}/100 (derived from alerts)` : ''}${run.trigger ? ` &middot; ${run.trigger === 'manual' ? 'manual run' : 'scheduled'}` : ''}${typeof run.durationMs === 'number' ? ` &middot; took ${Math.max(1, Math.round(run.durationMs / 1000))}s` : ''}</div>
   <div class="verdict"><b>${escHtml(run.health)}</b> - ${escHtml(run.summary)}</div>
   ${run.alerts.length ? `<h2>Open issues (${run.alerts.length})</h2>${alertBlocks}` : '<h2>Open issues</h2><p>None - every check that ran came back clean.</p>'}
   <h2>Health checks (${run.checks.length})</h2>

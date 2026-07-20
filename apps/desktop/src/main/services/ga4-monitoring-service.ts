@@ -7,7 +7,7 @@
 // one-entry targets list on load.
 
 import { readJsonFile, writeJsonFileAtomic } from '../storage/json-file';
-import { monitorGa4, firstMetric, noSourceSharePct, ga4DataLagDays, type Ga4MonitorInput } from '../google/ga4-monitor';
+import { monitorGa4, monitorHealthScore, firstMetric, noSourceSharePct, ga4DataLagDays, type Ga4MonitorInput } from '../google/ga4-monitor';
 import { buildSlackPayload, buildSlackDigestPayload, buildSlackAuditPayload, buildSlackMonthlyPayload, buildSlackTestPayload, sendSlackWebhook, isValidSlackWebhook, type FetchLike } from './slack-notify';
 import { withQuotaRetry } from '../google/quota-retry';
 import { rankGa4Campaigns } from '../google/ga4-campaigns';
@@ -17,6 +17,9 @@ import type { AccountView, Ga4ExecSummaryView, Ga4MonitorConfig, Ga4MonitorRun, 
 const MIN_INTERVAL_MINUTES = 15; // GA4 realtime + report quota — never hammer the API
 // Each target costs ~7 GA4 API calls per sweep, so the list is capped to keep a 15-min interval sane.
 const MAX_TARGETS = 10;
+// Per-target run-history entries kept (the Monitoring History table + score trend). ~30 covers a day
+// of hourly sweeps plus manual runs without growing the config file meaningfully.
+const HISTORY_KEEP = 30;
 const DEFAULT_CONFIG: Ga4MonitorConfig = { enabled: false, intervalMinutes: 60, targets: [], days: 28, slackEnabled: true, digestEnabled: false, auditEnabled: false, slackLabel: '' };
 // One digest per property per week, posted after a sweep once due.
 const DIGEST_EVERY_MS = 7 * 24 * 60 * 60 * 1000;
@@ -216,6 +219,11 @@ export class Ga4MonitoringService {
    *  panel). Dedupe + the size cap are PER ACCOUNT. */
   private normalizeTargets(c: Partial<Ga4MonitorConfig> | null, owner: string | null): Ga4MonitorTarget[] {
     const raw = Array.isArray(c?.targets) ? c.targets : [];
+    // Server-owned per-target fields (run history, issue log, schedule stamps, audit-score trend) are
+    // written by the SWEEP, never by the renderer — so when a target already exists, the CURRENT
+    // config's values win over an incoming echo (a stale renderer copy must not roll them back).
+    // During the constructor's disk load this.config is not set yet, so the incoming values are kept.
+    const currentByKey = new Map<string, Ga4MonitorTarget>((this.config?.targets ?? []).map((x) => [`${x.accountId ?? '?'}|${x.propertyId}`, x]));
     const seen = new Set<string>();
     const perAccount = new Map<string, number>();
     const targets: Ga4MonitorTarget[] = [];
@@ -244,12 +252,20 @@ export class Ga4MonitoringService {
             }
           : { alerts: c?.slackEnabled !== false, digest: Boolean(c?.digestEnabled), audit: Boolean(c?.auditEnabled) },
         accountId: acct,
-        lastDigestAt: Number.isFinite(Number((t as Ga4MonitorTarget).lastDigestAt)) && Number((t as Ga4MonitorTarget).lastDigestAt) > 0 ? Number((t as Ga4MonitorTarget).lastDigestAt) : undefined,
-        lastAuditAt: Number.isFinite(Number((t as Ga4MonitorTarget).lastAuditAt)) && Number((t as Ga4MonitorTarget).lastAuditAt) > 0 ? Number((t as Ga4MonitorTarget).lastAuditAt) : undefined,
-        lastMonthlyAt: Number.isFinite(Number((t as Ga4MonitorTarget).lastMonthlyAt)) && Number((t as Ga4MonitorTarget).lastMonthlyAt) > 0 ? Number((t as Ga4MonitorTarget).lastMonthlyAt) : undefined,
-        lastAuditScore: Number.isFinite(Number((t as Ga4MonitorTarget).lastAuditScore)) ? Number((t as Ga4MonitorTarget).lastAuditScore) : undefined,
-        prevAuditScore: Number.isFinite(Number((t as Ga4MonitorTarget).prevAuditScore)) ? Number((t as Ga4MonitorTarget).prevAuditScore) : undefined,
-        issueLog: Array.isArray((t as Ga4MonitorTarget).issueLog) ? (t as Ga4MonitorTarget).issueLog!.slice(-50) : undefined,
+        // Server-owned fields: prefer the live config's copy for an EXISTING target (see currentByKey).
+        ...((): Pick<Ga4MonitorTarget, 'lastDigestAt' | 'lastAuditAt' | 'lastMonthlyAt' | 'lastAuditScore' | 'prevAuditScore' | 'issueLog' | 'history'> => {
+          const cur = currentByKey.get(key);
+          const src = cur ?? (t as Ga4MonitorTarget);
+          return {
+            lastDigestAt: Number.isFinite(Number(src.lastDigestAt)) && Number(src.lastDigestAt) > 0 ? Number(src.lastDigestAt) : undefined,
+            lastAuditAt: Number.isFinite(Number(src.lastAuditAt)) && Number(src.lastAuditAt) > 0 ? Number(src.lastAuditAt) : undefined,
+            lastMonthlyAt: Number.isFinite(Number(src.lastMonthlyAt)) && Number(src.lastMonthlyAt) > 0 ? Number(src.lastMonthlyAt) : undefined,
+            lastAuditScore: Number.isFinite(Number(src.lastAuditScore)) ? Number(src.lastAuditScore) : undefined,
+            prevAuditScore: Number.isFinite(Number(src.prevAuditScore)) ? Number(src.prevAuditScore) : undefined,
+            issueLog: Array.isArray(src.issueLog) ? src.issueLog.slice(-50) : undefined,
+            history: Array.isArray(src.history) ? src.history.slice(-HISTORY_KEEP) : undefined,
+          };
+        })(),
       });
     }
     // Legacy single-property config ({propertyId, propertyLabel}) → a one-entry list, so an existing
@@ -324,7 +340,14 @@ export class Ga4MonitoringService {
     const key = `${owner ?? '?'}:${propertyId}`;
     let s = this.state.get(key);
     if (!s) {
-      s = { lastRunAt: null, lastError: null, lastRun: null, lastSlackAt: null, consentProbeAt: null, consentProbe: null, priorGcsPresent: null, priorBqLinked: null, seenIds: new Set() };
+      // Seed the seen-alert set from the PERSISTED issue log's still-open entries, so an app restart
+      // doesn't re-treat every ongoing issue as NEW — which would re-ping Slack, append a duplicate
+      // issue-log entry, and reset the issue's openedAt (the Recent-alerts timeline).
+      const t =
+        this.config.targets.find((x) => (x.accountId ?? null) === owner && x.propertyId === propertyId) ??
+        this.config.targets.find((x) => x.propertyId === propertyId);
+      const openIds = (t?.issueLog ?? []).filter((e) => !e.closedAt).map((e) => e.id);
+      s = { lastRunAt: null, lastError: null, lastRun: null, lastSlackAt: null, consentProbeAt: null, consentProbe: null, priorGcsPresent: null, priorBqLinked: null, seenIds: new Set(openIds) };
       this.state.set(key, s);
     }
     return s;
@@ -462,15 +485,15 @@ export class Ga4MonitoringService {
    *  produced (empty when there's nothing to monitor). Targets are checked SEQUENTIALLY so N
    *  properties never burst N×7 GA4 calls at once; one target failing degrades to its own lastError
    *  and never stops the rest of the sweep. */
-  runOnce(only?: string | string[]): Promise<Ga4MonitorRun[]> {
+  runOnce(only?: string | string[], trigger: 'manual' | 'scheduled' = 'scheduled'): Promise<Ga4MonitorRun[]> {
     if (this.inFlight) return this.inFlight;
-    this.inFlight = this.runOnceInner(only).finally(() => {
+    this.inFlight = this.runOnceInner(only, trigger).finally(() => {
       this.inFlight = null;
     });
     return this.inFlight;
   }
 
-  private async runOnceInner(only?: string | string[]): Promise<Ga4MonitorRun[]> {
+  private async runOnceInner(only?: string | string[], trigger: 'manual' | 'scheduled' = 'scheduled'): Promise<Ga4MonitorRun[]> {
     const active = this.deps.registry.getActiveView();
     if (!active || !active.hasGoogleToken) return [];
     // Background sweeps may run before the tab is ever opened — stamp legacy ownerless targets and
@@ -488,7 +511,13 @@ export class Ga4MonitoringService {
     let sweepError: string | null = null;
     for (const target of targets) {
       const st = this.stateFor(active.id, target.propertyId);
+      // configure() can swap this.config with freshly-rebuilt target objects while we await GA4 (IPC
+      // interleaves at every await). Persisted per-target fields must be mutated on the LIVE target —
+      // re-resolved at write time — or the write lands on a detached orphan and is silently lost when
+      // the new config persists.
+      const liveTarget = (): Ga4MonitorTarget => this.mine(active.id).find((x) => x.propertyId === target.propertyId) ?? target;
       try {
+        const startedAt = this.now(); // wall-clock for the run's duration (History table)
         const input = await gatherGa4MonitorInput(this.deps.data, target.propertyId, this.config.days, () => this.now());
         // Consent-signal probe (Tier 2): a real page load of the property's own site, so throttled to
         // once per target per 24h; between probes the cached verdict keeps feeding the check.
@@ -531,10 +560,13 @@ export class Ga4MonitoringService {
         // Rolling issue history (persisted, capped): when each alert opened and closed. This is the
         // monthly report's "what we caught and what we resolved" story.
         if (newAlerts.length || closedIds.length) {
-          const log = (target.issueLog ?? []).slice();
+          const tgt = liveTarget();
+          const log = (tgt.issueLog ?? []).slice();
           for (const id of closedIds) for (const e of log) if (e.id === id && !e.closedAt) e.closedAt = at;
-          for (const a of newAlerts) log.push({ id: a.id, title: a.title, severity: a.severity, openedAt: at });
-          target.issueLog = log.slice(-50);
+          // Never append a duplicate OPEN entry for an id that is already open (belt + braces on top of
+          // the restart-seeded seenIds) — it would reset the issue's openedAt timeline.
+          for (const a of newAlerts) if (!log.some((e) => e.id === a.id && !e.closedAt)) log.push({ id: a.id, title: a.title, severity: a.severity, openedAt: at });
+          tgt.issueLog = log.slice(-50);
           if (this.deps.configPath) writeJsonFileAtomic(this.deps.configPath, this.config);
         }
 
@@ -552,6 +584,8 @@ export class Ga4MonitoringService {
           }
         }
 
+        const score = monitorHealthScore(result);
+        const durationMs = Math.max(0, this.now() - startedAt);
         const run: Ga4MonitorRun = {
           at,
           property: target.propertyId,
@@ -562,12 +596,35 @@ export class Ga4MonitoringService {
           checks: result.checks,
           alerts: result.alerts,
           newAlertIds: newAlerts.map((a) => a.id),
+          score,
+          durationMs,
+          trigger,
           slackSent,
           slackError,
         };
         st.lastRun = run;
         this.deps.emit(run);
         runs.push(run);
+
+        // Run history (persisted, capped): one compact row per completed sweep — the Monitoring
+        // History table + the health-score trend. Counted from the run's REAL alerts; written on the
+        // LIVE target so a mid-sweep configure() can never orphan it.
+        {
+          const tgt = liveTarget();
+          tgt.history = [
+            ...(tgt.history ?? []),
+            {
+              at,
+              health: result.health,
+              score,
+              critical: result.alerts.filter((a) => a.severity === 'critical' || a.severity === 'high').length,
+              warnings: result.alerts.filter((a) => a.severity === 'medium' || a.severity === 'low').length,
+              durationMs,
+              trigger,
+            },
+          ].slice(-HISTORY_KEEP);
+        }
+        if (this.deps.configPath) writeJsonFileAtomic(this.deps.configPath, this.config);
 
         // Weekly scheduled AUDIT: the full audit pipeline, at most once per property per 7 days,
         // with its executive summary posted to the property's own channel. Runs BEFORE the digest so
@@ -578,11 +635,14 @@ export class Ga4MonitoringService {
           if (auditDue) {
             try {
               const exec = await this.deps.runAudit(target.propertyId, this.config.days);
-              target.lastAuditAt = at;
-              // Reliability TREND memory: the monthly report quotes "X%, up from Y%", not a snapshot.
-              if (Number.isFinite(exec.reliabilityPct)) {
-                if (Number.isFinite(Number(target.lastAuditScore))) target.prevAuditScore = target.lastAuditScore;
-                target.lastAuditScore = exec.reliabilityPct;
+              {
+                const tgt = liveTarget();
+                tgt.lastAuditAt = at;
+                // Reliability TREND memory: the monthly report quotes "X%, up from Y%", not a snapshot.
+                if (Number.isFinite(exec.reliabilityPct)) {
+                  if (Number.isFinite(Number(tgt.lastAuditScore))) tgt.prevAuditScore = tgt.lastAuditScore;
+                  tgt.lastAuditScore = exec.reliabilityPct;
+                }
               }
               if (this.deps.configPath) writeJsonFileAtomic(this.deps.configPath, this.config);
               const auditHook = this.webhookForTarget(active.id, target.propertyId);
@@ -611,7 +671,7 @@ export class Ga4MonitoringService {
             });
             const sent = await sendSlackWebhook(webhook, digest, { fetchImpl: this.deps.slackFetch });
             if (sent.ok) {
-              target.lastDigestAt = at;
+              liveTarget().lastDigestAt = at;
               if (this.deps.configPath) writeJsonFileAtomic(this.deps.configPath, this.config);
             }
           }
@@ -622,7 +682,7 @@ export class Ga4MonitoringService {
         // (no send), so the first report tells a real month's story instead of an empty one.
         if (target.notify?.monthly !== false) {
           if (!target.lastMonthlyAt) {
-            target.lastMonthlyAt = at;
+            liveTarget().lastMonthlyAt = at;
             if (this.deps.configPath) writeJsonFileAtomic(this.deps.configPath, this.config);
           } else if (at - target.lastMonthlyAt >= MONTHLY_EVERY_MS) {
             const webhookM = this.webhookForTarget(active.id, target.propertyId);
@@ -661,7 +721,7 @@ export class Ga4MonitoringService {
               });
               const sentM = await sendSlackWebhook(webhookM, monthly, { fetchImpl: this.deps.slackFetch });
               if (sentM.ok) {
-                target.lastMonthlyAt = at;
+                liveTarget().lastMonthlyAt = at;
                 if (this.deps.configPath) writeJsonFileAtomic(this.deps.configPath, this.config);
               }
             }

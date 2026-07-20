@@ -1332,6 +1332,26 @@ export interface Ga4MonitorTarget {
   /** Rolling issue history (capped at 50): when each alert opened and closed. Powers the monthly
    *  report's "caught and resolved" story; persisted so restarts don't lose the month. */
   issueLog?: Array<{ id: string; title: string; severity: string; openedAt: number; closedAt?: number }>;
+  /** Rolling RUN history (newest last, capped): one compact entry per completed monitor sweep of this
+   *  property — powers the dashboard's Monitoring History table + the health-score trend. Persisted. */
+  history?: Ga4MonitorHistoryEntry[];
+}
+
+/** One completed monitor run of one property, compactly (the Monitoring History table row). */
+export interface Ga4MonitorHistoryEntry {
+  at: number;
+  health: 'healthy' | 'warning' | 'critical';
+  /** Derived 0-100 health score for this run (see monitorHealthScore — computed from the run's real
+   *  alerts, not measured by GA4). */
+  score: number;
+  /** Alerts at critical/high severity in this run. */
+  critical: number;
+  /** Alerts at medium/low severity in this run. */
+  warnings: number;
+  /** Wall-clock duration of this property's check (ms). */
+  durationMs: number;
+  /** What started the run: a user click (manual) or the background timer/boot sweep (scheduled). */
+  trigger: 'manual' | 'scheduled';
 }
 
 /** Persisted config for the GA4 monitor (multi-property; mirrors the GTM MonitorConfig in shape). */
@@ -1390,6 +1410,12 @@ export interface Ga4MonitorRun {
   alerts: Ga4MonitorAlertView[];
   /** ids of the alerts that are NEW vs the previous run (the set that triggered Slack). */
   newAlertIds: string[];
+  /** Derived 0-100 health score for THIS run (from its real alerts; see monitorHealthScore). */
+  score?: number;
+  /** Wall-clock duration of this property's check (ms). */
+  durationMs?: number;
+  /** What started the run: a user click (manual) or the background timer/boot sweep (scheduled). */
+  trigger?: 'manual' | 'scheduled';
   /** How many Slack messages were sent this run, and any send error (null when fine/skipped). */
   slackSent: number;
   slackError: string | null;
