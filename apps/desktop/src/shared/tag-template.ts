@@ -325,6 +325,30 @@ export function adsIdentityIssue(s: SuggestedTagView): string | null {
  *  their own row ("Get a Free Audit" get_a_free_audit_click vs "Get Free Audit" get_free_audit_click).
  *  Used by BOTH the renderer net (below) and the main-process net (scan-core `dedupSuggestions`) — the
  *  two MUST agree or the mid-scan streamed list and the final list disagree and rows flicker. */
+// The house tag-name shape is "<Vendor> - <Kind> - <Name> Tag" (e.g. "Google Ads - Conversion - Get A
+// Free Consultation Form Tag"). Both ends are GTM bookkeeping; the middle is what a human would call
+// the thing, which is exactly what a Google Ads conversion ACTION should be named.
+const TAG_NAME_PREFIX = /^\s*(?:google\s*ads|ga4|meta|facebook|tiktok|linkedin|reddit|pinterest|snap|microsoft\s*ads|bing)\s*-\s*(?:conversion|remarketing|event|pixel|tag)\s*-\s*/i;
+const TAG_NAME_SUFFIX = /\s*\bTag\s*$/i;
+
+/**
+ * The conversion-action name to suggest for a Google Ads row, derived from its GTM tag name.
+ *
+ * "Google Ads - Conversion - Get A Free Consultation Form Tag" -> "Get A Free Consultation Form".
+ *
+ * Only the vendor/kind prefix and the trailing "Tag" are removed: the kind word a human relies on
+ * ("Form", "Click") is part of the name, and an internal " - " is preserved, so
+ * "... - Book A Demo - EU Tag" keeps "Book A Demo - EU". Returns '' when nothing meaningful is left,
+ * so the caller can fall back to its placeholder instead of proposing an empty name.
+ */
+export function conversionActionNameFromTag(tagName: string | undefined): string {
+  return String(tagName ?? '')
+    .replace(TAG_NAME_PREFIX, '')
+    .replace(TAG_NAME_SUFFIX, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export function suggestionDedupKey(s: { platform: string; eventName?: string; tagName: string }): string {
   const alnum = (v: string): string => v.trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
   return `${s.platform}|${(s.eventName ?? '').trim().toLowerCase()}|${alnum(s.tagName)}`;
