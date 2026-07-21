@@ -4,7 +4,17 @@ import type { GoogleProduct, GtmContext } from '../../shared/ipc';
 import type { AuditHistoryStore } from '../storage/audit-history';
 import { ManifestStore } from '../storage/manifest-store';
 import type { MemoryStore } from '../storage/memory-store';
-import { MEMORY_KINDS, findMemoriesMatching, type MemoryKind, type MemoryScope } from '../../shared/chat-memory';
+import {
+  MEMORY_KINDS,
+  findMemoriesMatching,
+  searchMemories,
+  type Memory,
+  type MemoryKind,
+  type MemoryScope,
+  type MemorySearchScope,
+} from '../../shared/chat-memory';
+import { lookupCorpusPatterns, LOOKUP_DEFAULT_LIMIT, LOOKUP_MAX_LIMIT, type CorpusLookupKind } from '../../shared/corpus-lookup';
+import { getPatternLibrary } from '../corpus/pattern-library';
 import { fingerprintResource, diffManifest, type ManifestResource } from '../../shared/install-manifest';
 import { buildTrackingStatus } from '../../shared/tracking-status';
 import {
@@ -112,8 +122,13 @@ export interface GtmContextControl {
 export interface MemoryToolContext {
   store: MemoryStore;
   accountId: string;
-  /** The client scope for a client-scoped memory: containerId in a GTM turn, property in a GA4 turn. */
-  scope: MemoryScope;
+  /** The client scope for a client-scoped memory: containerId in a GTM turn, property in a GA4 turn.
+   *  A FUNCTION, not a value: the active container can change mid-turn (set_gtm_container), and a
+   *  snapshot would file new notes under, and recall from, the container the user just left. */
+  scope: () => MemoryScope;
+  /** Provenance hook: memories the model pulled in MID-turn via `recall_memories`. The chat service
+   *  folds these into the turn's "memories used" list, credits each one once, and owns the usage log. */
+  onRecall?: (memories: Memory[]) => void;
 }
 
 export interface Tool extends LlmToolDef {
@@ -3936,10 +3951,80 @@ export function buildToolRegistry(
             const text = s(a.text).trim();
             if (!text) return { saved: false, message: 'No text to remember.' };
             const kind = (MEMORY_KINDS.includes(a.kind as MemoryKind) ? a.kind : 'fact') as MemoryKind;
-            const wantClient = a.scope === 'client' || (a.scope == null && (memoryCtx.scope.containerId || memoryCtx.scope.property));
-            const scope: MemoryScope = wantClient ? { ...memoryCtx.scope } : {};
+            const active = memoryCtx.scope(); // resolved NOW: the container may have changed this turn
+            const wantClient = a.scope === 'client' || (a.scope == null && (active.containerId || active.property));
+            const scope: MemoryScope = wantClient ? { ...active } : {};
             const res = memoryCtx.store.add(memoryCtx.accountId, { kind, text, scope, source: 'chat' });
             return { saved: true, deduped: res.deduped, secretRemoved: res.redacted, kind: res.memory.kind, text: res.memory.text, scope: res.memory.scope.containerId || res.memory.scope.property ? 'client' : 'account' };
+          },
+        },
+        {
+          name: 'recall_memories',
+          description:
+            'SEARCH the saved memories for this Google account and read back what matches. Each turn a few of the most ' +
+            'relevant notes are already injected automatically; call this when that is not enough: the user asks what you ' +
+            'remember ("what do you know about this client?", "did I tell you how we name events?"), refers to something ' +
+            'agreed earlier that is not in front of you, or you are about to build/change something and want the client\'s ' +
+            'saved rules first. Set scope="all" to look across OTHER clients of this account too (the default), "context" ' +
+            'for just the active client plus account-wide notes. Returns only what is saved: if nothing matches, say you ' +
+            'have no note on it rather than guessing.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              query: { type: 'string', description: 'What to look for, in the user\'s words (e.g. "event naming", "checkout tags"). Leave empty to list the most relevant saved notes.' },
+              scope: { type: 'string', enum: ['all', 'context', 'account'], description: 'all = every note under this account incl. other clients (default); context = active client + account-wide; account = account-wide only.' },
+              limit: { type: 'number', description: 'Max notes to return (default 10, max 25).' },
+            },
+            required: [],
+            additionalProperties: false,
+          },
+          handler: async (a): Promise<unknown> => {
+            const query = s(a.query).trim();
+            const scope = (['all', 'context', 'account'].includes(s(a.scope)) ? s(a.scope) : 'all') as MemorySearchScope;
+            const limit = Math.min(25, Math.max(1, Math.floor(Number(a.limit) || 10)));
+            const active = memoryCtx.scope();
+            const all = memoryCtx.store.list(memoryCtx.accountId);
+            // Search UNLIMITED, then slice here, so the model is told how much it is NOT seeing instead
+            // of being handed a silently truncated list it would present as everything saved.
+            const matched = searchMemories(all, query, {
+              scope,
+              ctx: { containerId: active.containerId, property: active.property },
+              limit: Number.MAX_SAFE_INTEGER,
+            });
+            const hits = matched.slice(0, limit);
+            // Recalled notes shape the answer, so they belong in this turn's provenance. The chat
+            // service credits each id once and owns the usage log (counting here too would double-count
+            // a note that was also injected). Best-effort: provenance must never fail the answer.
+            if (hits.length) {
+              try {
+                memoryCtx.onRecall?.(hits.map((h) => h.memory));
+              } catch (e) {
+                console.error('[tool] recall_memories provenance failed (continuing):', e instanceof Error ? e.message : e);
+              }
+            }
+            return {
+              // Only enabled notes are searchable at all, so report that as the pool rather than a
+              // total that includes muted ones.
+              searched: all.filter((m) => m.enabled).length,
+              matched: matched.length,
+              found: hits.length,
+              scope,
+              memories: hits.map((h) => ({
+                kind: h.memory.kind,
+                text: h.memory.text,
+                scope: h.memory.scope.containerId || h.memory.scope.property
+                  ? { client: h.memory.scope.label || h.memory.scope.containerId || h.memory.scope.property }
+                  : 'account',
+                pinned: h.memory.pinned,
+                savedBy: h.memory.source,
+                updatedAt: new Date(h.memory.updatedAt).toISOString().slice(0, 10),
+              })),
+              ...(hits.length === 0
+                ? { note: 'Nothing saved matches. Tell the user you have no note on this rather than guessing.' }
+                : matched.length > hits.length
+                  ? { note: `${matched.length} notes matched; the ${hits.length} most relevant are returned. Say the list is partial, or call again with a narrower query or a higher limit.` }
+                  : {}),
+            };
           },
         },
         {
@@ -3964,10 +4049,60 @@ export function buildToolRegistry(
       ]
     : [];
 
+  // CORPUS retrieval. Reads the anonymized pattern library that ships inside the app (mined from the
+  // operator's own historical GTM containers), so the assistant can answer "how do WE usually build
+  // this?" with real counts on ANY machine — no local corpus, no network, no account data involved.
+  // Read-only and product-agnostic (event-name conventions matter in GA4 chats too), so like the memory
+  // tools it is appended AFTER the product filter.
+  const corpusTools: Tool[] = [
+    {
+      name: 'lookup_corpus_patterns',
+      description:
+        'Look up how tags, triggers and variables were ACTUALLY built across the operator\'s own past GTM containers ' +
+        '(an anonymized, aggregated pattern library that ships with the app). Call this before proposing a naming ' +
+        'convention, an event name, a trigger shape, or a vendor setup, and whenever the user asks what is typical, ' +
+        'standard, or "how do we usually do this". Search by intent ("form submit", "purchase ecommerce", "meta pixel"). ' +
+        'Each result carries the number of distinct containers it appeared in, so cite the real count ("128 of 561 of ' +
+        'your containers") instead of vague words like "commonly". IMPORTANT: these are FREQUENCY counts from past work, ' +
+        'not industry benchmarks and not proof a pattern is correct; never present them as a live reading of the ' +
+        'current container (use the GTM read tools for that).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'What you are looking for, in plain words or an event name (e.g. "form submit", "purchase", "tiktok"). Leave empty to list the most common patterns.' },
+          kind: { type: 'string', enum: ['all', 'tag', 'trigger', 'variable', 'vendor'], description: 'Restrict to one kind. vendor = platform adoption counts (how many containers use GA4, Meta, TikTok...). Default all.' },
+          brand: {
+            type: 'string',
+            enum: ['ga4', 'googtag', 'gads', 'meta', 'tiktok', 'linkedin', 'msads', 'snap', 'pinterest', 'hotjar', 'clarity', 'floodlight', 'consent', 'amplitude', 'x', 'html', 'img'],
+            description: 'Restrict TAG results to one vendor. Common names are accepted too (facebook = meta, google ads = gads, bing = msads).',
+          },
+          limit: { type: 'number', description: `Max patterns to return (default ${LOOKUP_DEFAULT_LIMIT}, max ${LOOKUP_MAX_LIMIT}).` },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      handler: async (a): Promise<unknown> => {
+        const lib = getPatternLibrary();
+        if (!lib) {
+          return {
+            available: false,
+            note: 'No pattern library is bundled with this build. Answer from the live container and general knowledge, and do not cite any frequency.',
+          };
+        }
+        return lookupCorpusPatterns(lib, {
+          query: s(a.query),
+          kind: (['all', 'tag', 'trigger', 'variable', 'vendor'].includes(s(a.kind)) ? s(a.kind) : 'all') as CorpusLookupKind,
+          brand: s(a.brand),
+          ...(a.limit != null ? { limit: Number(a.limit) } : {}),
+        });
+      },
+    },
+  ];
+
   // GA4 Admin write tools (product 'ga4') live in a separate catalog; included
   // only when a confirm function is provided, exactly like the GTM write tools.
   const all = [...readTools, ...(confirm ? [...writeTools, ...buildGa4WriteTools(data)] : []), ...contextTools];
-  const tools = [...(product ? all.filter((t) => productOf(t.name) === product) : all), ...memoryTools];
+  const tools = [...(product ? all.filter((t) => productOf(t.name) === product) : all), ...memoryTools, ...corpusTools];
 
   return {
     list: (): LlmToolDef[] =>

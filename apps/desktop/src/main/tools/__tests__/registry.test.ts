@@ -474,6 +474,7 @@ async function main(): Promise<void> {
       'list_gtm_workspaces',
       'list_unused_gtm_triggers',
       'list_unused_gtm_variables',
+      'lookup_corpus_patterns',
       'monitor_ga4_property',
       'rank_ga4_campaigns',
       'run_ga4_realtime_report',
@@ -503,7 +504,7 @@ async function main(): Promise<void> {
 
   await test('write tools appear ONLY when a confirm function is provided', async () => {
     const readOnly = buildToolRegistry(fakeData().data);
-    assert.equal(readOnly.list().length, 54, 'read-only registry has 54 tools');
+    assert.equal(readOnly.list().length, 55, 'read-only registry has 55 tools');
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
@@ -518,8 +519,8 @@ async function main(): Promise<void> {
     // plus the read-only monitor_ga4_property = 102, plus the three new server tag types
     // (create_stackadapt_server_tag, create_reddit_capi_server_tag, create_amazon_capi_server_tag) = 105,
     // plus the read-only rank_ga4_campaigns = 106, plus the read-only suggest_tags_from_url = 107,
-    // plus the read-only get_form_tracking_recipe = 108.
-    assert.equal(withWrites.list().length, 108 + 60, 'read + write registry has 108 GTM/GA4-read/context + 60 GA4-write tools');
+    // plus the read-only get_form_tracking_recipe = 108, plus the read-only lookup_corpus_patterns = 109.
+    assert.equal(withWrites.list().length, 109 + 60, 'read + write registry has 109 GTM/GA4-read/context + 60 GA4-write tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_pinterest_capi_server_tag'), true, 'create_pinterest_capi_server_tag present');
     assert.equal(withWrites.list().some((t) => t.name === 'create_reddit_capi_server_tag'), true, 'create_reddit_capi_server_tag present');
     assert.equal(withWrites.list().some((t) => t.name === 'create_amazon_capi_server_tag'), true, 'create_amazon_capi_server_tag present');
@@ -1535,9 +1536,11 @@ async function main(): Promise<void> {
     assert.ok(gtmNames.includes('analytics_scorecard'));
     assert.ok(gtmNames.includes('create_gtm_tag_with_trigger'));
 
-    // ga4 mode is EXACTLY the GA4 tool set (no confirm → no write tools, all of which are GTM anyway).
+    // ga4 mode is EXACTLY the GA4 tool set (no confirm → no write tools, all of which are GTM anyway),
+    // plus the product-agnostic corpus lookup, which is appended after the product filter on purpose:
+    // event-naming conventions matter in a GA4 chat too.
     const ga4Names = buildToolRegistry(fakeData().data, undefined, 'ga4').list().map((t) => t.name);
-    assert.deepEqual([...ga4Names].sort(), [...GA4_TOOLS].sort(), 'ga4 mode = exactly the GA4 tools');
+    assert.deepEqual([...ga4Names].sort(), [...GA4_TOOLS, 'lookup_corpus_patterns'].sort(), 'ga4 mode = the GA4 tools + corpus lookup');
   });
 
   await test('approval is DELETE-ONLY: creates/edits apply directly without prompting; delete edits still apply', async () => {
@@ -2211,7 +2214,7 @@ async function main(): Promise<void> {
   await test('memory tools (remember/forget) appear only with a memory context, in BOTH products, and work', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'reg-mem-'));
     const store = new MemoryStore(join(dir, 'm.json'), 500, () => 1);
-    const memCtx = { store, accountId: 'acct1', scope: { containerId: 'GTM-A' } };
+    const memCtx = { store, accountId: 'acct1', scope: () => ({ containerId: 'GTM-A' }) };
     const regGtm = buildToolRegistry(fakeData().data, undefined, 'gtm', undefined, undefined, undefined, memCtx);
     const regGa4 = buildToolRegistry(fakeData().data, undefined, 'ga4', undefined, undefined, undefined, memCtx);
     assert.ok(regGtm.list().some((t) => t.name === 'remember_memory') && regGtm.list().some((t) => t.name === 'forget_memory'), 'present in gtm');
@@ -2228,6 +2231,118 @@ async function main(): Promise<void> {
     assert.equal(forgot.removed, 1);
     assert.equal(store.list('acct1').length, 0);
     rmSync(dir, { recursive: true, force: true });
+  });
+
+  await test('recall_memories searches the store, scopes correctly, and reports usage for provenance', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'reg-recall-'));
+    const store = new MemoryStore(join(dir, 'm.json'), 500, () => 1);
+    store.add('acct1', { kind: 'rule', text: 'we name GA4 events in snake_case', scope: {}, source: 'chat' });
+    store.add('acct1', { kind: 'fact', text: 'checkout fires order_completed not purchase', scope: { containerId: 'GTM-A' }, source: 'chat' });
+    store.add('acct1', { kind: 'fact', text: 'the other site fires purchase on the thank-you page', scope: { containerId: 'GTM-B' }, source: 'chat' });
+    const recalled: string[] = [];
+    const memCtx = {
+      store,
+      accountId: 'acct1',
+      scope: () => ({ containerId: 'GTM-A' }),
+      onRecall: (mems: { id: string }[]): void => { for (const m of mems) recalled.push(m.id); },
+    };
+    const reg = buildToolRegistry(fakeData().data, undefined, 'gtm', undefined, undefined, undefined, memCtx);
+    assert.ok(reg.list().some((t) => t.name === 'recall_memories'), 'listed with a memory context');
+    assert.equal(buildToolRegistry(fakeData().data).list().some((t) => t.name === 'recall_memories'), false, 'absent without one');
+
+    const all = rec(JSON.parse(await reg.execute('recall_memories', { query: 'purchase' })));
+    assert.equal(all.found, 2, 'default scope reaches the OTHER client too');
+    assert.equal(all.searched, 3);
+
+    const ctxOnly = rec(JSON.parse(await reg.execute('recall_memories', { query: 'purchase', scope: 'context' })));
+    assert.equal(ctxOnly.found, 1, 'context scope stays on the active client + account-wide');
+
+    const none = rec(JSON.parse(await reg.execute('recall_memories', { query: 'bigquery streaming export' })));
+    assert.equal(none.found, 0);
+    assert.match(String(none.note), /no note|rather than guessing/i, 'tells the model not to guess');
+
+    // Plain words must find a note that only spells the concept as an identifier, or the model is
+    // told to deny a rule the user actually saved.
+    const words = rec(JSON.parse(await reg.execute('recall_memories', { query: 'order completed' })));
+    assert.equal(words.found, 1, 'plain-words query finds the snake_case identifier');
+
+    // Truncation is disclosed, not silent: matched is the pre-limit total.
+    const capped = rec(JSON.parse(await reg.execute('recall_memories', { query: 'purchase', limit: 1 })));
+    assert.equal(capped.found, 1);
+    assert.equal(capped.matched, 2, 'reports how many matched before the limit');
+    assert.match(String(capped.note), /partial|higher limit/i, 'discloses the truncation');
+
+    // A muted note is neither returned nor counted in the searchable pool.
+    const muted = store.add('acct1', { kind: 'fact', text: 'muted purchase note', scope: {}, source: 'chat' }).memory;
+    store.update('acct1', muted.id, { enabled: false });
+    const afterMute = rec(JSON.parse(await reg.execute('recall_memories', { query: 'purchase' })));
+    assert.equal(afterMute.matched, 2, 'disabled notes stay muted');
+    assert.equal(afterMute.searched, 3, 'searched counts only enabled notes');
+
+    assert.ok(recalled.length >= 3, 'every recalled memory is reported for provenance');
+    // The tool no longer writes the usage log itself: the chat service credits each memory once per
+    // turn (a note both injected and recalled must not count twice).
+    assert.equal(store.list('acct1').every((m) => (m.useCount ?? 0) === 0), true, 'usage log is owned by the chat service');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  await test('recall_memories resolves the client scope LIVE, so a mid-turn container switch is respected', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'reg-scope-'));
+    const store = new MemoryStore(join(dir, 'm.json'), 500, () => 1);
+    store.add('acct1', { kind: 'fact', text: 'site A uses order_completed', scope: { containerId: 'GTM-A' }, source: 'chat' });
+    store.add('acct1', { kind: 'fact', text: 'site B uses purchase directly', scope: { containerId: 'GTM-B' }, source: 'chat' });
+    let activeContainer = 'GTM-A';
+    const memCtx = { store, accountId: 'acct1', scope: () => ({ containerId: activeContainer }) };
+    const reg = buildToolRegistry(fakeData().data, undefined, 'gtm', undefined, undefined, undefined, memCtx);
+
+    const onA = rec(JSON.parse(await reg.execute('recall_memories', { query: 'uses', scope: 'context' })));
+    assert.equal(onA.found, 1);
+    assert.match(String((onA.memories as Array<{ text: string }>)[0].text), /site A/);
+
+    activeContainer = 'GTM-B'; // the model called set_gtm_container mid-turn
+    const onB = rec(JSON.parse(await reg.execute('recall_memories', { query: 'uses', scope: 'context' })));
+    assert.match(String((onB.memories as Array<{ text: string }>)[0].text), /site B/, 'follows the new container');
+
+    // The same live scope must file NEW notes under the container the user is actually on.
+    await reg.execute('remember_memory', { text: 'B ships a separate consent banner', kind: 'fact' });
+    const saved = store.list('acct1').find((m) => m.text.includes('consent banner'));
+    assert.equal(saved?.scope.containerId, 'GTM-B', 'remember_memory files under the CURRENT container');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  await test('lookup_corpus_patterns ships in every chat and returns real, honest counts', async () => {
+    // No memory context, no confirm fn: corpus knowledge is read-only and product-agnostic.
+    const regGtm = buildToolRegistry(fakeData().data, undefined, 'gtm');
+    const regGa4 = buildToolRegistry(fakeData().data, undefined, 'ga4');
+    assert.ok(regGtm.list().some((t) => t.name === 'lookup_corpus_patterns'), 'present in gtm');
+    assert.ok(regGa4.list().some((t) => t.name === 'lookup_corpus_patterns'), 'present in ga4');
+
+    const r = rec(JSON.parse(await regGtm.execute('lookup_corpus_patterns', { query: 'form submit' })));
+    const scanned = Number(r.containersScanned);
+    assert.ok(scanned > 100, `the shipped library loaded (${scanned} containers)`);
+    assert.ok(Array.isArray(r.hits) && r.hits.length > 0, 'a common query hits');
+    const hit = (r.hits as Array<Record<string, unknown>>)[0];
+    assert.ok(Number(hit.containers) >= 2, 'every hit met the k-anonymity threshold');
+    assert.ok(Number(hit.containers) <= scanned, 'a count can never exceed the corpus');
+    assert.match(String(r.source), /not industry benchmarks/i, 'the envelope disclaims benchmark status');
+    assert.ok(!/[—–]/.test(JSON.stringify(r)), 'no em dashes reach the model');
+
+    const vendors = rec(JSON.parse(await regGtm.execute('lookup_corpus_patterns', { kind: 'vendor' })));
+    assert.ok(Array.isArray(vendors.vendors) && vendors.vendors.length > 0, 'vendor adoption available');
+
+    const miss = rec(JSON.parse(await regGtm.execute('lookup_corpus_patterns', { query: 'zorbex quantum widget' })));
+    assert.equal((miss.hits as unknown[]).length, 0);
+    assert.match(String(miss.note), /instead of guessing/i, 'a miss instructs honesty, not invention');
+
+    // A vendor synonym must not read as "your containers never do this".
+    const fb = rec(JSON.parse(await regGtm.execute('lookup_corpus_patterns', { query: 'pixel', brand: 'facebook' })));
+    assert.ok((fb.hits as unknown[]).length > 0, 'facebook resolves to the meta brand key');
+    assert.equal(fb.brand, 'meta', 'the applied filter is echoed back');
+
+    // A share can never exceed 100, and a count can never exceed the corpus.
+    const vendorRows = vendors.vendors as Array<{ containers: number; containerShare: number }>;
+    assert.ok(vendorRows.every((v) => v.containerShare <= 100 && v.containers <= Number(vendors.containersScanned)),
+      'no vendor share exceeds the corpus');
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);

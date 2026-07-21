@@ -104,7 +104,16 @@ check('mine: DUPLICATE export files of the same container count as ONE (k keyed 
   // Two files, same publicId (e.g. "GTM-X_workspace5.json" and "GTM-X_workspace5 (1).json"):
   // containers must dedupe to 1, so every pattern falls below MIN_CONTAINERS and is dropped.
   const lib = minePatternLibrary([exportWith({ pid: 'GTM-SAME' }), exportWith({ pid: 'GTM-SAME' })], '2026-07-20');
-  return lib.containersScanned === 2 && lib.tagPatterns.length === 0 && lib.triggerPatterns.length === 0;
+  return lib.tagPatterns.length === 0 && lib.triggerPatterns.length === 0;
+})());
+
+check('mine: containersScanned counts CONTAINERS, not export files (it is the denominator of every share)', (() => {
+  // 3 files, 2 identities. Publishing 3 here would understate every percentage the app reports.
+  const lib = minePatternLibrary(
+    [exportWith({ pid: 'GTM-SAME' }), exportWith({ pid: 'GTM-SAME' }), exportWith({ pid: 'GTM-OTHER' })],
+    '2026-07-20',
+  );
+  return lib.containersScanned === 2 && lib.tagPatterns[0]?.containers === 2;
 })());
 
 check('mine: exports MISSING a publicId still count as distinct containers (file fallback)', (() => {
@@ -127,6 +136,7 @@ check('mine: deterministic — same corpus, identical artifact', (() => {
 check('mine: malformed exports (non-array fields) never crash', (() => {
   const bad = { containerVersion: { tag: { not: 'an array' }, trigger: null, variable: 42 } } as unknown as CorpusExport;
   const lib = minePatternLibrary([bad, exportWith({ pid: 'GTM-AAAA' }), exportWith({ pid: 'GTM-BBBB' })], '2026-07-20');
+  // The malformed one has no publicId, so it counts as its own identity: 3 containers scanned.
   return lib.containersScanned === 3 && lib.tagPatterns.length > 0;
 })());
 
@@ -149,7 +159,10 @@ check('leak: clean text passes', scanForLeaks('{"type":"gaawe","eventName":"purc
   if (existsSync(artifactPath)) {
     const raw = readFileSync(artifactPath, 'utf8');
     const lib = JSON.parse(raw) as PatternLibrary;
-    check('artifact: schema v1 with real corpus counts', lib.version === 1 && lib.containersScanned >= 500 && lib.minContainers >= 2);
+    check('artifact: schema v1 with real corpus counts', lib.version === 1 && lib.containersScanned >= 400 && lib.minContainers >= 2);
+    check('artifact: no pattern claims more containers than were scanned (every share stays <= 100%)',
+      [...lib.tagPatterns, ...lib.triggerPatterns, ...lib.variablePatterns, ...lib.vendorStats].every((p) => p.containers <= lib.containersScanned),
+      `max ${Math.max(...[...lib.tagPatterns, ...lib.vendorStats].map((p) => p.containers))} vs scanned ${lib.containersScanned}`);
     check('artifact: all three pattern kinds populated', lib.tagPatterns.length > 100 && lib.triggerPatterns.length > 50 && lib.variablePatterns.length > 20);
     check('artifact: every pattern meets the k-anonymity threshold', [...lib.tagPatterns, ...lib.triggerPatterns, ...lib.variablePatterns].every((p) => p.containers >= lib.minContainers));
     check('artifact: LEAK SCAN CLEAN (no ids/urls/emails/digit runs)', scanForLeaks(raw).length === 0, JSON.stringify(scanForLeaks(raw)[0] ?? null));

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { dateContextLine, GTM_AUDIT_METHODOLOGY, GA4_TAG_NAMING, GA4_ECOMMERCE_REFERENCE, GTM_CREATION_METHODOLOGY, GTM_TRIGGER_VARIABLE_REFERENCE, GTM_DECISION_RULES, GA4_DATA_FRESHNESS } from '../chat-service';
+import { dateContextLine, GTM_AUDIT_METHODOLOGY, GA4_TAG_NAMING, GA4_ECOMMERCE_REFERENCE, GTM_CREATION_METHODOLOGY, GTM_TRIGGER_VARIABLE_REFERENCE, GTM_DECISION_RULES, GA4_DATA_FRESHNESS, CORPUS_PROMPT } from '../chat-service';
 
 let passed = 0;
 let failed = 0;
@@ -112,6 +112,23 @@ test('GA4_DATA_FRESHNESS teaches "when did data last arrive" — widen the windo
   assert.ok(/run_ga4_realtime_report/.test(m) && /last 30 minutes/i.test(m) && /NOT evidence that data stopped/i.test(m), 'realtime ≠ recency');
   // Do not over-alarm: a gap is POSSIBLE / Likely / runtime-required, not asserted "critical/broken".
   assert.ok(/do NOT (assert|over-alarm)/i.test(m) && /POSSIBLE/.test(m) && /DebugView/.test(m), 'no over-alarm; confirm at runtime');
+});
+
+console.log('\nChat system prompt - house patterns (corpus retrieval):');
+
+test('CORPUS_PROMPT points at the tool and fences off every way its counts could mislead', () => {
+  const m = CORPUS_PROMPT;
+  assert.ok(/lookup_corpus_patterns/.test(m), 'names the tool');
+  // Say WHEN, or the tool is simply never called.
+  assert.ok(/BEFORE proposing an event name/i.test(m) && /naming convention/i.test(m), 'says when to call it');
+  // Cite the real number rather than a vague superlative.
+  assert.ok(/cite the real count/i.test(m) && /never a vague/i.test(m), 'demands the real count');
+  // The three honesty fences, each mirrored by a guarantee in the result envelope.
+  assert.ok(/not industry benchmarks/i.test(m), 'not benchmarks');
+  assert.ok(/not proof a pattern is correct/i.test(m), 'frequency is not correctness');
+  assert.ok(/never a reading of the CURRENT container/i.test(m), 'not a live reading of the container');
+  assert.ok(/say so instead of inventing a frequency/i.test(m), 'a miss must not become an invented number');
+  assert.ok(!/[—–]/.test(m), 'no em dashes (house style)');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
