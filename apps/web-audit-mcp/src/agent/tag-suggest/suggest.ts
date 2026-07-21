@@ -6,6 +6,7 @@
 // create_gtm_tracking_tag tool.
 
 import type { DetectedForm, DetectedElement, SuggestInput, SuggestedTag, SuggestPlatform, FormProvider, VideoEmbed, TriggerKind, CtaIntent } from './types.js';
+import { formIdScope, ephemeralFormIdNote } from './form-id-stability.js';
 import { CTA_BY_INTENT, classifyCtaIntent } from './cta-intents.js';
 import { buildSocialUrlPattern } from './social.js';
 import { buildFormInstallPlan, buildTriggerInstallPlan, type FormMechanism, type InstallRequirement } from './install-plan.js';
@@ -429,16 +430,19 @@ function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null
   const classUnique = !!rawClass && !ctx.nonUniqueClasses.has(rawClass);
   let usedClass: string | null = null;
   let usedPage: string | null = null;
-  if (groupIds && groupIds.length) {
-    // Scope by {{Form ID}} — one id → equals; several distinct ids in the group → ^(id1|id2)$ matchRegex
-    // (fires on exactly those forms, wherever they appear, with no page over-fire).
-    if (groupIds.length === 1) {
-      trigger.formIdValue = groupIds[0];
-      trigger.formIdOperator = 'equals';
-    } else {
-      trigger.formIdValue = `^(${groupIds.map(escRe).join('|')})$`;
-      trigger.formIdOperator = 'matchRegex';
-    }
+  // Scope by {{Form ID}} — one id → equals; several distinct ids in the group → ^(id1|id2)$ matchRegex
+  // (fires on exactly those forms, wherever they appear, with no page over-fire).
+  //
+  // EXCEPT when the id is minted per page load, which embedded providers do (HubSpot joins a
+  // per-render instance GUID to the real form GUID). Matching such an id exactly produces a tag GTM
+  // accepts and which can never fire again. formIdScope() keeps the durable fragment when several
+  // samples prove one, and otherwise refuses the id so the ladder falls through to class/page —
+  // firing too widely is recoverable, firing never is not.
+  const idScope = groupIds && groupIds.length ? formIdScope(groupIds) : null;
+  const idRefusedNote = groupIds && groupIds.length ? ephemeralFormIdNote(groupIds) : null;
+  if (idScope) {
+    trigger.formIdValue = idScope.value;
+    trigger.formIdOperator = idScope.operator;
   } else if (groupClass) {
     trigger.formClassesValue = groupClass;
     trigger.formClassesOperator = 'contains';
@@ -554,6 +558,12 @@ function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null
   // element (name → id → aria-label → nearest heading). Auto-created with the tag (see FORM_NAME_JS in
   // the desktop builder). NOTE: for embed/AJAX forms that fire on a dataLayer Custom Event (not a
   // native form submit), {{Form Element}} isn't set, so it falls back to "form".
+  // An ephemeral id we refused, or a durable fragment we proved, is the most actionable thing to say
+  // about this trigger's scope, so it leads the note.
+  const stabilizedNote = idScope?.stabilized ? idScope.note : undefined;
+  if (stabilizedNote) note = note ? `${stabilizedNote} ${note}` : stabilizedNote;
+  else if (idRefusedNote) note = note ? `${idRefusedNote} ${note}` : idRefusedNote;
+
   const formNameValue = '{{Form Name}}';
 
   // Field signature (type/name only — never values) for the evidence line.
