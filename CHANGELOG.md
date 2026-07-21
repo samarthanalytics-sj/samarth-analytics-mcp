@@ -1,3 +1,9 @@
+## [1.362.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.362.2...v1.362.3) (2026-07-21)
+
+### Performance Improvements
+
+* **desktop:** send a minimal tool set per chat step, expanding only for what the turn needs ([933534f](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/933534f2a1ae5983e6f2d86ce281258496ff2ac9))
+
 ## [1.362.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.362.1...v1.362.2) (2026-07-21)
 
 ### Bug Fixes
