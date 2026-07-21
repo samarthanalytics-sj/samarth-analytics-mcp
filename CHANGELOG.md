@@ -1,3 +1,9 @@
+## [1.360.6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.360.5...v1.360.6) (2026-07-21)
+
+### Performance Improvements
+
+* **desktop:** scope the sent tool list to the container kind, cutting ~8,400 tokens per web turn ([#616](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/616)) ([9ac12b3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/9ac12b32508d08ce671d2061075438d85554b322))
+
 ## [1.360.5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.360.4...v1.360.5) (2026-07-21)
 
 ### Bug Fixes
