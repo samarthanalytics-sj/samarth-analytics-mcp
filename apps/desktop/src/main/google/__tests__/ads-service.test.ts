@@ -13,7 +13,9 @@ function check(name: string, ok: boolean, detail?: string): void {
   else failures.push(`✗ ${name}${detail ? ': ' + detail : ''}`);
 }
 
-const ADS_SCOPES = [...DESKTOP_GOOGLE_SCOPES, GOOGLE_ADS_SCOPE].join(' ');
+const ADS_SCOPES = [...new Set([...DESKTOP_GOOGLE_SCOPES, GOOGLE_ADS_SCOPE])].join(' ');
+/** What an account that signed in before Google Ads support carries. */
+const LEGACY_SCOPES = DESKTOP_GOOGLE_SCOPES.filter((s) => s !== GOOGLE_ADS_SCOPE).join(' ');
 const noSleep = async (): Promise<void> => {};
 
 interface Call { url: string; method: string; headers: Record<string, string>; data?: unknown }
@@ -81,7 +83,9 @@ async function main(): Promise<void> {
     check('readiness: the no-token remedy names the MANAGER account requirement', /MANAGER/.test(r.reason?.remedy ?? ''));
   }
   {
-    const { s } = svc([], { scope: DESKTOP_GOOGLE_SCOPES.join(' ') });
+    // A token minted BEFORE adwords joined the default scope set. Built by subtraction rather than by
+    // reusing DESKTOP_GOOGLE_SCOPES, which now CONTAINS adwords and would assert the opposite.
+    const { s } = svc([], { scope: LEGACY_SCOPES });
     const r = await s.readiness();
     check('readiness: a token without the adwords scope is caught BEFORE any call', r.ready === false && r.reason?.code === 'ACCESS_TOKEN_SCOPE_INSUFFICIENT');
     check('readiness: the scope remedy reassures that GTM/GA4 access is unaffected', /unaffected/i.test(r.reason?.remedy ?? ''));

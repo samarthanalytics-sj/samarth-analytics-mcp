@@ -82,14 +82,17 @@ test('buildAuthUrl carries PKCE + offline + chooser params', () => {
   assert.equal(url.searchParams.get('include_granted_scopes'), 'true');
 });
 
-test('the Google Ads scope is opt-in, never in the default set', () => {
-  // Adding adwords to the defaults would force every existing account through a fresh consent screen
-  // and show an Ads permission to users who only audit containers.
-  assert.ok(!DESKTOP_GOOGLE_SCOPES.includes(GOOGLE_ADS_SCOPE));
+test('the Google Ads scope is part of a normal sign-in, so there is no second connect step', () => {
+  // A token's scopes are fixed at grant time, so an account that signed in before this cannot be
+  // upgraded in place; including adwords here at least means every NEW sign-in and every re-connect
+  // covers Google Ads without the user having to find a separate button.
+  assert.ok(DESKTOP_GOOGLE_SCOPES.includes(GOOGLE_ADS_SCOPE));
   const url = new URL(
     buildAuthUrl({ clientId: 'c', redirectUri: 'http://127.0.0.1:1/callback', scopes: DESKTOP_GOOGLE_SCOPES, state: 's', codeChallenge: 'x' })
   );
-  assert.ok(!url.searchParams.get('scope')?.includes('adwords'));
+  assert.ok(url.searchParams.get('scope')?.includes('adwords'));
+  // Still never publish.
+  assert.ok(!url.searchParams.get('scope')?.includes('tagmanager.publish'));
 });
 
 test('adsAuthScopes requests the UNION, so a re-consent cannot drop existing grants', () => {
@@ -97,11 +100,18 @@ test('adsAuthScopes requests the UNION, so a re-consent cannot drop existing gra
   assert.ok(scopes.includes(GOOGLE_ADS_SCOPE));
   for (const s of DESKTOP_GOOGLE_SCOPES) assert.ok(scopes.includes(s), `union dropped ${s}`);
   assert.ok(!scopes.includes('https://www.googleapis.com/auth/tagmanager.publish'));
+  // No duplicate now that adwords is in the defaults: a repeated scope is harmless to Google but makes
+  // the consent URL and any scope diffing noisy.
+  assert.equal(new Set(scopes).size, scopes.length);
 });
 
 test('hasAdsScope reads the granted scope string the token actually carries', () => {
   assert.equal(hasAdsScope(`${GOOGLE_ADS_SCOPE} openid email`), true);
-  assert.equal(hasAdsScope(DESKTOP_GOOGLE_SCOPES.join(' ')), false);
+  // A token minted BEFORE adwords joined the defaults: this is the case the readiness check exists for,
+  // since a token's scopes are fixed at grant time and cannot be upgraded in place.
+  const legacyScopes = DESKTOP_GOOGLE_SCOPES.filter((s) => s !== GOOGLE_ADS_SCOPE);
+  assert.equal(hasAdsScope(legacyScopes.join(' ')), false);
+  assert.equal(hasAdsScope(DESKTOP_GOOGLE_SCOPES.join(' ')), true);
   // A missing scope must be detectable BEFORE a call: it surfaces as a 403 insufficient-scope, which is
   // not invalid_grant, so the auth-expired chokepoint never catches it.
   assert.equal(hasAdsScope(undefined), false);
