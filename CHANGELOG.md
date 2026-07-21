@@ -1,3 +1,9 @@
+## [1.360.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.360.0...v1.360.1) (2026-07-21)
+
+### Bug Fixes
+
+* **desktop:** stop losing an approved batch to a read-only workspace, and put Google Ads where it belongs ([76ebc56](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/76ebc567aeaae61fac363517f725a2d2f331f3b4))
+
 ## [1.360.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.359.0...v1.360.0) (2026-07-21)
 
 ### Features
