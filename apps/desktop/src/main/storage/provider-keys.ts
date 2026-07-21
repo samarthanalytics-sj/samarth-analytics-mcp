@@ -6,6 +6,8 @@ import type { LlmProvider, ProviderStatus } from '../../shared/ipc';
 interface AppSettingsFile {
   version: 1;
   providers: Partial<Record<LlmProvider, { apiKeyRef?: string }>>;
+  /** Opaque SecretStore ref for the Google Ads API developer token (never the token itself). */
+  adsDeveloperTokenRef?: string;
 }
 
 const EMPTY: AppSettingsFile = { version: 1, providers: {} };
@@ -60,5 +62,42 @@ export class ProviderKeyStore {
       acc[p] = this.hasKey(p);
       return acc;
     }, {} as ProviderStatus);
+  }
+
+  /* ── Google Ads API developer token ────────────────────────────────────────
+   * App-level, exactly like an LLM provider key: the token belongs to the operator's Google Ads
+   * MANAGER account, not to any one signed-in Google account, and the same token is used for every
+   * client account in the app. It rides in the `developer-token` header of every Google Ads request,
+   * including read-only ones, so without it the whole Ads surface is unavailable.
+   *
+   * Stored the same way as every other secret here: ciphertext in the shared SecretStore (safeStorage,
+   * DPAPI on Windows), only the opaque ref in app-settings.json, and only a BOOLEAN ever crosses into
+   * the renderer. Never follow the oauth-client.json precedent, which keeps its secret in plaintext.
+   *
+   * Note this deliberately reuses the SAME store instance and file as the provider keys: SecretStore
+   * reads the whole file into memory in its constructor and writes the whole cache back, so a second
+   * store over the same path would clobber it. */
+  hasAdsDeveloperToken(): boolean {
+    const ref = this.data.adsDeveloperTokenRef;
+    return Boolean(ref && this.secrets.has(ref));
+  }
+
+  getAdsDeveloperToken(): string | null {
+    const ref = this.data.adsDeveloperTokenRef;
+    return ref ? this.secrets.get(ref) : null;
+  }
+
+  setAdsDeveloperToken(token: string): void {
+    const ref = this.data.adsDeveloperTokenRef ?? `ads_devtoken_${randomUUID()}`;
+    this.secrets.set(ref, token.trim());
+    this.data.adsDeveloperTokenRef = ref;
+    this.persist();
+  }
+
+  clearAdsDeveloperToken(): void {
+    const ref = this.data.adsDeveloperTokenRef;
+    if (ref) this.secrets.delete(ref);
+    delete this.data.adsDeveloperTokenRef;
+    this.persist();
   }
 }

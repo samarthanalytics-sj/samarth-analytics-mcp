@@ -1,7 +1,7 @@
 // Pure tests for the "GTM Structure - GA4 Events" template mapping (the table view
 // + CSV download share this). Run: tsx src/shared/__tests__/tag-template.test.ts
 
-import { suggestionToGroup, suggestionsToTemplateCsv, suggestionsToInstallRunbookMarkdown, installPlanNeedsAction, installPlanStatus, installPlanProgress, triggerWhens, dedupeViewsByGtmName, TEMPLATE_HEADERS, applyTagEdit, applyWhensToTrigger, conditionToOperator, CONDITION_LABELS } from '../tag-template';
+import { suggestionToGroup, suggestionsToTemplateCsv, suggestionsToInstallRunbookMarkdown, installPlanNeedsAction, installPlanStatus, installPlanProgress, triggerWhens, dedupeViewsByGtmName, TEMPLATE_HEADERS, applyTagEdit, applyWhensToTrigger, adsIdentityIssue, conditionToOperator, CONDITION_LABELS } from '../tag-template';
 import type { SuggestedTagView } from '../ipc';
 
 let passed = 0;
@@ -350,5 +350,74 @@ check('progress: mixed, only listener done → not allRequiredDone', installPlan
 check('progress: mixed, both required done → allRequiredDone but not fullyDone (optional left)', (() => { const p = installPlanProgress(mixedPlan, { 0: true, 1: true }); return p.allRequiredDone === true && p.fullyDone === false; })());
 check('progress: mixed, all three done → fullyDone', installPlanProgress(mixedPlan, { 0: true, 1: true, 2: true }).fullyDone === true);
 
+// ── Google Ads identity rows (Conversion ID / Label) ─────────────────────────
+// The suggestion engine seeds these rows with {{Google Ads Conversion ID}} / {{Google Ads Conversion
+// Label}}, and NOTHING creates those GTM variables (planGoogleTagVars only handles 'google_tag'), so a
+// row left as-is builds an awct tag that references variables that do not exist and can never fire.
+const adsPlaceholder = base({
+  id: 'ads', platform: 'google_ads_conversion', tagName: 'Google Ads - Conversion - Contact Form',
+  eventName: 'contact_form', measurementId: '{{Google Ads Conversion ID}}', conversionLabel: '{{Google Ads Conversion Label}}',
+  trigger: { name: 'Contact Form Trigger', kind: 'form_submit', formIdValue: 'contact', formIdOperator: 'equals' },
+});
+const adsReal = applyTagEdit(adsPlaceholder, { measurementId: 'AW-123456789', conversionLabel: 'AbC-dEfGh12_34' });
+const adsRemarketing = base({ id: 'rm', platform: 'google_ads_remarketing', tagName: 'Google Ads - Remarketing', eventName: '', measurementId: 'AW-123456789', trigger: { name: 'All Pages', kind: 'pageview' } });
+
+const ga = suggestionToGroup(adsReal);
+check('ads group: conversion projects Conversion ID + Conversion Label identity rows', ga.params.length === 2 && ga.params[0].name === 'Conversion ID' && ga.params[1].name === 'Conversion Label');
+check('ads group: identity rows carry the field they write back to', ga.params[0].field === 'measurementId' && ga.params[1].field === 'conversionLabel');
+check('ads group: identity rows carry the tag\'s live values', ga.params[0].variable === 'AW-123456789' && ga.params[1].variable === 'AbC-dEfGh12_34');
+check('ads group: rowCount spans the identity rows', ga.rowCount === 2);
+const grm = suggestionToGroup(adsRemarketing);
+check('ads group: remarketing projects ONLY a Conversion ID row (it takes no label)', grm.params.length === 1 && grm.params[0].field === 'measurementId');
+check('ads group: a non-Ads platform is unchanged (no identity rows)', suggestionToGroup(phone).params.every((p) => p.field === undefined));
+// conversion_linker has no id fields at all, so it must not project an identity row.
+check('ads group: conversion_linker projects no identity rows', suggestionToGroup(base({ id: 'cl', platform: 'conversion_linker', tagName: 'Conversion Linker', eventName: '', measurementId: '', trigger: { name: 'All Pages', kind: 'pageview' } })).params.length === 0);
+
+check('ads edit: conversionLabel is overridable (the field TagEdit was missing)', adsReal.conversionLabel === 'AbC-dEfGh12_34' && adsReal.measurementId === 'AW-123456789');
+check('ads edit: an untouched conversionLabel is preserved', applyTagEdit(adsPlaceholder, { tagName: 'X' }).conversionLabel === '{{Google Ads Conversion Label}}');
+
+// The CSV export shares suggestionToGroup, so the Ads ids ride along with no column change.
+const adsCsv = suggestionsToTemplateCsv([adsReal]).split('\r\n');
+check('ads csv: identity rows land in the Parameters columns', adsCsv[1].includes('Conversion ID,AW-123456789') && adsCsv[2].includes('Conversion Label,AbC-dEfGh12_34'));
+check('ads csv: still exactly the template column count', adsCsv.slice(1).filter(Boolean).every((r) => r.split(',').length === TEMPLATE_HEADERS.length));
+
+check('ads issue: the engine-seeded placeholder id is BLOCKED', (adsIdentityIssue(adsPlaceholder) ?? '').includes('Conversion ID is still'));
+check('ads issue: a resolved id + label passes', adsIdentityIssue(adsReal) === null);
+check('ads issue: a bare numeric id passes', adsIdentityIssue(applyTagEdit(adsReal, { measurementId: '123456789' })) === null);
+check('ads issue: an empty label is BLOCKED', (adsIdentityIssue(applyTagEdit(adsReal, { conversionLabel: '   ' })) ?? '').includes('Conversion Label is empty'));
+check('ads issue: a placeholder label alone is BLOCKED', (adsIdentityIssue(applyTagEdit(adsReal, { conversionLabel: '{{Google Ads Conversion Label}}' })) ?? '').includes('Conversion Label is still'));
+check('ads issue: an empty id is BLOCKED', (adsIdentityIssue(applyTagEdit(adsReal, { measurementId: '' })) ?? '').includes('Conversion ID is empty'));
+check('ads issue: a non-id string is BLOCKED', (adsIdentityIssue(applyTagEdit(adsReal, { measurementId: 'G-ABC123' })) ?? '').includes('not a Google Ads conversion id'));
+// The whole "AW-123456789/AbCdEf" string pasted into the LABEL is the classic copy/paste slip: the
+// label alone is wanted, and a slash silently mis-attributes the conversion.
+check('ads issue: the combined AW-id/label pasted into the label is BLOCKED', (adsIdentityIssue(applyTagEdit(adsReal, { conversionLabel: 'AW-123456789/AbCdEf' })) ?? '').includes('paste only the label'));
+check('ads issue: a label with a stray space is BLOCKED', (adsIdentityIssue(applyTagEdit(adsReal, { conversionLabel: 'AbC dEf' })) ?? '').includes('paste only the label'));
+check('ads issue: remarketing needs no label', adsIdentityIssue(adsRemarketing) === null);
+check('ads issue: remarketing still validates its id', adsIdentityIssue(applyTagEdit(adsRemarketing, { measurementId: '{{Google Ads Conversion ID}}' })) !== null);
+// A user's OWN Constant is a legitimate setup, so it must not be blocked - only the engine's two
+// un-provisioned defaults are.
+check('ads issue: a user-supplied {{variable}} is allowed through', adsIdentityIssue(applyTagEdit(adsReal, { measurementId: '{{My Ads ID}}', conversionLabel: '{{My Ads Label}}' })) === null);
+// The waiver is for a value that is EXACTLY one reference. A substring test used to wave these through,
+// and they reach the awct template verbatim because normalizeAdsConversionId passes any {{ through.
+check('ads issue: "AW-{{suffix}}" is NOT a variable reference and is blocked', adsIdentityIssue(applyTagEdit(adsReal, { measurementId: 'AW-{{suffix}}' })) !== null);
+check('ads issue: "G-ABC123 {{x}}" is blocked', adsIdentityIssue(applyTagEdit(adsReal, { measurementId: 'G-ABC123 {{x}}' })) !== null);
+check('ads issue: "not an id {{x}}" is blocked', adsIdentityIssue(applyTagEdit(adsReal, { measurementId: 'not an id {{x}}' })) !== null);
+// The combined send_to string with a variable label is exactly what the slash check exists to catch.
+check('ads issue: "AW-123456789/{{Label}}" in the label is blocked', (adsIdentityIssue(applyTagEdit(adsReal, { conversionLabel: 'AW-123456789/{{Label}}' })) ?? '').includes('paste only the label'));
+check('ads issue: two references in the label are blocked', adsIdentityIssue(applyTagEdit(adsReal, { conversionLabel: '{{A}} {{B}}' })) !== null);
+// Switching a GA4 row's Tag Type carries measurementId across (applyTagEdit), so the Ads row would
+// otherwise arrive holding a G- measurement id with nothing objecting. Remarketing takes no label, so
+// it is the path that needs no further input at all.
+const switchedRm = applyTagEdit(base({ id: 'sw', platform: 'ga4_event', measurementId: '{{GA4 Measurement ID}}', tagName: 'GA4 - X', eventName: 'x', trigger: { name: 'T', kind: 'all_clicks' } }), { platform: 'google_ads_remarketing' });
+check('ads issue: a GA4 measurement-id variable carried in by a Tag Type switch is BLOCKED', (adsIdentityIssue(switchedRm) ?? '').includes('different platform'));
+const switchedConv = applyTagEdit(base({ id: 'sw2', platform: 'ga4_event', measurementId: '{{Meta Pixel ID}}', tagName: 'M', eventName: 'x', trigger: { name: 'T', kind: 'all_clicks' } }), { platform: 'google_ads_conversion', conversionLabel: 'AbCdEf' });
+check('ads issue: a Meta pixel variable carried in by a Tag Type switch is BLOCKED', (adsIdentityIssue(switchedConv) ?? '').includes('different platform'));
+check('ads issue: a non-Ads platform is never blocked', adsIdentityIssue(phone) === null && adsIdentityIssue(gtag) === null && adsIdentityIssue(metaPixel) === null);
+// Repo rule: no em dashes at any output boundary, and these strings surface in the UI.
+const adsMessages = [adsPlaceholder, applyTagEdit(adsReal, { conversionLabel: '' }), applyTagEdit(adsReal, { measurementId: 'G-ABC123' })].map((t) => adsIdentityIssue(t) ?? '');
+check('ads issue: messages carry no em/en dashes', adsMessages.every((m) => m.length > 0 && !/[—–]/.test(m)));
+
+// Guard against silently deleting assertions from this file.
+if (passed < 100) { console.error(`✗ only ${passed} assertions ran (expected 100+)`); process.exit(1); }
 console.log(`\ntag-template: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }

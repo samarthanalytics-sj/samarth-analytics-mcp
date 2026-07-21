@@ -10,6 +10,7 @@ import { buildSuggestions } from '../../../../web-audit-mcp/src/agent/tag-sugges
 import { buildSuggestInput, type PageScan } from '../../../../web-audit-mcp/src/agent/tag-suggest/collect.js';
 import type { SuggestInput, SuggestedTag } from '../../../../web-audit-mcp/src/agent/tag-suggest/types.js';
 import type { CreateTagOutcome, SuggestedTagView } from '../../shared/ipc';
+import { adsIdentityIssue } from '../../shared/tag-template';
 import { ga4VariablePlan, buildVariable, type ContainerSnapshot } from '../google/gtm-builders';
 import { QUOTA_RE } from '../google/quota-retry';
 
@@ -118,6 +119,21 @@ export function planGoogleTagVars(
     planned.add(key);
   }
   return { creates, errors };
+}
+
+/** Which Google Ads rows to BLOCK because their Conversion ID / Label is not usable yet (still the
+ *  engine's un-provisioned {{Google Ads Conversion ID}} / {{...Label}} placeholder, empty, or
+ *  malformed). Unlike the google_tag case there is nothing to PROVISION here: an Ads tag must carry a
+ *  LITERAL id, because normalizeAdsConversionId passes any {{variable}} through verbatim, so a Constant
+ *  holding "AW-123456789" would reach the awct template with the prefix it rejects. Blocked rows are
+ *  filtered out per-row (never the whole batch) exactly like planGoogleTagVars' errors. PURE. */
+export function planAdsIdentity(list: SuggestedTagView[]): { errors: Map<string, string> } {
+  const errors = new Map<string, string>();
+  for (const t of list) {
+    const issue = adsIdentityIssue(t);
+    if (issue) errors.set(t.id, issue);
+  }
+  return { errors };
 }
 
 /** A tool runner — buildToolRegistry's `execute`. Injected so the create loop is

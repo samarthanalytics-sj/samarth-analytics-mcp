@@ -1507,3 +1507,67 @@ export interface GoogleClientStatus {
   /** Whether the client_id has the expected …apps.googleusercontent.com shape. */
   clientIdLooksValid?: boolean;
 }
+
+/* ─────────────── Google Ads (conversion actions → GTM tag prefill) ─────────────── */
+
+/** One Google Ads account the signed-in user can reach. `loginCustomerId` is the manager it must be
+ *  reached THROUGH (Google rejects a client-account call made without it when access is manager
+ *  mediated), so the renderer passes it straight back on every follow-up call. */
+export interface AdsAccountView {
+  id: string;
+  name: string;
+  manager: boolean;
+  level: number;
+  status: string;
+  /** A test account cannot serve real conversions; shown so the user is not confused by an empty list. */
+  testAccount: boolean;
+  hidden: boolean;
+  loginCustomerId?: string;
+}
+
+/** A conversion action offered for reuse. `conversionId` / `conversionLabel` are parsed from the SAME
+ *  tag snippet, never assembled from two sources. `taggable` is false when the action can never drive a
+ *  GTM tag (upload/app/store-visit/GA4-originated types have no web snippet at all). */
+export interface AdsConversionActionView {
+  resourceName: string;
+  id: string;
+  name: string;
+  status: string;
+  type: string;
+  category: string;
+  primaryForGoal?: boolean;
+  conversionId: string | null;
+  conversionLabel: string | null;
+  taggable: boolean;
+  note?: string;
+}
+
+/** Why the Ads surface is unavailable, so the UI can offer the right remedy instead of a raw error. */
+export interface AdsReadiness {
+  ready: boolean;
+  /** 'token' = no developer token stored; 'scope' = this Google account has not granted adwords. */
+  reason?: 'token' | 'scope' | 'other';
+  message?: string;
+  remedy?: string;
+}
+
+export interface AdsConversionActionsResult {
+  actions: AdsConversionActionView[];
+  /** Set when conversions are managed by a DIFFERENT customer (cross-account conversion tracking). */
+  crossAccountFrom?: string;
+}
+
+/** The create form's category dropdown, with Google's editorial counting-type default per category. */
+export interface AdsCategoryOption {
+  value: string;
+  label: string;
+  counting: string;
+}
+
+/** Whether the chosen Google Ads account matches the GTM container the tag is about to be written into.
+ *  'mismatch' is a caution, never a block: adding a second Ads account to one container is legitimate. */
+export interface AdsPairingView {
+  verdict: 'match' | 'mismatch' | 'no-ads-tags' | 'unknown';
+  message: string;
+  containerIds: Array<{ conversionId: string; tagNames: string[] }>;
+}

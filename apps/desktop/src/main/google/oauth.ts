@@ -32,6 +32,33 @@ export const DESKTOP_GOOGLE_SCOPES = [
   'https://www.googleapis.com/auth/analytics.manage.users',
 ];
 
+// The Google Ads API scope. Deliberately NOT in DESKTOP_GOOGLE_SCOPES: it is a SENSITIVE scope, and
+// adding it to the default set would force every existing account through a fresh consent screen and
+// show a Google Ads permission to users who only ever audit GTM containers. It is requested on demand
+// by the "Connect Google Ads" flow, as the UNION below (never on its own - see adsAuthScopes).
+export const GOOGLE_ADS_SCOPE = 'https://www.googleapis.com/auth/adwords';
+
+/** The scope set to request when a user opts into Google Ads. It is the union with the existing scopes,
+ *  NOT the Ads scope alone: a second authorization returns a token that REPLACES the vaulted one, so
+ *  asking for adwords by itself would silently drop the Tag Manager and Analytics grants. */
+export function adsAuthScopes(): string[] {
+  return [...DESKTOP_GOOGLE_SCOPES, GOOGLE_ADS_SCOPE];
+}
+
+/** The scopes actually granted, parsed from the space-delimited `scope` string Google returns with the
+ *  token (persisted by parseTokenResponse). Google may grant a SUPERSET of what was asked for, and with
+ *  include_granted_scopes it usually does. */
+export function grantedScopes(scope: string | undefined | null): Set<string> {
+  return new Set(String(scope ?? '').split(/\s+/).filter(Boolean));
+}
+
+/** Whether a stored token can call the Google Ads API. Checked BEFORE any Ads request, because a missing
+ *  scope surfaces as a 403 insufficient-scope, which is NOT invalid_grant and so never reaches the
+ *  auth-expired chokepoint in account-clients.ts: without this preflight the user just sees a raw error. */
+export function hasAdsScope(scope: string | undefined | null): boolean {
+  return grantedScopes(scope).has(GOOGLE_ADS_SCOPE);
+}
+
 function base64url(buf: Buffer): string {
   return buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
@@ -74,6 +101,13 @@ export function buildAuthUrl(p: AuthUrlParams): string {
   // browser's signed-in Google accounts (and "Use another account").
   u.searchParams.set('access_type', 'offline');
   u.searchParams.set('prompt', 'select_account consent');
+  // Incremental authorization: carry FORWARD every scope the user already granted this client, so a
+  // narrower re-consent (e.g. the opt-in Google Ads flow) cannot silently drop the Tag Manager and
+  // Analytics grants the vaulted token was minted with. Harmless on a first sign-in.
+  // Note: 'prompt' stays 'select_account consent' deliberately. Do NOT switch to 'none' to smooth the
+  // re-consent: combined with access_type=offline, a skipped consent screen can return a token with NO
+  // refresh_token, which silently breaks the account the next time the access token expires.
+  u.searchParams.set('include_granted_scopes', 'true');
   return u.toString();
 }
 

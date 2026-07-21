@@ -41,6 +41,12 @@ import type {
   DiscoverResult,
   ParsedSuggestionsResult,
   ProviderStatus,
+  AdsReadiness,
+  AdsAccountView,
+  AdsConversionActionView,
+  AdsConversionActionsResult,
+  AdsCategoryOption,
+  AdsPairingView,
   ScanProgressView,
   SecretSelfTest,
   SuggestedTagView,
@@ -119,9 +125,32 @@ const api = {
     selfTest: (): Promise<SecretSelfTest> => ipcRenderer.invoke('secrets:selfTest'),
   },
 
+  // Google Ads: fetch real Conversion IDs + Labels so a GTM Ads tag needs no copy-paste. The developer
+  // token is app-level (it belongs to the operator's Ads MANAGER account, not to a signed-in identity),
+  // so only a boolean ever crosses this boundary, never the token itself.
+  ads: {
+    status: (): Promise<AdsReadiness> => ipcRenderer.invoke('ads:status'),
+    hasDeveloperToken: (): Promise<boolean> => ipcRenderer.invoke('ads:hasDeveloperToken'),
+    setDeveloperToken: (token: string): Promise<boolean> => ipcRenderer.invoke('ads:setDeveloperToken', token),
+    clearDeveloperToken: (): Promise<boolean> => ipcRenderer.invoke('ads:clearDeveloperToken'),
+    listAccounts: (): Promise<AdsAccountView[]> => ipcRenderer.invoke('ads:listAccounts'),
+    listConversionActions: (customerId: string, loginCustomerId?: string): Promise<AdsConversionActionsResult> =>
+      ipcRenderer.invoke('ads:listConversionActions', customerId, loginCustomerId),
+    validateConversionAction: (customerId: string, input: { name: string; category: string; countingType?: string }, loginCustomerId?: string): Promise<string | null> =>
+      ipcRenderer.invoke('ads:validateConversionAction', customerId, input, loginCustomerId),
+    createConversionAction: (customerId: string, input: { name: string; category: string; countingType?: string }, loginCustomerId?: string): Promise<AdsConversionActionView> =>
+      ipcRenderer.invoke('ads:createConversionAction', customerId, input, loginCustomerId),
+    categories: (): Promise<AdsCategoryOption[]> => ipcRenderer.invoke('ads:categories'),
+    /** Advisory only: does this container already carry tags for the selected Ads account? */
+    checkPairing: (accountId: string, containerId: string, workspaceId: string, conversionId: string | null, accountName?: string): Promise<AdsPairingView> =>
+      ipcRenderer.invoke('ads:checkPairing', accountId, containerId, workspaceId, conversionId, accountName),
+  },
+
   google: {
     status: (): Promise<GoogleClientStatus> => ipcRenderer.invoke('google:status'),
     connect: (): Promise<AccountView> => ipcRenderer.invoke('google:connect'),
+    /** Re-consent adding the Google Ads scope (the union with the existing scopes). */
+    connectAds: (): Promise<AccountView> => ipcRenderer.invoke('google:connectAds'),
     cancelConnect: (): Promise<void> => ipcRenderer.invoke('google:cancelConnect'),
     disconnect: (id: string): Promise<void> => ipcRenderer.invoke('google:disconnect', id),
   },

@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ThemeToggle, useTheme } from './ThemeToggle';
 import { ShortcutsOverlay, EmptyState } from './ui';
 import type { AppInfo } from '../../preload';
@@ -34,6 +34,11 @@ import type {
   NetworkTestResultView,
   NetworkConnectionType,
   ProviderStatus,
+  AdsReadiness,
+  AdsAccountView,
+  AdsConversionActionView,
+  AdsCategoryOption,
+  AdsPairingView,
   ScanProgressView,
   SecretSelfTest,
   SuggestPlatform,
@@ -48,7 +53,7 @@ import type {
   FormTagVerifyPlanResult,
   SubmitFormVerifyResult,
 } from '../../shared/ipc';
-import { suggestionToGroup, suggestionsToTemplateCsv, suggestionsToInstallRunbookMarkdown, installPlanNeedsAction, installPlanProgress, dedupeViewsByGtmName, TEMPLATE_HEADERS, applyTagEdit, TAG_TYPE_OPTIONS, STANDARD_TRIGGER_VARIABLES, CONDITION_LABELS, type TagEdit, type TriggerWhen, type InstallProgress } from '../../shared/tag-template';
+import { suggestionToGroup, suggestionsToTemplateCsv, suggestionsToInstallRunbookMarkdown, installPlanNeedsAction, installPlanProgress, dedupeViewsByGtmName, TEMPLATE_HEADERS, applyTagEdit, adsIdentityIssue, TAG_TYPE_OPTIONS, STANDARD_TRIGGER_VARIABLES, CONDITION_LABELS, type TagEdit, type TemplateGroup, type TriggerWhen, type InstallProgress } from '../../shared/tag-template';
 import { findMergeGroups, mergeGroup, mergeLabel, type MergeGroup } from '../../shared/tag-merge';
 import { parseCsvUrls, parseCsvUrlStats, CSV_URL_CAP } from '../../shared/csv-urls';
 import { MEMORY_KINDS, type Memory, type MemoryKind } from '../../shared/chat-memory';
@@ -2416,6 +2421,7 @@ function SuggestionTemplateTable({
   gtmTarget,
   screenshots,
   onShot,
+  onFetchAds,
 }: {
   suggestions: SuggestedTagView[];
   /** Raw inline-edit overlay (keyed by suggestion id). The editable Parameter/When ROWS render from these
@@ -2436,6 +2442,8 @@ function SuggestionTemplateTable({
   screenshots?: Record<string, string>;
   /** Open a suggestion's proof screenshot full-screen. */
   onShot?: (shot: { src: string; name: string }) => void;
+  /** Open the Google Ads picker for this row, to fill its Conversion ID + Label from the real account. */
+  onFetchAds?: (suggestionId: string) => void;
 }): JSX.Element {
   // Which suggestions have their "How to install" panel expanded (keyed by id).
   const [installOpen, setInstallOpen] = useState<Record<string, boolean>>({});
@@ -2476,7 +2484,12 @@ function SuggestionTemplateTable({
             // or when value keeps its row mounted instead of collapsing mid-keystroke; untouched rows fall
             // back to the projected group. rowCount + the create-time blank-drop follow from these.
             const ed = edits[s.id];
-            const paramRows = ed?.params ?? g.params;
+            // Identity rows (the Google Ads Conversion ID / Label) are projected from the tag's own
+            // fields, so they never read the generic `params` overlay: a stale overlay left behind by a
+            // platform switch must not replace them.
+            const hasIdentity = g.params.some((p) => p.field);
+            const paramRows: TemplateGroup['params'] = hasIdentity ? g.params : (ed?.params ?? g.params);
+            const adsIssue = adsIdentityIssue(s);
             const whenRows = ed?.whens ?? g.whens;
             const rowCount = Math.max(paramRows.length, whenRows.length, 1);
             const editParam = (idx: number, patch: Partial<{ name: string; variable: string }>): void =>
@@ -2528,7 +2541,13 @@ function SuggestionTemplateTable({
                             aria-label={`Select ${g.tagName} to create in GTM`}
                           />
                           {st?.state === 'creating' && <div style={{ color: 'var(--text-muted)', fontSize: 10, marginTop: 2 }}>…</div>}
-                          {st?.state === 'err' && <div style={{ color: 'var(--c-red)', fontSize: 10, marginTop: 2 }} title={st?.msg}>✗ failed</div>}
+                          {/* A row skipped for missing Google Ads details is not a failure - it is
+                              waiting on input, and its reason is already shown beside the id cell. */}
+                          {st?.state === 'err' && (
+                            adsIssue
+                              ? <div style={{ color: 'var(--c-amber)', fontSize: 10, marginTop: 2 }} title={st?.msg}>⚠ needs details</div>
+                              : <div style={{ color: 'var(--c-red)', fontSize: 10, marginTop: 2 }} title={st?.msg}>✗ failed</div>
+                          )}
                         </>
                       )}
                     </td>
@@ -2573,8 +2592,46 @@ function SuggestionTemplateTable({
                         : g.eventName ? <code style={mdStyles.code}>{g.eventName}</code> : <span style={{ color: 'var(--text-faint)' }}>-</span>}
                     </td>
                   )}
-                  <td style={tplStyles.td}>{p ? (editable ? <GrowCell value={p.name} disabled={creating} onChange={(v) => editParam(i, { name: v })} ariaLabel="Parameter name" /> : p.name) : ''}</td>
-                  <td style={tplStyles.td}>{p ? (editable ? <GrowCell value={p.variable} disabled={creating} onChange={(v) => editParam(i, { variable: v })} ariaLabel="Parameter variable" /> : <code style={mdStyles.code}>{p.variable}</code>) : ''}</td>
+                  {/* An identity row's NAME is the tag's fixed field label ("Conversion ID"), so it is
+                      never editable; its VALUE writes straight to that SuggestedTagView field. */}
+                  <td style={tplStyles.td}>
+                    {p
+                      ? p.field
+                        ? <span style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{p.name}</span>
+                        : editable ? <GrowCell value={p.name} disabled={creating} onChange={(v) => editParam(i, { name: v })} ariaLabel="Parameter name" /> : p.name
+                      : ''}
+                  </td>
+                  <td style={tplStyles.td}>
+                    {p
+                      ? p.field
+                        ? (
+                          <>
+                            {editable
+                              ? <GrowCell value={p.variable} disabled={creating} onChange={(v) => onEdit(s.id, p.field === 'conversionLabel' ? { conversionLabel: v } : { measurementId: v })} ariaLabel={p.name} />
+                              : p.variable ? <code style={mdStyles.code}>{p.variable}</code> : <span style={{ color: 'var(--text-faint)' }}>-</span>}
+                            {/* One note per block, on the last identity row, naming what is still missing,
+                                plus the shortcut that fills BOTH values from the Ads account itself. */}
+                            {editable && i === paramRows.length - 1 && (
+                              <div style={{ marginTop: 3 }}>
+                                {adsIssue && (
+                                  <div style={{ fontSize: 11, lineHeight: 1.45, color: 'var(--c-amber)', whiteSpace: 'normal', maxWidth: 260 }}>{adsIssue}</div>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => onFetchAds?.(s.id)}
+                                  disabled={creating}
+                                  title="Pick a conversion action in your Google Ads account and fill these in"
+                                  style={{ marginTop: 4, padding: '1px 7px', fontSize: 11, lineHeight: 1.6, color: 'var(--c-blue)', background: 'none', border: '1px dashed var(--border-2)', borderRadius: 5, cursor: 'pointer', whiteSpace: 'nowrap' }}
+                                >
+                                  Get from Google Ads
+                                </button>
+                              </div>
+                            )}
+                          </>
+                        )
+                        : editable ? <GrowCell value={p.variable} disabled={creating} onChange={(v) => editParam(i, { variable: v })} ariaLabel="Parameter variable" /> : <code style={mdStyles.code}>{p.variable}</code>
+                      : ''}
+                  </td>
                   {first && (
                     <td rowSpan={rowCount} style={tplStyles.td}>
                       {editable ? <GrowCell value={g.triggerName} disabled={creating} onChange={(v) => onEdit(s.id, { triggerName: v })} ariaLabel="Trigger name" /> : g.triggerName}
@@ -3079,6 +3136,8 @@ function TagReviewPanel({
     [],
   );
   const [sLightbox, setSLightbox] = useState<{ src: string; name: string } | null>(null);
+  // Which suggestion row the Google Ads picker is open for (null = closed).
+  const [adsPickerFor, setAdsPickerFor] = useState<string | null>(null);
   // Suggestion-list filters (search text + type). Display-only: they narrow which rows are SHOWN,
   // never which ids are selected/created.
   const [search, setSearch] = useState('');
@@ -3570,9 +3629,9 @@ function TagReviewPanel({
 
   async function confirmCreate(): Promise<void> {
     if (!targetReady || !ctx) return;
+    const chosen = suggestions.filter((s) => selected[s.id] && !alreadyExists(s)).map(effective);
     setCreating(true);
     onError('');
-    const chosen = suggestions.filter((s) => selected[s.id] && !alreadyExists(s)).map(effective);
     setStatuses((st) => {
       const n = { ...st };
       for (const s of chosen) n[s.id] = { state: 'creating' };
@@ -3775,6 +3834,13 @@ function TagReviewPanel({
   const emCount = suggestions.length - newCount;
   const selectedHasEmOverlap = suggestions.some((s) => selected[s.id] && s.enhancedMeasurementOverlap);
   const selectedUsesVar = suggestions.some((s) => selected[s.id] && effective(s).measurementId.includes('{{'));
+  // Selected Google Ads rows that would build a tag which can never fire (unresolved placeholder id /
+  // label, or an empty label). The main process skips exactly these rows and reports why, so this is a
+  // heads-up, NOT a gate: the rest of the batch still creates.
+  const adsBlocked = suggestions
+    .filter((s) => selected[s.id] && !alreadyExists(s))
+    .map((s) => ({ s: effective(s), issue: adsIdentityIssue(effective(s)) }))
+    .filter((r): r is { s: SuggestedTagView; issue: string } => r.issue !== null);
 
   return (
     <div style={styles.reviewWrap}>
@@ -4421,7 +4487,20 @@ function TagReviewPanel({
                   gtmTarget={{ accountId: ctx?.accountId, containerId: ctx?.containerId, workspaceId: ctx?.workspaceId }}
                   screenshots={sShots}
                   onShot={setSLightbox}
+                  onFetchAds={setAdsPickerFor}
                 />
+                {adsPickerFor && (
+                  <AdsPicker
+                    gtmTarget={{ accountId: ctx?.accountId, containerId: ctx?.containerId, workspaceId: ctx?.workspaceId }}
+                    onClose={() => setAdsPickerFor(null)}
+                    onError={onError}
+                    onPick={({ conversionId, conversionLabel }) => {
+                      // Written into the EDIT overlay, not the raw suggestion, so the prefill is
+                      // reversible and flows through the one path confirmCreate already reads.
+                      setEdits((m) => ({ ...m, [adsPickerFor]: { ...m[adsPickerFor], measurementId: conversionId, conversionLabel } }));
+                    }}
+                  />
+                )}
                 {pageCount > 1 && (
                   <div style={tplStyles.pager}>
                     <button style={tplStyles.pagerBtn} disabled={curPage <= 0} onClick={() => setPage(Math.max(0, curPage - 1))} aria-label="Previous page">‹ Prev</button>
@@ -4462,6 +4541,13 @@ function TagReviewPanel({
                   Approve &amp; create selected ({selectedIds.length})
                 </button>
                 {!targetReady && <span style={{ color: 'var(--c-amber)', fontSize: 13 }}>Pick a draft workspace first.</span>}
+                {adsBlocked.length > 0 && (
+                  <span style={{ color: 'var(--c-amber)', fontSize: 13 }}>
+                    {adsBlocked.length === 1
+                      ? `“${adsBlocked[0].s.tagName}” will be skipped: ${adsBlocked[0].issue}`
+                      : `${adsBlocked.length} Google Ads tags will be skipped until their Conversion ID and Label are filled in.`}
+                  </span>
+                )}
                 {creating && createProgress && (
                   <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>
                     Creating… {createProgress.done}/{createProgress.total}
@@ -9313,6 +9399,8 @@ function SettingsView({
       <section style={styles.card}>
         <p style={styles.settingsSub}>App-level API keys, shared by every account that picks the provider.</p>
         <ProvidersEditor status={provStatus} onStatus={setProvStatus} onChange={refresh} onError={onError} />
+        <div style={{ height: 1, background: 'var(--border-2)', margin: '18px 0' }} />
+        <GoogleAdsCard onError={onError} />
       </section>
       )}
 
@@ -9514,6 +9602,392 @@ function ProvidersEditor({
           )}
         </div>
       ))}
+    </div>
+  );
+}
+
+/**
+ * Pick a Google Ads conversion action (or create one) and hand back its real Conversion ID and Label.
+ *
+ * Three steps, collapsed into one panel so the whole thing is a few clicks: account, then action, then
+ * the values land in the row. Reuse is the default path and "Create new" is secondary, deliberately:
+ * creating a conversion action is a REAL, immediately live write to the advertiser's Google Ads account
+ * with no draft stage, unlike the GTM half which only ever touches a draft workspace.
+ */
+function AdsPicker({
+  gtmTarget,
+  onPick,
+  onClose,
+  onError,
+}: {
+  gtmTarget: { accountId?: string; containerId?: string; workspaceId?: string };
+  onPick: (v: { conversionId: string; conversionLabel: string }) => void;
+  onClose: () => void;
+  onError: (m: string) => void;
+}): JSX.Element {
+  const [accounts, setAccounts] = useState<AdsAccountView[] | null>(null);
+  const [account, setAccount] = useState<AdsAccountView | null>(null);
+  const [actions, setActions] = useState<AdsConversionActionView[] | null>(null);
+  const [crossAccountFrom, setCrossAccountFrom] = useState<string | undefined>();
+  const [pairing, setPairing] = useState<AdsPairingView | null>(null);
+  const [busy, setBusy] = useState('');
+  const [mode, setMode] = useState<'reuse' | 'create'>('reuse');
+  const [categories, setCategories] = useState<AdsCategoryOption[]>([]);
+  const [newName, setNewName] = useState('');
+  const [newCategory, setNewCategory] = useState('SUBMIT_LEAD_FORM');
+  const [createErr, setCreateErr] = useState('');
+  const [confirmCreate, setConfirmCreate] = useState(false);
+
+  useEffect(() => {
+    void (async () => {
+      setBusy('Loading Google Ads accounts…');
+      try {
+        setAccounts(await window.desktop.ads.listAccounts());
+        setCategories(await window.desktop.ads.categories());
+      } catch (e) {
+        onError(e instanceof Error ? e.message : String(e));
+        setAccounts([]);
+      } finally { setBusy(''); }
+    })();
+  }, [onError]);
+
+  async function chooseAccount(a: AdsAccountView): Promise<void> {
+    setAccount(a);
+    setActions(null);
+    setPairing(null);
+    setBusy(`Loading conversion actions for ${a.name}…`);
+    try {
+      const res = await window.desktop.ads.listConversionActions(a.id, a.loginCustomerId);
+      setActions(res.actions);
+      setCrossAccountFrom(res.crossAccountFrom);
+      // Advisory pairing check against the container the tag is actually going into. Uses the first
+      // taggable action's id as the account's representative conversion id.
+      const rep = res.actions.find((x) => x.taggable && x.conversionId)?.conversionId ?? null;
+      if (gtmTarget.accountId && gtmTarget.containerId && gtmTarget.workspaceId) {
+        setPairing(await window.desktop.ads.checkPairing(gtmTarget.accountId, gtmTarget.containerId, gtmTarget.workspaceId, rep, a.name));
+      }
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+      setActions([]);
+    } finally { setBusy(''); }
+  }
+
+  function pick(a: AdsConversionActionView): void {
+    if (!a.conversionId || !a.conversionLabel) return;
+    onPick({ conversionId: a.conversionId, conversionLabel: a.conversionLabel });
+    onClose();
+  }
+
+  /** Dry run first (validateOnly), so a duplicate name is caught before anything is written. */
+  async function validateThenConfirm(): Promise<void> {
+    if (!account) return;
+    setCreateErr('');
+    setBusy('Checking…');
+    try {
+      const problem = await window.desktop.ads.validateConversionAction(account.id, { name: newName.trim(), category: newCategory }, account.loginCustomerId);
+      if (problem) { setCreateErr(problem); return; }
+      setConfirmCreate(true);
+    } catch (e) {
+      setCreateErr(e instanceof Error ? e.message : String(e));
+    } finally { setBusy(''); }
+  }
+
+  async function doCreate(): Promise<void> {
+    if (!account) return;
+    setBusy('Creating in Google Ads…');
+    setCreateErr('');
+    try {
+      const made = await window.desktop.ads.createConversionAction(account.id, { name: newName.trim(), category: newCategory }, account.loginCustomerId);
+      if (made.conversionId && made.conversionLabel) {
+        onPick({ conversionId: made.conversionId, conversionLabel: made.conversionLabel });
+        onClose();
+      } else {
+        setCreateErr(made.note ?? 'Created, but Google Ads has not returned its tag snippet yet. Reopen this picker in a moment and select it.');
+        setConfirmCreate(false);
+      }
+    } catch (e) {
+      setCreateErr(e instanceof Error ? e.message : String(e));
+      setConfirmCreate(false);
+    } finally { setBusy(''); }
+  }
+
+  const usable = (actions ?? []).filter((a) => a.taggable && a.conversionId && a.conversionLabel);
+  const unusable = (actions ?? []).filter((a) => !a.taggable || !a.conversionId || !a.conversionLabel);
+  const pairTone = pairing?.verdict === 'mismatch' ? 'var(--c-amber)' : pairing?.verdict === 'match' ? 'var(--c-green)' : 'var(--text-muted)';
+
+  return (
+    <div style={adsStyles.overlay} onClick={onClose}>
+      <div style={adsStyles.panel} onClick={(e) => e.stopPropagation()}>
+        <div style={adsStyles.head}>
+          <div>
+            <div style={{ fontWeight: 600 }}>Google Ads conversion</div>
+            <div style={{ ...styles.muted, marginTop: 2 }}>
+              {account ? `${account.name} · ${account.id}` : 'Pick the account this site advertises under.'}
+            </div>
+          </div>
+          <button style={styles.ghostBtn} onClick={onClose}>Close</button>
+        </div>
+
+        {busy && <div style={{ ...styles.muted, padding: '8px 0' }}>{busy}</div>}
+
+        {/* Step 1: account */}
+        {!account && accounts && (
+          accounts.length === 0 ? (
+            <div style={styles.muted}>No Google Ads accounts are reachable from this Google account.</div>
+          ) : (
+            <div style={adsStyles.list}>
+              {accounts.map((a) => (
+                <button
+                  key={a.id}
+                  style={{ ...adsStyles.row, opacity: a.manager || a.testAccount ? 0.6 : 1, cursor: a.manager ? 'default' : 'pointer' }}
+                  disabled={a.manager}
+                  onClick={() => void chooseAccount(a)}
+                  title={a.manager ? 'Manager accounts do not hold conversion actions' : `Use ${a.name}`}
+                >
+                  <span style={{ paddingLeft: a.level > 0 ? 14 : 0 }}>
+                    {a.name}
+                    {a.manager && <span style={adsStyles.chip}>manager</span>}
+                    {a.testAccount && <span style={adsStyles.chip}>test</span>}
+                  </span>
+                  <span style={{ color: 'var(--text-faint)', fontSize: 11 }}>{a.id}</span>
+                </button>
+              ))}
+            </div>
+          )
+        )}
+
+        {/* Steps 2 and 3: reuse or create */}
+        {account && (
+          <>
+            {pairing && pairing.message && (
+              <div style={{ ...styles.muted, color: pairTone, margin: '6px 0 10px' }}>
+                {pairing.verdict === 'mismatch' ? '⚠ ' : pairing.verdict === 'match' ? '✓ ' : ''}{pairing.message}
+              </div>
+            )}
+            {crossAccountFrom && (
+              <div style={{ ...styles.muted, color: 'var(--c-amber)', marginBottom: 8 }}>
+                Conversions for this account are managed by manager {crossAccountFrom} (cross-account conversion tracking).
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: 6, margin: '4px 0 10px' }}>
+              <button style={mode === 'reuse' ? styles.toggleOn : styles.toggleOff} onClick={() => setMode('reuse')}>
+                Use an existing action ({usable.length})
+              </button>
+              <button style={mode === 'create' ? styles.toggleOn : styles.toggleOff} onClick={() => setMode('create')}>
+                Create a new one
+              </button>
+              <button style={styles.ghostBtn} onClick={() => { setAccount(null); setActions(null); setPairing(null); }}>
+                ← Change account
+              </button>
+            </div>
+
+            {mode === 'reuse' && actions && (
+              usable.length === 0 ? (
+                <div style={styles.muted}>
+                  This account has no conversion action that can drive a GTM tag. Create one, or paste the values by hand.
+                </div>
+              ) : (
+                <div style={adsStyles.list}>
+                  {usable.map((a) => (
+                    <button key={a.resourceName} style={{ ...adsStyles.row, cursor: 'pointer' }} onClick={() => pick(a)}>
+                      <span>
+                        {a.name}
+                        <span style={adsStyles.chip}>{a.category.replace(/_/g, ' ').toLowerCase()}</span>
+                        {a.status !== 'ENABLED' && <span style={adsStyles.chip}>{a.status.toLowerCase()}</span>}
+                      </span>
+                      <code style={{ ...mdStyles.code, fontSize: 11 }}>{a.conversionId}/{a.conversionLabel}</code>
+                    </button>
+                  ))}
+                  {unusable.length > 0 && (
+                    <div style={{ ...styles.muted, marginTop: 8 }}>
+                      {unusable.length} other action(s) cannot drive a GTM tag (no web snippet: upload, app, store visit, or Analytics-imported).
+                    </div>
+                  )}
+                </div>
+              )
+            )}
+
+            {mode === 'create' && !confirmCreate && (
+              <div>
+                <div style={styles.formRow}>
+                  <input style={styles.input} value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Conversion action name (e.g. Contact Form Submit)" />
+                  <select style={styles.select} value={newCategory} onChange={(e) => setNewCategory(e.target.value)}>
+                    {categories.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+                  </select>
+                  <button style={styles.primaryBtn} onClick={() => void validateThenConfirm()} disabled={busy !== '' || newName.trim() === ''}>
+                    Continue
+                  </button>
+                </div>
+                <p style={styles.muted}>
+                  Counting defaults to {categories.find((c) => c.value === newCategory)?.counting === 'ONE_PER_CLICK' ? 'one per click (right for leads)' : 'many per click (right for purchases)'}.
+                  Google assigns the Conversion Label; it cannot be chosen.
+                </p>
+                {createErr && <div style={{ ...styles.muted, color: 'var(--c-red)' }}>{createErr}</div>}
+              </div>
+            )}
+
+            {mode === 'create' && confirmCreate && (
+              <div style={styles.confirm}>
+                <div style={styles.confirmHead}>Create this conversion action in Google Ads?</div>
+                <div style={{ ...styles.muted, margin: '6px 0', color: 'var(--c-amber)' }}>
+                  “{newName.trim()}” in <b>{account.name}</b>. This writes to the live Google Ads account
+                  immediately. There is no draft stage and it will be visible to anyone using that account.
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button style={styles.primaryBtn} onClick={() => void doCreate()} disabled={busy !== ''}>
+                    {busy ? 'Creating…' : 'Create it'}
+                  </button>
+                  <button style={styles.ghostBtn} onClick={() => setConfirmCreate(false)} disabled={busy !== ''}>Cancel</button>
+                </div>
+                {createErr && <div style={{ ...styles.muted, color: 'var(--c-red)' }}>{createErr}</div>}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const adsStyles: Record<string, React.CSSProperties> = {
+  overlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60, padding: 24 },
+  panel: { background: 'var(--surface)', border: '1px solid var(--border-2)', borderRadius: 'var(--radius-l)', boxShadow: 'var(--shadow-3)', width: 'min(760px, 100%)', maxHeight: '80vh', overflow: 'auto', padding: 18 },
+  head: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 10 },
+  list: { display: 'flex', flexDirection: 'column', gap: 4 },
+  row: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, width: '100%', textAlign: 'left', padding: '8px 10px', fontSize: 13, color: 'var(--text)', background: 'var(--surface-2)', border: '1px solid var(--border-2)', borderRadius: 'var(--radius-s)' },
+  chip: { marginLeft: 6, padding: '1px 6px', fontSize: 10.5, color: 'var(--text-muted)', background: 'var(--surface-3)', borderRadius: 999 },
+};
+
+/** Google Ads setup: the app-level developer token, the per-account adwords consent, and a live
+ *  connection test. The two preconditions fail in DIFFERENT ways and need different remedies, so they
+ *  are reported separately rather than as one "not working" state: the token belongs to the operator's
+ *  Ads MANAGER account and is shared by every signed-in identity, while the scope is granted per Google
+ *  account and needs a re-consent. */
+function GoogleAdsCard({ onError }: { onError: (m: string) => void }): JSX.Element {
+  const [hasToken, setHasToken] = useState<boolean | null>(null);
+  const [readiness, setReadiness] = useState<AdsReadiness | null>(null);
+  const [token, setToken] = useState('');
+  const [busy, setBusy] = useState<'' | 'saving' | 'connecting' | 'testing'>('');
+  const [result, setResult] = useState('');
+
+  const refresh = useCallback(async (): Promise<void> => {
+    try {
+      setHasToken(await window.desktop.ads.hasDeveloperToken());
+      setReadiness(await window.desktop.ads.status());
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    }
+  }, [onError]);
+
+  useEffect(() => { void refresh(); }, [refresh]);
+
+  async function save(): Promise<void> {
+    setBusy('saving');
+    setResult('');
+    try {
+      await window.desktop.ads.setDeveloperToken(token);
+      setToken('');
+      await refresh();
+      setResult('Token saved.');
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally { setBusy(''); }
+  }
+
+  async function clear(): Promise<void> {
+    try {
+      await window.desktop.ads.clearDeveloperToken();
+      setResult('');
+      await refresh();
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function connect(): Promise<void> {
+    setBusy('connecting');
+    setResult('');
+    try {
+      await window.desktop.google.connectAds();
+      await refresh();
+      setResult('Google Ads access granted.');
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally { setBusy(''); }
+  }
+
+  /** A REAL call, not a stored flag: listing accounts is the first request that actually exercises the
+   *  developer token against production, which is the only way to catch a Test-level token (the account
+   *  list call itself succeeds with one, every follow-up fails). */
+  async function test(): Promise<void> {
+    setBusy('testing');
+    setResult('');
+    try {
+      const accounts = await window.desktop.ads.listAccounts();
+      const managers = accounts.filter((a) => a.manager).length;
+      setResult(
+        accounts.length === 0
+          ? 'Connected, but this Google account can reach no Google Ads accounts.'
+          : `✓ ${accounts.length} account(s) reachable${managers ? ` (${managers} manager)` : ''}: ${accounts.slice(0, 3).map((a) => a.name).join(', ')}${accounts.length > 3 ? ', …' : ''}`,
+      );
+    } catch (e) {
+      setResult(`✗ ${e instanceof Error ? e.message : String(e)}`);
+    } finally { setBusy(''); }
+  }
+
+  const scopeMissing = readiness?.ready === false && readiness.reason === 'scope';
+
+  return (
+    <div>
+      <p style={{ ...styles.settingsSub, marginTop: 0 }}>
+        Google Ads: fetch a real Conversion ID and Label instead of copying them by hand.
+      </p>
+      <div style={styles.formRow}>
+        <span style={{ width: 90, fontSize: 13, alignSelf: 'center' }}>
+          Dev token {hasToken ? '✓' : ''}
+        </span>
+        <input
+          style={styles.input}
+          type="password"
+          value={token}
+          onChange={(e) => setToken(e.target.value)}
+          placeholder={hasToken ? 'token saved (enter to replace)' : 'developer token from the Ads API Center'}
+        />
+        <button style={styles.ghostBtn} onClick={save} disabled={busy !== '' || token.trim() === ''}>
+          {busy === 'saving' ? 'Saving…' : 'Save'}
+        </button>
+        {hasToken && <button style={styles.dangerGhost} onClick={clear} disabled={busy !== ''}>Clear</button>}
+      </div>
+      <p style={styles.muted}>
+        Issued from a Google Ads <b>manager (MCC)</b> account under Tools and Settings, API Center. A standard
+        Ads account cannot issue one. Shared by every signed-in Google account; stored encrypted (DPAPI).
+      </p>
+
+      <div style={{ ...styles.formRow, marginTop: 10 }}>
+        <button style={styles.ghostBtn} onClick={connect} disabled={busy !== ''}>
+          {busy === 'connecting' ? 'Opening browser…' : scopeMissing ? 'Connect Google Ads' : 'Re-connect Google Ads'}
+        </button>
+        <button style={styles.ghostBtn} onClick={test} disabled={busy !== '' || !hasToken}>
+          {busy === 'testing' ? 'Testing…' : 'Test connection'}
+        </button>
+      </div>
+
+      {readiness && !readiness.ready && (
+        <div style={{ ...styles.muted, color: 'var(--c-amber)' }}>
+          {readiness.message} {readiness.remedy}
+        </div>
+      )}
+      {readiness?.ready && !result && (
+        <div style={{ ...styles.muted, color: 'var(--c-green)' }}>✓ Token and Google Ads access are both in place.</div>
+      )}
+      {result && (
+        <div style={{ ...styles.muted, color: result.startsWith('✗') ? 'var(--c-red)' : 'var(--c-green)' }}>{result}</div>
+      )}
+      <p style={styles.muted}>
+        Granting Ads access re-runs Google sign-in for the active account. Your Tag Manager and Analytics
+        access is carried forward, not replaced.
+      </p>
     </div>
   );
 }
