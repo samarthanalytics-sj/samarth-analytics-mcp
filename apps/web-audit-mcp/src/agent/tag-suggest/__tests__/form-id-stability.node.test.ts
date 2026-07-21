@@ -1,7 +1,7 @@
 // Tests for per-render form ids. The failure this prevents is the worst kind: GTM ACCEPTS a trigger
 // built on an id that no longer exists, reports the tag as created, and the tag never fires again.
 // Run: tsx apps/web-audit-mcp/src/agent/tag-suggest/__tests__/form-id-stability.node.test.ts
-import { looksEphemeralFormId, uuidsIn, formIdScope, ephemeralFormIdNote } from '../form-id-stability.js';
+import { looksEphemeralFormId, uuidsIn, formIdScope, ephemeralFormIdNote, stableFormKey } from '../form-id-stability.js';
 
 let passed = 0;
 let failed = 0;
@@ -79,6 +79,49 @@ check('case differences in a UUID do not defeat the match', (() => {
 })());
 check('no em dashes in operator-facing text (house style)',
   !/[—–]/.test((formIdScope(HS)?.note ?? '') + (ephemeralFormIdNote([HS[0]]) ?? '')));
+
+// -- The provider's own id (HubSpot data-form-id): ONE sample is enough ----------
+// Verified live on get.chownow.com: the wrapper and the <form> both carry
+// data-form-id="79c35ad9-5d43-407b-8c0e-0b62b2cc8de0", and the DOM id ends with it.
+{
+  const one = ['cf2be672-0e24-4813-8728-42d97847318c-' + FORM_GUID];
+  const sc = formIdScope(one, FORM_GUID);
+  check('provider id: a SINGLE ephemeral sample now stabilizes', sc?.operator === 'contains' && sc.value === FORM_GUID);
+  check('provider id: flagged as stabilized', sc?.stabilized === true);
+  check('provider id: the note says it is the provider durable id', /durable form id/i.test(sc?.note ?? ''));
+  check('provider id: no refusal note once stabilized', ephemeralFormIdNote(one, FORM_GUID) === null);
+  check('provider id: without it, the same single sample is still refused', formIdScope(one) === null);
+}
+check('provider id: one that does NOT appear in the DOM id is not trusted', (() => {
+  const other = '00000000-0000-0000-0000-000000000000';
+  return formIdScope(['cf2be672-0e24-4813-8728-42d97847318c-' + FORM_GUID], other) === null;
+})());
+check('provider id: matched case-insensitively', (() => {
+  const sc = formIdScope(['CF2BE672-0E24-4813-8728-42D97847318C-' + FORM_GUID.toUpperCase()], FORM_GUID);
+  return sc?.operator === 'contains' && sc.value === FORM_GUID;
+})());
+check('provider id: blank is ignored, ordinary ids unaffected', (() => {
+  const sc = formIdScope(['contact-form'], '');
+  return sc?.operator === 'equals' && sc.value === 'contact-form';
+})());
+
+// -- stableFormKey: one form read twice must not become two forms ----------------
+{
+  // The real field signature from get.chownow.com carries a per-render GUID AND an epoch-ms run.
+  const key = (guid: string, stamp: string): string =>
+    `https://forms-na2.hsforms.com/submissions|post|0-1/firstname,0-1/email,${guid}-${stamp}-input,hs_context`;
+  const a = stableFormKey(key('cf2be672-0e24-4813-8728-42d97847318c', '2118870237419'));
+  const b = stableFormKey(key('90c40916-c9d8-4b32-b5fa-07cb0779ce19', '2118870999123'));
+  check('key: two reads of the SAME re-rendered form collapse to one key', a === b, `${a} vs ${b}`);
+  check('key: the volatile parts are replaced, not dropped', a.includes('<uid>') && a.includes('<n>'));
+  check('key: genuinely DIFFERENT forms still differ', stableFormKey('/a|post|email') !== stableFormKey('/b|post|email'));
+  check('key: different real field names still differ',
+    stableFormKey('/a|post|email,name') !== stableFormKey('/a|post|email,phone'));
+  check('key: case-insensitive, like the original', stableFormKey('/A|POST|Email') === stableFormKey('/a|post|email'));
+  check('key: empty and missing are safe', stableFormKey('') === '' && stableFormKey(undefined as unknown as string) === '');
+  check('key: a short number is NOT a per-render token (0-1/ field prefixes survive)',
+    stableFormKey('0-1/firstname').includes('0-1/firstname'));
+}
 
 console.log(`\nform-id-stability: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }

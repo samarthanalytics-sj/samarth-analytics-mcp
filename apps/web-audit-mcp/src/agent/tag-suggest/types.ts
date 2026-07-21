@@ -60,6 +60,9 @@ export interface DetectedForm {
   /** The form element's own id/classes — used to scope the GTM trigger to THIS
    *  form. Empty for cross-origin embedded forms (no readable element). */
   formId?: string;
+  /** The provider's own durable form id (data-form-id). Preferred over formId for scoping, because an
+   *  embedded form's DOM id is often minted per render. */
+  providerFormId?: string;
   formClasses?: string;
   /** The form's visible heading (e.g. "Get a Free Consultation") — used to name
    *  the tag for what the user sees, falling back to the purpose. */

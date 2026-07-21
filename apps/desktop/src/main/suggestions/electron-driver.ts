@@ -19,6 +19,7 @@
 import { BrowserWindow, session } from 'electron';
 import { collectPageInBrowser, type PageScanRaw } from '../../../../web-audit-mcp/src/agent/tag-suggest/collect.js';
 import { extractFormsInPage, type RawForm } from '../../../../web-audit-mcp/src/agent/forms.js';
+import { stableFormKey } from '../../../../web-audit-mcp/src/agent/tag-suggest/form-id-stability.js';
 import { requestAllowed } from './ssrf';
 import type { PageDriver, DrivenPage } from './scan-core';
 import type { ScanDebug, ScanDebugPage } from '../../shared/ipc';
@@ -97,8 +98,15 @@ function probeFormsDom(): { forms: number; inputs: number; textareas: number; se
 function scrollAndCollectForms(): Promise<RawForm[]> {
   return new Promise<RawForm[]>((resolve) => {
     const collected = new Map<string, RawForm>();
+    // Volatile parts stripped, or one form that re-renders between two scroll positions keys twice and
+    // is reported as two forms. Embedded providers put a per-render token INSIDE a field name
+    // (HubSpot: `<instanceGuid>-<epochMs>-input`). Kept INLINE because this function is serialized
+    // into the page: it must stay self-contained. Mirrors stableFormKey in tag-suggest.
     const keyOf = (f: RawForm): string =>
-      `${f.action || ''}|${f.method || ''}|${(f.fields || []).map((x) => x.name || x.id || x.type).join(',')}`.toLowerCase();
+      `${f.action || ''}|${f.method || ''}|${(f.fields || []).map((x) => x.name || x.id || x.type).join(',')}`
+        .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, '<uid>')
+        .replace(/\d{6,}/g, '<n>')
+        .toLowerCase();
     const grab = (): void => {
       try {
         const ex = (window as unknown as { __sxForms?: () => RawForm[] }).__sxForms;
@@ -325,8 +333,11 @@ export function createElectronDriver(opts: ElectronDriverOptions = {}): PageDriv
         ).catch(() => [])) as RawForm[];
         // Union deduped by the SAME form-key the multi-driver uses, then reindexed so the merged list is
         // contiguous.
+        // Same normalization as the in-page pass: this union decides the REPORTED form count, and an
+        // un-normalized key double-counted a single HubSpot form whose field name carries a
+        // per-render GUID (verified live on get.chownow.com: one form, reported as two).
         const formKey = (f: RawForm): string =>
-          `${f.action || ''}|${f.method || ''}|${(f.fields || []).map((x) => x.name || x.id || x.type).join(',')}`.toLowerCase();
+          stableFormKey(`${f.action || ''}|${f.method || ''}|${(f.fields || []).map((x) => x.name || x.id || x.type).join(',')}`);
         const byForm = new Map<string, RawForm>();
         for (const f of [...(Array.isArray(scrolledForms) ? scrolledForms : []), ...(Array.isArray(finalForms) ? finalForms : [])]) {
           const k = formKey(f);
