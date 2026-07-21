@@ -1,3 +1,9 @@
+## [1.359.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.358.0...v1.359.0) (2026-07-21)
+
+### Features
+
+* **desktop:** Google Ads API integration - fetch Conversion ID + Label, prefill the GTM tag ([5a89f9e](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/5a89f9ead72c0b86bacba70ac96ab41e395f1342))
+
 ## [1.358.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.357.0...v1.358.0) (2026-07-21)
 
 ### Features
