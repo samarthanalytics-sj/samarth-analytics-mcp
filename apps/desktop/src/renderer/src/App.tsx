@@ -3654,8 +3654,12 @@ function TagReviewPanel({
     }
   }
 
-  async function confirmCreate(): Promise<void> {
+  /** @param wsOverride retry into a DIFFERENT workspace than ctx names. Passed explicitly rather than
+   *  read back from ctx, because setGtmContext updates the main process but the ctx PROP here is
+   *  refreshed by the parent, and a retry must not race that. */
+  async function confirmCreate(wsOverride?: string): Promise<void> {
     if (!targetReady || !ctx) return;
+    const wsId = wsOverride ?? ctx.workspaceId!;
     const chosen = suggestions.filter((s) => selected[s.id] && !alreadyExists(s)).map(effective);
     setCreating(true);
     onError('');
@@ -3671,7 +3675,7 @@ function TagReviewPanel({
       const outcomes: CreateTagOutcome[] = await window.desktop.tags.createTags(
         ctx.accountId!,
         ctx.containerId!,
-        ctx.workspaceId!,
+        wsId,
         chosen,
         (p) => setCreateProgress(p),
       );
@@ -3681,7 +3685,7 @@ function TagReviewPanel({
         for (const s of chosen) {
           const o = byId.get(s.id);
           if (!o) n[s.id] = { state: 'err', msg: 'no result' };
-          else if (o.ok) n[s.id] = { state: 'ok', msg: o.triggerReused ? 'created · trigger reused' : 'created · trigger created', url: gtmTagUrl(ctx.accountId!, ctx.containerId!, ctx.workspaceId!, o.tagId) };
+          else if (o.ok) n[s.id] = { state: 'ok', msg: o.triggerReused ? 'created · trigger reused' : 'created · trigger created', url: gtmTagUrl(ctx.accountId!, ctx.containerId!, wsId, o.tagId) };
           else if (o.existing) n[s.id] = { state: 'exists', msg: 'already exists in the container' };
           else n[s.id] = { state: 'err', msg: o.error ?? 'failed' };
         }
@@ -3690,6 +3694,11 @@ function TagReviewPanel({
       const created = outcomes.filter((o) => o.ok).length;
       const existing = outcomes.filter((o) => o.existing).length;
       setDone({ created, existing, failed: outcomes.length - created - existing, total: chosen.length });
+      // The workspace went read-only and GTM already made the replacement. Offer the move instead of
+      // making the user hunt for it in the GTM bar: the old workspace no longer exists, so there is
+      // nothing to weigh up. Still a button rather than an automatic retarget, because silently
+      // redirecting a batch of writes to a different workspace is not something to do behind someone's back.
+      setSwitchTo(outcomes.find((o) => o.switchToWorkspace)?.switchToWorkspace ?? null);
       // Succeeded + already-existing rows: deselect (read-only). Failures stay selected to retry.
       setSelected((sel) => {
         const n = { ...sel };
@@ -3866,6 +3875,25 @@ function TagReviewPanel({
   // heads-up, NOT a gate: the rest of the batch still creates.
   // Distinct failure reasons from the last create run, most common first. A batch normally fails for one
   // shared cause, so collapsing by message turns N identical tooltips into one readable line.
+  // The successor workspace GTM minted after the target went read-only, when the last create run hit
+  // that case. Drives the one-click switch-and-retry; cleared on any run that does not hit it.
+  const [switchTo, setSwitchTo] = useState<{ id: string; name: string } | null>(null);
+
+  /** Retarget the GTM context at the replacement workspace, then re-run the same approved batch. The
+   *  rows are still selected, so confirmCreate picks up exactly what the user already approved. */
+  async function switchWorkspaceAndRetry(): Promise<void> {
+    if (!active || !ctx || !switchTo) return;
+    try {
+      await window.desktop.accounts.setGtmContext(active.id, { ...ctx, workspaceId: switchTo.id, workspaceName: switchTo.name });
+      setSwitchTo(null);
+      setDone(null);
+      setStatuses({});
+      await confirmCreate(switchTo.id);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
   const failureReasons = useMemo(() => {
     const byMsg = new Map<string, number>();
     for (const st of Object.values(statuses)) {
@@ -4562,7 +4590,9 @@ function TagReviewPanel({
                   {selectedUsesVar && ' Some tags use the {{GA4 Measurement ID}} variable - verify it exists in this container.'}
                 </div>
                 <div style={{ display: 'flex', gap: 8 }}>
-                  <button style={styles.primaryBtn} onClick={confirmCreate} disabled={creating}>
+                  {/* Wrapped, NOT passed directly: confirmCreate now takes an optional workspace
+                      override, and React would hand it the MouseEvent as that argument. */}
+                  <button style={styles.primaryBtn} onClick={() => void confirmCreate()} disabled={creating}>
                     {creating ? 'Creating…' : `Create ${selectedIds.length} tag(s)`}
                   </button>
                   <button style={styles.ghostBtn} onClick={() => setConfirming(false)} disabled={creating}>
@@ -4603,6 +4633,18 @@ function TagReviewPanel({
                         read-only workspace, expired auth), and burying it in a per-row tooltip meant a
                         failure could not be diagnosed without hovering a 10px mark. Show the distinct
                         reasons inline; they are already user-facing prose from the main process. */}
+                    {/* The target went read-only and GTM already made the replacement. One click beats
+                        sending the user to the GTM bar to find a workspace that usually has the SAME name. */}
+                    {switchTo && (
+                      <button
+                        type="button"
+                        style={{ ...styles.primaryBtn, marginLeft: 8 }}
+                        disabled={creating}
+                        onClick={() => void switchWorkspaceAndRetry()}
+                      >
+                        Switch to “{switchTo.name}” and retry
+                      </button>
+                    )}
                     {done.failed > 0 && failureReasons.length > 0 && (
                       <span style={{ display: 'block', width: '100%', marginTop: 4, color: 'var(--c-red)', fontSize: 12.5, lineHeight: 1.5, whiteSpace: 'normal' }}>
                         {failureReasons.map((r) => (

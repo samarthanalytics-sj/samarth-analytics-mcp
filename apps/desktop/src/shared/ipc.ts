@@ -1265,6 +1265,10 @@ export interface CreateTagOutcome {
   /** The container already has a tag with this name — skipped, not an error. */
   existing?: boolean;
   error?: string;
+  /** Set when the batch failed ONLY because the target workspace is read-only and GTM has already made
+   *  a replacement. Carries the successor so the UI can offer a one-click switch-and-retry instead of
+   *  making the user find it in the GTM bar. Advisory: the user still confirms the retry. */
+  switchToWorkspace?: { id: string; name: string };
 }
 
 /** Continuous-monitoring config: auto re-audit the active container on a timer. */
