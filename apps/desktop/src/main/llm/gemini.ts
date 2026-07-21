@@ -1,4 +1,4 @@
-import { sseEvents, startStream } from './sse';
+import { sseEvents, startStream, withRequestTimeout } from './sse';
 import type { LlmChatInput, LlmClient, LlmReply, LlmToolCall, LlmTurn, StreamAccumulator } from './types';
 
 // Google Gemini (generativelanguage v1beta generateContent). Pure mappers
@@ -114,27 +114,31 @@ export const geminiClient: LlmClient = {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
       input.model
     )}:streamGenerateContent?alt=sse`;
-    const res = await startStream(
-      url,
-      { 'x-goog-api-key': input.apiKey },
-      {
-        systemInstruction: { parts: [{ text: input.system }] },
-        contents: toGeminiContents(input.messages),
-        ...(input.tools.length
-          ? { tools: [{ functionDeclarations: input.tools.map(geminiFunctionDecl) }] }
-          : {}),
-      },
-      'Gemini',
-      input.signal
-    );
-    const acc = geminiStreamAccumulator(onDelta);
-    for await (const data of sseEvents(res)) {
-      try {
-        acc.push(JSON.parse(data));
-      } catch {
-        // ignore non-JSON lines
+    // The budget covers the request AND the body stream AND any retry sleeps.
+    return withRequestTimeout('Gemini', input.signal, async ({ signal, deadlineAt }) => {
+      const res = await startStream(
+        url,
+        { 'x-goog-api-key': input.apiKey },
+        {
+          systemInstruction: { parts: [{ text: input.system }] },
+          contents: toGeminiContents(input.messages),
+          ...(input.tools.length
+            ? { tools: [{ functionDeclarations: input.tools.map(geminiFunctionDecl) }] }
+            : {}),
+        },
+        'Gemini',
+        signal,
+        { onRetry: input.onRetry, deadlineAt }
+      );
+      const acc = geminiStreamAccumulator(onDelta);
+      for await (const data of sseEvents(res)) {
+        try {
+          acc.push(JSON.parse(data));
+        } catch {
+          // ignore non-JSON lines
+        }
       }
-    }
-    return acc.result();
+      return acc.result();
+    });
   },
 };

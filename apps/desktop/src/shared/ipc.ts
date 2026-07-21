@@ -108,6 +108,9 @@ export type ChatStreamEvent =
   | { type: 'tool'; name: string }
   | { type: 'tool_result'; name: string; ok: boolean; error?: string }
   | { type: 'memories'; used: ChatMemoryUsed[] }
+  /** The provider rate-limited / overloaded us and the request is being retried after `delayMs`.
+   *  Purely informational: the turn is still running. Without it the wait looks like a hang. */
+  | { type: 'retry'; provider: string; status: number; attempt: number; maxAttempts: number; delayMs: number }
   | {
       type: 'confirm';
       confirmId: string;

@@ -1,4 +1,4 @@
-import { sseEvents, startStream } from './sse';
+import { sseEvents, startStream, withRequestTimeout } from './sse';
 import type { LlmChatInput, LlmClient, LlmReply, LlmToolCall, LlmTurn, StreamAccumulator } from './types';
 
 // Anthropic Messages API. Pure mappers are exported for unit tests.
@@ -109,32 +109,36 @@ export function anthropicStreamAccumulator(onDelta: (t: string) => void): Stream
 
 export const anthropicClient: LlmClient = {
   async chatStream(input: LlmChatInput, onDelta: (t: string) => void): Promise<LlmReply> {
-    const res = await startStream(
-      'https://api.anthropic.com/v1/messages',
-      { 'x-api-key': input.apiKey, 'anthropic-version': '2023-06-01' },
-      {
-        model: input.model,
-        max_tokens: 4096,
-        system: input.system,
-        messages: toAnthropicMessages(input.messages),
-        tools: input.tools.map((t) => ({
-          name: t.name,
-          description: t.description,
-          input_schema: t.inputSchema,
-        })),
-        stream: true,
-      },
-      'Anthropic',
-      input.signal
-    );
-    const acc = anthropicStreamAccumulator(onDelta);
-    for await (const data of sseEvents(res)) {
-      try {
-        acc.push(JSON.parse(data));
-      } catch {
-        // ignore non-JSON lines
+    // The budget covers the request AND the body stream AND any retry sleeps.
+    return withRequestTimeout('Anthropic', input.signal, async ({ signal, deadlineAt }) => {
+      const res = await startStream(
+        'https://api.anthropic.com/v1/messages',
+        { 'x-api-key': input.apiKey, 'anthropic-version': '2023-06-01' },
+        {
+          model: input.model,
+          max_tokens: 4096,
+          system: input.system,
+          messages: toAnthropicMessages(input.messages),
+          tools: input.tools.map((t) => ({
+            name: t.name,
+            description: t.description,
+            input_schema: t.inputSchema,
+          })),
+          stream: true,
+        },
+        'Anthropic',
+        signal,
+        { onRetry: input.onRetry, deadlineAt }
+      );
+      const acc = anthropicStreamAccumulator(onDelta);
+      for await (const data of sseEvents(res)) {
+        try {
+          acc.push(JSON.parse(data));
+        } catch {
+          // ignore non-JSON lines
+        }
       }
-    }
-    return acc.result();
+      return acc.result();
+    });
   },
 };

@@ -6,6 +6,7 @@ import type {
   LlmProvider,
   LlmToolCall,
   LlmTurn,
+  RetryNotice,
   ToolExecutor,
 } from './types';
 
@@ -42,8 +43,13 @@ export interface RunChatCallbacks {
   onDelta?: (text: string) => void;
   /** Fired when the model invokes a tool. */
   onToolCall?: (call: LlmToolCall) => void;
-  /** Fired after a tool runs — ok=false carries the error so the UI can show failures. */
-  onToolResult?: (result: { name: string; ok: boolean; error?: string }) => void;
+  /** Fired after a tool runs: ok=false carries the error so the UI can show failures. `content` is
+   *  the tool's raw output on success, so the caller can carry it into the NEXT turn's context
+   *  (see tool-memory.ts) instead of the model re-calling the same tool to re-learn the answer. */
+  onToolResult?: (result: { name: string; ok: boolean; error?: string; args?: Record<string, unknown>; content?: string }) => void;
+  /** Fired when the provider rate-limits us and the request is about to be retried, so the UI can
+   *  show "retrying in Ns" rather than an unexplained pause. */
+  onRetry?: (notice: RetryNotice) => void;
 }
 
 /**
@@ -77,6 +83,7 @@ export async function runChat(
           tools,
           messages,
           signal: input.signal,
+          onRetry: callbacks.onRetry,
         },
         (delta) => callbacks.onDelta?.(delta)
       );
@@ -123,8 +130,9 @@ export async function runChat(
         }
         callbacks.onToolCall?.(call);
         try {
-          results.push({ id: call.id, name: call.name, content: await executor.execute(call.name, call.args) });
-          callbacks.onToolResult?.({ name: call.name, ok: true });
+          const content = await executor.execute(call.name, call.args);
+          results.push({ id: call.id, name: call.name, content });
+          callbacks.onToolResult?.({ name: call.name, ok: true, args: call.args, content });
         } catch (e) {
           const message = e instanceof Error ? e.message : String(e);
           results.push({ id: call.id, name: call.name, content: message, isError: true });
