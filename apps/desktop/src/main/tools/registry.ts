@@ -676,6 +676,45 @@ export function buildToolRegistry(
       handler: (a) => data.listGtmTags(s(a.accountId), s(a.containerId), s(a.workspaceId)),
     },
     {
+      // The site-wide counterpart to suggest_tags_from_url, which only ever looks at ONE page. Without
+      // this, "list the forms on this website" or "check for sitemaps" had no tool at all, so the model
+      // silently answered for the homepage alone and dropped the sitemap half of the question.
+      name: 'discover_site_urls',
+      description:
+        'List the pages of a website, from its sitemap.xml (found via robots.txt or the usual locations) and falling back to a link crawl when there is no sitemap. Read-only. Answers "does this site have a sitemap", "what pages does it have", and is the FIRST step for anything site-wide, because suggest_tags_from_url only ever looks at the ONE url you give it: call this, then call suggest_tags_from_url on the pages that matter. Also reports the GTM container and GA4 measurement ids already live on the homepage. UNLIKE the list_* tools this one IS capped: it returns `total` alongside `urls`, and when they differ say so rather than implying the list is complete. Needs a full public http(s) URL.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: 'Site or page URL, e.g. https://example.com' },
+          limit: { type: 'number', description: 'Max urls to return (default 50, max 200). The true count is always reported as `total`.' },
+        },
+        required: ['url'],
+        additionalProperties: false,
+      },
+      handler: async (a) => {
+        const { discoverSite } = await import('../suggestions/discover');
+        const res = await discoverSite(s(a.url));
+        // discoverSite goes up to 800 urls. Dumping that into the chat would refill the very
+        // per-minute token budget the tool gating exists to protect, so cap hard and report honestly.
+        const asked = Number(a.limit);
+        const cap = Math.min(Math.max(Number.isFinite(asked) && asked > 0 ? Math.floor(asked) : 50, 1), 200);
+        const urls = res.urls.slice(0, cap);
+        return {
+          url: s(a.url),
+          sitemapFound: res.viaSitemap,
+          total: res.total,
+          returned: urls.length,
+          ...(res.total > urls.length
+            ? { truncated: `showing ${urls.length} of ${res.total} pages; say so rather than implying this is the whole site, and raise \`limit\` (max 200) or narrow the url if more are needed` }
+            : {}),
+          urls,
+          installed: res.installed,
+          ...(res.note ? { note: res.note } : {}),
+          next: 'Call suggest_tags_from_url on the specific pages worth tracking (it scans ONE page per call). Forms and CTAs differ per page, so a homepage scan does not describe the site.',
+        };
+      },
+    },
+    {
       name: 'suggest_tags_from_url',
       description:
         'Scan a LIVE web page with a headless browser and return the GA4 event tags worth creating for it, INCLUDING the exact TRIGGER CONDITION each needs: form submits scoped by Form ID/classes or page path, CTA/link clicks by Click Text or Click URL, mailto:/tel: clicks, file downloads, outbound links. Read-only, it only inventories the DOM. Answers "how should the trigger be configured to track X on <url>?"; pass a suggestion\'s `trigger` object straight to create_gtm_tracking_tag so the tag actually fires. Needs a full public http(s) URL. Slow, call it once per page.',

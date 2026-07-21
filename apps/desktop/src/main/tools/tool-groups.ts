@@ -69,6 +69,11 @@ export const ENABLE_TOOL_GROUP = 'enable_tool_group';
 const GROUP_MEMBERS: Record<ToolGroup, readonly string[]> = {
   // ---- CORE: always sent. Deliberately small: reads, context switching, memory, house patterns.
   core: [
+    // Site discovery. Core rather than audit-verify (where its sibling suggest_tags_from_url lives)
+    // because it is the ENTRY POINT for anything site-wide: gate it behind keywords and the model
+    // cannot even begin on "what pages does this site have", which carries no audit vocabulary. It is
+    // 251 tokens, the cheapest way to stop a whole class of question failing silently.
+    'discover_site_urls',
     // GTM reads
     'list_gtm_accounts',
     'list_gtm_containers',
