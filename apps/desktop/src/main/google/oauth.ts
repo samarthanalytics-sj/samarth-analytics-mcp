@@ -20,6 +20,9 @@ export const GOOGLE_USERINFO_ENDPOINT = 'https://openidconnect.googleapis.com/v1
 // analytics.manage.users authorizes GA4 access-binding (user permission) writes.
 // Actual writes are still gated at runtime behind per-change user confirmation
 // (GA4 deletes/archives via the two-step approval card).
+// The one and only Google Ads API OAuth scope.
+export const GOOGLE_ADS_SCOPE = 'https://www.googleapis.com/auth/adwords';
+
 export const DESKTOP_GOOGLE_SCOPES = [
   'openid',
   'email',
@@ -30,19 +33,23 @@ export const DESKTOP_GOOGLE_SCOPES = [
   'https://www.googleapis.com/auth/analytics.readonly',
   'https://www.googleapis.com/auth/analytics.edit',
   'https://www.googleapis.com/auth/analytics.manage.users',
+  // adwords authorizes the Google Ads API: reading the account tree and its conversion actions, and
+  // creating a conversion action. It is INCLUDED here so a normal sign-in covers Google Ads and there
+  // is no second "connect" step to discover. It is the only Google Ads scope there is; Google publishes
+  // no read-only variant, so read-only access is granted per account IN THE GOOGLE ADS UI (set the
+  // connecting user to "Read only" there) rather than by narrowing this list.
+  GOOGLE_ADS_SCOPE,
 ];
 
-// The Google Ads API scope. Deliberately NOT in DESKTOP_GOOGLE_SCOPES: it is a SENSITIVE scope, and
-// adding it to the default set would force every existing account through a fresh consent screen and
-// show a Google Ads permission to users who only ever audit GTM containers. It is requested on demand
-// by the "Connect Google Ads" flow, as the UNION below (never on its own - see adsAuthScopes).
-export const GOOGLE_ADS_SCOPE = 'https://www.googleapis.com/auth/adwords';
-
-/** The scope set to request when a user opts into Google Ads. It is the union with the existing scopes,
- *  NOT the Ads scope alone: a second authorization returns a token that REPLACES the vaulted one, so
- *  asking for adwords by itself would silently drop the Tag Manager and Analytics grants. */
+/** The scope set to request when upgrading an account that signed in BEFORE adwords joined the defaults.
+ *  Identical to the defaults now, and kept as its own function because it names the intent at the call
+ *  site and because the union is the load-bearing part: a second authorization returns a token that
+ *  REPLACES the vaulted one, so asking for adwords ALONE would silently drop the Tag Manager and
+ *  Analytics grants. */
 export function adsAuthScopes(): string[] {
-  return [...DESKTOP_GOOGLE_SCOPES, GOOGLE_ADS_SCOPE];
+  return DESKTOP_GOOGLE_SCOPES.includes(GOOGLE_ADS_SCOPE)
+    ? [...DESKTOP_GOOGLE_SCOPES]
+    : [...DESKTOP_GOOGLE_SCOPES, GOOGLE_ADS_SCOPE];
 }
 
 /** The scopes actually granted, parsed from the space-delimited `scope` string Google returns with the

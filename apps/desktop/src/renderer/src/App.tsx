@@ -9638,18 +9638,40 @@ function AdsPicker({
   const [createErr, setCreateErr] = useState('');
   const [confirmCreate, setConfirmCreate] = useState(false);
 
-  useEffect(() => {
-    void (async () => {
-      setBusy('Loading Google Ads accounts…');
-      try {
-        setAccounts(await window.desktop.ads.listAccounts());
-        setCategories(await window.desktop.ads.categories());
-      } catch (e) {
-        onError(e instanceof Error ? e.message : String(e));
-        setAccounts([]);
-      } finally { setBusy(''); }
-    })();
+  const [blocked, setBlocked] = useState<AdsReadiness | null>(null);
+  const [reconnecting, setReconnecting] = useState(false);
+
+  const load = useCallback(async (): Promise<void> => {
+    setBusy('Loading Google Ads accounts…');
+    setBlocked(null);
+    try {
+      // Preflight. Both preconditions fail as a 403 at call time, and a missing scope is NOT
+      // invalid_grant, so without this the user would just see a raw error with no way forward.
+      const ready = await window.desktop.ads.status();
+      if (!ready.ready) { setBlocked(ready); setAccounts([]); return; }
+      setAccounts(await window.desktop.ads.listAccounts());
+      setCategories(await window.desktop.ads.categories());
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+      setAccounts([]);
+    } finally { setBusy(''); }
   }, [onError]);
+
+  useEffect(() => { void load(); }, [load]);
+
+  /** Upgrade an account that signed in before adwords joined the default scope set. A token's scopes are
+   *  fixed at grant time, so this is a fresh authorization; it requests the UNION, so the existing Tag
+   *  Manager and Analytics grants survive. Offered right here rather than in Settings, because this is
+   *  where the user actually hit the wall. */
+  async function reconnect(): Promise<void> {
+    setReconnecting(true);
+    try {
+      await window.desktop.google.connectAds();
+      await load();
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally { setReconnecting(false); }
+  }
 
   async function chooseAccount(a: AdsAccountView): Promise<void> {
     setAccount(a);
@@ -9730,8 +9752,26 @@ function AdsPicker({
 
         {busy && <div style={{ ...styles.muted, padding: '8px 0' }}>{busy}</div>}
 
+        {/* Blocked: fix it HERE rather than sending the user to Settings to hunt for it. */}
+        {blocked && (
+          <div style={styles.warn}>
+            <div>{blocked.message} {blocked.reason === 'token' ? blocked.remedy : ''}</div>
+            {blocked.reason === 'scope' && (
+              <div style={{ marginTop: 8 }}>
+                <button style={styles.primaryBtn} onClick={() => void reconnect()} disabled={reconnecting}>
+                  {reconnecting ? 'Opening browser…' : 'Grant Google Ads access'}
+                </button>
+                <div style={{ ...styles.muted, marginTop: 6 }}>
+                  This account signed in before Google Ads was part of the app, so its sign-in has to be
+                  repeated once. Your Tag Manager and Analytics access is carried forward, not replaced.
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Step 1: account */}
-        {!account && accounts && (
+        {!account && !blocked && accounts && (
           accounts.length === 0 ? (
             <div style={styles.muted}>No Google Ads accounts are reachable from this Google account.</div>
           ) : (
@@ -9966,7 +10006,7 @@ function GoogleAdsCard({ onError }: { onError: (m: string) => void }): JSX.Eleme
 
       <div style={{ ...styles.formRow, marginTop: 10 }}>
         <button style={styles.ghostBtn} onClick={connect} disabled={busy !== ''}>
-          {busy === 'connecting' ? 'Opening browser…' : scopeMissing ? 'Connect Google Ads' : 'Re-connect Google Ads'}
+          {busy === 'connecting' ? 'Opening browser…' : scopeMissing ? 'Grant Google Ads access' : 'Re-authorize Google'}
         </button>
         <button style={styles.ghostBtn} onClick={test} disabled={busy !== '' || !hasToken}>
           {busy === 'testing' ? 'Testing…' : 'Test connection'}
@@ -9985,8 +10025,9 @@ function GoogleAdsCard({ onError }: { onError: (m: string) => void }): JSX.Eleme
         <div style={{ ...styles.muted, color: result.startsWith('✗') ? 'var(--c-red)' : 'var(--c-green)' }}>{result}</div>
       )}
       <p style={styles.muted}>
-        Granting Ads access re-runs Google sign-in for the active account. Your Tag Manager and Analytics
-        access is carried forward, not replaced.
+        Google Ads access is part of a normal sign-in, so new accounts need nothing here. An account that
+        signed in earlier has to repeat its sign-in ONCE, because a token's permissions are fixed when it
+        is granted and cannot be widened in place. Tag Manager and Analytics access is carried forward.
       </p>
     </div>
   );
