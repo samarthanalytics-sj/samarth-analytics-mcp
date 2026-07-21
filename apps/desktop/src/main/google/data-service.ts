@@ -202,6 +202,30 @@ export interface GtmWorkspaceView {
   path: string;
 }
 
+/**
+ * Given the container's CURRENT workspaces, is the target still writable, and if not which workspace
+ * should the user move to?
+ *
+ * A workspace goes read-only the moment a container version is created from it, and GTM then drops it
+ * from the workspace list and mints a replacement. So "is it in the list" IS the writability test, and
+ * it costs one cheap read rather than a failed write.
+ *
+ * Pure, so the decision is unit-tested without auth: the network call stays in workspaceWritable.
+ */
+export function decideWorkspaceFallback(
+  workspaces: GtmWorkspaceView[],
+  workspaceId: string
+): { writable: boolean; fallbackId: string | null; fallbackName: string | null } {
+  const list = workspaces ?? [];
+  if (list.some((w) => w.workspaceId === workspaceId)) return { writable: true, fallbackId: null, fallbackName: null };
+  // Prefer the NEWEST non-default workspace: when GTM mints a replacement after a submit, that is the one
+  // carrying the user's continuing work, and it usually reuses the old name. Ids are numeric and
+  // increasing, so the highest is newest. Fall back to the newest of any name when that is all there is.
+  const byNewest = [...list].sort((a, b) => Number(b.workspaceId) - Number(a.workspaceId));
+  const pick = byNewest.find((w) => w.name.trim().toLowerCase() !== 'default workspace') ?? byNewest[0] ?? null;
+  return { writable: false, fallbackId: pick?.workspaceId ?? null, fallbackName: pick?.name ?? null };
+}
+
 export interface GtmFolderView {
   folderId: string;
   name: string;
@@ -1509,13 +1533,7 @@ export class GoogleDataService {
     containerId: string,
     workspaceId: string
   ): Promise<{ writable: boolean; fallbackId: string | null; fallbackName: string | null }> {
-    const wss = await this.listGtmWorkspaces(accountId, containerId);
-    if (wss.some((w) => w.workspaceId === workspaceId)) return { writable: true, fallbackId: null, fallbackName: null };
-    // Prefer the newest workspace: when GTM mints a replacement after a submit, that is the one holding
-    // the user's continuing work. Workspace ids are numeric and increasing, so the highest is newest.
-    const byNewest = [...wss].sort((a, b) => Number(b.workspaceId) - Number(a.workspaceId));
-    const pick = byNewest.find((w) => w.name.toLowerCase() !== 'default workspace') ?? byNewest[0] ?? null;
-    return { writable: false, fallbackId: pick?.workspaceId ?? null, fallbackName: pick?.name ?? null };
+    return decideWorkspaceFallback(await this.listGtmWorkspaces(accountId, containerId), workspaceId);
   }
 
   /** The default workspace of a container (named "Default Workspace", else the first). */
