@@ -525,6 +525,7 @@ async function main(): Promise<void> {
       'detect_meta_web_tags',
       'diff_gtm_versions',
       'diff_gtm_workspace_vs_live',
+      'discover_site_urls',
       'generate_analytics_report',
       'generate_ga4_report',
       'get_form_tracking_recipe',
@@ -588,7 +589,7 @@ async function main(): Promise<void> {
 
   await test('write tools appear ONLY when a confirm function is provided', async () => {
     const readOnly = buildToolRegistry(fakeData().data);
-    assert.equal(readOnly.list().length, 55, 'read-only registry has 55 tools');
+    assert.equal(readOnly.list().length, 56, 'read-only registry has 56 tools');
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
@@ -603,8 +604,9 @@ async function main(): Promise<void> {
     // plus the read-only monitor_ga4_property = 102, plus the three new server tag types
     // (create_stackadapt_server_tag, create_reddit_capi_server_tag, create_amazon_capi_server_tag) = 105,
     // plus the read-only rank_ga4_campaigns = 106, plus the read-only suggest_tags_from_url = 107,
-    // plus the read-only get_form_tracking_recipe = 108, plus the read-only lookup_corpus_patterns = 109.
-    assert.equal(withWrites.list().length, 109 + 60, 'read + write registry has 109 GTM/GA4-read/context + 60 GA4-write tools');
+    // plus the read-only get_form_tracking_recipe = 108, plus the read-only lookup_corpus_patterns = 109,
+    // plus the read-only discover_site_urls = 110.
+    assert.equal(withWrites.list().length, 110 + 60, 'read + write registry has 110 GTM/GA4-read/context + 60 GA4-write tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_pinterest_capi_server_tag'), true, 'create_pinterest_capi_server_tag present');
     assert.equal(withWrites.list().some((t) => t.name === 'create_reddit_capi_server_tag'), true, 'create_reddit_capi_server_tag present');
     assert.equal(withWrites.list().some((t) => t.name === 'create_amazon_capi_server_tag'), true, 'create_amazon_capi_server_tag present');

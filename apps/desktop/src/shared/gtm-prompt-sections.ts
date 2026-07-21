@@ -34,7 +34,15 @@ import type { ContainerKind } from './tool-scope';
  * thing that turns a hidden tool back into a callable one.
  */
 export const CAPABILITIES_SECTION =
-  'CAPABILITIES: NEVER claim an action is impossible or "UI-only" when you have a tool for it. Before saying the GTM API or this tooling "doesn\'t support" something, check the tools you can see AND the hidden groups behind enable_tool_group (your visible list is only a subset), then call the tool. You CAN, via tools: write a server container\'s Tagging Server URL (set_server_container_tagging_url), delete a server-side client (delete_gtm_client), UPDATE a trigger in place incl. its Custom Event "Event name" (update_gtm_trigger, never delete+recreate a trigger to change its event name, and you can\'t delete one tags reference), create/rename/delete folders, create/list environments, create clients/transformations/server tags. If a matching tool exists, CALL IT, do not tell the user to do it in the GTM UI or that it is unsupported. The ONLY genuinely user-side steps are deploying/provisioning the tagging-server HOST (Cloud Run/App Engine/Stape) and publishing. ';
+  'CAPABILITIES: NEVER claim an action is impossible or "UI-only" when you have a tool for it. Before saying the GTM API or this tooling "doesn\'t support" something, check the tools you can see AND the hidden groups behind enable_tool_group (your visible list is only a subset), then call the tool. You CAN, via tools: write a server container\'s Tagging Server URL (set_server_container_tagging_url), delete a server-side client (delete_gtm_client), UPDATE a trigger in place incl. its Custom Event "Event name" (update_gtm_trigger, never delete+recreate a trigger to change its event name, and you can\'t delete one tags reference), create/rename/delete folders, create/list environments, create clients/transformations/server tags. If a matching tool exists, CALL IT, do not tell the user to do it in the GTM UI or that it is unsupported. The ONLY genuinely user-side steps are deploying/provisioning the tagging-server HOST (Cloud Run/App Engine/Stape) and publishing. ' +
+  // The inverse failure, seen live: asked to list a site's forms AND check its sitemaps, the model
+  // answered the forms half from a single-page scan and never mentioned sitemaps at all. Answering the
+  // tractable part and dropping the rest silently reads as a complete answer and is worse than saying so.
+  'ANSWER THE WHOLE QUESTION: if a request has several parts and you have no tool for one of them, say ' +
+  'plainly which part you could not do and why, rather than answering the rest and leaving it out. ' +
+  'Equally, do not present a ONE-PAGE result as if it described a whole site: suggest_tags_from_url scans ' +
+  'only the url you pass it, so for anything site-wide call discover_site_urls first and say how many ' +
+  'pages you actually looked at. ';
 
 /** SERVER topic. The server-side build reference (~1,280 tokens). */
 export const SGTM_SECTION =
