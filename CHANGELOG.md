@@ -1,3 +1,9 @@
+## [1.360.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.360.3...v1.360.4) (2026-07-21)
+
+### Bug Fixes
+
+* **desktop:** one-click switch to the replacement workspace after a read-only failure ([46d428f](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/46d428f562c0d5faad7288f3313d600d8667a375)), closes [#611](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/611)
+
 ## [1.360.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.360.2...v1.360.3) (2026-07-21)
 
 ### Bug Fixes
