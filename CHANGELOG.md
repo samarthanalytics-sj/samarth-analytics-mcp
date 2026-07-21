@@ -1,3 +1,9 @@
+## [1.363.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.363.0...v1.363.1) (2026-07-21)
+
+### Bug Fixes
+
+* **desktop:** stop reporting an unreadable sitemap as a site having none ([a4bd609](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a4bd6092b177cd449ab98c2c91ed89d29efbe41c))
+
 ## [1.363.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.362.4...v1.363.0) (2026-07-21)
 
 ### Features
