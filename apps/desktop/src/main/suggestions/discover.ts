@@ -15,6 +15,17 @@ export interface DiscoverResult {
   /** GTM container + measurement ids already live on the site (from its homepage). */
   installed: { containers: string[]; measurementIds: string[] };
   note?: string;
+  /**
+   * Why the sitemap path did or did not produce urls. Every sitemap fetch failure used to be swallowed,
+   * so a 429, a timeout or a 503 was reported identically to a site that genuinely has no sitemap, and a
+   * caller would state "no sitemap found" as fact. Observed live: three rapid calls to the same site,
+   * the third got throttled and reported no sitemap for a site with 700+ urls in one.
+   *   'found'       urls came from a sitemap.
+   *   'none'        every candidate answered cleanly with nothing (a real, reportable absence).
+   *   'unreachable' at least one candidate errored or returned >= 400, so absence is NOT established.
+   *   'partial'     urls came from a sitemap, but the MAX_SITEMAPS budget ran out, so `total` is a floor.
+   */
+  sitemapStatus: 'found' | 'none' | 'unreachable' | 'partial';
 }
 
 const MAX_URLS = 800;
@@ -56,15 +67,21 @@ export function extractCrawlLinks(html: string, pageUrl: string, base: string): 
   return out;
 }
 
-async function collectSitemap(sitemapUrl: string, base: string, out: Set<string>, sitemapsLeft: { n: number }, depth = 0): Promise<void> {
+async function collectSitemap(sitemapUrl: string, base: string, out: Set<string>, sitemapsLeft: { n: number }, depth = 0, fail?: { failed: boolean }): Promise<void> {
   if (depth > 2 || out.size >= MAX_URLS || sitemapsLeft.n <= 0) return;
   sitemapsLeft.n -= 1;
   let body = '';
   try {
     const r = await safeFetch(sitemapUrl, 12_000, 'application/xml,text/xml,*/*');
-    if (r.status >= 400 || !r.body) return;
+    // A 404 is a clean "not here" and says nothing is wrong. Anything else (429, 5xx, an empty body on a
+    // 200) means we did not get to LOOK, which must not be reported as "this site has no sitemap".
+    if (r.status >= 400 || !r.body) {
+      if (fail && r.status !== 404) fail.failed = true;
+      return;
+    }
     body = r.body;
   } catch {
+    if (fail) fail.failed = true;
     return;
   }
   const { locs, isIndex } = parseSitemapLocs(body);
@@ -83,9 +100,10 @@ async function collectSitemap(sitemapUrl: string, base: string, out: Set<string>
   }
 }
 
-async function discoverViaSitemap(start: string): Promise<string[]> {
+async function discoverViaSitemap(start: string): Promise<{ urls: string[]; failed: boolean; budgetHit: boolean }> {
   const origin = originOf(start);
-  if (!origin) return [];
+  if (!origin) return { urls: [], failed: false, budgetHit: false };
+  let robotsFailed = false;
   const candidates = new Set<string>([`${origin}/sitemap.xml`, `${origin}/sitemap_index.xml`]);
   // robots.txt commonly lists the real sitemap location(s).
   try {
@@ -97,15 +115,21 @@ async function discoverViaSitemap(start: string): Promise<string[]> {
       }
     }
   } catch {
-    /* no robots — fine */
+    // robots.txt is optional, so its absence proves nothing either way, but a FAILURE here is a hint
+    // that the host is refusing us rather than that it has no sitemap.
+    robotsFailed = true;
   }
   const out = new Set<string>();
   const sitemapsLeft = { n: MAX_SITEMAPS };
+  const fail = { failed: robotsFailed };
   for (const sm of candidates) {
     if (out.size >= MAX_URLS || sitemapsLeft.n <= 0) break;
-    await collectSitemap(sm, start, out, sitemapsLeft);
+    await collectSitemap(sm, start, out, sitemapsLeft, 0, fail);
   }
-  return [...out];
+  // Budget exhausted with urls in hand means `total` is a floor, not a count: a big sitemap index gets
+  // cut off at MAX_SITEMAPS, and WHICH sub-sitemaps finish varies with network timing, which is why
+  // repeated runs against the same site returned 730 / 728 / 702.
+  return { urls: [...out], failed: fail.failed, budgetHit: sitemapsLeft.n <= 0 };
 }
 
 async function discoverViaCrawl(start: string): Promise<string[]> {
@@ -150,22 +174,39 @@ async function detectInstalledOnHomepage(start: string): Promise<{ containers: s
  *  which GTM container is already live on the site. */
 export async function discoverSite(startUrl: string): Promise<DiscoverResult> {
   const start = normalizeUrl(startUrl, startUrl);
-  if (!start) return { urls: [], viaSitemap: false, total: 0, installed: { containers: [], measurementIds: [] }, note: 'Not a valid http(s) URL.' };
+  if (!start) return { urls: [], viaSitemap: false, total: 0, installed: { containers: [], measurementIds: [] }, sitemapStatus: 'none', note: 'Not a valid http(s) URL.' };
   const installed = await detectInstalledOnHomepage(start);
   const sm = await discoverViaSitemap(start);
-  if (sm.length > 0) {
-    const urls = sm.includes(start) ? sm : [start, ...sm];
+  if (sm.urls.length > 0) {
+    const urls = sm.urls.includes(start) ? sm.urls : [start, ...sm.urls];
     // STABLE-sort form-likely pages first (homepage always leads) so App.tsx's "first 25" pre-select
     // naturally picks the contact/audit/consultation pages instead of raw sitemap order. Same URL SET,
     // only its order — nothing is added or dropped.
-    return { urls: prioritizeUrls(urls).slice(0, MAX_URLS), viaSitemap: true, total: Math.min(urls.length, MAX_URLS), installed };
+    return {
+      urls: prioritizeUrls(urls).slice(0, MAX_URLS),
+      viaSitemap: true,
+      total: Math.min(urls.length, MAX_URLS),
+      installed,
+      sitemapStatus: sm.budgetHit || sm.failed ? 'partial' : 'found',
+      ...(sm.budgetHit || sm.failed
+        ? { note: `Sitemap read only in part (${sm.budgetHit ? `stopped after ${MAX_SITEMAPS} sitemap files` : 'a sitemap fetch failed'}), so the page count is a FLOOR, not the total.` }
+        : {}),
+    };
   }
   const crawled = await discoverViaCrawl(start);
+  // The distinction that matters: 'unreachable' means we never got to look, so the caller must NOT
+  // report "this site has no sitemap". 'none' means every candidate answered cleanly with nothing.
+  const status = sm.failed ? 'unreachable' : 'none';
   return {
     urls: prioritizeUrls(crawled),
     viaSitemap: false,
     total: crawled.length,
     installed,
-    note: crawled.length >= MAX_CRAWL ? `Link-crawl capped at ${MAX_CRAWL} pages (no sitemap found).` : 'No sitemap found — discovered via a quick link-crawl (server-rendered links only).',
+    sitemapStatus: status,
+    note: status === 'unreachable'
+      ? 'Could NOT read the sitemap for this site (it refused or timed out), so do not say it has none. These pages come from a quick link-crawl; retry in a moment for the full list.'
+      : crawled.length >= MAX_CRAWL
+        ? `Link-crawl capped at ${MAX_CRAWL} pages (no sitemap found).`
+        : 'No sitemap found, discovered via a quick link-crawl (server-rendered links only).',
   };
 }

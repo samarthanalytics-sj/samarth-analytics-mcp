@@ -681,7 +681,7 @@ export function buildToolRegistry(
       // silently answered for the homepage alone and dropped the sitemap half of the question.
       name: 'discover_site_urls',
       description:
-        'List the pages of a website, from its sitemap.xml (found via robots.txt or the usual locations) and falling back to a link crawl when there is no sitemap. Read-only. Answers "does this site have a sitemap", "what pages does it have", and is the FIRST step for anything site-wide, because suggest_tags_from_url only ever looks at the ONE url you give it: call this, then call suggest_tags_from_url on the pages that matter. Also reports the GTM container and GA4 measurement ids already live on the homepage. UNLIKE the list_* tools this one IS capped: it returns `total` alongside `urls`, and when they differ say so rather than implying the list is complete. Needs a full public http(s) URL.',
+        'List the pages of a website, from its sitemap.xml (found via robots.txt or the usual locations) and falling back to a link crawl when there is no sitemap. Read-only. Answers "does this site have a sitemap", "what pages does it have", and is the FIRST step for anything site-wide, because suggest_tags_from_url only ever looks at the ONE url you give it: call this, then call suggest_tags_from_url on the pages that matter. Also reports the GTM container and GA4 measurement ids already live on the homepage. UNLIKE the list_* tools this one IS capped: it returns `total` alongside `urls`, and when they differ say so rather than implying the list is complete. Read `sitemapStatus` before saying anything about sitemaps: `found` and `none` are facts, `unreachable` means the sitemap could not be READ (say that, never that the site has none), and `partial` means the page count is a FLOOR. Needs a full public http(s) URL.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -702,6 +702,9 @@ export function buildToolRegistry(
         return {
           url: s(a.url),
           sitemapFound: res.viaSitemap,
+          // 'unreachable' is NOT 'none': the sitemap could not be READ, so absence is unproven and
+          // saying "this site has no sitemap" would be a false positive claim.
+          sitemapStatus: res.sitemapStatus,
           total: res.total,
           returned: urls.length,
           ...(res.total > urls.length
