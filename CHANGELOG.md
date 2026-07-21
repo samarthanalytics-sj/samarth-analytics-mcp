@@ -1,3 +1,9 @@
+## [1.361.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.360.10...v1.361.0) (2026-07-21)
+
+### Features
+
+* **desktop:** seed the Google Ads conversion-action name from the tag name ([#621](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/621)) ([30045f3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/30045f3f25cacbdb54bc5dabe6c44206baf78be5))
+
 ## [1.360.10](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.360.9...v1.360.10) (2026-07-21)
 
 ### Bug Fixes
