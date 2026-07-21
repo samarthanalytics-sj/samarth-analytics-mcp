@@ -1,3 +1,9 @@
+## [1.360.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.360.1...v1.360.2) (2026-07-21)
+
+### Bug Fixes
+
+* **desktop:** make tag-create failures readable, and stop the preflight failing the batch ([37f519d](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/37f519d7e47f5981661716d7b7bae84b6abc90fe)), closes [#610](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/610)
+
 ## [1.360.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.360.0...v1.360.1) (2026-07-21)
 
 ### Bug Fixes
