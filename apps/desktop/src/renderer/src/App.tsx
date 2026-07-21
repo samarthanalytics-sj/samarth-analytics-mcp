@@ -9725,6 +9725,7 @@ function AdsPicker({
   const [categories, setCategories] = useState<AdsCategoryOption[]>([]);
   // Seeded from the row's tag name so the common case is one click, and still fully editable.
   const [newName, setNewName] = useState(suggestedName ?? '');
+  const nameRef = useRef<HTMLInputElement | null>(null);
   const [newCategory, setNewCategory] = useState('SUBMIT_LEAD_FORM');
   const [createErr, setCreateErr] = useState('');
   const [confirmCreate, setConfirmCreate] = useState(false);
@@ -9942,7 +9943,14 @@ function AdsPicker({
             {mode === 'create' && !confirmCreate && (
               <div>
                 <div style={styles.formRow}>
-                  <input style={styles.input} value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Conversion action name (e.g. Contact Form Submit)" />
+                  <input
+                    ref={nameRef}
+                    style={styles.input}
+                    value={newName}
+                    onChange={(e) => setNewName(e.target.value)}
+                    placeholder="Conversion action name (e.g. Contact Form Submit)"
+                    aria-label="Conversion action name"
+                  />
                   <select style={styles.select} value={newCategory} onChange={(e) => setNewCategory(e.target.value)}>
                     {categories.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
                   </select>
@@ -9950,6 +9958,34 @@ function AdsPicker({
                     Continue
                   </button>
                 </div>
+                {/* A pre-filled box reads as fixed, so say where the name came from and make editing
+                    a visible action. Once edited, the same line becomes the way back to the seed. */}
+                {suggestedName && (
+                  <div style={{ ...styles.muted, marginTop: 4 }}>
+                    {newName.trim() === suggestedName ? (
+                      <>
+                        Name taken from the tag{' '}
+                        <button
+                          style={{ ...styles.linkBtn, fontSize: 12 }}
+                          onClick={() => { nameRef.current?.focus(); nameRef.current?.select(); }}
+                        >
+                          ✎ edit
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        Edited{' '}
+                        <button
+                          style={{ ...styles.linkBtn, fontSize: 12 }}
+                          onClick={() => { setNewName(suggestedName); nameRef.current?.focus(); }}
+                          title={`Restore "${suggestedName}"`}
+                        >
+                          ↩ use the tag name
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )}
                 <p style={styles.muted}>
                   Counting defaults to {categories.find((c) => c.value === newCategory)?.counting === 'ONE_PER_CLICK' ? 'one per click (right for leads)' : 'many per click (right for purchases)'}.
                   Google assigns the Conversion Label; it cannot be chosen.
