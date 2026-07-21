@@ -56,6 +56,7 @@ import type {
 import { suggestionToGroup, suggestionsToTemplateCsv, suggestionsToInstallRunbookMarkdown, installPlanNeedsAction, installPlanProgress, dedupeViewsByGtmName, TEMPLATE_HEADERS, applyTagEdit, adsIdentityIssue, TAG_TYPE_OPTIONS, STANDARD_TRIGGER_VARIABLES, CONDITION_LABELS, type TagEdit, type TemplateGroup, type TriggerWhen, type InstallProgress } from '../../shared/tag-template';
 import { findMergeGroups, mergeGroup, mergeLabel, type MergeGroup } from '../../shared/tag-merge';
 import { parseCsvUrls, parseCsvUrlStats, CSV_URL_CAP } from '../../shared/csv-urls';
+import { platformIdHints } from '../../shared/platform-id-hints';
 import { autoHealConfirmMessage } from '../../shared/workspace-warnings';
 import { MEMORY_KINDS, type Memory, type MemoryKind } from '../../shared/chat-memory';
 import type { SeedCandidate } from '../../shared/memory-seed';
@@ -4145,47 +4146,21 @@ function TagReviewPanel({
               return here.
             </div>
           )}
-          <div style={{ ...styles.muted, marginTop: 6 }}>
-            measurementId defaults to the <code style={mdStyles.code}>{'{{GA4 Measurement ID}}'}</code> variable - make
-            sure it exists in this container, or edit a row to a real G-XXXX id.
-          </div>
-          {platforms.includes('meta') && (
-            <div style={{ ...styles.muted, marginTop: 6 }}>
-              Meta tags use the <code style={mdStyles.code}>{'{{Meta Pixel ID}}'}</code> variable - set it in the
-              container (or edit the Pixel ID per row).
+          {/* One line per SELECTED platform. The id a row carries is platform-specific (Pixel ID,
+              Conversion ID, Measurement ID) even though they share one field, so showing a
+              platform's hint when it is not selected is not just noise, it is wrong advice. */}
+          {platformIdHints(platforms).map((h) => (
+            <div key={h.platform} style={{ ...styles.muted, marginTop: 6 }}>
+              {h.label} tags use the{' '}
+              {h.variables.map((v, i) => (
+                <span key={v}>
+                  {i > 0 && (i === h.variables.length - 1 ? ' and ' : ', ')}
+                  <code style={mdStyles.code}>{v}</code>
+                </span>
+              ))}{' '}
+              {h.variables.length > 1 ? 'variables' : 'variable'} - {h.action}
             </div>
-          )}
-          {platforms.includes('pinterest') && (
-            <div style={{ ...styles.muted, marginTop: 6 }}>
-              Pinterest tags use the <code style={mdStyles.code}>{'{{Pinterest Tag ID}}'}</code> variable - set it in
-              the container (or edit the Tag ID per row).
-            </div>
-          )}
-          {platforms.includes('tiktok') && (
-            <div style={{ ...styles.muted, marginTop: 6 }}>
-              TikTok tags use the <code style={mdStyles.code}>{'{{TikTok Pixel ID}}'}</code> variable - set it in the
-              container (or edit the Pixel ID per row).
-            </div>
-          )}
-          {platforms.includes('linkedin') && (
-            <div style={{ ...styles.muted, marginTop: 6 }}>
-              LinkedIn tags use the <code style={mdStyles.code}>{'{{LinkedIn Partner ID}}'}</code> variable - set it in
-              the container (or edit the Partner ID per row).
-            </div>
-          )}
-          {platforms.includes('reddit') && (
-            <div style={{ ...styles.muted, marginTop: 6 }}>
-              Reddit tags use the <code style={mdStyles.code}>{'{{Reddit Pixel ID}}'}</code> variable - set it in the
-              container (or edit the Pixel ID per row).
-            </div>
-          )}
-          {platforms.includes('google_ads') && (
-            <div style={{ ...styles.muted, marginTop: 6 }}>
-              Google Ads conversions use the <code style={mdStyles.code}>{'{{Google Ads Conversion ID}}'}</code> and{' '}
-              <code style={mdStyles.code}>{'{{Google Ads Conversion Label}}'}</code> variables - set them in the
-              container (or edit each row).
-            </div>
-          )}
+          ))}
         </div>
 
         {/* Warnings (scan or paste) */}
