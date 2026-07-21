@@ -201,7 +201,7 @@ export async function createSuggestedTags(
             ...platformArgs,
             trigger: t.trigger,
           }),
-        ) as { declined?: boolean; alreadyExists?: boolean; tag?: { name?: string }; trigger?: { reused?: boolean } };
+        ) as { declined?: boolean; alreadyExists?: boolean; tag?: { name?: string; tagId?: string }; trigger?: { reused?: boolean } };
         if (out?.declined) {
           outcomes.push({ id: t.id, ok: false, error: 'declined' });
         } else if (out?.alreadyExists) {
@@ -214,6 +214,7 @@ export async function createSuggestedTags(
             id: t.id,
             ok: true,
             tagName: out?.tag?.name ?? t.tagName,
+            ...(out?.tag?.tagId ? { tagId: String(out.tag.tagId) } : {}),
             triggerReused: out?.trigger?.reused === true,
           });
         }

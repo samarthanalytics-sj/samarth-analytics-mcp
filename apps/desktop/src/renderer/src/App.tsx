@@ -2024,7 +2024,13 @@ function Ga4ContextBar({
 
 /* ───────────────────── Tag suggestions (review & approve) ───────────────────── */
 
-type RowStatus = { state: 'idle' | 'creating' | 'ok' | 'err' | 'exists'; msg?: string };
+type RowStatus = { state: 'idle' | 'creating' | 'ok' | 'err' | 'exists'; msg?: string; url?: string };
+
+/** Deep link into the GTM UI: the workspace's Tags view, or ONE tag when its id is known. Matches the
+ *  canonical tagManagerUrl shape the API itself hands out; opens externally (setWindowOpenHandler
+ *  routes target=_blank to the system browser). */
+const gtmTagUrl = (accountId: string, containerId: string, workspaceId: string, tagId?: string): string =>
+  `https://tagmanager.google.com/#/container/accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/tags${tagId ? `/${tagId}` : ''}`;
 /** Human-readable trigger condition (the filter GTM will apply). */
 function triggerCondition(s: SuggestedTagView): string {
   const t = s.trigger;
@@ -2281,7 +2287,14 @@ function InstallRequirementRow({
             >
               {status.state === 'creating' ? 'Creating…' : 'Create listener tag'}
             </button>
-            {status.state === 'created' && <span style={tplStyles.installDoneText}>✓ Created{status.reused ? ' · trigger reused' : ''}</span>}
+            {status.state === 'created' && (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                <span style={tplStyles.installDoneText}>✓ Created{status.reused ? ' · trigger reused' : ''}</span>
+                {status.url && (
+                  <a href={status.url} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: 'var(--c-blue)', textDecoration: 'none' }} title="Open this tag in the GTM workspace (opens your browser)">view in GTM ↗</a>
+                )}
+              </span>
+            )}
             {status.state === 'exists' && <span style={tplStyles.installDoneText}>✓ Already exists</span>}
             {status.state === 'idle' && done && <span style={tplStyles.installDoneText}>✓ Done</span>}
             {status.state === 'err' && <span style={{ color: 'var(--c-red)', fontSize: 12 }} title={status.msg}>✗ {status.msg}</span>}
@@ -2332,7 +2345,7 @@ function InstallRequirementRow({
 type ListenerCreateStatus =
   | { state: 'idle' }
   | { state: 'creating' }
-  | { state: 'created'; reused: boolean }
+  | { state: 'created'; reused: boolean; url?: string }
   | { state: 'exists' }
   | { state: 'err'; msg: string };
 
@@ -2355,7 +2368,7 @@ function InstallPanel({ plan, gtmTarget, done, onToggleDone }: { plan: InstallPl
       setStatuses((s) => ({
         ...s,
         [index]: o.ok
-          ? { state: 'created', reused: o.triggerReused === true }
+          ? { state: 'created', reused: o.triggerReused === true, url: gtmTagUrl(acct, cont, ws, o.tagId) }
           : o.existing
             ? { state: 'exists' }
             : { state: 'err', msg: o.error ?? 'failed' },
@@ -2496,7 +2509,14 @@ function SuggestionTemplateTable({
                       {exists ? (
                         <span style={styles.existsChip} title="A tag with this name already exists in the container">✓ exists</span>
                       ) : created ? (
-                        <span style={{ color: 'var(--c-green)', fontSize: 11 }} title={st?.msg}>✓ created</span>
+                        <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 2 }}>
+                          <span style={{ color: 'var(--c-green)', fontSize: 11 }} title={st?.msg}>✓ created</span>
+                          {st?.url && (
+                            <a href={st.url} target="_blank" rel="noreferrer" style={{ fontSize: 10, color: 'var(--c-blue)', textDecoration: 'none' }} title="Open this tag in the GTM workspace (opens your browser)">
+                              view in GTM ↗
+                            </a>
+                          )}
+                        </span>
                       ) : (
                         <>
                           <input
@@ -3575,7 +3595,7 @@ function TagReviewPanel({
         for (const s of chosen) {
           const o = byId.get(s.id);
           if (!o) n[s.id] = { state: 'err', msg: 'no result' };
-          else if (o.ok) n[s.id] = { state: 'ok', msg: o.triggerReused ? 'created · trigger reused' : 'created · trigger created' };
+          else if (o.ok) n[s.id] = { state: 'ok', msg: o.triggerReused ? 'created · trigger reused' : 'created · trigger created', url: gtmTagUrl(ctx.accountId!, ctx.containerId!, ctx.workspaceId!, o.tagId) };
           else if (o.existing) n[s.id] = { state: 'exists', msg: 'already exists in the container' };
           else n[s.id] = { state: 'err', msg: o.error ?? 'failed' };
         }
@@ -4452,6 +4472,17 @@ function TagReviewPanel({
                     {done.created} of {done.total} created
                     {done.existing ? ` · ${done.existing} already existed` : ''}
                     {done.failed ? ` · ${done.failed} failed` : ''} - open GTM to review &amp; publish.
+                    {done.created + done.existing > 0 && ctx?.accountId && ctx?.containerId && ctx?.workspaceId && (
+                      <a
+                        href={gtmTagUrl(ctx.accountId, ctx.containerId, ctx.workspaceId)}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{ color: 'var(--c-blue)', fontWeight: 600, textDecoration: 'none' }}
+                        title="Open this workspace's Tags view in Google Tag Manager (opens your browser)"
+                      >
+                        Open the workspace in GTM ↗
+                      </a>
+                    )}
                     {done.created > 0 && (
                       <span style={{ color: 'var(--text-muted)' }}>
                         Verify &amp; auto-fix them below, or in the <b>✅ Tag verification</b> tab.
