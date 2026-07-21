@@ -1,3 +1,9 @@
+## [1.363.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.362.4...v1.363.0) (2026-07-21)
+
+### Features
+
+* **desktop:** give chat a site-discovery tool, and stop it answering half a question silently ([41e34f4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/41e34f46ca49d055711cd3dc578b84cca08ff56b))
+
 ## [1.362.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.362.3...v1.362.4) (2026-07-21)
 
 ### Bug Fixes
