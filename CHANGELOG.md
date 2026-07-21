@@ -1,3 +1,9 @@
+## [1.356.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.355.0...v1.356.0) (2026-07-21)
+
+### Features
+
+* **desktop:** "view in GTM" links for tags created from Tag suggestions ([9eb98d2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/9eb98d26ae79fd4d500251fb4f0375b7617e3010))
+
 ## [1.355.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.354.0...v1.355.0) (2026-07-20)
 
 ### Features
