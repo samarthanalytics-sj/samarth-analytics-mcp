@@ -56,6 +56,7 @@ import type {
 import { suggestionToGroup, suggestionsToTemplateCsv, suggestionsToInstallRunbookMarkdown, installPlanNeedsAction, installPlanProgress, dedupeViewsByGtmName, TEMPLATE_HEADERS, applyTagEdit, adsIdentityIssue, TAG_TYPE_OPTIONS, STANDARD_TRIGGER_VARIABLES, CONDITION_LABELS, type TagEdit, type TemplateGroup, type TriggerWhen, type InstallProgress } from '../../shared/tag-template';
 import { findMergeGroups, mergeGroup, mergeLabel, type MergeGroup } from '../../shared/tag-merge';
 import { parseCsvUrls, parseCsvUrlStats, CSV_URL_CAP } from '../../shared/csv-urls';
+import { autoHealConfirmMessage } from '../../shared/workspace-warnings';
 import { MEMORY_KINDS, type Memory, type MemoryKind } from '../../shared/chat-memory';
 import type { SeedCandidate } from '../../shared/memory-seed';
 import { resolveChatInput, slashMenuMatches, type SlashCommand } from '../../shared/chat-commands';
@@ -3811,6 +3812,11 @@ function TagReviewPanel({
     }
   }
   async function startHeal(): Promise<void> {
+    // Minting the preview SUBMITS the active workspace (GTM replaces it with a fresh one). That is
+    // unavoidable - the built-in "Latest" preview environment can only serve a version - so warn
+    // before the click instead of leaving the user to discover it when a later write fails
+    // "already submitted". Asked once per run, not per heal round.
+    if (!window.confirm(autoHealConfirmMessage(ctx?.workspaceName))) return;
     setHealSkipped({});
     setHealVerdicts([]);
     setHealNote('');
@@ -4686,13 +4692,16 @@ function TagReviewPanel({
                       Proves the tags you just created fire, auto-applies confident trigger fixes (you approve each round),
                       re-verifies, and loops until they fire or nothing more is auto-fixable. Uses the scanned page inventory
                       for concrete fixes. Draft-only writes; nothing is sent and nothing is published.
+                      {' '}Each round creates a container version to load your drafts in a preview, so GTM makes the current
+                      workspace read-only and hands back a fresh one (the app follows it automatically). You confirm before
+                      the first round.
                     </div>
                   </div>
                   <button
                     style={styles.primaryBtn}
                     onClick={() => void startHeal()}
                     disabled={!targetReady || healPhase === 'busy' || !url.trim()}
-                    title={targetReady ? 'Mint a preview, verify each created tag, and heal the fixable ones' : 'Pick a GTM account, container and draft workspace first'}
+                    title={targetReady ? 'Creates a container version (GTM replaces this workspace), then verifies each created tag and heals the fixable ones' : 'Pick a GTM account, container and draft workspace first'}
                   >
                     {healPhase === 'busy' ? 'Working…' : healPhase === 'idle' ? 'Start auto-verify & heal' : 'Restart'}
                   </button>
