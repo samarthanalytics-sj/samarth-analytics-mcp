@@ -1,3 +1,9 @@
+## [1.357.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.356.0...v1.357.0) (2026-07-21)
+
+### Features
+
+* **desktop:** corpus pattern library - anonymized GTM knowledge mined from 561 containers ([#606](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/606)) ([dcc3396](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/dcc33960a715e2511a547c55f6cef7bdbe2df3a2))
+
 ## [1.356.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.355.0...v1.356.0) (2026-07-21)
 
 ### Features
