@@ -37,8 +37,11 @@ export function containerKindFromUsageContext(usageContext?: readonly string[] |
  *
  * Deliberately NOT here, because they are how a web-container user REACHES server-side tagging:
  * bootstrap_server_side_tagging and create_server_container(_from_web) create the server container,
- * set_web_server_container_url writes the WEB container's transport URL, and verify_server_endpoint
- * just pings a URL.
+ * set_web_server_container_url writes the WEB container's transport URL, verify_server_endpoint just
+ * pings a URL, and set_server_container_tagging_url records the deployed host on the server
+ * container - which happens at the end of the bring-up flow, while the user is still sitting on the
+ * web container. Withholding that one made the web prompt advertise a tool the web turn could not
+ * see, which the prompt tests catch.
  */
 export const SERVER_ONLY_TOOLS: ReadonlySet<string> = new Set([
   // Server-side vendor CAPI builders (the single heaviest group of schemas in the registry).
@@ -61,9 +64,8 @@ export const SERVER_ONLY_TOOLS: ReadonlySet<string> = new Set([
   'list_gtm_clients',
   'create_gtm_transformation',
   'list_gtm_transformations',
-  // Server container configuration and audit.
+  // Server container audit (reads a server container's own workspace).
   'audit_server_container',
-  'set_server_container_tagging_url',
 ]);
 
 /**
@@ -77,7 +79,8 @@ export const WEB_ONLY_TOOLS: ReadonlySet<string> = new Set([
   'create_pinterest_tag',
   'create_hotjar_tag',
   'import_gallery_template',
-  'detect_meta_web_tags',
+  // detect_meta_web_tags is deliberately absent: it READS a web container by explicit id, and the
+  // Meta CAPI instructions tell a SERVER turn to run it first to see whether a pixel already exists.
   'setup_ecommerce_funnel',
   'setup_consent_mode_defaults',
   'get_form_tracking_recipe',
