@@ -190,7 +190,9 @@ app.whenReady().then(() => {
       if (!w.isDestroyed()) w.webContents.send('accounts:changed');
     }
   };
-  const chatService = new ChatService(registry, dataService, providerKeys, auditHistory, broadcastAccountsChanged, manifests, memory);
+  // adsService is threaded into the chat so the GTM assistant can read a real Conversion ID + Label
+  // itself when it builds a Google Ads conversion tag, instead of asking the user to paste them.
+  const chatService = new ChatService(registry, dataService, providerKeys, auditHistory, broadcastAccountsChanged, manifests, memory, adsService);
 
   // Startup diagnostic — proves THIS running process loaded the current build. If the
   // GA4-edit tools are missing here, the main process is stale (electron-vite did not

@@ -664,6 +664,19 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
       // variable to EXIST, or the base tag points at nothing and GA4 never loads
       // (mirrors ensureGa4Config). Provision a Constant from the row's real
       // Measurement ID first; block the row if the ID is still the placeholder.
+      // Preflight the TARGET before writing anything. A workspace goes read-only the moment a version is
+      // created from it, which this app does itself during "Auto: create preview & verify", so a target
+      // chosen earlier in the session is routinely dead by now. Checked once, up front, so the user gets
+      // one actionable message instead of the same failure repeated per tag after approving the batch.
+      const wsCheck = await data.workspaceWritable(acct, cont, ws);
+      if (!wsCheck.writable) {
+        const move = wsCheck.fallbackName
+          ? ` Switch to "${wsCheck.fallbackName}" in the GTM bar and retry.`
+          : ' Create a new workspace in the GTM bar and retry.';
+        const msg = `That GTM workspace is read-only: a version was already created from it (a Submit in GTM, or this app's "Auto: create preview & verify").${move}`;
+        return list.map((t) => ({ id: t.id, ok: false, error: msg }));
+      }
+
       const errors = new Map<string, string>();
       // Google Ads rows need a LITERAL Conversion ID (and Label): the engine seeds them with
       // {{Google Ads Conversion ID}} / {{...Label}} placeholders that nothing provisions, and GTM

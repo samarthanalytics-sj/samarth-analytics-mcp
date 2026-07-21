@@ -1,4 +1,6 @@
 import type { GoogleDataService } from '../google/data-service';
+import { AdsError, type GoogleAdsService } from '../google/ads-service';
+import { CONVERSION_CATEGORIES } from '../google/ads-rest';
 import type { LlmToolDef, ToolExecutor } from '../llm/types';
 import type { GoogleProduct, GtmContext } from '../../shared/ipc';
 import type { AuditHistoryStore } from '../storage/audit-history';
@@ -330,6 +332,267 @@ async function recordSetupManifest(
   manifests.record(key, { account: ids.accountId, container: ids.containerId, workspace: ids.workspaceId }, entries, new Date().toISOString());
 }
 
+/**
+ * Shape a Google Ads failure into something that can safely reach the chat transcript.
+ *
+ * The rule that matters: never read `.response` or `.config` off the raw error. A gaxios failure
+ * carries the request config it was made with, and that config carries the `developer-token` header,
+ * so a "helpful" error dump would print the operator's token into the chat and into the console log.
+ * That is why every Ads handler catches for itself instead of letting the generic apiErrorMessage()
+ * path (which does read `.response.data.error.message`) see the error at all. AdsError already holds
+ * a message and a remedy written for a human by ads-errors, and that is the only thing that travels.
+ */
+function adsFailure(e: unknown): Record<string, unknown> {
+  if (e instanceof AdsError) {
+    return {
+      ok: false,
+      error: e.info.message,
+      ...(e.info.remedy ? { remedy: e.info.remedy } : {}),
+      ...(e.info.code ? { code: e.info.code } : {}),
+      ...(e.info.retryable ? { retryable: true } : {}),
+    };
+  }
+  // A non-AdsError here is a local precondition (no active account, no signed-in token) or something
+  // unexpected. Only an Error's own message travels; an unknown throw shape is reported generically
+  // rather than serialized, because nothing guarantees what a stranger object is carrying.
+  return { ok: false, error: e instanceof Error ? e.message : 'The Google Ads request failed.' };
+}
+
+/**
+ * Ads preflight. Both ways a call can be dead on arrival (no developer token, or an account whose
+ * Google token never granted the adwords scope) surface as a 403 at call time, and a 403 is NOT
+ * invalid_grant, so it never reaches the auth-expired chokepoint that would explain it. Checking up
+ * front is the difference between "add your developer token in Settings" and a bare permission error
+ * the model will happily invent a cause for.
+ */
+async function adsNotReady(ads: GoogleAdsService): Promise<Record<string, unknown> | null> {
+  try {
+    const r = await ads.readiness();
+    if (r.ready) return null;
+    return {
+      ok: false,
+      ready: false,
+      error: r.reason?.message ?? 'Google Ads is not available for this Google account.',
+      ...(r.reason?.remedy ? { remedy: r.reason.remedy } : {}),
+      ...(r.reason?.code ? { code: r.reason.code } : {}),
+      note: 'Report this fix to the user verbatim. Do not retry, and do not guess a conversion id or label.',
+    };
+  } catch (e) {
+    return adsFailure(e);
+  }
+}
+
+/**
+ * Google Ads chat tools. Part of the GTM toolset, not a product of their own: they exist so the model
+ * can fetch a REAL Conversion ID and Label itself and feed them into create_gtm_tracking_tag
+ * (platform google_ads_conversion), instead of asking the user to paste them out of the Ads UI or
+ * emitting a {{placeholder}} variable that produces a tag which reports created and records nothing.
+ *
+ * Registered only when an Ads service is injected, so every existing caller (the audit/suggestion fix
+ * appliers, the startup diagnostic, the test fakes) keeps working unchanged with no Ads surface.
+ *
+ * `writesEnabled` mirrors the GTM/GA4 rule: the create tool exists only when the registry was built
+ * with a confirm fn, so a read-only registry cannot even name it.
+ */
+function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean): Tool[] {
+  // Every handler runs behind the readiness gate and swallows its own errors, so an Ads failure is a
+  // structured answer the model can read out, never a throw carrying a request config.
+  const run = async (fn: () => Promise<unknown>): Promise<unknown> => {
+    const blocked = await adsNotReady(ads);
+    if (blocked) return blocked;
+    try {
+      return await fn();
+    } catch (e) {
+      return adsFailure(e);
+    }
+  };
+  // An empty login-customer-id is not the same as an absent one (the API rejects a blank header), so a
+  // model that sends "" must be read as "no manager", not as a manager named nothing.
+  const login = (a: Record<string, unknown>): string | undefined => s(a.loginCustomerId).trim() || undefined;
+
+  const readTools: Tool[] = [
+    {
+      name: 'list_google_ads_accounts',
+      description:
+        'List the Google Ads accounts the signed-in Google account can reach, manager (MCC) accounts included. ' +
+        'Returns each account\'s customerId (bare digits, which is the only form the API accepts), name, whether it ' +
+        'is a manager, whether it is a TEST account (holds no real conversion data), and the loginCustomerId to send ' +
+        'back on the next call when the account is reached THROUGH a manager. Read-only. Call this first to resolve a ' +
+        'customerId instead of asking the user to copy a dashed id out of the Google Ads UI, then call ' +
+        'list_google_ads_conversion_actions on the account you need.',
+      inputSchema: { ...EMPTY_SCHEMA },
+      handler: () =>
+        run(async () => {
+          const accounts = await ads.listAccounts();
+          return {
+            ok: true,
+            count: accounts.length,
+            accounts: accounts.map((a) => ({
+              customerId: a.id,
+              name: a.name,
+              manager: a.manager,
+              testAccount: a.testAccount,
+              status: a.status,
+              hidden: a.hidden,
+              ...(a.loginCustomerId ? { loginCustomerId: a.loginCustomerId } : {}),
+              ...(a.currencyCode ? { currencyCode: a.currencyCode } : {}),
+            })),
+            note: 'Pass BOTH a row\'s customerId and its loginCustomerId to the other Google Ads tools: an account reached through a manager needs that manager id on every call, and omitting it reads as a permission error rather than a missing header.',
+          };
+        }),
+    },
+    {
+      name: 'list_google_ads_conversion_actions',
+      description:
+        'List a Google Ads account\'s conversion actions WITH the Conversion ID (AW-xxxxxxxxx) and Conversion LABEL of ' +
+        'each one, which is exactly the pair a GTM Google Ads Conversion Tracking tag (awct) needs. This is the tool ' +
+        'that answers "what is the conversion id / label for the contact form conversion". Read-only. Requires ' +
+        'customerId (bare digits, no dashes); also pass loginCustomerId when the account sits under a manager ' +
+        '(list_google_ads_accounts returns it). ' +
+        'ALWAYS CALL THIS BEFORE creating a Google Ads conversion tag in GTM: pick the action the user means, then call ' +
+        'create_gtm_tracking_tag with platform "google_ads_conversion" and pass that action\'s conversionId and ' +
+        'conversionLabel as LITERAL values (e.g. conversionId "AW-17667466396", conversionLabel "g9RqCLD6kdQcEJzJwOhB"). ' +
+        'NEVER pass a {{variable}} for either one and never invent a placeholder: a braced value is handed to the awct ' +
+        'template verbatim, keeping the "AW-" prefix the template rejects, and the tag is then reported as created while ' +
+        'recording nothing at all. Do not ask the user to paste these values when this tool can read them. ' +
+        'taggable=false means the action can NEVER be fired from GTM (offline upload, app, store visit, or an ' +
+        'Analytics-imported action) and its `note` says why: report that note instead of inventing a label. A null ' +
+        'conversionLabel means Google published no event snippet for that action, so the label does not exist anywhere ' +
+        'in the API; say so rather than fabricating one.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          customerId: { type: 'string', description: 'Google Ads account id, bare digits (strip the dashes shown in the Ads UI).' },
+          loginCustomerId: { type: 'string', description: 'Manager (MCC) account id to act through, when the account is reached via a manager.' },
+        },
+        required: ['customerId'],
+        additionalProperties: false,
+      },
+      handler: (a) =>
+        run(async () => {
+          const { actions, conversionCustomer } = await ads.listConversionActions(s(a.customerId), login(a));
+          return {
+            ok: true,
+            customerId: s(a.customerId),
+            count: actions.length,
+            // Where the actions actually LIVE. Under cross-account conversion tracking they belong to a
+            // manager and are shared with its clients, which is normal and not an error.
+            conversionCustomer: {
+              customerId: conversionCustomer.conversionCustomerId,
+              isCrossAccount: conversionCustomer.isCrossAccount,
+              status: conversionCustomer.status,
+            },
+            actions: actions.map((x) => ({
+              id: x.id,
+              name: x.name,
+              category: x.category,
+              status: x.status,
+              type: x.type,
+              conversionId: x.conversionId,
+              conversionLabel: x.conversionLabel,
+              taggable: x.taggable,
+              ...(x.primaryForGoal === undefined ? {} : { primaryForGoal: x.primaryForGoal }),
+              ...(x.note ? { note: x.note } : {}),
+            })),
+            ...(conversionCustomer.isCrossAccount && conversionCustomer.conversionCustomerId
+              ? { note: `Conversion tracking for this account is owned by manager ${conversionCustomer.conversionCustomerId}, so these actions are shared with its other client accounts. Editing one affects all of them.` }
+              : {}),
+          };
+        }),
+    },
+  ];
+
+  if (!writesEnabled) return readTools;
+
+  return [
+    ...readTools,
+    {
+      name: 'create_google_ads_conversion_action',
+      description:
+        'Create a new WEBSITE conversion action in a Google Ads account and return its Conversion ID and Label. ' +
+        'READ THIS BEFORE CALLING: unlike every GTM write in this app, which only ever lands in a DRAFT workspace the ' +
+        'user publishes later, this applies IMMEDIATELY to the advertiser\'s live Google Ads account. There is no draft ' +
+        'stage, no undo, and no tool here that can remove it again. So call list_google_ads_conversion_actions FIRST and ' +
+        'reuse an existing action when one fits, and only create when the user has actually asked for a new conversion ' +
+        'action. State the exact name and category you are about to create BEFORE calling. It is gated by the app\'s ' +
+        'strongest confirmation: the same two-step card deletes use, which is labelled as a delete card and asks the ' +
+        'user to type "delete" to approve. Warn them about that wording, it is the confirmation strength, not a delete. ' +
+        'Requires customerId, name and category; optional countingType and loginCustomerId.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          customerId: { type: 'string', description: 'Google Ads account that will OWN the conversion action, bare digits.' },
+          name: { type: 'string', description: 'Name of the conversion action, exactly as it should appear in Google Ads.' },
+          category: {
+            type: 'string',
+            enum: CONVERSION_CATEGORIES.map((c) => c.value),
+            description: 'What the conversion represents. Lead-style categories (submit lead form, contact, sign-up, book appointment, request quote, phone call lead) count once per click; purchase-style ones can repeat.',
+          },
+          countingType: {
+            type: 'string',
+            enum: ['ONE_PER_CLICK', 'MANY_PER_CLICK'],
+            description: 'Omit to take Google\'s own guidance for the category (one per click for leads, many per click for purchases). The API accepts either for any category, so this is a choice, not a rule.',
+          },
+          loginCustomerId: { type: 'string', description: 'Manager (MCC) account id to act through, when the account is reached via a manager.' },
+        },
+        required: ['customerId', 'name', 'category'],
+        additionalProperties: false,
+      },
+      write: true,
+      // destructive:true is NOT a claim that this deletes something. It is the flag that buys the
+      // two-step approval card (plain writes auto-apply, because a GTM write is only ever a reversible
+      // draft edit), and this is the one write in the registry that lands on a LIVE advertising account
+      // with no draft stage and nothing here able to undo it. It gets the strongest gate that exists.
+      destructive: true,
+      summarize: (a) =>
+        `Create a LIVE Google Ads conversion action "${s(a.name)}" (${s(a.category)}) in account ${s(a.customerId)}. This is not a draft: it exists in Google Ads the moment it is created`,
+      // Readiness is checked HERE, not only in the handler: precheck runs before the approval card, so
+      // a missing developer token or scope never makes the user type "delete" to authorize a write that
+      // could not have been attempted. adsNotReady swallows its own errors, which matters because a
+      // precheck throw would escape execute()'s try/catch entirely.
+      precheck: () => adsNotReady(ads),
+      handler: (a) =>
+        run(async () => {
+          const input = {
+            name: s(a.name).trim(),
+            category: s(a.category).trim().toUpperCase(),
+            ...(s(a.countingType).trim() ? { countingType: s(a.countingType).trim().toUpperCase() } : {}),
+          };
+          // Dry run first. validateOnly is the same mutate call with the write suppressed, so a duplicate
+          // name or a category the API refuses is reported with nothing landing in the live account.
+          const invalid = await ads.validateConversionAction(s(a.customerId), input, login(a));
+          if (invalid) {
+            return {
+              ok: false,
+              created: false,
+              error: invalid.message,
+              ...(invalid.remedy ? { remedy: invalid.remedy } : {}),
+              note: 'Google Ads rejected the conversion action before it was created, so NOTHING was written. Fix the name or category and ask again.',
+            };
+          }
+          const action = await ads.createConversionAction(s(a.customerId), input, login(a));
+          return {
+            ok: true,
+            created: true,
+            customerId: s(a.customerId),
+            action: {
+              id: action.id,
+              name: action.name,
+              category: action.category,
+              status: action.status,
+              type: action.type,
+              conversionId: action.conversionId,
+              conversionLabel: action.conversionLabel,
+              taggable: action.taggable,
+              ...(action.note ? { note: action.note } : {}),
+            },
+            note: 'This conversion action is LIVE in Google Ads now. Pass its conversionId and conversionLabel as LITERAL values to create_gtm_tracking_tag (platform google_ads_conversion), never as a {{variable}}. The label exists nowhere else in the API, so if it came back null, read the action in Google Ads rather than guessing.',
+          };
+        }),
+    },
+  ];
+}
+
 export function buildToolRegistry(
   data: GoogleDataService,
   confirm?: ConfirmFn,
@@ -337,7 +600,10 @@ export function buildToolRegistry(
   history?: AuditHistoryStore,
   ctxControl?: GtmContextControl,
   manifests?: ManifestStore,
-  memoryCtx?: MemoryToolContext
+  memoryCtx?: MemoryToolContext,
+  /** Google Ads. Optional so every non-chat caller (audit/suggestion fix appliers, the startup
+   *  diagnostic, the test fakes) keeps compiling and simply gets no Ads tools. */
+  ads?: GoogleAdsService
 ): ToolExecutor {
   const readTools: Tool[] = [
     {
@@ -1449,7 +1715,8 @@ export function buildToolRegistry(
         'platform: "ga4_event" (needs measurementId G-XXXX, eventName, optional eventParameters [{name,value}]); "google_tag" (the Google tag / gtag base that configures GA4/Ads — needs tagId G-XXXX/AW-XXXX/GT-XXXX, optional configSettings [{name,value}]); "meta_pixel" (a Meta/Facebook Pixel via the OFFICIAL gallery template — needs pixelId (or measurementId as the pixel id, e.g. a {{Meta Pixel ID}} variable) + eventName = the Meta event (PageView/Lead/AddToCart/Purchase/ViewContent/InitiateCheckout/Search/Subscribe/CompleteRegistration/Contact/…), optional eventParameters → Meta Object Properties); "tiktok_pixel" (a TikTok web Pixel via its gallery template - needs pixelId + eventName = the TikTok event Pageview/ViewContent/AddToCart/CompletePayment); "linkedin_insight" (the LinkedIn Insight base tag via its gallery template - needs pixelId = the LinkedIn Partner ID); "reddit_pixel" (a Reddit Pixel as Custom HTML - needs pixelId + eventName = the Reddit event PageVisit/ViewContent/AddToCart/Purchase/Lead/SignUp/Search; empty or PageVisit emits the full init snippet); "pinterest_tag" (a Pinterest web tag via its gallery template - needs pixelId + eventName = the Pinterest event pagevisit/viewcontent/addtocart/checkout/lead); "google_ads_conversion" (needs conversionId AW-XXXX, conversionLabel); "custom_html" (needs html — use for other pixels); ' +
         '"conversion_linker" (Google Ads Conversion Linker; no fields required; optional enableCrossDomain plus comma-separated linkerDomains); "google_ads_call_conversion" (needs phoneNumber exactly as shown on the page, conversionId, conversionLabel); "google_ads_remarketing" (needs conversionId; an all-pages audience tag); "floodlight" (Campaign Manager / DV360 Floodlight counter; needs advertiserId, groupTag, activityTag; optional countingMethod standard|unique); "custom_image" (a beacon/pixel; needs url). ' +
         'trigger.kind: "link_click" or "all_clicks" (optional clickUrlValue and/or clickTextValue, each with a *Operator equals|contains|startsWith|matchRegex), "custom_event" (eventName = dataLayer event; optional ANDed scope conditions — formIdValue, pagePathValue/pagePathOperator, pageUrlValue — e.g. event form_submit AND {{Page Path}} contains /contact, the corpus-standard data-layer form pattern; optional dataLayerConditions: [{key,value,operator}] — scopes a custom_event trigger by a pushed dataLayer key via an auto-created {{dlv - <key>}} variable (use this to scope an AJAX/embed form\'s custom_event to one form by the form_id the listener pushes; {{Form ID}} does NOT work on a pushed event)),"pageview", "timer" (REQUIRES trigger.intervalMs in ms, optional trigger.limit), "form_submit" (optional formIdValue and/or formClassesValue, each with a *Operator — scopes the trigger to ONE form via {{Form ID}}/{{Form Classes}}; or pagePathValue/pagePathOperator to scope to a single page via {{Page Path}} when the form has no id/class; omit all and it fires on every form submit). ' +
-        'eventParameters values may be GTM built-in variables (e.g. {{Click URL}}, {{Click Text}}, {{Form ID}}, {{Form URL}}) — the needed built-in variables are auto-enabled.',
+        'eventParameters values may be GTM built-in variables (e.g. {{Click URL}}, {{Click Text}}, {{Form ID}}, {{Form URL}}); the needed built-in variables are auto-enabled. ' +
+        'WHERE THE ADS VALUES COME FROM: for "google_ads_conversion", "google_ads_call_conversion" and "google_ads_remarketing", call list_google_ads_conversion_actions first and take conversionId + conversionLabel straight off the chosen action, rather than asking the user to paste them. Both MUST be LITERAL values (e.g. "AW-17667466396" and "g9RqCLD6kdQcEJzJwOhB"), NEVER a {{variable}} or a placeholder: a braced value is passed through to the awct template verbatim, so it keeps the "AW-" prefix the template rejects and you get a tag that looks created but records nothing.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -4099,9 +4366,16 @@ export function buildToolRegistry(
     },
   ];
 
+  // GOOGLE ADS belongs to the GTM toolset, NOT to a product of its own and NOT to the GA4 chat: its
+  // entire job here is to hand the GTM half a real Conversion ID + Label so a google_ads_conversion tag
+  // can be built without asking the user to paste them. So these go through the SAME product filter as
+  // everything else (productOf files them under 'gtm', since no Ads tool name contains "ga4"), and the
+  // create tool rides in the confirm-gated half exactly like every other write.
+  const adsTools: Tool[] = ads ? buildGoogleAdsTools(ads, Boolean(confirm)) : [];
+
   // GA4 Admin write tools (product 'ga4') live in a separate catalog; included
   // only when a confirm function is provided, exactly like the GTM write tools.
-  const all = [...readTools, ...(confirm ? [...writeTools, ...buildGa4WriteTools(data)] : []), ...contextTools];
+  const all = [...readTools, ...(confirm ? [...writeTools, ...buildGa4WriteTools(data)] : []), ...contextTools, ...adsTools];
   const tools = [...(product ? all.filter((t) => productOf(t.name) === product) : all), ...memoryTools, ...corpusTools];
 
   return {

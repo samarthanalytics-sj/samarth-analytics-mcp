@@ -8,6 +8,7 @@ import { AuditHistoryStore } from '../../storage/audit-history';
 import { ManifestStore } from '../../storage/manifest-store';
 import { MemoryStore } from '../../storage/memory-store';
 import type { GoogleDataService } from '../../google/data-service';
+import { AdsError, type GoogleAdsService } from '../../google/ads-service';
 import type { GtmContext } from '../../../shared/ipc';
 
 let passed = 0;
@@ -421,6 +422,88 @@ function seqConfirm(...answers: boolean[]): {
     },
   };
 }
+
+// The developer token the real service sends in a `developer-token` header on EVERY Ads call. It is
+// planted in the fake's failures below so the "nothing leaks into the transcript" assertions exercise
+// a real leak path (a gaxios error carries the request config, and the config carries this header).
+const ADS_DEV_TOKEN = 'ADS-DEV-TOKEN-abc123-MUST-NEVER-LEAK';
+
+// Hand-written GoogleAdsService fake, same house style as fakeData: apps/desktop has no mocking
+// library, so every Google fake in this repo is an object literal injected as a parameter.
+function fakeAds(
+  opts: {
+    /** Makes readiness() report the blocker instead of ready (no developer token / no adwords scope). */
+    notReady?: { code: string; message: string; remedy: string };
+    /** Thrown by every data method, to exercise the error-shaping path. */
+    fail?: unknown;
+    /** validateConversionAction's verdict: non-null means the dry run REFUSED the create. */
+    invalid?: { message: string; remedy?: string };
+  } = {}
+): { ads: GoogleAdsService; calls: string[] } {
+  const calls: string[] = [];
+  const boom = (): void => {
+    if (opts.fail) throw opts.fail;
+  };
+  const ads = {
+    readiness: async () => {
+      calls.push('readiness');
+      return opts.notReady ? { ready: false, reason: { ...opts.notReady, status: 0, retryable: false } } : { ready: true };
+    },
+    listAccounts: async () => {
+      calls.push('listAccounts');
+      boom();
+      return [
+        { id: '1234567890', name: 'Acme (MCC)', manager: true, level: 0, status: 'ENABLED', hidden: false, testAccount: false, loginCustomerId: '1234567890' },
+        { id: '9876543210', name: 'Acme Store', manager: false, level: 1, status: 'ENABLED', hidden: false, testAccount: false, currencyCode: 'USD', loginCustomerId: '1234567890' },
+      ];
+    },
+    listConversionActions: async (customerId: string, loginCustomerId?: string) => {
+      calls.push(`listConversionActions:${customerId}:${loginCustomerId ?? ''}`);
+      boom();
+      return {
+        actions: [
+          {
+            resourceName: 'customers/9876543210/conversionActions/111', id: '111', name: 'Contact form',
+            status: 'ENABLED', type: 'WEBPAGE', category: 'SUBMIT_LEAD_FORM', primaryForGoal: true,
+            conversionId: 'AW-17667466396', conversionLabel: 'g9RqCLD6kdQcEJzJwOhB', taggable: true,
+          },
+          {
+            resourceName: 'customers/9876543210/conversionActions/222', id: '222', name: 'Offline sale',
+            status: 'ENABLED', type: 'UPLOAD_CLICKS', category: 'PURCHASE',
+            conversionId: null, conversionLabel: null, taggable: false,
+            note: 'Offline conversion: it is recorded by uploading clicks or calls to Google Ads, so it has no website snippet and no conversion label.',
+          },
+        ],
+        conversionCustomer: {
+          conversionCustomerId: '1234567890', status: 'CONVERSION_TRACKING_MANAGED_BY_THIS_MANAGER',
+          trackingId: '1234567890', crossAccountTrackingId: null, isCrossAccount: true,
+        },
+      };
+    },
+    validateConversionAction: async (customerId: string, input: { name: string }) => {
+      calls.push(`validate:${customerId}:${input.name}`);
+      boom();
+      return opts.invalid ? { code: 'DUPLICATE_NAME', status: 400, retryable: false, ...opts.invalid } : null;
+    },
+    createConversionAction: async (customerId: string, input: { name: string; category: string }, loginCustomerId?: string) => {
+      calls.push(`createConversionAction:${customerId}:${input.name}:${loginCustomerId ?? ''}`);
+      boom();
+      return {
+        resourceName: 'customers/9876543210/conversionActions/333', id: '333', name: input.name,
+        status: 'ENABLED', type: 'WEBPAGE', category: input.category,
+        conversionId: 'AW-17667466396', conversionLabel: 'NEWLABEL123', taggable: true,
+      };
+    },
+  } as unknown as GoogleAdsService;
+  return { ads, calls };
+}
+
+/** buildToolRegistry with an Ads service in the 8th slot, GTM product (where the Ads tools belong). */
+const gtmWithAds = (
+  ads: GoogleAdsService,
+  confirm?: Parameters<typeof buildToolRegistry>[1]
+): ReturnType<typeof buildToolRegistry> =>
+  buildToolRegistry(fakeData().data, confirm, 'gtm', undefined, undefined, undefined, undefined, ads);
 
 async function main(): Promise<void> {
   console.log('\nTool registry:');
@@ -2343,6 +2426,154 @@ async function main(): Promise<void> {
     const vendorRows = vendors.vendors as Array<{ containers: number; containerShare: number }>;
     assert.ok(vendorRows.every((v) => v.containerShare <= 100 && v.containers <= Number(vendors.containersScanned)),
       'no vendor share exceeds the corpus');
+  });
+
+  await test('Google Ads read tools live in the GTM toolset and return the real conversion id + label', async () => {
+    const fa = fakeAds();
+    const gtm = gtmWithAds(fa.ads);
+    const names = gtm.list().map((t) => t.name);
+    assert.ok(names.includes('list_google_ads_accounts'), 'account list in the GTM chat');
+    assert.ok(names.includes('list_google_ads_conversion_actions'), 'conversion-action list in the GTM chat');
+    assert.equal(names.includes('create_google_ads_conversion_action'), false, 'no create without a confirm fn');
+
+    // Ads is part of the GTM toolset (it feeds create_gtm_tracking_tag), NOT a product of its own and
+    // NOT part of the read-only GA4 Analytics chat.
+    // (Matched by exact name, not by substring: the GA4 catalog has its own list_ga4_google_ads_links.)
+    const ADS_TOOLS = ['list_google_ads_accounts', 'list_google_ads_conversion_actions', 'create_google_ads_conversion_action'];
+    const ga4 = buildToolRegistry(fakeData().data, approveAsIs, 'ga4', undefined, undefined, undefined, undefined, fakeAds().ads)
+      .list().map((t) => t.name);
+    assert.equal(ga4.some((n) => ADS_TOOLS.includes(n)), false, 'Ads tools do not leak into the GA4 chat');
+    // Without a service there is no Ads surface at all, so every existing caller is untouched.
+    assert.equal(
+      buildToolRegistry(fakeData().data, approveAsIs, 'gtm').list().some((t) => ADS_TOOLS.includes(t.name)),
+      false,
+      'absent when no Ads service is injected'
+    );
+
+    const accounts = rec(JSON.parse(await gtm.execute('list_google_ads_accounts', {})));
+    assert.equal(accounts.count, 2);
+    const rows = accounts.accounts as Array<Record<string, unknown>>;
+    assert.equal(rows[0].customerId, '1234567890');
+    assert.equal(rows[0].manager, true);
+    assert.equal(rows[1].loginCustomerId, '1234567890', 'the manager id to send back is carried');
+
+    const list = rec(JSON.parse(await gtm.execute('list_google_ads_conversion_actions', { customerId: '9876543210', loginCustomerId: '1234567890' })));
+    assert.ok(fa.calls.includes('listConversionActions:9876543210:1234567890'), 'the manager id is passed through');
+    const actions = list.actions as Array<Record<string, unknown>>;
+    assert.equal(actions[0].conversionId, 'AW-17667466396');
+    assert.equal(actions[0].conversionLabel, 'g9RqCLD6kdQcEJzJwOhB', 'the label is what a GTM awct tag cannot be built without');
+    assert.equal(actions[0].taggable, true);
+    // An untaggable action reports null + the reason instead of a plausible-looking label.
+    assert.equal(actions[1].conversionLabel, null);
+    assert.equal(actions[1].taggable, false);
+    assert.match(String(actions[1].note), /offline/i);
+    assert.equal(rec(list.conversionCustomer).isCrossAccount, true, 'cross-account ownership is surfaced');
+
+    // A blank loginCustomerId must read as "no manager": an EMPTY header is rejected outright by the API.
+    await gtm.execute('list_google_ads_conversion_actions', { customerId: '9876543210', loginCustomerId: '   ' });
+    assert.ok(fa.calls.includes('listConversionActions:9876543210:'), 'a blank manager id is dropped, not sent');
+  });
+
+  await test('create_google_ads_conversion_action is a LIVE write: hidden without confirm, gated like a delete', async () => {
+    // No confirm fn → not registered at all, and calling it cannot reach Google Ads.
+    const ro = fakeAds();
+    await assert.rejects(
+      () => gtmWithAds(ro.ads).execute('create_google_ads_conversion_action', { customerId: '9876543210', name: 'X', category: 'CONTACT' }),
+      /Unknown tool/
+    );
+    assert.equal(ro.calls.length, 0, 'nothing reached Google Ads');
+
+    // Approving only the FIRST card must not write: there is no draft stage on a live Ads account.
+    const once = seqConfirm(true, false);
+    const fa1 = fakeAds();
+    const declined = rec(JSON.parse(
+      await gtmWithAds(fa1.ads, once.fn).execute('create_google_ads_conversion_action', { customerId: '9876543210', name: 'Contact form', category: 'SUBMIT_LEAD_FORM' })
+    ));
+    assert.equal(declined.declined, true);
+    assert.equal(once.calls.length, 2, 'asked twice, exactly like a delete');
+    assert.equal((once.calls[0] as { requireTextConfirm?: string }).requireTextConfirm, undefined, 'first card is a plain approval');
+    assert.equal((once.calls[1] as { requireTextConfirm?: string }).requireTextConfirm, 'delete', 'the final card demands a typed confirmation');
+    assert.equal((once.calls[1] as { destructive?: boolean }).destructive, true, 'flagged destructive so it never auto-applies');
+    assert.equal(fa1.calls.some((c) => c.startsWith('createConversionAction')), false, 'declined → nothing created');
+
+    // Both confirms → dry run FIRST, then the write, and the new label comes back.
+    const twice = seqConfirm(true, true);
+    const fa2 = fakeAds();
+    const created = rec(JSON.parse(
+      await gtmWithAds(fa2.ads, twice.fn).execute('create_google_ads_conversion_action', { customerId: '9876543210', name: 'Contact form', category: 'SUBMIT_LEAD_FORM' })
+    ));
+    assert.equal(created.created, true);
+    assert.equal(rec(created.action).conversionLabel, 'NEWLABEL123');
+    assert.ok(
+      fa2.calls.indexOf('validate:9876543210:Contact form') < fa2.calls.findIndex((c) => c.startsWith('createConversionAction')),
+      'the validateOnly dry run runs BEFORE anything is written'
+    );
+
+    // The dry run refusing (duplicate name) stops the write and says why.
+    const dup = fakeAds({ invalid: { message: 'A conversion action with this name already exists.', remedy: 'Reuse that action instead.' } });
+    const refused = rec(JSON.parse(
+      await gtmWithAds(dup.ads, seqConfirm(true, true).fn).execute('create_google_ads_conversion_action', { customerId: '9876543210', name: 'Contact form', category: 'SUBMIT_LEAD_FORM' })
+    ));
+    assert.equal(refused.created, false);
+    assert.match(String(refused.error), /already exists/);
+    assert.equal(dup.calls.some((c) => c.startsWith('createConversionAction')), false, 'a refused dry run writes nothing');
+  });
+
+  await test('an Ads service that is not ready answers with the fix, not a raw 403', async () => {
+    const reason = { code: 'DEVELOPER_TOKEN_MISSING', message: 'No Google Ads developer token is set.', remedy: 'Add one in Settings, from a Google Ads MANAGER account.' };
+    const fa = fakeAds({ notReady: reason });
+    const out = rec(JSON.parse(await gtmWithAds(fa.ads).execute('list_google_ads_conversion_actions', { customerId: '9876543210' })));
+    assert.equal(out.ok, false);
+    assert.match(String(out.error), /developer token/i);
+    assert.match(String(out.remedy), /Settings/);
+    assert.equal(fa.calls.some((c) => c.startsWith('listConversionActions')), false, 'the doomed call is never attempted');
+
+    // The create is blocked in the PRECHECK, so the user is never asked to type "delete" to authorize a
+    // write that could not have run in the first place.
+    const c = seqConfirm(true, true);
+    const fa2 = fakeAds({ notReady: reason });
+    const out2 = rec(JSON.parse(
+      await gtmWithAds(fa2.ads, c.fn).execute('create_google_ads_conversion_action', { customerId: '9876543210', name: 'Contact form', category: 'SUBMIT_LEAD_FORM' })
+    ));
+    assert.equal(c.calls.length, 0, 'no approval card for an impossible write');
+    assert.match(String(out2.error), /developer token/i);
+    assert.equal(fa2.calls.some((x) => x.startsWith('createConversionAction')), false);
+  });
+
+  await test('no Google Ads developer token can reach the chat transcript', async () => {
+    // A gaxios-shaped failure: the real one carries the request config, and the config carries the
+    // developer-token header. Dumping the error, or reading .response off it, would print the token.
+    const gaxiosLike = Object.assign(new Error('Request failed with status code 403'), {
+      config: { url: 'https://googleads.googleapis.com/v24/customers/1/googleAds:searchStream', headers: { 'developer-token': ADS_DEV_TOKEN, authorization: 'Bearer ya29.SECRET-ACCESS-TOKEN' } },
+      response: { status: 403, data: { error: { message: 'The caller does not have permission', status: 'PERMISSION_DENIED' } } },
+    });
+    const shaped = new AdsError({
+      code: 'CUSTOMER_NOT_ENABLED', status: 403, retryable: false,
+      message: 'That Google Ads account is not active.', remedy: 'Pick another account.',
+    });
+
+    const args: Record<string, Record<string, unknown>> = {
+      list_google_ads_accounts: {},
+      list_google_ads_conversion_actions: { customerId: '9876543210' },
+      create_google_ads_conversion_action: { customerId: '9876543210', name: 'Contact form', category: 'SUBMIT_LEAD_FORM' },
+    };
+    for (const fail of [gaxiosLike, shaped]) {
+      for (const [tool, a] of Object.entries(args)) {
+        const reg = gtmWithAds(fakeAds({ fail }).ads, seqConfirm(true, true).fn);
+        // A THROW would carry the raw error out through a different path, so this must not reject.
+        const out = await reg.execute(tool, a);
+        assert.ok(!out.includes(ADS_DEV_TOKEN), `${tool}: developer token absent`);
+        assert.ok(!out.includes('ya29.'), `${tool}: access token absent`);
+        assert.ok(!out.includes('googleads.googleapis.com'), `${tool}: no request config leaked`);
+        assert.equal(rec(JSON.parse(out)).ok, false, `${tool}: reports the failure`);
+      }
+    }
+
+    // A shaped AdsError keeps its human message and remedy, and nothing else.
+    const out = rec(JSON.parse(await gtmWithAds(fakeAds({ fail: shaped }).ads).execute('list_google_ads_accounts', {})));
+    assert.equal(out.error, 'That Google Ads account is not active.');
+    assert.equal(out.remedy, 'Pick another account.');
+    assert.equal(out.code, 'CUSTOMER_NOT_ENABLED');
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);
