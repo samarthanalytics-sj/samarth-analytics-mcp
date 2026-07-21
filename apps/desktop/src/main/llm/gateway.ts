@@ -2,6 +2,7 @@ import { anthropicClient } from './anthropic';
 import { openaiClient } from './openai';
 import { geminiClient } from './gemini';
 import { capToolResult } from '../../shared/context-budget';
+import { attachReference, referenceForResult, referenceForError } from '../../shared/jit-reference';
 import type {
   LlmClient,
   LlmProvider,
@@ -138,11 +139,16 @@ export async function runChat(
           if (capped.capped) {
             console.error(`[chat] ${call.name}: result capped for the model (${capped.originalChars} -> ${capped.content.length} chars)`);
           }
-          results.push({ id: call.id, name: call.name, content: capped.content });
+          // Just-in-time reference AFTER the cap, so a large result can never trim away the
+          // methodology that tells the model how to report it.
+          const forModel = attachReference(capped.content, referenceForResult(call.name));
+          results.push({ id: call.id, name: call.name, content: forModel });
           callbacks.onToolResult?.({ name: call.name, ok: true, args: call.args, content });
         } catch (e) {
           const message = e instanceof Error ? e.message : String(e);
-          results.push({ id: call.id, name: call.name, content: message, isError: true });
+          // A rejected RAW create is exactly when the model needs the resource shapes, so they ride
+          // on the error instead of being paid for on every request.
+          results.push({ id: call.id, name: call.name, content: attachReference(message, referenceForError(call.name)), isError: true });
           batchFailed = true;
           lastToolError = { name: call.name, message };
           callbacks.onToolResult?.({ name: call.name, ok: false, error: message });

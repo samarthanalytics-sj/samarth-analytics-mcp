@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { dateContextLine, GTM_AUDIT_METHODOLOGY, GA4_TAG_NAMING, GA4_ECOMMERCE_REFERENCE, GTM_CREATION_METHODOLOGY, GTM_TRIGGER_VARIABLE_REFERENCE, GTM_DECISION_RULES, GA4_DATA_FRESHNESS, CORPUS_PROMPT } from '../chat-service';
+import { AUDIT_REPORTING_METHODOLOGY } from '../../../shared/jit-reference';
 
 let passed = 0;
 let failed = 0;
@@ -31,14 +32,26 @@ test('pads single-digit month/day to a valid ISO date', () => {
   assert.ok(!line.includes('2026-1-5'));
 });
 
-test('GTM_AUDIT_METHODOLOGY carries the Audit-Brain essentials', () => {
+// The audit brain is delivered in two parts now. What the PROMPT still carries must be enough for
+// the model to reach the tool; everything about interpreting findings rides on the result.
+test('GTM_AUDIT_METHODOLOGY (the prompt half) still routes the model to the deterministic audit', () => {
   const m = GTM_AUDIT_METHODOLOGY;
   assert.ok(/audit_gtm_container FIRST/i.test(m), 'calls the deterministic audit first');
+  assert.ok(/never audit from memory or a generic checklist/i.test(m), 'forbids auditing from memory');
+  assert.ok(/comes back WITH the audit result/i.test(m), 'says the rest arrives with the result');
+  assert.ok(m.length < AUDIT_REPORTING_METHODOLOGY.length / 4, 'the prompt half is a fraction of the full brain');
+});
+
+// Every essential the prompt used to carry must still exist, now on the result-borne half.
+test('AUDIT_REPORTING_METHODOLOGY carries the Audit-Brain essentials', () => {
+  const m = AUDIT_REPORTING_METHODOLOGY;
   assert.ok(/boundary statement/i.test(m) && /runtime verification/i.test(m), 'has the container-only boundary statement');
   assert.ok(/\[Certain\]/.test(m) && /\[Likely\]/.test(m) && /runtime-required/i.test(m), 'has the three confidence levels');
   assert.ok(/Hygiene[\s\S]*NEVER leads/i.test(m), 'orders by impact — hygiene never leads');
   assert.ok(/denied consent signal correctly BLOCKING a tag is correct/i.test(m), 'has the denied-pass false-positive guard');
   assert.ok(/ad_user_data/.test(m) && /ad_personalization/.test(m), 'names the four Consent Mode v2 signals');
+  assert.ok(/Critical −30|Critical -30/.test(m), 'keeps the deterministic scoring');
+  assert.ok(/needs verification/i.test(m), 'keeps the runtime-required list');
 });
 
 test('GA4_TAG_NAMING defines the "GA4 - Event - <Name>[ Click|Form] Tag" / "<Name>[ Click|Form] Trigger" format', () => {
