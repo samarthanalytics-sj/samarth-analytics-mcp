@@ -1,3 +1,9 @@
+## [1.362.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.362.3...v1.362.4) (2026-07-21)
+
+### Bug Fixes
+
+* **suggest:** stop double-counting one embedded form, and use the provider's durable id ([#626](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/626)) ([15fe982](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/15fe9820fbd7718d8f426e059b889ec39718e840))
+
 ## [1.362.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.362.2...v1.362.3) (2026-07-21)
 
 ### Performance Improvements
