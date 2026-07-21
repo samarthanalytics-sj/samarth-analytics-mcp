@@ -1,3 +1,9 @@
+## [1.360.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.359.0...v1.360.0) (2026-07-21)
+
+### Features
+
+* **desktop:** Google Ads access is part of a normal sign-in, no separate connect step ([e694d54](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/e694d54f4d02f24ba73afa3c03c00f6e57b04922))
+
 ## [1.359.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.358.0...v1.359.0) (2026-07-21)
 
 ### Features
