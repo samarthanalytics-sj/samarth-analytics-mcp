@@ -123,6 +123,58 @@ export function findMemoriesMatching(memories: Memory[], query: string): Memory[
   });
 }
 
+/** Where a recall search may look. 'context' = what this turn would inject anyway (account-wide + the
+ *  active client); 'account' = account-wide notes only; 'all' = every note saved under this Google
+ *  account, including other clients (for "what did I tell you about the other site?"). */
+export type MemorySearchScope = 'context' | 'account' | 'all';
+
+/** One ranked recall result: the memory plus why it surfaced (how many query terms it matched). */
+export interface MemorySearchHit {
+  memory: Memory;
+  matchedTerms: number;
+}
+
+/**
+ * RANKED recall over saved memories — the retrieval half of the memory system, used by the chat
+ * `recall_memories` tool to look past the handful auto-injected each turn.
+ *
+ * Deliberately different from `findMemoriesMatching` (the `forget` matcher): that one demands EVERY
+ * term so a vague query can never mass-delete. Recall is read-only, so partial matches are useful and
+ * ranked instead of excluded. Disabled memories stay excluded everywhere: muted means muted.
+ * PURE + deterministic.
+ */
+export function searchMemories(
+  memories: Memory[],
+  query: string,
+  opts: { scope?: MemorySearchScope; ctx?: { containerId?: string; property?: string }; limit?: number } = {},
+): MemorySearchHit[] {
+  const scope = opts.scope ?? 'all';
+  const ctx = opts.ctx ?? {};
+  const limit = Math.max(0, Math.floor(opts.limit ?? 10));
+  const q = tokens(String(query ?? ''));
+  const inScope = (m: Memory): boolean => {
+    if (scope === 'context') return memoryApplies(m, ctx);
+    if (scope === 'account') return !m.scope?.containerId && !m.scope?.property;
+    return true;
+  };
+  const scored = memories
+    .filter((m) => m.enabled && inScope(m))
+    .map((m) => {
+      const mt = tokens(m.text);
+      let matchedTerms = 0;
+      for (const t of q) if (mt.has(t)) matchedTerms += 1;
+      return { memory: m, matchedTerms };
+    })
+    // With a query, only real matches; with an empty query, browse the most relevant notes.
+    .filter((h) => (q.size === 0 ? true : h.matchedTerms > 0));
+  scored.sort((a, b) =>
+    b.matchedTerms - a.matchedTerms ||
+    Number(b.memory.pinned) - Number(a.memory.pinned) ||
+    b.memory.updatedAt - a.memory.updatedAt ||
+    (a.memory.id < b.memory.id ? -1 : a.memory.id > b.memory.id ? 1 : 0));
+  return scored.slice(0, limit);
+}
+
 /** Does a memory's scope apply to the current chat context? Account-wide always applies. */
 export function memoryApplies(m: Memory, ctx: { containerId?: string; property?: string }): boolean {
   const s = m.scope ?? {};

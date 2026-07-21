@@ -2,7 +2,8 @@
 // tsx src/shared/__tests__/chat-memory.test.ts
 import {
   redactSecrets, normalizeMemoryText, memoryApplies, memoryDedupeKey,
-  selectRelevantMemories, formatMemoriesForPrompt, findMemoriesMatching, MEMORY_MAX_LEN, type Memory,
+  selectRelevantMemories, formatMemoriesForPrompt, findMemoriesMatching, searchMemories,
+  MEMORY_MAX_LEN, type Memory,
 } from '../chat-memory';
 
 let passed = 0;
@@ -87,6 +88,44 @@ check('dedupe: different scope → different key', memoryDedupeKey({ kind: 'fact
   check('forget: empty query → empty (never removes everything)', findMemoriesMatching(list, '  ').length === 0);
   check('forget: too-vague short query (no term >= 3 chars) → empty (no mass delete)', findMemoriesMatching(list, 'a').length === 0 && findMemoriesMatching(list, 'it').length === 0 && findMemoriesMatching(list, 'do').length === 0);
   check('forget: is case-insensitive', findMemoriesMatching(list, 'ORDER_COMPLETED').map((m) => m.id).join() === 'b');
+}
+
+// ── searchMemories — RANKED recall (the retrieval half; `forget` matching stays strict) ─────────
+{
+  const list: Memory[] = [
+    mem({ id: 'a', text: 'we name GA4 events in snake_case', scope: {}, updatedAt: 10 }),
+    mem({ id: 'b', text: 'checkout uses order_completed not purchase', scope: { containerId: 'C1' }, updatedAt: 20 }),
+    mem({ id: 'c', text: 'client B fires purchase from the thank-you page', scope: { containerId: 'C2' }, updatedAt: 30 }),
+    mem({ id: 'd', text: 'muted note about purchase', scope: {}, enabled: false, updatedAt: 40 }),
+    mem({ id: 'e', text: 'pinned: never suggest scroll tracking', scope: {}, pinned: true, updatedAt: 5 }),
+  ];
+  const ids = (hits: ReturnType<typeof searchMemories>): string => hits.map((h) => h.memory.id).join();
+
+  check('recall: partial matches are KEPT and ranked (the strict forget matcher drops them)',
+    ids(searchMemories(list, 'purchase checkout')) === 'b,c'
+    && ids(findMemoriesMatching(list, 'purchase checkout').map((m) => ({ memory: m, matchedTerms: 0 }))) === 'b');
+  check('recall: more matched terms ranks higher', (() => {
+    const hits = searchMemories(list, 'purchase checkout');
+    return hits[0].memory.id === 'b' && hits[0].matchedTerms === 2 && hits[1].matchedTerms === 1;
+  })());
+  check('recall: DISABLED memories stay muted', !ids(searchMemories(list, 'purchase')).includes('d'));
+  // Equal term counts, so the tiebreak decides: newer note (c, updatedAt 30) before older (b, 20).
+  check('recall: scope=all reaches other clients of the account', ids(searchMemories(list, 'purchase', { scope: 'all' })) === 'c,b');
+  check('recall: scope=context is the active client + account-wide only',
+    ids(searchMemories(list, 'purchase', { scope: 'context', ctx: { containerId: 'C1' } })) === 'b');
+  check('recall: scope=account excludes every client-scoped note',
+    ids(searchMemories(list, 'events snake_case', { scope: 'account' })) === 'a');
+  check('recall: a non-matching query returns nothing (no fallback dump)', searchMemories(list, 'bigquery export').length === 0);
+  check('recall: an empty query browses, pinned first', (() => {
+    const hits = searchMemories(list, '  ');
+    return hits.length === 4 && hits[0].memory.id === 'e';
+  })());
+  check('recall: limit is honoured', searchMemories(list, '', { limit: 2 }).length === 2);
+  check('recall: limit 0 returns nothing', searchMemories(list, '', { limit: 0 }).length === 0);
+  check('recall: deterministic for equal scores (id tiebreak)', (() => {
+    const same = [mem({ id: 'z', text: 'purchase', updatedAt: 1 }), mem({ id: 'y', text: 'purchase', updatedAt: 1 })];
+    return ids(searchMemories(same, 'purchase')) === 'y,z';
+  })());
 }
 
 console.log(`\nchat-memory: ${passed} passed, ${failed} failed`);

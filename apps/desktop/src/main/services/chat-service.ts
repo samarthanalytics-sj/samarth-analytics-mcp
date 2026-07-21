@@ -10,7 +10,7 @@ import { buildToolRegistry } from '../tools/registry';
 import type { ConfirmFn } from '../tools/registry';
 import { createProvider, runChat } from '../llm/gateway';
 import { changeJournal } from '../google/change-journal';
-import type { ChatMediaPart, ChatReply, ChatStreamEvent, ChatToolCall, ChatTurn, GoogleProduct, GtmContext } from '../../shared/ipc';
+import type { ChatMediaPart, ChatMemoryUsed, ChatReply, ChatStreamEvent, ChatToolCall, ChatTurn, GoogleProduct, GtmContext } from '../../shared/ipc';
 import type { LlmTurn } from '../llm/types';
 // Shared GA4/GTM creation methodology — the SAME rules the tag-suggestion engine + AI scan follow,
 // so chat tag creation stays consistent with what the audit/suggestion surfaces propose. Re-exported
@@ -23,6 +23,19 @@ export { GTM_CREATION_METHODOLOGY, GTM_TRIGGER_VARIABLE_REFERENCE, GTM_DECISION_
  * follow when auditing a container, so audits return findings (not opinions) and never
  * lead with cosmetics or invent runtime verdicts. Exported so it's testable / reusable.
  */
+/**
+ * Corpus retrieval guidance. The pattern library ships inside the app, so this holds on every install.
+ * Written to buy grounding WITHOUT buying false authority: frequency across past containers is evidence
+ * of house convention, never evidence of correctness, and never a substitute for reading the live one.
+ */
+export const CORPUS_PROMPT =
+  'HOUSE PATTERNS: lookup_corpus_patterns searches an anonymized library of how tags, triggers and variables were ' +
+  'actually built across the operator\'s own past GTM containers. Call it BEFORE proposing an event name, a naming ' +
+  'convention, a trigger shape, or a vendor setup, and whenever asked what is typical or standard. Cite the real ' +
+  'count it returns ("128 of 561 containers"), never a vague "commonly". These counts describe past work only: they ' +
+  'are not industry benchmarks, not proof a pattern is correct, and never a reading of the CURRENT container - read ' +
+  'that with the GTM tools. If the library has no match, say so instead of inventing a frequency. ';
+
 export const GTM_AUDIT_METHODOLOGY =
   'AUDIT METHODOLOGY (GTM Audit Brain) — when the user asks to audit / check / review / "health-check" the container or its setup, follow this method exactly; return findings, not opinions: ' +
   '(1) ALWAYS call audit_gtm_container FIRST for the deterministic findings — never audit from memory or a generic checklist. ' +
@@ -216,6 +229,25 @@ export class ChatService {
     // the live property (deletes/archives are approval-gated).
     // The chat memory tools (remember_memory / forget_memory) write to the LOCAL per-account store, scoped
     // to the active client (container in a GTM turn, property in a GA4 turn) — matching how memories inject.
+    // Provenance ledger for this turn, keyed by memory id so a note injected AND later recalled is
+    // credited once. Seeded with the injected memories below; `recall_memories` adds to it mid-turn.
+    // A snapshot of the text, so the record stays truthful if the memory is edited later — dash-stripped
+    // (house style: no em dashes on any UI surface) and clamped to 200 chars so the per-reply snapshot
+    // persisted in the renderer's chat thread stays small.
+    const snapText = (t: string): string => {
+      const s = t.replace(/[—–]/g, '-');
+      return s.length > 200 ? `${s.slice(0, 200)}...` : s;
+    };
+    const usedMemories = new Map<string, ChatMemoryUsed>();
+    const creditMemories = (mems: Memory[]): boolean => {
+      let added = false;
+      for (const m of mems) {
+        if (usedMemories.has(m.id)) continue;
+        usedMemories.set(m.id, { id: m.id, kind: m.kind, text: snapText(m.text) });
+        added = true;
+      }
+      return added;
+    };
     const memoryCtx = this.memory
       ? {
           store: this.memory,
@@ -223,6 +255,11 @@ export class ChatService {
           scope: {
             ...(product === 'gtm' && active.gtmContext?.containerId ? { containerId: active.gtmContext.containerId } : {}),
             ...(product === 'ga4' && active.ga4Context?.property ? { property: active.ga4Context.property } : {}),
+          },
+          // A mid-turn recall counts as provenance too: re-emit the FULL ledger (the renderer replaces
+          // the list on each event) so "N memories used" covers injected + recalled.
+          onRecall: (mems: Memory[]): void => {
+            if (creditMemories(mems)) emit?.({ type: 'memories', used: [...usedMemories.values()] });
           },
         }
       : undefined;
@@ -362,8 +399,10 @@ export class ChatService {
           'call remember_memory to save it (kind: rule for an instruction/correction, else preference / decision / fact / glossary). ' +
           'When the user says to FORGET something ("forget that", "stop applying X"), call forget_memory with a short description. ' +
           'Also save a brief memory when you make a NOTABLE persistent change the user would want on record (e.g. created or deleted a key tag/trigger, with what and when). ' +
-          'Be conservative: never remember secrets, API keys, personal data, or transient one-off values. Briefly confirm what you remembered or forgot. '
+          'Be conservative: never remember secrets, API keys, personal data, or transient one-off values. Briefly confirm what you remembered or forgot. ' +
+          'To look BEYOND the notes shown above (another client of this account, or something the user says was agreed earlier), call recall_memories with a short query instead of guessing. '
         : '') +
+      CORPUS_PROMPT +
       dateContextLine(new Date()) +
       'Call tools when asked; never invent ids. When the user asks to list or count ' +
       'tags, triggers, variables, accounts, containers, or workspaces, the tools already ' +
@@ -389,20 +428,13 @@ export class ChatService {
     // pathological loops. Idempotent precheck (findExistingByName) means a re-run safely resumes.
     const MAX_TOOL_STEPS = 40;
     // Provenance: tell the UI which memories are in this turn's context (before the answer streams), and
-    // log the use on each memory. A snapshot of the text, so the record stays truthful if edited later —
-    // dash-stripped (house style: no em dashes on any UI surface) and clamped to 200 chars so the per-reply
-    // snapshot persisted in the renderer's chat thread stays small.
-    const snapText = (t: string): string => {
-      const s = t.replace(/[—–]/g, '-');
-      return s.length > 200 ? `${s.slice(0, 200)}...` : s;
-    };
-    const memoriesUsed = mem.used.map((u) => ({ id: u.id, kind: u.kind, text: snapText(u.text) }));
-    if (memoriesUsed.length) {
-      emit?.({ type: 'memories', used: memoriesUsed });
+    // log the use on each memory.
+    if (creditMemories(mem.used)) {
+      emit?.({ type: 'memories', used: [...usedMemories.values()] });
       // Best-effort usage log: a provenance side-write must NEVER kill the chat turn (a transient
       // disk-full / AV file-lock on memory-store.json would otherwise abort before the LLM is called).
       try {
-        this.memory?.recordUse(active.id, memoriesUsed.map((u) => u.id));
+        this.memory?.recordUse(active.id, mem.used.map((u) => u.id));
       } catch (e) {
         console.error('[chat] memory usage log failed (continuing):', e instanceof Error ? e.message : e);
       }
@@ -419,6 +451,8 @@ export class ChatService {
       onToolResult: emit ? (r) => emit({ type: 'tool_result', name: r.name, ok: r.ok, error: r.error }) : undefined,
     }, MAX_TOOL_STEPS);
 
+    // Injected + anything the model recalled mid-turn via the memory tool.
+    const memoriesUsed = [...usedMemories.values()];
     return { text: result.text.replace(/—/g, '-'), toolCalls, ...(memoriesUsed.length ? { memoriesUsed } : {}) };
   }
 }

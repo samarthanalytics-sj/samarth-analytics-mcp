@@ -474,6 +474,7 @@ async function main(): Promise<void> {
       'list_gtm_workspaces',
       'list_unused_gtm_triggers',
       'list_unused_gtm_variables',
+      'lookup_corpus_patterns',
       'monitor_ga4_property',
       'rank_ga4_campaigns',
       'run_ga4_realtime_report',
@@ -503,7 +504,7 @@ async function main(): Promise<void> {
 
   await test('write tools appear ONLY when a confirm function is provided', async () => {
     const readOnly = buildToolRegistry(fakeData().data);
-    assert.equal(readOnly.list().length, 54, 'read-only registry has 54 tools');
+    assert.equal(readOnly.list().length, 55, 'read-only registry has 55 tools');
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
@@ -518,8 +519,8 @@ async function main(): Promise<void> {
     // plus the read-only monitor_ga4_property = 102, plus the three new server tag types
     // (create_stackadapt_server_tag, create_reddit_capi_server_tag, create_amazon_capi_server_tag) = 105,
     // plus the read-only rank_ga4_campaigns = 106, plus the read-only suggest_tags_from_url = 107,
-    // plus the read-only get_form_tracking_recipe = 108.
-    assert.equal(withWrites.list().length, 108 + 60, 'read + write registry has 108 GTM/GA4-read/context + 60 GA4-write tools');
+    // plus the read-only get_form_tracking_recipe = 108, plus the read-only lookup_corpus_patterns = 109.
+    assert.equal(withWrites.list().length, 109 + 60, 'read + write registry has 109 GTM/GA4-read/context + 60 GA4-write tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_pinterest_capi_server_tag'), true, 'create_pinterest_capi_server_tag present');
     assert.equal(withWrites.list().some((t) => t.name === 'create_reddit_capi_server_tag'), true, 'create_reddit_capi_server_tag present');
     assert.equal(withWrites.list().some((t) => t.name === 'create_amazon_capi_server_tag'), true, 'create_amazon_capi_server_tag present');
@@ -1535,9 +1536,11 @@ async function main(): Promise<void> {
     assert.ok(gtmNames.includes('analytics_scorecard'));
     assert.ok(gtmNames.includes('create_gtm_tag_with_trigger'));
 
-    // ga4 mode is EXACTLY the GA4 tool set (no confirm → no write tools, all of which are GTM anyway).
+    // ga4 mode is EXACTLY the GA4 tool set (no confirm → no write tools, all of which are GTM anyway),
+    // plus the product-agnostic corpus lookup, which is appended after the product filter on purpose:
+    // event-naming conventions matter in a GA4 chat too.
     const ga4Names = buildToolRegistry(fakeData().data, undefined, 'ga4').list().map((t) => t.name);
-    assert.deepEqual([...ga4Names].sort(), [...GA4_TOOLS].sort(), 'ga4 mode = exactly the GA4 tools');
+    assert.deepEqual([...ga4Names].sort(), [...GA4_TOOLS, 'lookup_corpus_patterns'].sort(), 'ga4 mode = the GA4 tools + corpus lookup');
   });
 
   await test('approval is DELETE-ONLY: creates/edits apply directly without prompting; delete edits still apply', async () => {
@@ -2228,6 +2231,65 @@ async function main(): Promise<void> {
     assert.equal(forgot.removed, 1);
     assert.equal(store.list('acct1').length, 0);
     rmSync(dir, { recursive: true, force: true });
+  });
+
+  await test('recall_memories searches the store, scopes correctly, and reports usage for provenance', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'reg-recall-'));
+    const store = new MemoryStore(join(dir, 'm.json'), 500, () => 1);
+    store.add('acct1', { kind: 'rule', text: 'we name GA4 events in snake_case', scope: {}, source: 'chat' });
+    store.add('acct1', { kind: 'fact', text: 'checkout fires order_completed not purchase', scope: { containerId: 'GTM-A' }, source: 'chat' });
+    store.add('acct1', { kind: 'fact', text: 'the other site fires purchase on the thank-you page', scope: { containerId: 'GTM-B' }, source: 'chat' });
+    const recalled: string[] = [];
+    const memCtx = {
+      store,
+      accountId: 'acct1',
+      scope: { containerId: 'GTM-A' },
+      onRecall: (mems: { id: string }[]): void => { for (const m of mems) recalled.push(m.id); },
+    };
+    const reg = buildToolRegistry(fakeData().data, undefined, 'gtm', undefined, undefined, undefined, memCtx);
+    assert.ok(reg.list().some((t) => t.name === 'recall_memories'), 'listed with a memory context');
+    assert.equal(buildToolRegistry(fakeData().data).list().some((t) => t.name === 'recall_memories'), false, 'absent without one');
+
+    const all = rec(JSON.parse(await reg.execute('recall_memories', { query: 'purchase' })));
+    assert.equal(all.found, 2, 'default scope reaches the OTHER client too');
+    assert.equal(all.searched, 3);
+
+    const ctxOnly = rec(JSON.parse(await reg.execute('recall_memories', { query: 'purchase', scope: 'context' })));
+    assert.equal(ctxOnly.found, 1, 'context scope stays on the active client + account-wide');
+
+    const none = rec(JSON.parse(await reg.execute('recall_memories', { query: 'bigquery streaming export' })));
+    assert.equal(none.found, 0);
+    assert.match(String(none.note), /no note|rather than guessing/i, 'tells the model not to guess');
+
+    assert.equal(recalled.length, 3, 'every recalled memory is reported for provenance (2 + 1)');
+    const used = store.list('acct1').filter((m) => (m.useCount ?? 0) > 0);
+    assert.equal(used.length, 2, 'recall counts as a use in the usage log');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  await test('lookup_corpus_patterns ships in every chat and returns real, honest counts', async () => {
+    // No memory context, no confirm fn: corpus knowledge is read-only and product-agnostic.
+    const regGtm = buildToolRegistry(fakeData().data, undefined, 'gtm');
+    const regGa4 = buildToolRegistry(fakeData().data, undefined, 'ga4');
+    assert.ok(regGtm.list().some((t) => t.name === 'lookup_corpus_patterns'), 'present in gtm');
+    assert.ok(regGa4.list().some((t) => t.name === 'lookup_corpus_patterns'), 'present in ga4');
+
+    const r = rec(JSON.parse(await regGtm.execute('lookup_corpus_patterns', { query: 'form submit' })));
+    const scanned = Number(r.containersScanned);
+    assert.ok(scanned > 100, `the shipped library loaded (${scanned} containers)`);
+    assert.ok(Array.isArray(r.hits) && r.hits.length > 0, 'a common query hits');
+    const hit = (r.hits as Array<Record<string, unknown>>)[0];
+    assert.ok(Number(hit.containers) >= 2, 'every hit met the k-anonymity threshold');
+    assert.ok(Number(hit.containers) <= scanned, 'a count can never exceed the corpus');
+    assert.match(String(r.source), /not industry benchmarks/i, 'the envelope disclaims benchmark status');
+    assert.ok(!/[—–]/.test(JSON.stringify(r)), 'no em dashes reach the model');
+
+    const vendors = rec(JSON.parse(await regGtm.execute('lookup_corpus_patterns', { kind: 'vendor' })));
+    assert.ok(Array.isArray(vendors.vendors) && vendors.vendors.length > 0, 'vendor adoption available');
+
+    const miss = rec(JSON.parse(await regGtm.execute('lookup_corpus_patterns', { query: 'zorbex quantum widget' })));
+    assert.equal((miss.hits as unknown[]).length, 0);
+    assert.match(String(miss.note), /instead of guessing/i, 'a miss instructs honesty, not invention');
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);
