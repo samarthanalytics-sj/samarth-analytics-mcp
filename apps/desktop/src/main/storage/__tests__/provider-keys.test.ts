@@ -70,6 +70,53 @@ test('persists across instances; key is encrypted at rest', () => {
   assert.equal(readFileSync(secFile, 'utf8').includes('sk-secret'), false);
 });
 
+test('Ads developer token: set / get / has / clear round-trip', () => {
+  const { store } = make();
+  assert.equal(store.hasAdsDeveloperToken(), false);
+  assert.equal(store.getAdsDeveloperToken(), null);
+  store.setAdsDeveloperToken('dev-token-abc123');
+  assert.equal(store.hasAdsDeveloperToken(), true);
+  assert.equal(store.getAdsDeveloperToken(), 'dev-token-abc123');
+  store.clearAdsDeveloperToken();
+  assert.equal(store.hasAdsDeveloperToken(), false);
+  assert.equal(store.getAdsDeveloperToken(), null);
+});
+
+test('Ads developer token is trimmed (a pasted token often carries whitespace)', () => {
+  const { store } = make();
+  store.setAdsDeveloperToken('  dev-token-xyz \n');
+  assert.equal(store.getAdsDeveloperToken(), 'dev-token-xyz');
+});
+
+test('Ads developer token: encrypted at rest, only a ref in app-settings, and it survives a reopen', () => {
+  const appFile = join(dir, 'ads-app.json');
+  const secFile = join(dir, 'ads-sec.json');
+  new ProviderKeyStore(appFile, new SecretStore(secFile, new FakeCryptor())).setAdsDeveloperToken('SUPER_SECRET_DEV_TOKEN');
+  const reopened = new ProviderKeyStore(appFile, new SecretStore(secFile, new FakeCryptor()));
+  assert.equal(reopened.getAdsDeveloperToken(), 'SUPER_SECRET_DEV_TOKEN');
+  // The token rides in a header on EVERY Ads request, so a plaintext copy on disk would be a long-lived,
+  // account-wide credential sitting in a readable file.
+  assert.equal(readFileSync(appFile, 'utf8').includes('SUPER_SECRET_DEV_TOKEN'), false);
+  assert.equal(readFileSync(secFile, 'utf8').includes('SUPER_SECRET_DEV_TOKEN'), false);
+});
+
+test('Ads token and LLM provider keys share one file without clobbering each other', () => {
+  const appFile = join(dir, 'both-app.json');
+  const secFile = join(dir, 'both-sec.json');
+  const store = new ProviderKeyStore(appFile, new SecretStore(secFile, new FakeCryptor()));
+  store.setKey('openai', 'sk-1');
+  store.setAdsDeveloperToken('dev-1');
+  store.setKey('gemini', 'g-1');
+  const reopened = new ProviderKeyStore(appFile, new SecretStore(secFile, new FakeCryptor()));
+  assert.equal(reopened.getKey('openai'), 'sk-1');
+  assert.equal(reopened.getKey('gemini'), 'g-1');
+  assert.equal(reopened.getAdsDeveloperToken(), 'dev-1');
+  // Clearing one must not disturb the other.
+  reopened.clearAdsDeveloperToken();
+  assert.equal(reopened.getKey('openai'), 'sk-1');
+  assert.equal(reopened.hasAdsDeveloperToken(), false);
+});
+
 rmSync(dir, { recursive: true, force: true });
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

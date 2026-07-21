@@ -75,17 +75,34 @@ export function triggerWhens(s: SuggestedTagView): TriggerWhen[] {
   return out;
 }
 
+/** A SuggestedTagView field a projected param row writes straight back to, instead of into the
+ *  generic `params` overlay. Used by the Google Ads platforms, whose "parameters" ARE the tag's
+ *  identity fields (buildGoogleAdsConversionTag emits exactly conversionId + conversionLabel). */
+export type IdentityField = 'measurementId' | 'conversionLabel';
+
 export interface TemplateGroup {
   tagType: string;
   tagName: string;
   eventName: string;
   triggerName: string;
   triggerType: string;
-  params: Array<{ name: string; variable: string }>;
+  /** `field` set = an identity row: its VALUE edits that SuggestedTagView field and its NAME is fixed. */
+  params: Array<{ name: string; variable: string; field?: IdentityField }>;
   whens: TriggerWhen[];
   /** Rows this block spans = max(params, conditions, 1). */
   rowCount: number;
 }
+
+/** The Google Ads platforms carry their ids in dedicated fields rather than in eventParameters, so
+ *  they project one identity row per field. Without this the review table shows them nowhere and the
+ *  Conversion Label can only be typed through the chat approval card. conversion_linker has no ids. */
+const ADS_IDENTITY: Partial<Record<SuggestedTagView['platform'], Array<{ name: string; field: IdentityField }>>> = {
+  google_ads_conversion: [
+    { name: 'Conversion ID', field: 'measurementId' },
+    { name: 'Conversion Label', field: 'conversionLabel' },
+  ],
+  google_ads_remarketing: [{ name: 'Conversion ID', field: 'measurementId' }],
+};
 
 // Our platform → the template's "Tag Type" wording. meta_pixel shows its Meta event + pixel id like a
 // GA4 event tag (eventName column = the Meta event, params = Object Properties).
@@ -104,9 +121,12 @@ const TAG_TYPE: Record<string, string> = {
 
 /** One suggestion → its template block (the structure both the table + CSV use). */
 export function suggestionToGroup(s: SuggestedTagView): TemplateGroup {
-  const params = s.platform === 'google_tag'
-    ? (s.configSettings ?? []).map((p) => ({ name: p.name, variable: p.value }))
-    : (s.eventParameters ?? []).map((p) => ({ name: p.name, variable: p.value }));
+  const identity = ADS_IDENTITY[s.platform];
+  const params: TemplateGroup['params'] = identity
+    ? identity.map((r) => ({ name: r.name, variable: (r.field === 'conversionLabel' ? s.conversionLabel : s.measurementId) ?? '', field: r.field }))
+    : s.platform === 'google_tag'
+      ? (s.configSettings ?? []).map((p) => ({ name: p.name, variable: p.value }))
+      : (s.eventParameters ?? []).map((p) => ({ name: p.name, variable: p.value }));
   const whens = triggerWhens(s);
   return {
     tagType: TAG_TYPE[s.platform] ?? 'GA4 Event Tag',
@@ -129,6 +149,8 @@ export interface TagEdit {
   tagName?: string;
   eventName?: string;
   measurementId?: string;
+  /** Google Ads Conversion Label (platform 'google_ads_conversion'). Edited as an identity row. */
+  conversionLabel?: string;
   page?: string;
   platform?: SuggestedTagView['platform'];
   triggerName?: string;
@@ -219,6 +241,7 @@ export function applyTagEdit(s: SuggestedTagView, e: TagEdit | undefined): Sugge
     tagName: e.tagName ?? s.tagName,
     eventName: e.eventName ?? s.eventName,
     measurementId: e.measurementId ?? s.measurementId,
+    conversionLabel: e.conversionLabel ?? s.conversionLabel,
     page: e.page ?? s.page,
     platform,
   };
@@ -241,6 +264,51 @@ export function applyTagEdit(s: SuggestedTagView, e: TagEdit | undefined): Sugge
     else { next.eventParameters = rows; next.configSettings = []; }
   }
   return next;
+}
+
+/** The placeholder ids the suggestion engine seeds Google Ads rows with. NOTHING in the app ever
+ *  creates them as GTM variables (planGoogleTagVars only provisions 'google_tag' rows), so a row still
+ *  carrying one builds an awct tag that references a variable that does not exist. A user's OWN
+ *  {{variable}} is left alone: it may be a real Constant they created in the container. */
+const ADS_PLACEHOLDER_IDS = new Set(['{{Google Ads Conversion ID}}', '{{Google Ads Conversion Label}}']);
+
+/** Variables the suggestion engine seeds on OTHER platforms. They ride across a Tag Type change
+ *  (applyTagEdit carries measurementId over), so switching a GA4 row to "Google Ads Remarketing" would
+ *  otherwise hand a G- measurement id to the Ads conversionId field with nothing objecting. */
+const FOREIGN_ID_VARS = new Set([
+  '{{GA4 Measurement ID}}', '{{Meta Pixel ID}}', '{{TikTok Pixel ID}}',
+  '{{LinkedIn Partner ID}}', '{{Reddit Pixel ID}}', '{{Pinterest Tag ID}}',
+]);
+
+/** Is this value EXACTLY one {{variable}} reference? Anchored, and the name may not contain braces:
+ *  a lazy `.+?` backtracks across the inner "}}" and so accepts "{{A}} {{B}}" as a single reference.
+ *  A plain substring test is looser still, waving through "AW-{{suffix}}", "G-ABC123 {{x}}" and the
+ *  whole "AW-123456789/{{Label}}" send_to string, all of which reach the awct template verbatim
+ *  because normalizeAdsConversionId passes any braced value through untouched. */
+const isVarRef = (v: string): boolean => /^\s*\{\{[^{}]+\}\}\s*$/.test(v);
+
+/** Why an approved Google Ads row cannot be created yet, or null when it is ready. Blocks the two
+ *  failures that otherwise reach GTM silently and report ok: an unresolved engine placeholder, and an
+ *  empty Conversion Label (createSuggestedTags coerces a missing label to ''). Both produce a tag that
+ *  can never fire, and the container audit's A8 rule does not catch them because it ORs id and label.
+ *  PURE, so the review table and the create path share one definition of "ready". */
+export function adsIdentityIssue(s: SuggestedTagView): string | null {
+  if (s.platform !== 'google_ads_conversion' && s.platform !== 'google_ads_remarketing') return null;
+  const id = (s.measurementId ?? '').trim();
+  if (!id) return 'Conversion ID is empty. Copy it from Google Ads (Goals > Conversions > your action > Tag setup).';
+  if (ADS_PLACEHOLDER_IDS.has(id)) return `Conversion ID is still the ${id} placeholder, and that variable does not exist. Paste the real Conversion ID.`;
+  // Carried over from another platform by a Tag Type change: a GA4/Meta/TikTok id is not an Ads id.
+  if (FOREIGN_ID_VARS.has(id)) return `Conversion ID is still ${id}, which belongs to a different platform. Use "Get from Google Ads", or paste the Conversion ID.`;
+  // A user's OWN {{Constant}} is allowed through (it may genuinely hold the id), but ONLY when the value
+  // is exactly one reference. Anything else must satisfy the literal format: a substring test here would
+  // wave through "AW-{{suffix}}" and "G-ABC123 {{x}}", which reach the awct template verbatim.
+  if (!isVarRef(id) && !/^(AW-)?\d{6,}$/i.test(id)) return `Conversion ID "${id}" is not a Google Ads conversion id (expected AW-123456789 or 123456789).`;
+  if (s.platform === 'google_ads_remarketing') return null;
+  const label = (s.conversionLabel ?? '').trim();
+  if (!label) return 'Conversion Label is empty. Copy it from the same Tag setup panel in Google Ads.';
+  if (ADS_PLACEHOLDER_IDS.has(label)) return `Conversion Label is still the ${label} placeholder, and that variable does not exist. Paste the real Conversion Label.`;
+  if (!isVarRef(label) && /[\s/]/.test(label)) return `Conversion Label "${label}" looks wrong: paste only the label, not the whole AW-123456789/label string.`;
+  return null;
 }
 
 /** Collapse suggestions that would create the SAME GTM tag, keeping the FIRST. Identity is

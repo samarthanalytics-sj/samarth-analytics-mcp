@@ -33,7 +33,7 @@ import { discoverSite } from './discover';
 // The merged page-driver builder (Electron + optional Cheerio/Playwright) lives in scan-url.ts,
 // shared with the `suggest_tags_from_url` chat tool so both scan paths render pages identically.
 import { makeDriver, makeDrivers, scanConcurrency, clampSettle } from './scan-url';
-import { parseSuggestions, createSuggestedTags, planGoogleTagVars, provisionVariables } from './suggestion-service';
+import { parseSuggestions, createSuggestedTags, planGoogleTagVars, planAdsIdentity, provisionVariables } from './suggestion-service';
 import { urlAllowed } from '../../../../web-audit-mcp/src/utils/urlGuard.js';
 
 /** The persistent browser profile that keeps the Tag Assistant Google session across runs — keyed PER
@@ -665,6 +665,11 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
       // (mirrors ensureGa4Config). Provision a Constant from the row's real
       // Measurement ID first; block the row if the ID is still the placeholder.
       const errors = new Map<string, string>();
+      // Google Ads rows need a LITERAL Conversion ID (and Label): the engine seeds them with
+      // {{Google Ads Conversion ID}} / {{...Label}} placeholders that nothing provisions, and GTM
+      // happily stores the dangling reference, so the tag reports "created" and can never fire.
+      // Blocked per-row, so one unfilled Ads row never holds up the rest of the batch.
+      for (const [id, msg] of planAdsIdentity(list).errors) errors.set(id, msg);
       const hasGoogleTagVar = list.some((t) => t.platform === 'google_tag' && /^\s*\{\{.+\}\}\s*$/.test(t.tagId ?? ''));
       if (hasGoogleTagVar) {
         const snap = await data.getGtmContainerSnapshot(acct, cont, ws);

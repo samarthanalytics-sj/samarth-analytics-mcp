@@ -36,7 +36,11 @@ export class GoogleAuthService {
     };
   }
 
-  async connect(): Promise<AccountView> {
+  /** @param scopes Overrides the default scope set. Used by "Connect Google Ads", which passes
+   *  adsAuthScopes() (the UNION with the defaults, never the Ads scope alone: a second authorization
+   *  returns a token that REPLACES the vaulted one, so asking for adwords by itself would silently drop
+   *  the Tag Manager and Analytics grants). */
+  async connect(scopes?: string[]): Promise<AccountView> {
     const client = loadGoogleOAuthClient(this.configPath);
     if (!client) {
       throw new Error(
@@ -55,12 +59,23 @@ export class GoogleAuthService {
       const { token, userinfo } = await runLoopbackOAuth(client, {
         openBrowser: (url) => shell.openExternal(url),
         signal: controller.signal,
+        ...(scopes && scopes.length > 0 ? { scopes } : {}),
       });
-      return this.registry.upsertGoogleAccount(
+      const account = this.registry.upsertGoogleAccount(
         userinfo.email,
         userinfo.name,
         JSON.stringify(token)
       );
+      // Drop any cached OAuth2Client for this account, because upsert is idempotent by email and so a
+      // re-connect REUSES the cache key. Without this the stale client keeps presenting the OLD access
+      // token, and on its next refresh (google-auth-library refreshes eagerly ~5 minutes before expiry)
+      // its 'tokens' listener re-serializes its own closure snapshot over the token we just vaulted,
+      // silently reverting both the refresh token and the granted SCOPE string.
+      // This is not hypothetical for the Google Ads work: a scope upgrade is a voluntary re-consent, so
+      // it is never preceded by invalid_grant, which is the only path that currently invalidates the
+      // cache. The newly granted adwords scope would be dropped within the hour.
+      this.onDisconnect?.(account.id);
+      return account;
     } finally {
       // Only clear if a later connect() hasn't already replaced us.
       if (this.current === controller) this.current = null;

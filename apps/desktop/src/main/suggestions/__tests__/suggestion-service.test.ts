@@ -9,7 +9,7 @@ import { crawlAndSuggest, scanUrls, assembleResult, dedupSuggestions, detectInst
 import type { SuggestedTag } from '../../../../../web-audit-mcp/src/agent/tag-suggest/types.js';
 import { mergeDriven } from '../multi-driver';
 import { parseSitemapLocs, extractCrawlLinks } from '../discover';
-import { parseSuggestions, suggestionsFromData, createSuggestedTags, planGoogleTagVars, provisionVariables } from '../suggestion-service';
+import { parseSuggestions, suggestionsFromData, createSuggestedTags, planGoogleTagVars, planAdsIdentity, provisionVariables } from '../suggestion-service';
 import type { ContainerSnapshot } from '../../google/gtm-builders';
 import type { PageScanRaw, RawElement } from '../../../../../web-audit-mcp/src/agent/tag-suggest/collect.js';
 import type { RawForm } from '../../../../../web-audit-mcp/src/agent/forms.js';
@@ -480,6 +480,20 @@ async function main(): Promise<void> {
     check('create: google_ads_conversion drives a create call with conversionId + conversionLabel (no measurementId/eventName leak)',
       gccalls[0].platform === 'google_ads_conversion' && gccalls[0].conversionId === '{{Google Ads Conversion ID}}' && gccalls[0].conversionLabel === '{{Google Ads Conversion Label}}' &&
       gccalls[0].measurementId === undefined && gccalls[0].eventName === undefined && gcout[0].ok === true);
+
+    // planAdsIdentity is the gate that stops the placeholder row above from ever reaching the create
+    // loop: suggestion-ipc folds its errors into the same per-row `errors` map planGoogleTagVars uses,
+    // so a blocked Ads row is filtered out of `creatable` while every other tag still gets created.
+    const adsPlan = planAdsIdentity([adsConvTag, metaTag]);
+    check('planAdsIdentity: blocks the placeholder Ads row', adsPlan.errors.has('gc') && /Conversion ID is still/.test(adsPlan.errors.get('gc') ?? ''));
+    check('planAdsIdentity: leaves non-Ads rows alone', !adsPlan.errors.has(metaTag.id));
+    const adsReady = planAdsIdentity([{ ...adsConvTag, measurementId: 'AW-123456789', conversionLabel: 'AbC-dEfGh12_34' }]);
+    check('planAdsIdentity: a row with real values is NOT blocked', adsReady.errors.size === 0);
+    const adsNoLabel = planAdsIdentity([{ ...adsConvTag, measurementId: 'AW-123456789', conversionLabel: '' }]);
+    check('planAdsIdentity: a real id with an empty label is still blocked', /Conversion Label is empty/.test(adsNoLabel.errors.get('gc') ?? ''));
+    // The whole point of the per-row shape: a blocked Ads row must not stop the rest of the batch.
+    const mixed = planAdsIdentity([adsConvTag, metaTag]);
+    check('planAdsIdentity: blocks ONLY the offending row (batch survives)', mixed.errors.size === 1);
 
     // conversion_linker sends NO id fields; google_ads_remarketing sends only conversionId.
     const linkerTag: SuggestedTagView = {

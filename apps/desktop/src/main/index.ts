@@ -10,6 +10,8 @@ import { MemoryStore } from './storage/memory-store';
 import { RegistryService } from './services/registry-service';
 import { registerRegistryIpc } from './ipc/registry-ipc';
 import { registerProvidersIpc } from './ipc/providers-ipc';
+import { registerAdsIpc } from './ipc/ads-ipc';
+import { GoogleAdsService, type AdsRequest } from './google/ads-service';
 import { GoogleAuthService } from './services/google-auth-service';
 import { closeOpenTaWindow } from './suggestions/ta-driver';
 import { registerGoogleIpc } from './ipc/google-ipc';
@@ -157,6 +159,27 @@ app.whenReady().then(() => {
     clientManager.invalidate(id)
   );
   const dataService = new GoogleDataService(registry, clientManager);
+  // Google Ads. `auth` resolves the ACTIVE account on every call (matching GoogleDataService.activeAuth)
+  // and hands back that account's patched client.request, so a dead refresh token still travels the one
+  // chokepoint that clears the vault and raises the Re-connect banner. The scope string is read off the
+  // vaulted token so a missing `adwords` grant is caught BEFORE a call: it surfaces as a 403, which is
+  // not invalid_grant, so nothing downstream would classify it.
+  const adsService = new GoogleAdsService({
+    auth: async () => {
+      const active = registry.getActiveView();
+      if (!active) throw new Error('No active account. Connect a Google account first.');
+      if (!active.hasGoogleToken) throw new Error('The active account is not signed in to Google.');
+      const client = clientManager.getClient(active.id);
+      let scope: string | null = null;
+      try {
+        scope = (JSON.parse(registry.getGoogleToken(active.id) ?? '{}') as { scope?: string }).scope ?? null;
+      } catch {
+        scope = null; // an unreadable token is treated as "no Ads scope", which prompts a re-connect
+      }
+      return { request: client.request.bind(client) as unknown as AdsRequest, scope };
+    },
+    developerToken: () => providerKeys.getAdsDeveloperToken(),
+  });
   const auditHistory = new AuditHistoryStore(join(dataDir, 'audit-history.json'));
   const manifests = new ManifestStore(join(dataDir, 'manifests.json'));
   const memory = new MemoryStore(join(dataDir, 'memory-store.json'));
@@ -220,6 +243,7 @@ app.whenReady().then(() => {
   registerIpcHandlers();
   registerRegistryIpc(registry);
   registerProvidersIpc(providerKeys);
+  registerAdsIpc(adsService, providerKeys, dataService);
   registerGoogleIpc(googleAuth);
   registerDataIpc(dataService);
   registerChatIpc(chatService);

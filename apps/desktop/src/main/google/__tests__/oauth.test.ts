@@ -9,6 +9,10 @@ import {
   createPkcePair,
   createState,
   describeGoogleOAuthError,
+  adsAuthScopes,
+  grantedScopes,
+  hasAdsScope,
+  GOOGLE_ADS_SCOPE,
   parseTokenResponse,
   parseUserinfo,
   DESKTOP_GOOGLE_SCOPES,
@@ -73,6 +77,39 @@ test('buildAuthUrl carries PKCE + offline + chooser params', () => {
   assert.ok(url.searchParams.get('scope')?.includes('tagmanager.edit.containerversions'));
   assert.ok(!url.searchParams.get('scope')?.includes('tagmanager.publish')); // never publish
   assert.ok(url.searchParams.get('scope')?.includes('analytics.readonly'));
+  // Incremental auth: without this, the opt-in Google Ads re-consent returns a token that REPLACES the
+  // vaulted one and silently drops the Tag Manager + Analytics grants.
+  assert.equal(url.searchParams.get('include_granted_scopes'), 'true');
+});
+
+test('the Google Ads scope is opt-in, never in the default set', () => {
+  // Adding adwords to the defaults would force every existing account through a fresh consent screen
+  // and show an Ads permission to users who only audit containers.
+  assert.ok(!DESKTOP_GOOGLE_SCOPES.includes(GOOGLE_ADS_SCOPE));
+  const url = new URL(
+    buildAuthUrl({ clientId: 'c', redirectUri: 'http://127.0.0.1:1/callback', scopes: DESKTOP_GOOGLE_SCOPES, state: 's', codeChallenge: 'x' })
+  );
+  assert.ok(!url.searchParams.get('scope')?.includes('adwords'));
+});
+
+test('adsAuthScopes requests the UNION, so a re-consent cannot drop existing grants', () => {
+  const scopes = adsAuthScopes();
+  assert.ok(scopes.includes(GOOGLE_ADS_SCOPE));
+  for (const s of DESKTOP_GOOGLE_SCOPES) assert.ok(scopes.includes(s), `union dropped ${s}`);
+  assert.ok(!scopes.includes('https://www.googleapis.com/auth/tagmanager.publish'));
+});
+
+test('hasAdsScope reads the granted scope string the token actually carries', () => {
+  assert.equal(hasAdsScope(`${GOOGLE_ADS_SCOPE} openid email`), true);
+  assert.equal(hasAdsScope(DESKTOP_GOOGLE_SCOPES.join(' ')), false);
+  // A missing scope must be detectable BEFORE a call: it surfaces as a 403 insufficient-scope, which is
+  // not invalid_grant, so the auth-expired chokepoint never catches it.
+  assert.equal(hasAdsScope(undefined), false);
+  assert.equal(hasAdsScope(''), false);
+  assert.equal(hasAdsScope(null), false);
+  // A substring must not false-positive.
+  assert.equal(hasAdsScope('https://www.googleapis.com/auth/adwords.readonly'), false);
+  assert.equal(grantedScopes('  a   b  ').size, 2);
 });
 
 test('buildTokenExchangeBody includes verifier + auth-code grant', () => {
