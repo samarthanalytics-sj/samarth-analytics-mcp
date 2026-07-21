@@ -1,3 +1,9 @@
+## [1.362.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.362.0...v1.362.1) (2026-07-21)
+
+### Bug Fixes
+
+* **desktop:** say WHICH rate limit was hit, and stop retrying ones that cannot clear ([#623](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/623)) ([9337680](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/933768097b33df12f4dcfa78b5e062d3bb08e100))
+
 ## [1.362.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.361.0...v1.362.0) (2026-07-21)
 
 ### Features
