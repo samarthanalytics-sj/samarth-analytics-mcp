@@ -2,6 +2,8 @@
 // Response body and yields the payload of each `data:` line. Uses global fetch /
 // web streams (Node 20 / Electron undici), no dependencies.
 
+import { parseRateLimit } from '../../shared/rate-limit';
+
 /** Transient statuses worth retrying: rate limit (429) + upstream overload (500/503). */
 function isRetryableStatus(status: number): boolean {
   return status === 429 || status === 500 || status === 503;
@@ -115,6 +117,14 @@ export async function startStream(
       j = null;
     }
     const msg = (typeof j?.error === 'object' ? j?.error?.message : j?.error) ?? text.slice(0, 300);
+
+    // A 429 that retrying CANNOT clear: a daily budget, or an account out of credit. Retrying four
+    // times only delays the same answer by ~30s and reports it as a per-minute limit, sending the
+    // user to the wrong page. Fail now with the real cause. Unrecognised 429s stay retryable.
+    if (res.status === 429) {
+      const info = parseRateLimit(String(msg), providerLabel);
+      if (!info.retryable) throw new Error(`${info.summary} ${info.advice}`);
+    }
 
     // Transient rate-limit / overload: wait the server-suggested time and retry, so a burst
     // (e.g. an account's tokens-per-minute cap) self-heals instead of hard-failing the chat.
