@@ -13,6 +13,7 @@ import { AUDIT_POINTER } from '../../shared/jit-reference';
 import { MEMORY_EXTRACT_SYSTEM, buildExtractionTranscript, parseMemoryCandidates, type MemoryCandidate } from '../../shared/memory-extract';
 import { buildToolRegistry } from '../tools/registry';
 import type { ConfirmFn } from '../tools/registry';
+import { createGatedExecutor, buildToolGroupPrompt } from '../tools/tool-groups';
 import { createProvider, runChat } from '../llm/gateway';
 import { ToolMemoryStore, formatToolMemory } from '../llm/tool-memory';
 import { changeJournal } from '../google/change-journal';
@@ -310,11 +311,35 @@ export class ChatService {
         }
       : undefined;
     // Scope the SENT tool list to what the active container can actually do. Skipped entirely for a
-    // GA4 turn (no GTM container in play).
+    // GA4 turn (no GTM container in play). ONE lookup, ONE cache: this same kind is the server signal
+    // the tool-group gate reads below, so there is a single source of truth for "what kind of
+    // container is this".
     const containerKind = product === 'gtm'
       ? await this.activeContainerKind(active.gtmContext?.accountId, active.gtmContext?.containerId)
       : undefined;
     const tools = buildToolRegistry(this.data, confirm, product, this.history, ctxControl, this.manifests, memoryCtx, this.ads, containerKind);
+
+    // PROGRESSIVE TOOL DISCLOSURE, composed with the container-kind scoping above. The two filters
+    // are DIFFERENT AXES and both apply, in this order:
+    //   1. container kind  - what this CONTAINER can support at all (registry.list, tool-scope.ts).
+    //   2. tool group      - what this TURN actually needs (this wrapper, tool-groups.ts).
+    // createGatedExecutor reads its base list from the already-kind-scoped registry, so a web turn
+    // never re-offers a server-only tool even when the "server-side" group is selected, and the group
+    // counts in the enable_tool_group menu describe what this container can really do.
+    // The registry still holds EVERY tool (nothing is removed, no guardrail moves); this wrapper only
+    // decides which DEFINITIONS are sent on a given step, which is what actually costs tokens. Default
+    // is the minimal core (reads, context, memory); groups are added from keywords across the whole
+    // visible conversation, from the container kind, and from the model calling enable_tool_group.
+    const gatedTools = createGatedExecutor(tools, {
+      // The WHOLE visible history plus the new message: intent carries across turns ("list all tags"
+      // then "now delete the third one").
+      messages: [...history.map((h) => h.text), message],
+      // The container kind resolved ONCE above, reused as the group signal: server work in a server
+      // container needs the server tools even when the user never types the word "server".
+      serverContainer: containerKind === 'server',
+      onEnable: (group, reason) => console.error(`[chat] tool group "${group}" enabled (${reason})`),
+    });
+    console.error(`[chat] tool groups: ${gatedTools.enabledGroups().join(', ')} → ${gatedTools.list().length}/${tools.list().length + 1} tool definitions sent (container kind: ${containerKind ?? 'unknown'})`);
 
     // Tool-result carry-over. An EMPTY history means a brand-new conversation (the user cleared the
     // thread or switched target), so nothing may carry over into it.
@@ -454,6 +479,9 @@ export class ChatService {
       CORPUS_PROMPT +
       toolMemoryBlock +
       dateContextLine(new Date()) +
+      // Built from the groups THIS chat can really reveal: a GA4 chat has no "pixels" group and a
+      // read-only chat has no writes, so a fixed sentence would promise capabilities that do not exist.
+      buildToolGroupPrompt(gatedTools.availableGroups()) +
       'Call tools when asked; never invent ids. When the user asks to list or count ' +
       'tags, triggers, variables, accounts, containers, or workspaces, the tools already ' +
       'return the COMPLETE paginated set — present EVERY item (a compact table is ideal) and ' +
@@ -504,7 +532,7 @@ export class ChatService {
 
     let result;
     try {
-      result = await runChat(client, { system, model: active.llm.model, apiKey, messages, signal }, tools, {
+      result = await runChat(client, { system, model: active.llm.model, apiKey, messages, signal }, gatedTools, {
         // House style: never surface an em OR en dash. Stripped from the live stream as a hard guarantee
         // on top of the system-prompt instruction. Safe per chunk because both are single UTF-16 code
         // units, so neither can be split across deltas. The final text is stripped the same way below;

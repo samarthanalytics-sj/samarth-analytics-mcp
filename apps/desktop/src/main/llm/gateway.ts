@@ -67,7 +67,6 @@ export async function runChat(
   maxSteps = 6
 ): Promise<RunChatResult> {
   const messages: LlmTurn[] = [...input.messages];
-  const tools = executor.list();
   let lastToolError: { name: string; message: string } | null = null;
 
   for (let step = 1; step <= maxSteps; step++) {
@@ -75,6 +74,11 @@ export async function runChat(
       console.error('[chat] stopped by user');
       return { text: 'Stopped.', steps: step - 1 };
     }
+    // Re-listed ONCE per step, not once per turn: a gated executor (see tool-groups.ts) sends a
+    // minimal tool set by default and grows it when the model asks for a group, so the definitions
+    // it just unlocked have to reach the NEXT provider call. Listing here (before the request,
+    // never between a tool call and its result) keeps the set stable for the whole step.
+    const tools = executor.list();
     let reply;
     try {
       reply = await client.chatStream(
