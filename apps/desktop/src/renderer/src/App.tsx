@@ -9256,6 +9256,9 @@ function SettingsView({
       <section style={styles.card}>
         <h2 style={styles.h2}>OAuth client</h2>
         <OAuthClientCard google={google} />
+        <div style={{ height: 1, background: 'var(--border-2)', margin: '18px 0' }} />
+        <h2 style={styles.h2}>Scopes</h2>
+        <GrantedScopesCard onError={onError} />
       </section>
       )}
 
@@ -9945,18 +9948,6 @@ function GoogleAdsCard({ onError }: { onError: (m: string) => void }): JSX.Eleme
     }
   }
 
-  async function connect(): Promise<void> {
-    setBusy('connecting');
-    setResult('');
-    try {
-      await window.desktop.google.connectAds();
-      await refresh();
-      setResult('Google Ads access granted.');
-    } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
-    } finally { setBusy(''); }
-  }
-
   /** A REAL call, not a stored flag: listing accounts is the first request that actually exercises the
    *  developer token against production, which is the only way to catch a Test-level token (the account
    *  list call itself succeeds with one, every follow-up fails). */
@@ -10005,9 +9996,6 @@ function GoogleAdsCard({ onError }: { onError: (m: string) => void }): JSX.Eleme
       </p>
 
       <div style={{ ...styles.formRow, marginTop: 10 }}>
-        <button style={styles.ghostBtn} onClick={connect} disabled={busy !== ''}>
-          {busy === 'connecting' ? 'Opening browser…' : scopeMissing ? 'Grant Google Ads access' : 'Re-authorize Google'}
-        </button>
         <button style={styles.ghostBtn} onClick={test} disabled={busy !== '' || !hasToken}>
           {busy === 'testing' ? 'Testing…' : 'Test connection'}
         </button>
@@ -10015,7 +10003,9 @@ function GoogleAdsCard({ onError }: { onError: (m: string) => void }): JSX.Eleme
 
       {readiness && !readiness.ready && (
         <div style={{ ...styles.muted, color: 'var(--c-amber)' }}>
-          {readiness.message} {readiness.remedy}
+          {scopeMissing
+            ? 'This account has not granted Google Ads access. Grant it under Google Sign-In.'
+            : `${readiness.message} ${readiness.remedy ?? ''}`}
         </div>
       )}
       {readiness?.ready && !result && (
@@ -10025,9 +10015,76 @@ function GoogleAdsCard({ onError }: { onError: (m: string) => void }): JSX.Eleme
         <div style={{ ...styles.muted, color: result.startsWith('✗') ? 'var(--c-red)' : 'var(--c-green)' }}>{result}</div>
       )}
       <p style={styles.muted}>
-        Google Ads access is part of a normal sign-in, so new accounts need nothing here. An account that
-        signed in earlier has to repeat its sign-in ONCE, because a token's permissions are fixed when it
-        is granted and cannot be widened in place. Tag Manager and Analytics access is carried forward.
+        Google Ads access itself comes from the normal Google sign-in, not from here. See Google Sign-In
+        for what the active account has granted.
+      </p>
+    </div>
+  );
+}
+
+/** What the ACTIVE account's Google sign-in actually authorizes, and the one action that can widen it.
+ *
+ *  This lives under "OAuth and scopes" rather than with the developer token in Providers, because it is
+ *  a property of the SIGN-IN, not an API credential. Tag Manager, Analytics and Google Ads all come from
+ *  one sign-in; there is no separate Google Ads login.
+ *
+ *  The button appears ONLY when the scope is genuinely missing, which happens for an account connected
+ *  before adwords joined the default scope set: a token's scopes are fixed when it is granted, so such an
+ *  account needs exactly one repeat sign-in. Showing it unconditionally invited a pointless re-consent. */
+function GrantedScopesCard({ onError }: { onError: (m: string) => void }): JSX.Element {
+  const [readiness, setReadiness] = useState<AdsReadiness | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const refresh = useCallback(async (): Promise<void> => {
+    try {
+      setReadiness(await window.desktop.ads.status());
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    }
+  }, [onError]);
+
+  useEffect(() => { void refresh(); }, [refresh]);
+
+  async function grant(): Promise<void> {
+    setBusy(true);
+    try {
+      await window.desktop.google.connectAds();
+      await refresh();
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally { setBusy(false); }
+  }
+
+  // 'token' means the developer token is missing, which is a Providers concern, not a sign-in one: the
+  // sign-in itself is fine, so report the scope as granted and point at the right place.
+  const scopeMissing = readiness?.ready === false && readiness.reason === 'scope';
+
+  return (
+    <div>
+      <p style={styles.muted}>One Google sign-in covers all three. There is no separate Google Ads login.</p>
+      <div style={styles.kv}><span>Tag Manager</span><b style={{ color: 'var(--c-green)', fontWeight: 500 }}>✓ granted</b></div>
+      <div style={styles.kv}><span>Analytics (GA4)</span><b style={{ color: 'var(--c-green)', fontWeight: 500 }}>✓ granted</b></div>
+      <div style={styles.kv}>
+        <span>Google Ads</span>
+        <b style={{ color: scopeMissing ? 'var(--c-amber)' : 'var(--c-green)', fontWeight: 500 }}>
+          {readiness === null ? 'checking…' : scopeMissing ? 'not granted' : '✓ granted'}
+        </b>
+      </div>
+      {scopeMissing && (
+        <div style={{ marginTop: 10 }}>
+          <button style={styles.primaryBtn} onClick={() => void grant()} disabled={busy}>
+            {busy ? 'Opening browser…' : 'Grant Google Ads access'}
+          </button>
+          <p style={styles.muted}>
+            This account signed in before Google Ads was part of the app. A token's permissions are fixed
+            when it is granted and cannot be widened in place, so its sign-in has to be repeated once. Tag
+            Manager and Analytics access is carried forward, not replaced.
+          </p>
+        </div>
+      )}
+      <p style={styles.muted}>
+        The container-publish scope is never requested: this app writes to draft workspaces only, and you
+        publish in GTM yourself.
       </p>
     </div>
   );

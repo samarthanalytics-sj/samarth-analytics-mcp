@@ -1,5 +1,6 @@
 import type { RegistryService } from './registry-service';
 import type { GoogleDataService } from '../google/data-service';
+import type { GoogleAdsService } from '../google/ads-service';
 import type { ProviderKeyStore } from '../storage/provider-keys';
 import type { AuditHistoryStore } from '../storage/audit-history';
 import type { ManifestStore } from '../storage/manifest-store';
@@ -129,7 +130,10 @@ export class ChatService {
     /** Records what setup tools create, so re-runs are safe and drift is detectable. */
     private readonly manifests?: ManifestStore,
     /** Per-account "remember what I told you" notes, injected into the system prompt each turn. */
-    private readonly memory?: MemoryStore
+    private readonly memory?: MemoryStore,
+    /** Google Ads. Optional: without it the GTM chat simply has no Ads tools, so it falls back to
+     *  asking the user for a Conversion ID and Label instead of reading them. */
+    private readonly ads?: GoogleAdsService
   ) {}
 
   /** The REMEMBERED-CONTEXT block for this turn: the account's memories scoped to the active client
@@ -262,7 +266,7 @@ export class ChatService {
           },
         }
       : undefined;
-    const tools = buildToolRegistry(this.data, confirm, product, this.history, ctxControl, this.manifests, memoryCtx);
+    const tools = buildToolRegistry(this.data, confirm, product, this.history, ctxControl, this.manifests, memoryCtx, this.ads);
 
     // The memories injected into THIS turn — kept for provenance: streamed to the UI ("why did you say
     // that"), recorded in the usage log, and returned on the reply.

@@ -568,9 +568,21 @@ export class GoogleDataService {
     }
     // create_version SUBMITS the workspace (it becomes read-only) and GTM auto-creates a fresh editable
     // workspace based on the new version — its path is returned here. Surface its id so the caller can
-    // switch the active workspace to it; otherwise the next write fails "already submitted". (Empty in
-    // the already-submitted recovery path, where we didn't create a version.)
-    const newWorkspaceId = cv ? (cv.data.newWorkspacePath ?? '').split('/').pop() ?? '' : '';
+    // switch the active workspace to it; otherwise the next write fails "already submitted".
+    //
+    // The recovery path (cv === null, the workspace was ALREADY submitted before we got here) creates no
+    // version and so has no minted workspace to report. Returning '' there left the caller parked on the
+    // dead workspace, because followMintedWorkspace no-ops on an empty id: preview succeeded, then every
+    // subsequent tag write failed. So resolve a live workspace for that case too.
+    let newWorkspaceId = cv ? (cv.data.newWorkspacePath ?? '').split('/').pop() ?? '' : '';
+    if (!newWorkspaceId) {
+      try {
+        const check = await this.workspaceWritable(accountId, containerId, workspaceId);
+        if (!check.writable && check.fallbackId) newWorkspaceId = check.fallbackId;
+      } catch {
+        // Best effort: preview already succeeded, so a failure to resolve a successor must not fail it.
+      }
+    }
     return {
       snippet: buildEnvironmentSnippet(publicId, latest.authorizationCode, latest.environmentId).head,
       versionId,
@@ -1477,6 +1489,33 @@ export class GoogleDataService {
       name: res.data.name ?? name,
       taggingServerUrls: res.data.taggingServerUrls ?? [],
     };
+  }
+
+  /**
+   * Is this workspace still writable, and if not, which workspace should the caller move to?
+   *
+   * Creating a container VERSION submits its workspace, permanently making it read-only. The app does
+   * that itself during "Auto: create preview & verify", and a user can do it from the GTM UI, so a
+   * workspace selected earlier in a session is routinely dead by the time a batch of tags is created.
+   * Without this check the failure lands per-tag AFTER the user has scanned, picked and approved,
+   * producing N identical "Workspace is already submitted" errors instead of one actionable message.
+   *
+   * Detected by LISTING workspaces rather than by writing something: the list is a cheap read, and a
+   * submitted workspace simply is not in it (GTM drops it and mints a replacement). `fallbackId` is that
+   * replacement, or the default workspace, so the caller can offer a one-click move.
+   */
+  async workspaceWritable(
+    accountId: string,
+    containerId: string,
+    workspaceId: string
+  ): Promise<{ writable: boolean; fallbackId: string | null; fallbackName: string | null }> {
+    const wss = await this.listGtmWorkspaces(accountId, containerId);
+    if (wss.some((w) => w.workspaceId === workspaceId)) return { writable: true, fallbackId: null, fallbackName: null };
+    // Prefer the newest workspace: when GTM mints a replacement after a submit, that is the one holding
+    // the user's continuing work. Workspace ids are numeric and increasing, so the highest is newest.
+    const byNewest = [...wss].sort((a, b) => Number(b.workspaceId) - Number(a.workspaceId));
+    const pick = byNewest.find((w) => w.name.toLowerCase() !== 'default workspace') ?? byNewest[0] ?? null;
+    return { writable: false, fallbackId: pick?.workspaceId ?? null, fallbackName: pick?.name ?? null };
   }
 
   /** The default workspace of a container (named "Default Workspace", else the first). */

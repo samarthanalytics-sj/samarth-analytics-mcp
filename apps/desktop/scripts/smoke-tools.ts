@@ -25,6 +25,7 @@ import { buildToolRegistry } from '../src/main/tools/registry';
 import type { ConfirmFn } from '../src/main/tools/registry';
 import { AuditHistoryStore } from '../src/main/storage/audit-history';
 import type { GoogleDataService } from '../src/main/google/data-service';
+import type { GoogleAdsService } from '../src/main/google/ads-service';
 import { createSuggestedTags } from '../src/main/suggestions/suggestion-service';
 import type { SuggestedTagView } from '../src/shared/ipc';
 
@@ -36,8 +37,11 @@ function record(name: string, passed: boolean, detail = ''): void {
   console.log(`  ${passed ? 'ok  ' : 'FAIL'} ${name}${detail ? ` — ${detail}` : ''}`);
 }
 
-// Data-layer methods that MUTATE GTM. Used to prove read-only mode mutates
-// nothing and declined deletes never reach the API.
+// Data-layer methods that MUTATE. Used to prove read-only mode mutates nothing and declined
+// deletes never reach the API. A new mutating method MUST be added here: the read-only assertion
+// counts mutations, so it passes happily while mutating if its method name is missing from this set.
+// createConversionAction is the odd one out: it does not touch GTM at all, it writes to the
+// advertiser's LIVE Google Ads account with no draft stage, which is the strongest reason to track it.
 const MUTATIONS = new Set([
   'createGtmWorkspace', 'createGtmTag', 'updateGtmTag', 'setGtmTagPaused',
   'addGa4EventParameters', 'addGa4ServerParameters', 'setGa4MeasurementId', 'setGtmTagConsent',
@@ -51,6 +55,7 @@ const MUTATIONS = new Set([
   'setupEcommerceFunnel', 'setupServerEcommerceFunnel', 'createServerContainerFromWeb',
   'ga4AdminCreate', 'ga4AdminPatch', 'ga4AdminDelete', 'ga4AdminArchive',
   'ga4CreateProperty', 'ga4UpdateProperty', 'ga4DeleteProperty', 'ga4UpdateDataRetention', 'ga4UpdateAccount', 'ga4DeleteAccount',
+  'createConversionAction',
 ]);
 
 // A snapshot crafted so the audit produces every kind of finding: a paused GA4
@@ -76,7 +81,7 @@ const SNAPSHOT = {
   variables: [{ variableId: 'V1', name: 'Lonely', type: 'c', parameter: [] }],
 };
 
-function makeFakeData(): { data: GoogleDataService; calls: string[]; mutations: () => number } {
+function makeFakeData(): { data: GoogleDataService; calls: string[]; mutations: () => number; ads: GoogleAdsService } {
   const calls: string[] = [];
   const r = <T>(name: string, ret: T): Promise<T> => {
     calls.push(name);
@@ -188,7 +193,21 @@ function makeFakeData(): { data: GoogleDataService; calls: string[]; mutations: 
     createGtmVariable: (_a: string, _b: string, _c: string, v: Record<string, unknown>) =>
       r('createGtmVariable', { variableId: 'V9', name: String(v?.name ?? ''), type: String(v?.type ?? '') }),
   } as unknown as GoogleDataService;
-  return { data, calls, mutations: () => calls.filter((c) => MUTATIONS.has(c)).length };
+  // Google Ads (a separate service, injected separately). It shares `calls`, so its one mutating
+  // method is counted by mutations() exactly like a GTM write.
+  const ads = {
+    readiness: () => r('adsReadiness', { ready: true }),
+    listAccounts: () => r('adsListAccounts', [{ id: '1234567890', name: 'Acct', manager: false, level: 0, status: 'ENABLED', hidden: false, testAccount: false }]),
+    listConversionActions: () =>
+      r('adsListConversionActions', {
+        actions: [{ resourceName: 'customers/1/conversionActions/1', id: '1', name: 'Contact form', status: 'ENABLED', type: 'WEBPAGE', category: 'SUBMIT_LEAD_FORM', conversionId: 'AW-1234567890', conversionLabel: 'abcDEF123', taggable: true }],
+        conversionCustomer: { conversionCustomerId: '1234567890', status: 'CONVERSION_TRACKING_MANAGED_BY_SELF', trackingId: '1234567890', crossAccountTrackingId: null, isCrossAccount: false },
+      }),
+    validateConversionAction: () => r('adsValidateConversionAction', null),
+    createConversionAction: (_c: string, input: { name: string; category: string }) =>
+      r('createConversionAction', { resourceName: 'customers/1/conversionActions/2', id: '2', name: input.name, status: 'ENABLED', type: 'WEBPAGE', category: input.category, conversionId: 'AW-1234567890', conversionLabel: 'newLABEL1', taggable: true }),
+  } as unknown as GoogleAdsService;
+  return { data, calls, mutations: () => calls.filter((c) => MUTATIONS.has(c)).length, ads };
 }
 
 // Build a minimal schema-valid argument object for a tool's inputSchema.
@@ -220,16 +239,19 @@ async function main(): Promise<void> {
   const approve: ConfirmFn = async (p) => p.details; // approve unchanged (twice for destructive)
   const decline: ConfirmFn = async () => null;
 
-  // Discover read vs write tool names from the registry itself.
-  const readOnlyNames = new Set(buildToolRegistry(makeFakeData().data).list().map((t) => t.name));
-  const fullList = buildToolRegistry(makeFakeData().data, approve).list();
+  // Discover read vs write tool names from the registry itself. The Ads service is injected in both,
+  // so the Google Ads tools are part of the surface under test rather than silently skipped.
+  const roFake = makeFakeData();
+  const readOnlyNames = new Set(buildToolRegistry(roFake.data, undefined, undefined, undefined, undefined, undefined, undefined, roFake.ads).list().map((t) => t.name));
+  const fullFake = makeFakeData();
+  const fullList = buildToolRegistry(fullFake.data, approve, undefined, undefined, undefined, undefined, undefined, fullFake.ads).list();
   const writeNames = fullList.map((t) => t.name).filter((n) => !readOnlyNames.has(n));
 
   // ── A. Read-only mode: write tools are not registered, calling one fails,
   //       and nothing mutates. ────────────────────────────────────────────────
   {
     const fd = makeFakeData();
-    const reg = buildToolRegistry(fd.data); // no confirm
+    const reg = buildToolRegistry(fd.data, undefined, undefined, undefined, undefined, undefined, undefined, fd.ads); // no confirm
     let blocked = 0;
     for (const name of writeNames) {
       try {
@@ -243,7 +265,8 @@ async function main(): Promise<void> {
       blocked === writeNames.length && fd.mutations() === 0,
       `${blocked}/${writeNames.length} write tools rejected, ${fd.mutations()} mutations`
     );
-    record('read-only registry exposes the 55 read tools', readOnlyNames.size === 55, `${readOnlyNames.size} tools`);
+    // 55 GTM/GA4 read tools + the 2 read-only Google Ads tools (accounts, conversion actions).
+    record('read-only registry exposes the 57 read tools', readOnlyNames.size === 57, `${readOnlyNames.size} tools`);
   }
 
   // ── B. Approval is DELETE-ONLY: a declining confirm blocks every destructive
@@ -251,8 +274,12 @@ async function main(): Promise<void> {
   //       directly. Destructive is identified from the registry flag, not names. ──
   {
     const fd = makeFakeData();
-    const reg = buildToolRegistry(fd.data, decline);
-    const isDestructive = (n: string) => n.startsWith('delete_') || n.startsWith('archive_');
+    const reg = buildToolRegistry(fd.data, decline, undefined, undefined, undefined, undefined, undefined, fd.ads);
+    // create_google_ads_conversion_action carries destructive:true despite the create_ prefix: it is
+    // the one write that lands on a LIVE Google Ads account with no draft stage and no undo, so it
+    // takes the same two-step card as a delete and must decline the same way.
+    const isDestructive = (n: string) =>
+      n.startsWith('delete_') || n.startsWith('archive_') || n === 'create_google_ads_conversion_action';
     const destructiveNames = writeNames.filter(isDestructive);
     let destructiveDeclined = 0;
     let othersApplied = 0;
@@ -266,7 +293,7 @@ async function main(): Promise<void> {
       }
     }
     // No delete/archive should have reached the data layer (GTM deletes + GA4 delete/archive).
-    const destructiveCalls = fd.calls.filter((c) => /^delete|^ga4AdminDelete|^ga4AdminArchive|^ga4DeleteProperty|^ga4DeleteAccount/.test(c)).length;
+    const destructiveCalls = fd.calls.filter((c) => /^delete|^ga4AdminDelete|^ga4AdminArchive|^ga4DeleteProperty|^ga4DeleteAccount|^createConversionAction/.test(c)).length;
     record(
       'declined confirm → every delete/archive declines (no destructive API call); creates/edits apply without approval',
       destructiveDeclined === destructiveNames.length && othersApplied === writeNames.length - destructiveNames.length && destructiveCalls === 0,
@@ -279,7 +306,7 @@ async function main(): Promise<void> {
     const fd = makeFakeData();
     const histDir = mkdtempSync(join(tmpdir(), 'samarth-smoke-hist-'));
     const history = new AuditHistoryStore(join(histDir, 'h.json'));
-    const reg = buildToolRegistry(fd.data, approve, undefined, history); // all tools, monitoring enabled
+    const reg = buildToolRegistry(fd.data, approve, undefined, history, undefined, undefined, undefined, fd.ads); // all tools, monitoring enabled
     const tools = reg.list();
     // suggest_tags_from_url launches a real headless browser to scan a live URL — it can't run
     // against the fake data service with a synthesized 'x' URL, so exclude it from liveness.
