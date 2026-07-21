@@ -1,6 +1,7 @@
 import { anthropicClient } from './anthropic';
 import { openaiClient } from './openai';
 import { geminiClient } from './gemini';
+import { capToolResult } from '../../shared/context-budget';
 import type {
   LlmClient,
   LlmProvider,
@@ -131,7 +132,13 @@ export async function runChat(
         callbacks.onToolCall?.(call);
         try {
           const content = await executor.execute(call.name, call.args);
-          results.push({ id: call.id, name: call.name, content });
+          // The MODEL's copy is capped; the UI and the change journal keep the full result below.
+          // Uncapped, one large list/audit payload was re-sent on every remaining step of the turn.
+          const capped = capToolResult(call.name, content);
+          if (capped.capped) {
+            console.error(`[chat] ${call.name}: result capped for the model (${capped.originalChars} -> ${capped.content.length} chars)`);
+          }
+          results.push({ id: call.id, name: call.name, content: capped.content });
           callbacks.onToolResult?.({ name: call.name, ok: true, args: call.args, content });
         } catch (e) {
           const message = e instanceof Error ? e.message : String(e);
