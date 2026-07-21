@@ -1,3 +1,9 @@
+## [1.360.10](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.360.9...v1.360.10) (2026-07-21)
+
+### Bug Fixes
+
+* **desktop:** show only the SELECTED platforms' id hints in Tag suggestions ([#620](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/620)) ([d5830d0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d5830d084d540638fdae450e090890fb74c008e8))
+
 ## [1.360.9](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.360.8...v1.360.9) (2026-07-21)
 
 ### Performance Improvements
