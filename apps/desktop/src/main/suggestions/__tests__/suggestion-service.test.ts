@@ -413,7 +413,7 @@ async function main(): Promise<void> {
       if (tn === 'NOPE') return JSON.stringify({ declined: true });
       // The tool's precheck short-circuit for a name already in the container (no create).
       if (tn === 'DUPE') return JSON.stringify({ alreadyExists: true, tag: { name: tn }, message: 'already exists' });
-      return JSON.stringify({ tag: { name: tn }, trigger: { reused: tn === 'REUSE' } });
+      return JSON.stringify({ tag: { name: tn, tagId: `id-${tn}` }, trigger: { reused: tn === 'REUSE' } });
     };
     const tag = (id: string, tagName: string): SuggestedTagView => ({
       id, page: '/', label: '', evidence: '', confidence: 'high', enhancedMeasurementOverlap: false,
@@ -426,6 +426,8 @@ async function main(): Promise<void> {
     ], fast);
     check('create: one outcome per tag, in order', outcomes.length === 5 && outcomes.map((o) => o.id).join('') === 'abcde');
     check('create: ok tag → ok:true with name', outcomes[0].ok && outcomes[0].tagName === 'OK');
+    check('create: the created tag id is threaded onto the outcome (deep-link to GTM)', outcomes[0].tagId === 'id-OK' && outcomes[2].tagId === 'id-REUSE');
+    check('create: failed/declined/existing outcomes carry NO tag id', outcomes[1].tagId === undefined && outcomes[3].tagId === undefined && outcomes[4].tagId === undefined);
     check('create: a thrown (non-quota) error is isolated, later tags still run', !outcomes[1].ok && (outcomes[1].error ?? '').includes('api 400') && outcomes[2].ok === true);
     check('create: reused trigger surfaced', outcomes[2].triggerReused === true);
     // The precheck-skip (already present) must count as EXISTING, not created — the reported total was

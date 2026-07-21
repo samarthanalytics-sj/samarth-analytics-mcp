@@ -732,10 +732,10 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
             html,
             trigger: { name: 'All Pages', kind: 'pageview' },
           }),
-        ) as { declined?: boolean; alreadyExists?: boolean; tag?: { name?: string }; trigger?: { reused?: boolean } };
+        ) as { declined?: boolean; alreadyExists?: boolean; tag?: { name?: string; tagId?: string }; trigger?: { reused?: boolean } };
         if (out?.declined) return { id: name, ok: false, error: 'declined' };
         if (out?.alreadyExists) return { id: name, ok: false, existing: true, error: 'already exists' };
-        return { id: name, ok: true, tagName: out?.tag?.name ?? name, triggerReused: out?.trigger?.reused === true };
+        return { id: name, ok: true, tagName: out?.tag?.name ?? name, ...(out?.tag?.tagId ? { tagId: String(out.tag.tagId) } : {}), triggerReused: out?.trigger?.reused === true };
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         if (DUPLICATE_RE.test(msg)) return { id: name, ok: false, existing: true, error: 'already exists' };

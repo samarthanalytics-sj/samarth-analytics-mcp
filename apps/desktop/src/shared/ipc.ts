@@ -1256,6 +1256,8 @@ export interface CreateTagOutcome {
   id: string;
   ok: boolean;
   tagName?: string;
+  /** The created tag's GTM id — lets the UI deep-link straight to it in the GTM workspace. */
+  tagId?: string;
   triggerReused?: boolean;
   /** The container already has a tag with this name — skipped, not an error. */
   existing?: boolean;
