@@ -1,3 +1,9 @@
+## [1.360.7](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.360.6...v1.360.7) (2026-07-21)
+
+### Performance Improvements
+
+* **desktop:** scope the GTM system prompt to the container kind too ([#617](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/617)) ([2ceb48b](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/2ceb48b7ab699fc87f52375ca28e9fc5695727fc))
+
 ## [1.360.6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.360.5...v1.360.6) (2026-07-21)
 
 ### Performance Improvements
