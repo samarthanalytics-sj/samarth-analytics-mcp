@@ -668,10 +668,27 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
       // created from it, which this app does itself during "Auto: create preview & verify", so a target
       // chosen earlier in the session is routinely dead by now. Checked once, up front, so the user gets
       // one actionable message instead of the same failure repeated per tag after approving the batch.
-      const wsCheck = await data.workspaceWritable(acct, cont, ws);
+      // The check is ADVISORY: it must never be able to fail the batch by itself. A transient
+      // listGtmWorkspaces failure (expired auth, a network blip, a quota hiccup) would otherwise reject
+      // every approved tag before a single write was attempted, which is strictly worse than the
+      // "already submitted" error this preflight exists to pre-empt. On any error, fall through and let
+      // the real writes report the real problem.
+      let wsCheck: { writable: boolean; fallbackId: string | null; fallbackName: string | null } = {
+        writable: true,
+        fallbackId: null,
+        fallbackName: null,
+      };
+      try {
+        wsCheck = await data.workspaceWritable(acct, cont, ws);
+      } catch (e) {
+        console.error('[suggestions] workspace preflight skipped:', (e as Error).message);
+      }
       if (!wsCheck.writable) {
-        const move = wsCheck.fallbackName
-          ? ` Switch to "${wsCheck.fallbackName}" in the GTM bar and retry.`
+        // Always name the successor by id as well as label. GTM replaces a submitted workspace with a
+        // fresh one that usually carries the SAME name, so "switch to Default Workspace" while sitting on
+        // a workspace called Default Workspace reads as nonsense without the id to tell them apart.
+        const move = wsCheck.fallbackId
+          ? ` Switch to "${wsCheck.fallbackName}" (id ${wsCheck.fallbackId}, GTM created it to replace this one) in the GTM bar and retry.`
           : ' Create a new workspace in the GTM bar and retry.';
         const msg = `That GTM workspace is read-only: a version was already created from it (a Submit in GTM, or this app's "Auto: create preview & verify").${move}`;
         return list.map((t) => ({ id: t.id, ok: false, error: msg }));

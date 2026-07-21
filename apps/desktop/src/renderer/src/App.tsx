@@ -3837,6 +3837,18 @@ function TagReviewPanel({
   // Selected Google Ads rows that would build a tag which can never fire (unresolved placeholder id /
   // label, or an empty label). The main process skips exactly these rows and reports why, so this is a
   // heads-up, NOT a gate: the rest of the batch still creates.
+  // Distinct failure reasons from the last create run, most common first. A batch normally fails for one
+  // shared cause, so collapsing by message turns N identical tooltips into one readable line.
+  const failureReasons = useMemo(() => {
+    const byMsg = new Map<string, number>();
+    for (const st of Object.values(statuses)) {
+      if (st?.state !== 'err') continue;
+      const msg = (st.msg ?? 'failed').trim();
+      byMsg.set(msg, (byMsg.get(msg) ?? 0) + 1);
+    }
+    return [...byMsg.entries()].map(([msg, count]) => ({ msg, count })).sort((a, b) => b.count - a.count);
+  }, [statuses]);
+
   const adsBlocked = suggestions
     .filter((s) => selected[s.id] && !alreadyExists(s))
     .map((s) => ({ s: effective(s), issue: adsIdentityIssue(effective(s)) }))
@@ -4557,7 +4569,22 @@ function TagReviewPanel({
                   <span style={{ color: done.failed ? 'var(--c-amber)' : 'var(--c-green)', fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                     {done.created} of {done.total} created
                     {done.existing ? ` · ${done.existing} already existed` : ''}
-                    {done.failed ? ` · ${done.failed} failed` : ''} - open GTM to review &amp; publish.
+                    {done.failed ? ` · ${done.failed} failed` : ''}
+                    {/* "open GTM to review" is actively misleading when nothing was created. */}
+                    {done.created + done.existing > 0 ? ' - open GTM to review & publish.' : '.'}
+                    {/* The REASON, not just the count. A batch usually fails for ONE shared reason (a
+                        read-only workspace, expired auth), and burying it in a per-row tooltip meant a
+                        failure could not be diagnosed without hovering a 10px mark. Show the distinct
+                        reasons inline; they are already user-facing prose from the main process. */}
+                    {done.failed > 0 && failureReasons.length > 0 && (
+                      <span style={{ display: 'block', width: '100%', marginTop: 4, color: 'var(--c-red)', fontSize: 12.5, lineHeight: 1.5, whiteSpace: 'normal' }}>
+                        {failureReasons.map((r) => (
+                          <span key={r.msg} style={{ display: 'block' }}>
+                            {failureReasons.length > 1 || r.count > 1 ? `${r.count} tag(s): ` : ''}{r.msg}
+                          </span>
+                        ))}
+                      </span>
+                    )}
                     {done.created + done.existing > 0 && ctx?.accountId && ctx?.containerId && ctx?.workspaceId && (
                       <a
                         href={gtmTagUrl(ctx.accountId, ctx.containerId, ctx.workspaceId)}
