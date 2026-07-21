@@ -529,6 +529,9 @@ export class ChatService {
                 attempt: n.attempt,
                 maxAttempts: n.maxAttempts,
                 delayMs: n.delayMs,
+                // The provider's own text names the limit (TPM / RPM / per day) and the model. The
+                // banner used to drop it, so "rate limited, retrying" gave the user nothing to act on.
+                ...(n.reason ? { reason: n.reason } : {}),
               })
           : undefined,
       }, MAX_TOOL_STEPS);

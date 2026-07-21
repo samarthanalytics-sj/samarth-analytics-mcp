@@ -261,6 +261,46 @@ await testAsync('retries cannot silently outlive the budget: the sleep is cut sh
   assert.match((err as Error).message, /did not respond within/);
 });
 
+await testAsync('a DAILY limit is not retried: it fails at once with the real cause', async () => {
+  // Four retries inside a minute cannot refill a daily budget. Retrying only delayed the same
+  // answer by ~30s and reported it as a per-minute limit.
+  const daily = 'Rate limit reached for gpt-4o-mini in organization org-abc on tokens per day (TPD): Limit 200000, Used 199420, Requested 1200.';
+  const { fetchImpl, calls } = scriptedFetch([res429('60', daily)]);
+  const { sleepImpl, waits } = recordingSleep();
+  const notices: RetryNotice[] = [];
+  await assert.rejects(
+    startStream('u', {}, {}, 'OpenAI', undefined, { fetchImpl, sleepImpl, onRetry: (n) => notices.push(n) }),
+    (e: Error) => /daily/i.test(e.message) && /daily reset|different model|tier/i.test(e.message),
+  );
+  assert.equal(calls(), 1, 'exactly one request, no retries');
+  assert.deepEqual(waits, [], 'nothing was slept');
+  assert.equal(notices.length, 0, 'no misleading "retrying" notice');
+});
+
+await testAsync('an out-of-credit 429 is not retried and does not claim to be a rate limit', async () => {
+  const quota = 'You exceeded your current quota, please check your plan and billing details.';
+  const { fetchImpl, calls } = scriptedFetch([res429(null, quota)]);
+  const { sleepImpl, waits } = recordingSleep();
+  await assert.rejects(
+    startStream('u', {}, {}, 'OpenAI', undefined, { fetchImpl, sleepImpl }),
+    (e: Error) => /out of credit/i.test(e.message) && /billing/i.test(e.message) && !/per-minute limit/i.test(e.message),
+  );
+  assert.equal(calls(), 1, 'no pointless retries');
+  assert.deepEqual(waits, []);
+});
+
+await testAsync('a per-MINUTE limit still retries exactly as before', async () => {
+  const tpm = 'Request too large for gpt-4o in organization org-abc on tokens per min (TPM): Limit 30000, Requested 30062.';
+  const { fetchImpl, calls } = scriptedFetch([res429('2', tpm), resOk()]);
+  const { sleepImpl, waits } = recordingSleep();
+  const notices: RetryNotice[] = [];
+  const out = await startStream('u', {}, {}, 'OpenAI', undefined, { fetchImpl, sleepImpl, onRetry: (n) => notices.push(n) });
+  assert.equal(out.ok, true);
+  assert.equal(calls(), 2, 'the transient case is unchanged');
+  assert.equal(notices.length, 1);
+  assert.deepEqual(waits, [2250]);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
 }

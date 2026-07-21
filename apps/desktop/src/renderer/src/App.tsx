@@ -57,6 +57,7 @@ import { suggestionToGroup, suggestionsToTemplateCsv, suggestionsToInstallRunboo
 import { findMergeGroups, mergeGroup, mergeLabel, type MergeGroup } from '../../shared/tag-merge';
 import { parseCsvUrls, parseCsvUrlStats, CSV_URL_CAP } from '../../shared/csv-urls';
 import { platformIdHints } from '../../shared/platform-id-hints';
+import { parseRateLimit } from '../../shared/rate-limit';
 import { autoHealConfirmMessage } from '../../shared/workspace-warnings';
 import { MEMORY_KINDS, type Memory, type MemoryKind } from '../../shared/chat-memory';
 import type { SeedCandidate } from '../../shared/memory-seed';
@@ -942,15 +943,19 @@ interface ChatMessage {
   memoriesUsed?: Array<{ id: string; kind: string; text: string }>;
   /** Provider rate-limit / overload retries that happened while producing this reply, in order.
    *  Shown so a long wait reads as "waiting out a rate limit", not as a frozen app. */
-  retries?: Array<{ provider: string; status: number; attempt: number; maxAttempts: number; delayMs: number }>;
+  retries?: Array<{ provider: string; status: number; attempt: number; maxAttempts: number; delayMs: number; reason?: string }>;
 }
 
 /** The one-line notice for a provider retry, e.g. "Rate limited by OpenAI, retrying in 42s
  *  (attempt 2 of 4)". PURE. */
-function formatRetryNotice(r: { provider: string; status: number; attempt: number; maxAttempts: number; delayMs: number }): string {
+function formatRetryNotice(r: { provider: string; status: number; attempt: number; maxAttempts: number; delayMs: number; reason?: string }): string {
   const secs = Math.max(1, Math.round(r.delayMs / 1000));
-  const cause = r.status === 429 ? `Rate limited by ${r.provider}` : `${r.provider} is busy (${r.status})`;
-  return `${cause}, retrying in ${secs}s (attempt ${r.attempt} of ${r.maxAttempts})`;
+  // Name the limit that was actually hit. "Rate limited, retrying" left the user unable to tell a
+  // per-minute cap (waiting works) from a model they thought they had switched away from.
+  const cause = r.status === 429
+    ? parseRateLimit(r.reason, r.provider).summary.replace(/\.$/, '')
+    : `${r.provider} is busy (${r.status})`;
+  return `${cause} - retrying in ${secs}s (attempt ${r.attempt} of ${r.maxAttempts})`;
 }
 
 /** Short timestamp shown under a chat bubble: just the time for today's messages, date + time
@@ -1242,7 +1247,7 @@ function ChatView({
               ...last,
               retries: [
                 ...(last.retries ?? []),
-                { provider: ev.provider, status: ev.status, attempt: ev.attempt, maxAttempts: ev.maxAttempts, delayMs: ev.delayMs },
+                { provider: ev.provider, status: ev.status, attempt: ev.attempt, maxAttempts: ev.maxAttempts, delayMs: ev.delayMs, reason: ev.reason },
               ],
             };
           return copy;
