@@ -423,6 +423,48 @@ await test('an ordinary tool result reaches the model untouched', async () => {
   assert.equal(sent.results[0].content, small, 'no cap, no marker, byte-identical');
 });
 
+await test('an audit result carries the reporting methodology to the model, not to the UI', async () => {
+  const findings = JSON.stringify({ counts: { tags: 2 }, findings: [{ severity: 'high', message: 'x' }] });
+  const client = new ScriptedClient([
+    { toolCalls: [{ id: '1', name: 'audit_gtm_container', args: {} }] },
+    { text: 'done' },
+  ]);
+  let uiContent = '';
+  await runChat(
+    client,
+    { system: 's', model: 'm', apiKey: 'k', messages: [{ role: 'user', text: 'audit it' }] },
+    executor(async () => findings),
+    { onToolResult: (r) => { uiContent = r.content ?? ''; } }
+  );
+  const sent = client.inputs[1].messages.find((m) => m.role === 'tool') as { results: Array<{ content: string }> };
+  const modelSaw = JSON.parse(sent.results[0].content) as { findings?: unknown[]; _methodology?: string };
+  assert.ok(Array.isArray(modelSaw.findings), 'the findings still arrive');
+  assert.match(String(modelSaw._methodology), /boundary statement/i, 'the audit methodology rides along');
+  assert.equal(uiContent, findings, 'the UI copy is untouched');
+});
+
+await test('a rejected RAW create carries the resource shapes; a typed create does not', async () => {
+  const run = async (tool: string): Promise<string> => {
+    const client = new ScriptedClient([
+      { toolCalls: [{ id: '1', name: tool, args: {} }] },
+      { text: 'done' },
+    ]);
+    await runChat(
+      client,
+      { system: 's', model: 'm', apiKey: 'k', messages: [{ role: 'user', text: 'make it' }] },
+      executor(async () => { throw new Error('vendorTemplate.key: Unknown entity type'); }),
+      {}
+    );
+    const sent = client.inputs[1].messages.find((m) => m.role === 'tool') as { results: Array<{ content: string }> };
+    return sent.results[0].content;
+  };
+  const raw = await run('create_gtm_variable');
+  assert.match(raw, /Unknown entity type/, 'the real error is still first');
+  assert.match(raw, /RAW SHAPES/, 'the shapes arrive exactly when the shape was wrong');
+  const typed = await run('create_gtm_variable_typed');
+  assert.doesNotMatch(typed, /RAW SHAPES/, 'a typed builder failure does not pay for them');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
 }
