@@ -1,3 +1,9 @@
+## [1.360.8](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.360.7...v1.360.8) (2026-07-21)
+
+### Performance Improvements
+
+* **desktop:** bound the two unbounded parts of a chat request ([#618](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/618)) ([9e57db1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/9e57db16f0b38f2f359c23563181b766a6aba647))
+
 ## [1.360.7](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.360.6...v1.360.7) (2026-07-21)
 
 ### Performance Improvements
