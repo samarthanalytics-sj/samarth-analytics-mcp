@@ -53,7 +53,7 @@ import type {
   FormTagVerifyPlanResult,
   SubmitFormVerifyResult,
 } from '../../shared/ipc';
-import { suggestionToGroup, suggestionsToTemplateCsv, suggestionsToInstallRunbookMarkdown, installPlanNeedsAction, installPlanProgress, dedupeViewsByGtmName, TEMPLATE_HEADERS, applyTagEdit, adsIdentityIssue, TAG_TYPE_OPTIONS, STANDARD_TRIGGER_VARIABLES, CONDITION_LABELS, type TagEdit, type TemplateGroup, type TriggerWhen, type InstallProgress } from '../../shared/tag-template';
+import { suggestionToGroup, suggestionsToTemplateCsv, suggestionsToInstallRunbookMarkdown, installPlanNeedsAction, installPlanProgress, dedupeViewsByGtmName, conversionActionNameFromTag, TEMPLATE_HEADERS, applyTagEdit, adsIdentityIssue, TAG_TYPE_OPTIONS, STANDARD_TRIGGER_VARIABLES, CONDITION_LABELS, type TagEdit, type TemplateGroup, type TriggerWhen, type InstallProgress } from '../../shared/tag-template';
 import { findMergeGroups, mergeGroup, mergeLabel, type MergeGroup } from '../../shared/tag-merge';
 import { parseCsvUrls, parseCsvUrlStats, CSV_URL_CAP } from '../../shared/csv-urls';
 import { platformIdHints } from '../../shared/platform-id-hints';
@@ -4539,7 +4539,11 @@ function TagReviewPanel({
                 />
                 {adsPickerFor && (
                   <AdsPicker
+                    // Keyed by row so opening the picker on a DIFFERENT tag re-seeds the suggested
+                    // name instead of keeping the previous row's.
+                    key={adsPickerFor}
                     gtmTarget={{ accountId: ctx?.accountId, containerId: ctx?.containerId, workspaceId: ctx?.workspaceId }}
+                    suggestedName={conversionActionNameFromTag(effective(visible.find((s) => s.id === adsPickerFor) ?? pageItems[0]).tagName)}
                     onClose={() => setAdsPickerFor(null)}
                     onError={onError}
                     onPick={({ conversionId, conversionLabel }) => {
@@ -9699,11 +9703,14 @@ function ProvidersEditor({
  */
 function AdsPicker({
   gtmTarget,
+  suggestedName,
   onPick,
   onClose,
   onError,
 }: {
   gtmTarget: { accountId?: string; containerId?: string; workspaceId?: string };
+  /** Pre-filled conversion-action name, derived from the row's GTM tag name. Editable. */
+  suggestedName?: string;
   onPick: (v: { conversionId: string; conversionLabel: string }) => void;
   onClose: () => void;
   onError: (m: string) => void;
@@ -9716,7 +9723,8 @@ function AdsPicker({
   const [busy, setBusy] = useState('');
   const [mode, setMode] = useState<'reuse' | 'create'>('reuse');
   const [categories, setCategories] = useState<AdsCategoryOption[]>([]);
-  const [newName, setNewName] = useState('');
+  // Seeded from the row's tag name so the common case is one click, and still fully editable.
+  const [newName, setNewName] = useState(suggestedName ?? '');
   const [newCategory, setNewCategory] = useState('SUBMIT_LEAD_FORM');
   const [createErr, setCreateErr] = useState('');
   const [confirmCreate, setConfirmCreate] = useState(false);

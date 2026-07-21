@@ -1,7 +1,7 @@
 // Pure tests for the "GTM Structure - GA4 Events" template mapping (the table view
 // + CSV download share this). Run: tsx src/shared/__tests__/tag-template.test.ts
 
-import { suggestionToGroup, suggestionsToTemplateCsv, suggestionsToInstallRunbookMarkdown, installPlanNeedsAction, installPlanStatus, installPlanProgress, triggerWhens, dedupeViewsByGtmName, TEMPLATE_HEADERS, applyTagEdit, applyWhensToTrigger, adsIdentityIssue, conditionToOperator, CONDITION_LABELS } from '../tag-template';
+import { suggestionToGroup, suggestionsToTemplateCsv, suggestionsToInstallRunbookMarkdown, installPlanNeedsAction, installPlanStatus, installPlanProgress, triggerWhens, dedupeViewsByGtmName, TEMPLATE_HEADERS, applyTagEdit, applyWhensToTrigger, adsIdentityIssue, conditionToOperator, CONDITION_LABELS , conversionActionNameFromTag } from '../tag-template';
 import type { SuggestedTagView } from '../ipc';
 
 let passed = 0;
@@ -416,6 +416,24 @@ check('ads issue: a non-Ads platform is never blocked', adsIdentityIssue(phone) 
 // Repo rule: no em dashes at any output boundary, and these strings surface in the UI.
 const adsMessages = [adsPlaceholder, applyTagEdit(adsReal, { conversionLabel: '' }), applyTagEdit(adsReal, { measurementId: 'G-ABC123' })].map((t) => adsIdentityIssue(t) ?? '');
 check('ads issue: messages carry no em/en dashes', adsMessages.every((m) => m.length > 0 && !/[—–]/.test(m)));
+
+// ── conversionActionNameFromTag: seed the Ads conversion-action name from the tag name ───────────
+// The house shape is "<Vendor> - <Kind> - <Name> Tag"; both ends are GTM bookkeeping and the middle
+// is what the conversion action should be called.
+check('conv-name: the reported case', conversionActionNameFromTag('Google Ads - Conversion - Get A Free Consultation Form Tag') === 'Get A Free Consultation Form');
+check('conv-name: keeps the kind word a human relies on', conversionActionNameFromTag('Google Ads - Conversion - Contact Us Form Tag') === 'Contact Us Form'
+  && conversionActionNameFromTag('Google Ads - Conversion - Phone Click Tag') === 'Phone Click');
+check('conv-name: works for the other vendors', conversionActionNameFromTag('GA4 - Event - Book A Demo Click Tag') === 'Book A Demo Click'
+  && conversionActionNameFromTag('Meta - Event - Newsletter Form Tag') === 'Newsletter Form');
+check('conv-name: remarketing prefix too', conversionActionNameFromTag('Google Ads - Remarketing - All Pages Tag') === 'All Pages');
+check('conv-name: a name with NO prefix just loses the Tag suffix', conversionActionNameFromTag('Contact Form Tag') === 'Contact Form');
+check('conv-name: an INTERNAL " - " is preserved', conversionActionNameFromTag('Google Ads - Conversion - Book A Demo - EU Tag') === 'Book A Demo - EU');
+check('conv-name: case-insensitive on the boilerplate', conversionActionNameFromTag('google ads - conversion - Sample Request Form tag') === 'Sample Request Form');
+check('conv-name: collapses stray whitespace', conversionActionNameFromTag('Google Ads  -  Conversion  -   Get  Started   Tag') === 'Get Started');
+check('conv-name: nothing meaningful left returns empty, so the caller keeps its placeholder',
+  conversionActionNameFromTag('Google Ads - Conversion - Tag') === '' && conversionActionNameFromTag('Tag') === '');
+check('conv-name: empty / missing input is safe', conversionActionNameFromTag('') === '' && conversionActionNameFromTag(undefined) === '');
+check('conv-name: does NOT strip a word that merely contains "tag"', conversionActionNameFromTag('Google Ads - Conversion - Tag Manager Signup Tag') === 'Tag Manager Signup');
 
 // Guard against silently deleting assertions from this file.
 if (passed < 100) { console.error(`✗ only ${passed} assertions ran (expected 100+)`); process.exit(1); }
