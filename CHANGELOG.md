@@ -1,3 +1,9 @@
+## [1.362.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.362.1...v1.362.2) (2026-07-21)
+
+### Bug Fixes
+
+* **suggest:** never scope a Form Submission trigger on a per-render form id ([#624](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/624)) ([1f8ab36](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/1f8ab362517b019505cb1891106e8592a04ba2c0))
+
 ## [1.362.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.362.0...v1.362.1) (2026-07-21)
 
 ### Bug Fixes
