@@ -1,3 +1,9 @@
+## [1.360.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.360.2...v1.360.3) (2026-07-21)
+
+### Bug Fixes
+
+* **desktop:** surface LLM retries, bound the request with a timeout, stop re-reading the same tool ([5867662](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/5867662abfa96a94607be807fdbd649cd7b35b6f))
+
 ## [1.360.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.360.1...v1.360.2) (2026-07-21)
 
 ### Bug Fixes
