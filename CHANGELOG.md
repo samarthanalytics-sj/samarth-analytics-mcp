@@ -1,3 +1,9 @@
+## [1.360.9](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.360.8...v1.360.9) (2026-07-21)
+
+### Performance Improvements
+
+* **desktop:** deliver the audit brain and the raw GTM shapes just in time ([#619](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/619)) ([3571b12](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/3571b12869fa12520c3a9168faf9915d2a35bfda))
+
 ## [1.360.8](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.360.7...v1.360.8) (2026-07-21)
 
 ### Performance Improvements
