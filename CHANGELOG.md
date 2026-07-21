@@ -1,3 +1,9 @@
+## [1.358.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.357.0...v1.358.0) (2026-07-21)
+
+### Features
+
+* **desktop:** retrieval tools - chat memory recall + corpus pattern lookup (RAG) ([#607](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/607)) ([c866092](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c8660920cf186576b6a98cf299079b5cbae388be))
+
 ## [1.357.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.356.0...v1.357.0) (2026-07-21)
 
 ### Features
