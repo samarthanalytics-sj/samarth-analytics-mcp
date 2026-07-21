@@ -691,7 +691,10 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
           ? ` Switch to "${wsCheck.fallbackName}" (id ${wsCheck.fallbackId}, GTM created it to replace this one) in the GTM bar and retry.`
           : ' Create a new workspace in the GTM bar and retry.';
         const msg = `That GTM workspace is read-only: a version was already created from it (a Submit in GTM, or this app's "Auto: create preview & verify").${move}`;
-        return list.map((t) => ({ id: t.id, ok: false, error: msg }));
+        // Hand the successor back so the UI can offer the switch as a button. The old workspace no
+        // longer exists, so there is nothing to lose by moving; the user still confirms it.
+        const switchTo = wsCheck.fallbackId ? { id: wsCheck.fallbackId, name: wsCheck.fallbackName ?? 'Workspace' } : undefined;
+        return list.map((t) => ({ id: t.id, ok: false, error: msg, ...(switchTo ? { switchToWorkspace: switchTo } : {}) }));
       }
 
       const errors = new Map<string, string>();
