@@ -414,12 +414,11 @@ function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean): Too
     {
       name: 'list_google_ads_accounts',
       description:
-        'List the Google Ads accounts the signed-in Google account can reach, manager (MCC) accounts included. ' +
-        'Returns each account\'s customerId (bare digits, which is the only form the API accepts), name, whether it ' +
-        'is a manager, whether it is a TEST account (holds no real conversion data), and the loginCustomerId to send ' +
-        'back on the next call when the account is reached THROUGH a manager. Read-only. Call this first to resolve a ' +
-        'customerId instead of asking the user to copy a dashed id out of the Google Ads UI, then call ' +
-        'list_google_ads_conversion_actions on the account you need.',
+        'List the Google Ads accounts the signed-in user can reach, manager (MCC) accounts included. Returns each ' +
+        'account\'s customerId (bare digits, the only form the API accepts), name, manager flag, testAccount flag ' +
+        '(holds no real conversion data), and the loginCustomerId to send back when the account is reached THROUGH a ' +
+        'manager. Read-only. Call this to resolve a customerId instead of asking the user to copy a dashed id out of ' +
+        'the Google Ads UI, then call list_google_ads_conversion_actions.',
       inputSchema: { ...EMPTY_SCHEMA },
       handler: () =>
         run(async () => {
@@ -444,26 +443,24 @@ function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean): Too
     {
       name: 'list_google_ads_conversion_actions',
       description:
-        'List a Google Ads account\'s conversion actions WITH the Conversion ID (AW-xxxxxxxxx) and Conversion LABEL of ' +
-        'each one, which is exactly the pair a GTM Google Ads Conversion Tracking tag (awct) needs. This is the tool ' +
-        'that answers "what is the conversion id / label for the contact form conversion". Read-only. Requires ' +
-        'customerId (bare digits, no dashes); also pass loginCustomerId when the account sits under a manager ' +
-        '(list_google_ads_accounts returns it). ' +
+        'List a Google Ads account\'s conversion actions WITH each one\'s Conversion ID (AW-xxxxxxxxx) and Conversion ' +
+        'LABEL: exactly the pair a GTM Google Ads Conversion Tracking (awct) tag needs. Answers "what is the conversion ' +
+        'id / label for X". Read-only. Requires customerId (bare digits, no dashes); also pass loginCustomerId when the ' +
+        'account sits under a manager (list_google_ads_accounts returns it). ' +
         'ALWAYS CALL THIS BEFORE creating a Google Ads conversion tag in GTM: pick the action the user means, then call ' +
         'create_gtm_tracking_tag with platform "google_ads_conversion" and pass that action\'s conversionId and ' +
-        'conversionLabel as LITERAL values (e.g. conversionId "AW-17667466396", conversionLabel "g9RqCLD6kdQcEJzJwOhB"). ' +
-        'NEVER pass a {{variable}} for either one and never invent a placeholder: a braced value is handed to the awct ' +
-        'template verbatim, keeping the "AW-" prefix the template rejects, and the tag is then reported as created while ' +
-        'recording nothing at all. Do not ask the user to paste these values when this tool can read them. ' +
-        'taggable=false means the action can NEVER be fired from GTM (offline upload, app, store visit, or an ' +
-        'Analytics-imported action) and its `note` says why: report that note instead of inventing a label. A null ' +
-        'conversionLabel means Google published no event snippet for that action, so the label does not exist anywhere ' +
-        'in the API; say so rather than fabricating one.',
+        'conversionLabel as LITERAL values (e.g. "AW-17667466396" and "g9RqCLD6kdQcEJzJwOhB"). NEVER a {{variable}} for ' +
+        'either one, and never an invented placeholder: a braced value is handed to the awct template verbatim, keeping ' +
+        'the "AW-" prefix the template rejects, so the tag is reported as created while recording nothing. Do not ask ' +
+        'the user to paste values this tool can read. ' +
+        'taggable=false means the action can NEVER fire from GTM (offline upload, app, store visit, Analytics-imported) ' +
+        'and its `note` says why: report that note instead of inventing a label. A null conversionLabel means Google ' +
+        'published no event snippet, so the label exists nowhere in the API: say so rather than fabricating one.',
       inputSchema: {
         type: 'object',
         properties: {
-          customerId: { type: 'string', description: 'Google Ads account id, bare digits (strip the dashes shown in the Ads UI).' },
-          loginCustomerId: { type: 'string', description: 'Manager (MCC) account id to act through, when the account is reached via a manager.' },
+          customerId: { type: 'string', description: 'Google Ads account id, bare digits (strip the dashes).' },
+          loginCustomerId: { type: 'string', description: 'Manager (MCC) id to act through, when reached via a manager.' },
         },
         required: ['customerId'],
         additionalProperties: false,
@@ -510,30 +507,29 @@ function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean): Too
       name: 'create_google_ads_conversion_action',
       description:
         'Create a new WEBSITE conversion action in a Google Ads account and return its Conversion ID and Label. ' +
-        'READ THIS BEFORE CALLING: unlike every GTM write in this app, which only ever lands in a DRAFT workspace the ' +
-        'user publishes later, this applies IMMEDIATELY to the advertiser\'s live Google Ads account. There is no draft ' +
-        'stage, no undo, and no tool here that can remove it again. So call list_google_ads_conversion_actions FIRST and ' +
-        'reuse an existing action when one fits, and only create when the user has actually asked for a new conversion ' +
-        'action. State the exact name and category you are about to create BEFORE calling. It is gated by the app\'s ' +
-        'strongest confirmation: the same two-step card deletes use, which is labelled as a delete card and asks the ' +
-        'user to type "delete" to approve. Warn them about that wording, it is the confirmation strength, not a delete. ' +
-        'Requires customerId, name and category; optional countingType and loginCustomerId.',
+        'READ THIS BEFORE CALLING: unlike every GTM write in this app, which only lands in a DRAFT workspace, this ' +
+        'applies IMMEDIATELY to the advertiser\'s live Google Ads account. No draft stage, no undo, no tool here can ' +
+        'remove it. So call list_google_ads_conversion_actions FIRST and reuse an existing action when one fits; only ' +
+        'create when the user actually asked for a new one, and state the exact name and category you are about to ' +
+        'create BEFORE calling. It is gated by the app\'s strongest confirmation: the same two-step card deletes use, ' +
+        'which asks the user to type "delete" to approve. Warn them about that wording, it is confirmation strength, ' +
+        'not a delete. Requires customerId, name and category; optional countingType and loginCustomerId.',
       inputSchema: {
         type: 'object',
         properties: {
-          customerId: { type: 'string', description: 'Google Ads account that will OWN the conversion action, bare digits.' },
-          name: { type: 'string', description: 'Name of the conversion action, exactly as it should appear in Google Ads.' },
+          customerId: { type: 'string', description: 'Account that will OWN the action, bare digits.' },
+          name: { type: 'string', description: 'Name exactly as it should appear in Google Ads.' },
           category: {
             type: 'string',
             enum: CONVERSION_CATEGORIES.map((c) => c.value),
-            description: 'What the conversion represents. Lead-style categories (submit lead form, contact, sign-up, book appointment, request quote, phone call lead) count once per click; purchase-style ones can repeat.',
+            description: 'What the conversion represents. Lead-style categories count once per click; purchase-style ones can repeat.',
           },
           countingType: {
             type: 'string',
             enum: ['ONE_PER_CLICK', 'MANY_PER_CLICK'],
-            description: 'Omit to take Google\'s own guidance for the category (one per click for leads, many per click for purchases). The API accepts either for any category, so this is a choice, not a rule.',
+            description: 'Omit to take Google\'s guidance for the category (one per click for leads, many for purchases).',
           },
-          loginCustomerId: { type: 'string', description: 'Manager (MCC) account id to act through, when the account is reached via a manager.' },
+          loginCustomerId: { type: 'string', description: 'Manager (MCC) id to act through, when reached via a manager.' },
         },
         required: ['customerId', 'name', 'category'],
         additionalProperties: false,
@@ -625,7 +621,7 @@ export function buildToolRegistry(
     },
     {
       name: 'list_gtm_workspaces',
-      description: 'List the workspaces in a GTM container. Requires accountId and containerId.',
+      description: 'List the workspaces in a GTM container.',
       inputSchema: {
         type: 'object',
         properties: { accountId: { type: 'string' }, containerId: { type: 'string' } },
@@ -637,7 +633,7 @@ export function buildToolRegistry(
     {
       name: 'list_gtm_folders',
       description:
-        'List the folders in a GTM workspace (each folder\'s name + folderId). The GTM API DOES expose this (folders.list) — use it to find a folder\'s id before move_gtm_entities_to_folder / rename_gtm_folder / delete_gtm_folder, instead of asking the user to read ids from the GTM UI. Requires accountId, containerId, workspaceId.',
+        'List the folders in a GTM workspace (name + folderId). The GTM API DOES expose this (folders.list): use it to find a folder id before move_gtm_entities_to_folder / rename_gtm_folder / delete_gtm_folder rather than asking the user.',
       inputSchema: {
         type: 'object',
         properties: { accountId: { type: 'string' }, containerId: { type: 'string' }, workspaceId: { type: 'string' } },
@@ -649,7 +645,7 @@ export function buildToolRegistry(
     {
       name: 'list_gtm_environments',
       description:
-        "List the container's GTM environments (Test/Staging/etc.) — each one's environmentId, type, gtm_auth token (authorizationCode), and a ready-to-paste install snippet (head <script> + body <noscript>). The GTM API DOES manage environments, so use this (and create_gtm_environment) instead of telling the user to do it in the GTM UI. Requires accountId, containerId.",
+        "List the container's GTM environments (Test/Staging/etc.): environmentId, type, gtm_auth token (authorizationCode), and a ready-to-paste install snippet (head <script> + body <noscript>). The GTM API DOES manage environments, so use this and create_gtm_environment rather than sending the user to the GTM UI.",
       inputSchema: {
         type: 'object',
         properties: { accountId: { type: 'string' }, containerId: { type: 'string' } },
@@ -661,7 +657,7 @@ export function buildToolRegistry(
     {
       name: 'list_gtm_tags',
       description:
-        'List the tags in a GTM workspace. Requires accountId, containerId, workspaceId.',
+        'List the tags in a GTM workspace.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -677,7 +673,7 @@ export function buildToolRegistry(
     {
       name: 'suggest_tags_from_url',
       description:
-        'Scan a LIVE web page with a headless browser and return the GA4 event tags worth creating for it, INCLUDING the exact TRIGGER CONDITION each needs — form submits scoped by Form ID/classes (or page path), CTA/link clicks by Click Text or Click URL, mailto:/tel: clicks, file downloads, and outbound links. Read-only: it only inventories the DOM, it never submits forms or clicks anything. Use this to answer "how should the trigger be configured to track X on <url>?" and BEFORE create_gtm_tracking_tag: pass a returned suggestion\'s `trigger` object straight to create_gtm_tracking_tag so the created tag actually fires. Requires a full public http(s) URL (e.g. https://example.com/contact). Slow (launches a browser) — call it once per page.',
+        'Scan a LIVE web page with a headless browser and return the GA4 event tags worth creating for it, INCLUDING the exact TRIGGER CONDITION each needs: form submits scoped by Form ID/classes or page path, CTA/link clicks by Click Text or Click URL, mailto:/tel: clicks, file downloads, outbound links. Read-only, it only inventories the DOM. Answers "how should the trigger be configured to track X on <url>?"; pass a suggestion\'s `trigger` object straight to create_gtm_tracking_tag so the tag actually fires. Needs a full public http(s) URL. Slow, call it once per page.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -718,7 +714,7 @@ export function buildToolRegistry(
     {
       name: 'get_form_tracking_recipe',
       description:
-        "Get the COMPLETE, ready-to-create GTM recipe to track an AJAX WordPress form plugin (Contact Form 7, Gravity Forms, Ninja Forms, WPForms, Elementor) end-to-end. These plugins submit via AJAX, so GTM's NATIVE Form Submission trigger never fires — you must add a Custom HTML LISTENER that dataLayer.pushes a Custom Event, then a GA4 tag firing on that event. Returns a step-by-step `guide` plus a `listenerTag` (Custom HTML on All Pages, with the exact <script>) and a `ga4Tag` (GA4 event on the Custom Event trigger) — pass EACH straight to create_gtm_tracking_tag, creating the listener FIRST. Use this whenever suggest_tags_from_url or the user names one of these form plugins. Requires provider; optional eventName (GA4 event, default form_submission) and measurementId (G-XXXX).",
+        "Get the complete, ready-to-create GTM recipe for an AJAX WordPress form plugin (Contact Form 7, Gravity Forms, Ninja Forms, WPForms, Elementor). These submit via AJAX, so GTM's NATIVE Form Submission trigger never fires: you need a Custom HTML LISTENER that dataLayer.pushes a Custom Event, then a GA4 tag on that event. Returns a `guide`, a `listenerTag` (Custom HTML on All Pages with the exact script) and a `ga4Tag`; pass each to create_gtm_tracking_tag, listener FIRST. Use whenever suggest_tags_from_url or the user names one of these plugins.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -740,7 +736,7 @@ export function buildToolRegistry(
     },
     {
       name: 'list_gtm_triggers',
-      description: 'List the triggers in a GTM workspace. Requires accountId, containerId, workspaceId.',
+      description: 'List the triggers in a GTM workspace.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -756,7 +752,7 @@ export function buildToolRegistry(
     {
       name: 'list_unused_gtm_triggers',
       description:
-        'List the UNUSED (orphaned) triggers in a GTM workspace — triggers referenced by NO tag (neither a firing nor a blocking/exception trigger) and not a member of a Trigger Group. These are safe-to-delete clutter. Read-only — call this to show the user exactly what delete_unused_gtm_triggers would remove (returns each trigger\'s triggerId, name, type). Requires accountId, containerId, workspaceId.',
+        'List the UNUSED (orphaned) triggers in a GTM workspace: referenced by NO tag (firing or blocking) and not in a Trigger Group, so safe-to-delete clutter. Read-only; use it to show exactly what delete_unused_gtm_triggers would remove (triggerId, name, type).',
       inputSchema: {
         type: 'object',
         properties: {
@@ -775,7 +771,7 @@ export function buildToolRegistry(
     {
       name: 'list_unused_gtm_variables',
       description:
-        'List the UNUSED (orphaned) variables in a GTM workspace — variables whose {{name}} is referenced by NO tag, trigger, or other variable in the fields this audit can read. Read-only — call this to show the user what delete_unused_gtm_variables would remove (returns each variable\'s variableId, name, type). ADVISORY: this is a strong hint, not proof — a variable referenced only in a published version, or in a field the audit cannot inspect, may appear here even though it IS used. Requires accountId, containerId, workspaceId.',
+        'List the UNUSED (orphaned) variables in a GTM workspace: {{name}} referenced by NO tag, trigger or other variable in the fields this audit can read. Read-only; use it to show what delete_unused_gtm_variables would remove (variableId, name, type). ADVISORY, not proof: a variable referenced only in a published version, or in a field the audit cannot inspect, can appear here even though it IS used.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -793,7 +789,7 @@ export function buildToolRegistry(
     },
     {
       name: 'list_gtm_variables',
-      description: 'List the user-defined variables in a GTM workspace (name + type). Use it to check whether a variable already exists before creating one. Requires accountId, containerId, workspaceId.',
+      description: 'List the user-defined variables in a GTM workspace (name + type). Use it to check whether a variable already exists before creating one.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -808,7 +804,7 @@ export function buildToolRegistry(
     },
     {
       name: 'list_gtm_clients',
-      description: 'List the CLIENTS in a SERVER container workspace (server-side GTM — e.g. the GA4 client "gaaw_client" that claims incoming requests). Requires accountId, containerId, workspaceId.',
+      description: 'List the CLIENTS in a SERVER container workspace, e.g. the GA4 client "gaaw_client" that claims incoming requests.',
       inputSchema: {
         type: 'object',
         properties: { accountId: { type: 'string' }, containerId: { type: 'string' }, workspaceId: { type: 'string' } },
@@ -820,7 +816,7 @@ export function buildToolRegistry(
     {
       name: 'list_gtm_templates',
       description:
-        'List the CUSTOM (community-gallery) templates imported into a workspace, each with its tag TYPE code (cvt_… — for gallery templates this is cvt_<galleryTemplateId>, e.g. cvt_5RM3Q) — the value to put in a tag\'s `type` to build a tag from that template — plus the gallery owner/repository. Use to find an imported template (e.g. Meta Pixel) before creating tags from it. Requires accountId, containerId, workspaceId.',
+        'List the CUSTOM (community-gallery) templates imported into a workspace with each one\'s tag TYPE code (cvt_<galleryTemplateId>, e.g. cvt_5RM3Q), which is the value to put in a tag\'s `type`, plus the gallery owner/repository. Use to find an imported template before creating tags from it.',
       inputSchema: {
         type: 'object',
         properties: { accountId: { type: 'string' }, containerId: { type: 'string' }, workspaceId: { type: 'string' } },
@@ -831,7 +827,7 @@ export function buildToolRegistry(
     },
     {
       name: 'list_gtm_transformations',
-      description: 'List the TRANSFORMATIONS in a SERVER container workspace (server-side GTM — they enrich/redact event data before tags run). Requires accountId, containerId, workspaceId.',
+      description: 'List the TRANSFORMATIONS in a SERVER container workspace; they enrich or redact event data before tags run.',
       inputSchema: {
         type: 'object',
         properties: { accountId: { type: 'string' }, containerId: { type: 'string' }, workspaceId: { type: 'string' } },
@@ -843,7 +839,7 @@ export function buildToolRegistry(
     {
       name: 'audit_server_container',
       description:
-        'Audit a SERVER container workspace (server-side GTM). Checks that a client claims incoming requests, that server tags carry their destination id (GA4 Measurement ID / Ads Conversion ID+Label / remarketing id), have a firing trigger and are not paused, and that a tagging server URL is set. Also flags duplicate GA4 relays (2+ active GA4 tags forwarding the same Measurement ID on equivalent triggers → double-counting), URL-encoded trigger filter values (e.g. "Sign+Petition+Click") that never match a decoded event name, Meta CAPI tags with a swapped Pixel ID / Access Token, and Meta CAPI tags left with a Test Event Code (testId) set. Returns the same findings/severity/boundary shape as audit_gtm_container — but for server resources. Requires accountId, containerId, workspaceId.',
+        'Audit a SERVER container workspace. Checks that a client claims incoming requests; that server tags carry their destination id, have a firing trigger and are not paused; and that a tagging server URL is set. Flags duplicate GA4 relays (double-counting), URL-encoded trigger filter values (e.g. "Sign+Petition+Click") that never match a decoded event name, Meta CAPI tags with a swapped Pixel ID / Access Token, and Meta CAPI tags left with a Test Event Code. Same findings shape as audit_gtm_container.',
       inputSchema: {
         type: 'object',
         properties: { accountId: { type: 'string' }, containerId: { type: 'string' }, workspaceId: { type: 'string' } },
@@ -856,7 +852,7 @@ export function buildToolRegistry(
     {
       name: 'verify_server_endpoint',
       description:
-        'Runtime check for a server-side GTM tagging server: GET <serverUrl>/healthy (sGTM servers answer "ok") to confirm the host is actually deployed and reachable. https-only, public hosts only. Use after bootstrapping a server container and deploying the host, or when an audit flags a missing/blank tagging server URL. Requires serverUrl (e.g. https://sgtm.example.com).',
+        'Runtime check for a server-side GTM tagging server: GET <serverUrl>/healthy to confirm the host is deployed and reachable. https-only, public hosts only. Use after deploying a tagging server, or when an audit flags a missing tagging server URL.',
       inputSchema: {
         type: 'object',
         properties: { serverUrl: { type: 'string' } },
@@ -868,15 +864,15 @@ export function buildToolRegistry(
     {
       name: 'verify_tracking_setup',
       description:
-        'READ-ONLY post-install QA: verify a full tracking setup against the funnel checklist and return pass/warn/fail per check. Web checks: Google tag present, per-event GA4 tag coverage (exists / not paused / has a trigger / forwards the ecommerce object), consent defaults firing on Consent Initialization, web→server link (server_container_url). It ALSO runs contract checks per event: TAXONOMY (flags a reserved google_/ga_/firebase_ or malformed event name GA4 will reject) and SCHEMA (required GA4 parameters per recommended event — for a tag that forwards the whole ecommerce object it names the params the site must push, since that is a runtime/DebugView check; for explicit-param tags it flags missing required params like search_term). When the server container ids are also given: GA4 client present, tagging server URL recorded, per-event server relay coverage (a base all-events relay counts), and a LIVE /healthy check on the tagging server. Run this after setup_ecommerce_funnel / setup_server_ecommerce_funnel / setup_consent_mode_defaults to prove the install works — and before telling the user their tracking is complete. Requires accountId, containerId, workspaceId (the WEB container). Optional events (default: the 7-event ecommerce funnel; pass the events you installed if different) and serverAccountId/serverContainerId/serverWorkspaceId.',
+        'READ-ONLY post-install QA on the WEB container: verify a tracking setup against the funnel checklist, pass/warn/fail per check. Web: Google tag present, per-event GA4 tag coverage (exists, not paused, has a trigger, forwards the ecommerce object), consent defaults on Consent Initialization, web-to-server link. Per-event contract checks: TAXONOMY (reserved google_/ga_/firebase_ or malformed names GA4 rejects) and SCHEMA (required GA4 params per recommended event; for a tag forwarding the whole ecommerce object it names the params the site must push, since that is a runtime check). Given the server ids it also checks the GA4 client, the recorded tagging server URL, per-event relay coverage (a base all-events relay counts) and a LIVE /healthy probe. Run after the setup_ tools, and before telling the user tracking is complete.',
       inputSchema: {
         type: 'object',
         properties: {
           accountId: { type: 'string' },
           containerId: { type: 'string', description: 'The WEB container id.' },
           workspaceId: { type: 'string' },
-          events: { type: 'array', items: { type: 'string' }, description: 'Events to verify coverage for. Omit for the standard ecommerce funnel.' },
-          serverAccountId: { type: 'string', description: 'Set all three server ids to also verify the SERVER container + live endpoint.' },
+          events: { type: 'array', items: { type: 'string' }, description: 'Events to check. Omit for the standard ecommerce funnel.' },
+          serverAccountId: { type: 'string', description: 'Set all three server ids to cover the SERVER container too.' },
           serverContainerId: { type: 'string' },
           serverWorkspaceId: { type: 'string' },
         },
@@ -895,15 +891,15 @@ export function buildToolRegistry(
     {
       name: 'runtime_synthetic_test',
       description:
-        'RUNTIME synthetic test (READ-ONLY, SAFE): load a live URL in headless Chromium, push SYNTHETIC dataLayer funnel events (view_item…purchase, with obviously-fake values like transaction_id "SYNTHETIC_TEST_TXN"), and capture the analytics /collect hits each tag would send — to verify per-event that GA4 (and Meta/TikTok/your server) actually fire at RUNTIME with the right params. ' +
-        'CRITICAL SAFETY: during the synthetic-firing window EVERY analytics beacon is ABORTED before it leaves the browser — known collectors (GA4/Meta/TikTok/Google Ads/Pinterest/Snap/LinkedIn/Reddit/Bing) AND same-site FIRST-PARTY collector proxies (Stape / Cloudflare Zaraz / a self-hosted sGTM on a custom path like /fbevents or /g/collect). So no SYNTHETIC event — no fake purchase/conversion — is ever delivered to any destination or your tagging server. (A normal page-load hit such as page_view may fire on navigation, exactly as any real visit would; it carries no synthetic funnel event.) It only reads: fires synthetic events and aborts the resulting beacons. ' +
-        'Needs a URL where the GTM container is actually installed (so the tags exist to fire), and requires a LOCAL Playwright install (`npm i playwright && npx playwright install chromium` in apps/desktop); if Playwright is missing it returns a clear error instead of running. Returns, per expected event: whether a GA4 hit fired, any missing GA4 required params, and which destinations fired — plus a note confirming no real hits were sent. Requires url; optional events (default: the 7-event ecommerce funnel) and serverUrl.',
+        'RUNTIME synthetic test (READ-ONLY, SAFE): load a live URL in headless Chromium, push SYNTHETIC dataLayer funnel events with obviously-fake values, and capture the analytics /collect hits each tag would send, proving per-event that GA4 (and Meta/TikTok/your server) fire at RUNTIME with the right params. ' +
+        'SAFETY: during the synthetic-firing window EVERY analytics beacon is ABORTED before it leaves the browser, both known collectors and same-site FIRST-PARTY collector proxies (Stape, Cloudflare Zaraz, a self-hosted sGTM on a custom path), so no fake purchase or conversion ever reaches a destination or the tagging server. A normal page_view may still fire on navigation, as on any real visit. ' +
+        'Needs a LOCAL Playwright install (`npm i playwright && npx playwright install chromium` in apps/desktop); without it the tool returns a clear error instead of running. Returns, per expected event, whether a GA4 hit fired, any missing required params, and which destinations fired.',
       inputSchema: {
         type: 'object',
         properties: {
-          url: { type: 'string', description: 'The live page URL to load (must have the GTM container installed).' },
-          events: { type: 'array', items: { type: 'string' }, description: 'Events to fire + verify. Omit for the standard 7-event ecommerce funnel.' },
-          serverUrl: { type: 'string', description: 'Optional first-party tagging server URL — its host is also aborted as a collector.' },
+          url: { type: 'string', description: 'Live page URL to load; the GTM container must be installed on it.' },
+          events: { type: 'array', items: { type: 'string' }, description: 'Events to fire and verify. Omit for the standard funnel.' },
+          serverUrl: { type: 'string', description: 'First-party tagging server URL; its host is aborted as a collector too.' },
         },
         required: ['url'],
         additionalProperties: false,
@@ -940,9 +936,8 @@ export function buildToolRegistry(
     {
       name: 'audit_gtm_container',
       description:
-        'Audit a GTM workspace and return ACTIONABLE findings. Returns counts, a severity summary, and an array of findings — each with severity, category, the affected resource, a recommendation, and (for auto-fixable issues) a ready-to-run `fix` { tool, args } you can call directly to resolve it (the workspace ids are already filled in). ' +
-        'Checks: tags with no firing trigger, paused tags, GA4 event tags missing a measurement ID or event name, multiple/inconsistent GA4 measurement IDs, Custom HTML (security + document.write), missing Consent Mode v2 settings on ad/analytics tags, unused triggers, unused variables, and duplicate names. ' +
-        'Requires accountId, containerId, workspaceId.',
+        'Audit a GTM workspace and return ACTIONABLE findings: counts, a severity summary, and findings carrying severity, category, the affected resource, a recommendation, and for auto-fixable issues a ready-to-run `fix` { tool, args } with the ids already filled in. ' +
+        'Checks: tags with no firing trigger, paused tags, GA4 event tags missing a measurement ID or event name, inconsistent GA4 measurement IDs, Custom HTML (security + document.write), missing Consent Mode v2 settings on ad/analytics tags, unused triggers, unused variables, duplicate names.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -963,7 +958,7 @@ export function buildToolRegistry(
     {
       name: 'audit_gtm_container_changes',
       description:
-        'Re-audit the workspace AND report what CHANGED since the last audit of it: NEW issues (regressions) and RESOLVED issues, plus the full current report. Records this run so the next call can diff against it — the basis for continuous monitoring. New findings carry the same ready-to-run fixes (non-delete fixes apply directly; deletes are approval-gated). Use when the user asks "what changed", "any regressions", or to monitor over time. Requires accountId, containerId, workspaceId.',
+        'Re-audit the workspace AND report what CHANGED since its last audit: NEW issues (regressions), RESOLVED issues, plus the full current report. Records this run so the next call can diff against it. New findings carry the same ready-to-run fixes. Use when the user asks "what changed" or "any regressions".',
       inputSchema: {
         type: 'object',
         properties: {
@@ -989,7 +984,7 @@ export function buildToolRegistry(
     {
       name: 'diff_gtm_workspace_vs_live',
       description:
-        'Show CONFIG DRIFT between the draft workspace and the PUBLISHED (live) container version: which tags/triggers/variables were added, removed, or modified in the draft relative to what is live — i.e. exactly what publishing this workspace would change. Requires accountId, containerId, workspaceId.',
+        'Show CONFIG DRIFT between the draft workspace and the PUBLISHED (live) container version: which tags/triggers/variables the draft adds, removes or modifies, i.e. what publishing it would change.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1027,7 +1022,7 @@ export function buildToolRegistry(
     {
       name: 'audit_install_drift',
       description:
-        'Report DRIFT against the install manifest — the record of the GTM resources our setup tools (e.g. setup_ecommerce_funnel) created in this workspace. Compares each managed tag/trigger/variable to the LIVE container: INTACT (unchanged), MODIFIED (renamed or reconfigured since setup), or DELETED (removed after setup); and lists UNMANAGED resources (added manually, outside our setup). Read-only. If no setup has been recorded yet, returns hasManifest:false — run a setup tool first. Requires accountId, containerId, workspaceId.',
+        'Report DRIFT against the install manifest, the record of resources our setup tools (e.g. setup_ecommerce_funnel) created here. Compares each managed tag/trigger/variable to the LIVE container: INTACT, MODIFIED (renamed or reconfigured since setup), DELETED; and lists UNMANAGED resources added outside our setup. Read-only. Returns hasManifest:false when no setup has been recorded yet.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1066,15 +1061,15 @@ export function buildToolRegistry(
     {
       name: 'audit_tracking_status',
       description:
-        'UNIFIED tracking status: roll up the existing audits into ONE card of six named DIMENSIONS — setup, consent, schema, dedup, runtime, manifest — each with a single verdict (pass / partial / fail / not_run) plus its worst issues, and an overall roll-up. It does NOT re-audit; it AGGREGATES verify_tracking_setup (plumbing + consent-defaults + schema + the live /healthy runtime probe), the SERVER container audit (browser↔server dedup event_id + consent findings), and install-drift (manifest) so you can answer "is my tracking healthy?" at a glance. Each sub-audit is best-effort: if one is unavailable or errors, its dimension is reported not_run rather than failing the whole call. Requires accountId, containerId, workspaceId (the WEB container). Optional events (default: the 7-event ecommerce funnel), and serverAccountId/serverContainerId/serverWorkspaceId to also cover the server side (dedup + consent + runtime).',
+        'UNIFIED tracking status for the WEB container: ONE card of six DIMENSIONS (setup, consent, schema, dedup, runtime, manifest), each with a verdict (pass / partial / fail / not_run) plus its worst issues, and an overall roll-up. It does NOT re-audit; it AGGREGATES verify_tracking_setup, the SERVER container audit and install-drift, answering "is my tracking healthy?" at a glance. Each sub-audit is best-effort: one that errors reports not_run rather than failing the call. Set the three server ids to cover the server side too.',
       inputSchema: {
         type: 'object',
         properties: {
           accountId: { type: 'string' },
           containerId: { type: 'string', description: 'The WEB container id.' },
           workspaceId: { type: 'string' },
-          events: { type: 'array', items: { type: 'string' }, description: 'Events to verify coverage for. Omit for the standard ecommerce funnel.' },
-          serverAccountId: { type: 'string', description: 'Set all three server ids to also cover the SERVER container (dedup + consent + live endpoint).' },
+          events: { type: 'array', items: { type: 'string' }, description: 'Events to check. Omit for the standard ecommerce funnel.' },
+          serverAccountId: { type: 'string', description: 'Set all three server ids to cover the SERVER container too.' },
           serverContainerId: { type: 'string' },
           serverWorkspaceId: { type: 'string' },
         },
@@ -1142,7 +1137,7 @@ export function buildToolRegistry(
     {
       name: 'list_gtm_versions',
       description:
-        'List the container\'s published version history (newest first): version id, name, and tag/trigger/variable counts. Use to find versions to diff. Requires accountId, containerId.',
+        'List the container\'s published version history (newest first): version id, name, and tag/trigger/variable counts. Use to find versions to diff.',
       inputSchema: {
         type: 'object',
         properties: { accountId: { type: 'string' }, containerId: { type: 'string' } },
@@ -1154,7 +1149,7 @@ export function buildToolRegistry(
     {
       name: 'diff_gtm_versions',
       description:
-        'Diff two PUBLISHED container versions — which tags/triggers/variables were added, removed, or modified between version A (base) and version B. Use to answer "what changed between version N and M / when did this break". Requires accountId, containerId, versionA, versionB (version ids from list_gtm_versions).',
+        'Diff two PUBLISHED container versions: tags/triggers/variables added, removed or modified between version A (base) and version B. Answers "what changed between version N and M" or "when did this break". versionA and versionB are ids from list_gtm_versions.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1179,7 +1174,7 @@ export function buildToolRegistry(
     {
       name: 'check_gtm_measurement_ids',
       description:
-        'Cross-check the GA4 measurement ids configured in this GTM container against the GA4 properties the signed-in user can access — flags ids set on GTM tags that match NO accessible GA4 web stream (a typo, a wrong id, or a property on another GA4 account/login), and resolves matched ids to their property. Requires accountId, containerId, workspaceId; optional ga4Account (e.g. "accounts/123") to limit the GA4 scan.',
+        'Cross-check the GA4 measurement ids configured in this GTM container against the GA4 properties the signed-in user can access: flags ids matching NO accessible GA4 web stream (a typo, a wrong id, or a property on another login) and resolves matched ids to their property. Optional ga4Account ("accounts/123") bounds the scan.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1204,7 +1199,7 @@ export function buildToolRegistry(
     {
       name: 'detect_meta_web_tags',
       description:
-        'Scan a WEB container for Meta/Facebook pixel tags (Custom HTML with the fbq pixel, or a tag named/typed for Facebook/Meta) and report any standard ecommerce events they reference (Purchase, AddToCart, …). Use to decide whether Meta ECOMMERCE tracking is in use before setting up Meta CAPI server-side. Returns the matching tags + hasMetaPixel / hasEcommerce flags. Requires accountId, containerId, workspaceId.',
+        'Scan a WEB container for Meta/Facebook pixel tags (Custom HTML with fbq, or a tag named/typed for Facebook/Meta) and report the standard ecommerce events they reference. Use to decide whether Meta ecommerce tracking is in use before setting up Meta CAPI server-side. Returns matching tags plus hasMetaPixel / hasEcommerce.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1594,15 +1589,15 @@ export function buildToolRegistry(
     {
       name: 'analytics_scorecard',
       description:
-        'Produce a unified analytics health SCORECARD: an overall 0–100 score + letter grade (A–F) with a per-section breakdown and a ranked top-issues list, combining the GTM container audit and (when a GA4 property is supplied) the GA4 property audit. Requires accountId, containerId, workspaceId; optional ga4Property like "properties/123456" to fold GA4 into the score.',
+        'Unified analytics health SCORECARD: a 0-100 score and letter grade with a per-section breakdown and ranked top issues, combining the GTM container audit and, when ga4Property ("properties/123456") is given, the GA4 property audit.',
       inputSchema: {
         type: 'object',
         properties: {
           accountId: { type: 'string' },
           containerId: { type: 'string' },
           workspaceId: { type: 'string' },
-          ga4Property: { type: 'string', description: 'Optional GA4 property (e.g. "properties/123") to include in the score.' },
-          consentReport: { type: 'object', description: 'Optional web-audit consent_compliance_audit report (parsed JSON) to fold a Consent Mode v2 section into the score.' },
+          ga4Property: { type: 'string', description: 'GA4 property ("properties/123") to include in the score.' },
+          consentReport: { type: 'object', description: 'Parsed consent_compliance_audit report, adds a Consent Mode v2 section.' },
         },
         required: ['accountId', 'containerId', 'workspaceId'],
         additionalProperties: false,
@@ -1648,15 +1643,15 @@ export function buildToolRegistry(
     {
       name: 'generate_analytics_report',
       description:
-        'Generate a shareable, client-ready analytics health REPORT (Markdown): overall 0–100 score + letter grade, a per-section summary table, a ranked top-issues table, and full findings tables — from the GTM container audit and (when ga4Property is supplied) the GA4 property audit. Returns { report } as Markdown; present it to the user verbatim. Requires accountId, containerId, workspaceId; optional ga4Property like "properties/123456".',
+        'Generate a shareable, client-ready analytics health REPORT in Markdown: 0-100 score and grade, a per-section summary table, a ranked top-issues table and full findings tables, from the GTM container audit and, when ga4Property is given, the GA4 property audit. Returns { report }; present it to the user verbatim.',
       inputSchema: {
         type: 'object',
         properties: {
           accountId: { type: 'string' },
           containerId: { type: 'string' },
           workspaceId: { type: 'string' },
-          ga4Property: { type: 'string', description: 'Optional GA4 property to include in the report.' },
-          consentReport: { type: 'object', description: 'Optional web-audit consent_compliance_audit report (parsed JSON) to add a Consent Mode v2 section to the report.' },
+          ga4Property: { type: 'string', description: 'GA4 property to include in the report.' },
+          consentReport: { type: 'object', description: 'Parsed consent_compliance_audit report, adds a Consent Mode v2 section.' },
         },
         required: ['accountId', 'containerId', 'workspaceId'],
         additionalProperties: false,
@@ -1711,12 +1706,11 @@ export function buildToolRegistry(
     {
       name: 'create_gtm_tracking_tag',
       description:
-        'PREFERRED way to create a tag that fires on an event — builds a CORRECT GTM resource from simple fields (you do not write raw GTM JSON). One call (applies directly to the draft workspace): enables needed built-in variables, reuses an existing same-named trigger or creates it, and creates the tag linked to it. ' +
-        'platform: "ga4_event" (needs measurementId G-XXXX, eventName, optional eventParameters [{name,value}]); "google_tag" (the Google tag / gtag base that configures GA4/Ads — needs tagId G-XXXX/AW-XXXX/GT-XXXX, optional configSettings [{name,value}]); "meta_pixel" (a Meta/Facebook Pixel via the OFFICIAL gallery template — needs pixelId (or measurementId as the pixel id, e.g. a {{Meta Pixel ID}} variable) + eventName = the Meta event (PageView/Lead/AddToCart/Purchase/ViewContent/InitiateCheckout/Search/Subscribe/CompleteRegistration/Contact/…), optional eventParameters → Meta Object Properties); "tiktok_pixel" (a TikTok web Pixel via its gallery template - needs pixelId + eventName = the TikTok event Pageview/ViewContent/AddToCart/CompletePayment); "linkedin_insight" (the LinkedIn Insight base tag via its gallery template - needs pixelId = the LinkedIn Partner ID); "reddit_pixel" (a Reddit Pixel as Custom HTML - needs pixelId + eventName = the Reddit event PageVisit/ViewContent/AddToCart/Purchase/Lead/SignUp/Search; empty or PageVisit emits the full init snippet); "pinterest_tag" (a Pinterest web tag via its gallery template - needs pixelId + eventName = the Pinterest event pagevisit/viewcontent/addtocart/checkout/lead); "google_ads_conversion" (needs conversionId AW-XXXX, conversionLabel); "custom_html" (needs html — use for other pixels); ' +
-        '"conversion_linker" (Google Ads Conversion Linker; no fields required; optional enableCrossDomain plus comma-separated linkerDomains); "google_ads_call_conversion" (needs phoneNumber exactly as shown on the page, conversionId, conversionLabel); "google_ads_remarketing" (needs conversionId; an all-pages audience tag); "floodlight" (Campaign Manager / DV360 Floodlight counter; needs advertiserId, groupTag, activityTag; optional countingMethod standard|unique); "custom_image" (a beacon/pixel; needs url). ' +
-        'trigger.kind: "link_click" or "all_clicks" (optional clickUrlValue and/or clickTextValue, each with a *Operator equals|contains|startsWith|matchRegex), "custom_event" (eventName = dataLayer event; optional ANDed scope conditions — formIdValue, pagePathValue/pagePathOperator, pageUrlValue — e.g. event form_submit AND {{Page Path}} contains /contact, the corpus-standard data-layer form pattern; optional dataLayerConditions: [{key,value,operator}] — scopes a custom_event trigger by a pushed dataLayer key via an auto-created {{dlv - <key>}} variable (use this to scope an AJAX/embed form\'s custom_event to one form by the form_id the listener pushes; {{Form ID}} does NOT work on a pushed event)),"pageview", "timer" (REQUIRES trigger.intervalMs in ms, optional trigger.limit), "form_submit" (optional formIdValue and/or formClassesValue, each with a *Operator — scopes the trigger to ONE form via {{Form ID}}/{{Form Classes}}; or pagePathValue/pagePathOperator to scope to a single page via {{Page Path}} when the form has no id/class; omit all and it fires on every form submit). ' +
-        'eventParameters values may be GTM built-in variables (e.g. {{Click URL}}, {{Click Text}}, {{Form ID}}, {{Form URL}}); the needed built-in variables are auto-enabled. ' +
-        'WHERE THE ADS VALUES COME FROM: for "google_ads_conversion", "google_ads_call_conversion" and "google_ads_remarketing", call list_google_ads_conversion_actions first and take conversionId + conversionLabel straight off the chosen action, rather than asking the user to paste them. Both MUST be LITERAL values (e.g. "AW-17667466396" and "g9RqCLD6kdQcEJzJwOhB"), NEVER a {{variable}} or a placeholder: a braced value is passed through to the awct template verbatim, so it keeps the "AW-" prefix the template rejects and you get a tag that looks created but records nothing.',
+        'PREFERRED way to create a tag that fires on an event: builds a CORRECT GTM resource from simple fields (no raw GTM JSON). One call enables needed built-in variables, reuses or creates the named trigger, and creates the tag linked to it, in the draft workspace. ' +
+        'Fields per platform: ga4_event (measurementId, eventName, optional eventParameters [{name,value}]); google_tag (tagId G-/AW-/GT-XXXX, optional configSettings); meta_pixel (pixelId, or measurementId as the pixel id, plus eventName = the Meta event e.g. PageView/Lead/AddToCart/Purchase/ViewContent; eventParameters become Meta Object Properties); tiktok_pixel (pixelId + eventName Pageview/ViewContent/AddToCart/CompletePayment); linkedin_insight (pixelId = LinkedIn Partner ID); reddit_pixel (pixelId + eventName PageVisit/ViewContent/AddToCart/Purchase/Lead/SignUp/Search; empty or PageVisit emits the full init snippet); pinterest_tag (pixelId + eventName pagevisit/viewcontent/addtocart/checkout/lead); google_ads_conversion (conversionId, conversionLabel); custom_html (html); conversion_linker (none; optional enableCrossDomain + comma-separated linkerDomains); google_ads_call_conversion (phoneNumber exactly as shown on the page, conversionId, conversionLabel); google_ads_remarketing (conversionId); floodlight (advertiserId, groupTag, activityTag; optional countingMethod); custom_image (url). Templated platforms are imported automatically. ' +
+        'trigger.kind: link_click / all_clicks (optional clickUrlValue, clickTextValue, each with a *Operator equals|contains|startsWith|matchRegex); custom_event (eventName = the dataLayer event; ANDed scope via formIdValue, pagePathValue/pagePathOperator, pageUrlValue, or dataLayerConditions [{key,value,operator}], which scopes by a pushed dataLayer key through an auto-created {{dlv - <key>}} variable: the only way to scope an AJAX/embed form to ONE form, since {{Form ID}} does NOT work on a pushed event); pageview; timer (REQUIRES trigger.intervalMs in ms, optional trigger.limit); form_submit (formIdValue/formClassesValue with a *Operator scope to ONE form, or pagePathValue/pagePathOperator when the form has no id/class; omit all and it fires on every form submit). ' +
+        'eventParameters values may be built-in variables ({{Click URL}}, {{Click Text}}, {{Form ID}}, {{Form URL}}), which are auto-enabled. ' +
+        'WHERE THE ADS VALUES COME FROM: for google_ads_conversion, google_ads_call_conversion and google_ads_remarketing, call list_google_ads_conversion_actions first and take conversionId + conversionLabel straight off the chosen action rather than asking the user to paste them. Both MUST be LITERAL values (e.g. "AW-17667466396" and "g9RqCLD6kdQcEJzJwOhB"), NEVER a {{variable}} or a placeholder: a braced value is passed to the awct template verbatim, so it keeps the "AW-" prefix the template rejects and you get a tag that looks created but records nothing.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1734,7 +1728,7 @@ export function buildToolRegistry(
           },
           eventParamLookups: {
             type: 'array',
-            description: 'Companion Lookup Table variables an event parameter value references by {{variableName}} (e.g. form_name = {{Lookup - X Form Name}} keyed on {{Page Path}}). Each is auto-created (type smm) when missing; the input built-in is auto-enabled.',
+            description: 'Lookup Table variables an event parameter references by {{variableName}} (e.g. form_name = {{Lookup - X Form Name}} keyed on {{Page Path}}). Auto-created (type smm) when missing.',
             items: {
               type: 'object',
               properties: {
@@ -1794,15 +1788,15 @@ export function buildToolRegistry(
               eventName: { type: 'string' },
               dataLayerConditions: {
                 type: 'array',
-                description: 'custom_event only — extra ANDed scope conditions on a pushed dataLayer key, each read via an auto-created {{dlv - <key>}} variable. Use to scope an AJAX/embed form\'s custom_event to ONE form by the form_id its listener pushes ({{Form ID}} does NOT resolve on a pushed event).',
+                description: 'custom_event only: ANDed scope conditions on a pushed dataLayer key, each read via an auto-created {{dlv - <key>}} variable. Scopes an AJAX/embed form to ONE form by its pushed form_id ({{Form ID}} does NOT resolve on a pushed event).',
                 items: {
                   type: 'object',
                   properties: { key: { type: 'string' }, value: { type: 'string' }, operator: { type: 'string' } },
                   required: ['key', 'value'],
                 },
               },
-              intervalMs: { type: 'string', description: 'timer only — REQUIRED: the firing interval in milliseconds (e.g. "30000").' },
-              limit: { type: 'string', description: 'timer only — max number of fires (omit = unlimited).' },
+              intervalMs: { type: 'string', description: 'timer only, REQUIRED: firing interval in ms (e.g. "30000").' },
+              limit: { type: 'string', description: 'timer only: max fires (omit = unlimited).' },
             },
             required: ['name', 'kind'],
           },
@@ -2135,7 +2129,7 @@ export function buildToolRegistry(
     {
       name: 'create_gtm_variable_typed',
       description:
-        'Create a GTM variable with the correct structure (you do not write raw JSON). kind: "constant" (value), "data_layer" (dataLayerName), "javascript" (javascript — a Custom JavaScript variable, e.g. "function(){return document.title;}" for page title), "event_data" (SERVER container only — reads keyPath from the incoming event, e.g. keyPath "items" or "x-ga-mp1-tt"; optional defaultValue), "request_header" (SERVER container only — reads one HTTP header off the request via headerName, e.g. "X-Geo-Country" / "X-Device-Os" that the tagging host injects), "lookup_table" (input = the {{variable}} to match EXACTLY, rows = [{key,value}], optional defaultValue), or "regex_table" (same fields; each row key is a REGEX matched against input — use when many inputs map to one value, e.g. {{Page Path}} "^/services/" → a section name), or "google_tag_event_settings" (a REUSABLE "Google Tag: Event Settings" parameter table, type gtes - rows = [{key,value}] event parameters, e.g. click_text → {{Click Text}}; GA4 event tags reference it in their Event Settings field. ALWAYS use this kind for a shared event-parameter variable - never a Custom JavaScript object). Requires accountId, containerId, workspaceId, kind, name.',
+        'Create a GTM variable with the correct structure (no raw JSON). Fields per kind: constant (value); data_layer (dataLayerName); javascript (a Custom JavaScript variable, e.g. "function(){return document.title;}"); event_data (SERVER only, reads keyPath from the incoming event; optional defaultValue); request_header (SERVER only, reads one header via headerName); lookup_table (input = the {{variable}} to match EXACTLY, rows = [{key,value}], optional defaultValue); regex_table (same, but each row key is a REGEX matched against input, for when many inputs map to one value); google_tag_event_settings (a REUSABLE "Google Tag: Event Settings" table, type gtes, rows = event parameters like click_text = {{Click Text}}, referenced by GA4 tags in their Event Settings field: ALWAYS use this kind for a shared event-parameter variable, never a Custom JavaScript object).',
       inputSchema: {
         type: 'object',
         properties: {
@@ -2149,11 +2143,11 @@ export function buildToolRegistry(
           javascript: { type: 'string' },
           keyPath: { type: 'string' },
           defaultValue: { type: 'string' },
-          headerName: { type: 'string', description: 'request_header only — the HTTP header to read, e.g. "X-Geo-Country".' },
-          input: { type: 'string', description: 'lookup_table / regex_table only — the input {{variable}}, e.g. "{{Page Path}}" or "{{Click Text}}".' },
+          headerName: { type: 'string', description: 'request_header only: the HTTP header to read, e.g. "X-Geo-Country".' },
+          input: { type: 'string', description: 'lookup_table / regex_table only: the input {{variable}}.' },
           rows: {
             type: 'array',
-            description: 'lookup_table / regex_table / google_tag_event_settings — the rows (key → value; regex_table keys are regexes; google_tag_event_settings keys are event-parameter names).',
+            description: 'Rows for lookup_table / regex_table / google_tag_event_settings (regex_table keys are regexes; gtes keys are event-parameter names).',
             items: { type: 'object', properties: { key: { type: 'string' }, value: { type: 'string' } }, required: ['key', 'value'] },
           },
         },
@@ -2195,7 +2189,7 @@ export function buildToolRegistry(
     },
     {
       name: 'create_gtm_workspace',
-      description: 'Create a new draft workspace in a GTM container to make changes in. Requires accountId, containerId, name.',
+      description: 'Create a new draft workspace in a GTM container to make changes in.',
       inputSchema: {
         type: 'object',
         properties: { accountId: { type: 'string' }, containerId: { type: 'string' }, name: { type: 'string' } },
@@ -2209,7 +2203,7 @@ export function buildToolRegistry(
     {
       name: 'copy_workspace_resources',
       description:
-        'COPY all tags, triggers, and variables from one workspace into another in the SAME container. GTM has no atomic "move", so this RECREATES the resources in the destination (variables, then triggers incl. trigger groups, then tags — remapping firing/blocking trigger references, built-in trigger ids, and trigger-group members to the destination). Non-destructive: any resource whose NAME already exists in the destination is SKIPPED, never overwritten. Variable {{references}} carry over by name. NOT copied: folders, built-in variables (may need enabling), clients/transformations (server-only), and tags using legacy firing/blocking RULES — those are listed in `unsupported`. Quota/429 errors are auto-retried with backoff, so a large copy usually completes in ONE run; any create that still fails is recorded in `failed` and the copy CONTINUES; re-running is safe (skips what already exists) and resolves setup/teardown-tag ordering. Returns created/skipped per type plus unsupported + failed. Requires accountId, containerId, fromWorkspaceId, toWorkspaceId.',
+        'COPY all tags, triggers and variables from one workspace into another in the SAME container. GTM has no atomic move, so this RECREATES them, remapping firing/blocking trigger references, built-in trigger ids and trigger-group members. Non-destructive: a resource whose NAME already exists in the destination is SKIPPED, never overwritten. Variable {{references}} carry over by name. NOT copied: folders, built-in variables, clients/transformations, and tags using legacy firing/blocking RULES, all listed in `unsupported`. Quota errors are auto-retried; a create that still fails is recorded in `failed` and the copy continues. Re-running is safe.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -2228,7 +2222,7 @@ export function buildToolRegistry(
     {
       name: 'create_gtm_environment',
       description:
-        'Create a GTM ENVIRONMENT (e.g. a "Test" preview-and-debug environment) and return its environmentId, gtm_auth token (authorizationCode), and the ready-to-paste install snippet (head <script> + body <noscript>, with gtm_auth/gtm_preview/gtm_cookies_win filled in). This is a config write (not a publish) — it does not change the live container. Requires accountId, containerId, name; optional url and enableDebug (boolean). Use this instead of telling the user to create the environment in the GTM UI.',
+        'Create a GTM ENVIRONMENT (e.g. a "Test" preview-and-debug environment) and return its environmentId, gtm_auth token (authorizationCode) and the ready-to-paste install snippet (head <script> + body <noscript> with gtm_auth/gtm_preview/gtm_cookies_win filled in). A config write, not a publish: it does not change the live container. Use this instead of sending the user to the GTM UI.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -2254,7 +2248,7 @@ export function buildToolRegistry(
     {
       name: 'create_server_container',
       description:
-        'Create a SERVER container (server-side GTM, usageContext "server") in an account. Note: this only creates the CONTAINER — the actual tagging-server HOST (Cloud Run / App Engine) must be provisioned separately (GTM UI "automatically provision tagging server", or gcloud); its URL then appears as the container\'s taggingServerUrls. Requires accountId, name.',
+        'Create a SERVER container (server-side GTM, usageContext "server"). This creates the CONTAINER only: the tagging-server HOST (Cloud Run / App Engine) must be provisioned separately (GTM UI "automatically provision tagging server", or gcloud), after which its URL appears as taggingServerUrls.',
       inputSchema: {
         type: 'object',
         properties: { accountId: { type: 'string' }, name: { type: 'string' } },
@@ -2268,7 +2262,7 @@ export function buildToolRegistry(
     {
       name: 'create_gtm_client',
       description:
-        'Create a CLIENT in a SERVER container workspace. `client` is a GTM API Client resource {name, type, parameter?}. The GA4 client is type "gaaw_client" (claims incoming GA4/gtag requests). Requires accountId, containerId, workspaceId, client.',
+        'Create a CLIENT in a SERVER container workspace. `client` is a GTM API Client resource {name, type, parameter?}. The GA4 client is type "gaaw_client", which claims incoming GA4/gtag requests.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -2287,7 +2281,7 @@ export function buildToolRegistry(
     {
       name: 'delete_gtm_client',
       description:
-        'Delete a CLIENT from a SERVER container workspace (draft, not published). The GTM API DOES support this (workspaces.clients.delete) — do NOT tell the user clients can only be removed in the GTM UI. Useful for removing a duplicate/unused client. Requires accountId, containerId, workspaceId, clientId. Destructive — requires the user to confirm twice; make sure the client is not the only one claiming requests. Optional name is shown in the approval prompt.',
+        'Delete a CLIENT from a SERVER container workspace (draft, not published). The GTM API DOES support this (workspaces.clients.delete); do NOT tell the user clients can only be removed in the GTM UI. Destructive, requires two confirmations: check the client is not the only one claiming requests.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -2309,7 +2303,7 @@ export function buildToolRegistry(
     {
       name: 'create_gtm_transformation',
       description:
-        'Create a TRANSFORMATION in a SERVER container workspace (reshape event data before tags run). EITHER pass name + allowParams (a structured "Allow parameters" transformation — keeps ONLY the listed event params, dropping the rest, e.g. to strip PII), OR a raw `transformation` GTM resource {name, type, parameter?} for any other type. Requires accountId, containerId, workspaceId.',
+        'Create a TRANSFORMATION in a SERVER container workspace (reshape event data before tags run). EITHER pass name + allowParams (an "Allow parameters" transformation keeping ONLY the listed event params, e.g. to strip PII), OR a raw `transformation` GTM resource {name, type, parameter?} for any other type.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -2336,14 +2330,14 @@ export function buildToolRegistry(
     {
       name: 'bootstrap_server_side_tagging',
       description:
-        "Set up server-side tagging FROM a web container in one step: creates a SERVER container, then adds a GA4 client + a GA4 server tag in its default workspace. Give it the GA4 Measurement ID to relay EITHER directly via `measurementId`, OR via `webContainerId` (the web container — it derives that container's GA4 Measurement ID automatically; pass the ACTIVE web container's id when the user says \"set up a server container for this web container\"). Returns the new container id + taggingServerUrls. Does NOT deploy the tagging-server host or change the web container — once the server is provisioned and you have its URL, call set_web_server_container_url to send to it. Requires accountId, name, and one of measurementId / webContainerId.",
+        'Set up server-side tagging in one step: creates a SERVER container, then a GA4 client and GA4 server tag in its default workspace. Give the Measurement ID to relay either as `measurementId` or as `webContainerId` (derived from that web container; use the ACTIVE web container id when the user says "set up a server container for this web container"). Returns the new container id and taggingServerUrls. Does NOT deploy the tagging-server host or change the web container: once the server is provisioned, call set_web_server_container_url.',
       inputSchema: {
         type: 'object',
         properties: {
           accountId: { type: 'string' },
           name: { type: 'string' },
           measurementId: { type: 'string' },
-          webContainerId: { type: 'string', description: 'Derive the GA4 Measurement ID from this web container (alternative to measurementId).' },
+          webContainerId: { type: 'string', description: 'Derive the Measurement ID from this web container instead.' },
         },
         required: ['accountId', 'name'],
         additionalProperties: false,
@@ -2365,14 +2359,14 @@ export function buildToolRegistry(
     {
       name: 'create_server_container_from_web',
       description:
-        "ONE STEP: create a complete, production-shaped server-side container FROM a web container (reference architecture). Derives the web container's GA4 Measurement ID and builds: the SERVER container + GA4 client with SERVER-MANAGED first-party FPID cookies + all-events firing trigger + GA4 relay tag + a GTM client that FIRST-PARTY-SERVES the web container (allowedContainerIds = its GTM-XXXX id) + the standard Event Data variables (ed - event_id for browser↔server Meta/TikTok dedup, ed - page_location for page-scoped triggers). When `serverUrl` is given (the user's deployed Cloud Run / Stape / tagging-server URL) it also records the URL on the server container, points the web Google tag at it (web→server link), AND wires dedup on the web side (Unique Event ID variable sent as event_id on every GA4 hit). Also returns the NON-GA4 conversion tags (Google Ads, Meta) still in the web container that need a server-side tag built by hand. Does NOT deploy the host and does NOT publish. Requires accountId + webContainerId (the ACTIVE web container's id); optional name (defaults from the web container) and serverUrl.",
+        "ONE STEP: create a complete, production-shaped server-side container FROM a web container. Derives its GA4 Measurement ID and builds the SERVER container, a GA4 client with server-managed first-party FPID cookies, an all-events firing trigger, a GA4 relay tag, a GTM client that first-party-serves the web container, and the standard Event Data variables (ed - event_id for browser/server dedup, ed - page_location for page-scoped triggers). With `serverUrl` it also records the URL, points the web Google tag at it, and wires web-side dedup (Unique Event ID sent as event_id on every GA4 hit). Returns the NON-GA4 conversion tags still in the web container that need a server tag built by hand. Does NOT deploy the host and does NOT publish.",
       inputSchema: {
         type: 'object',
         properties: {
           accountId: { type: 'string' },
-          webContainerId: { type: 'string', description: "The WEB container to base the server container on (its GA4 id is derived automatically)." },
-          name: { type: 'string', description: 'Name for the new server container (e.g. "example.com - Server").' },
-          serverUrl: { type: 'string', description: 'Optional tagging-server URL (https://…) — records it on the server container + points the web Google tag at it. Omit to wire later.' },
+          webContainerId: { type: 'string', description: 'The WEB container to base it on.' },
+          name: { type: 'string', description: 'Name for the new server container.' },
+          serverUrl: { type: 'string', description: 'Tagging-server URL. Omit to wire it later.' },
         },
         required: ['accountId', 'webContainerId'],
         additionalProperties: false,
@@ -2388,7 +2382,7 @@ export function buildToolRegistry(
     {
       name: 'set_web_server_container_url',
       description:
-        "Wire a WEB container to a server container: set the web Google tag's server_container_url (the data then flows web→server). Requires accountId, containerId, workspaceId, tagId (the web Google tag — type googtag; find it with list_gtm_tags), and serverUrl (the https://… tagging-server URL, available only AFTER you provision the server host). Upserts the config setting, preserving the tag's other settings. After this, QA in GTM Preview.",
+        "Wire a WEB container to a server container by setting the web Google tag's server_container_url. tagId is the web Google tag (type googtag; find it with list_gtm_tags); serverUrl exists only AFTER the server host is provisioned. Upserts the config setting, preserving the tag's other settings. QA in GTM Preview afterwards.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -2408,7 +2402,7 @@ export function buildToolRegistry(
     {
       name: 'set_server_container_tagging_url',
       description:
-        'Set the SERVER container\'s own Tagging Server URL (its container-level taggingServerUrls field). The GTM API CAN write this (containers.update) — do NOT tell the user it can only be set in the GTM UI. Use when they have their tagging-server host URL (e.g. https://sgtm.example.com) and want it recorded on the container; this clears the audit\'s "No tagging server URL" finding. IMPORTANT: this only RECORDS the URL in config — it does NOT deploy the host. The server at that URL must still be live (confirm with verify_server_endpoint). This is DIFFERENT from set_web_server_container_url (which points a WEB tag at the server). Requires accountId, containerId (the SERVER container), serverUrl.',
+        'Set the SERVER container\'s own Tagging Server URL (container-level taggingServerUrls). The GTM API CAN write this (containers.update); do NOT tell the user it is UI-only. Clears the audit\'s "No tagging server URL" finding. It only RECORDS the URL, it does NOT deploy the host: confirm the server is live with verify_server_endpoint. DIFFERENT from set_web_server_container_url, which points a WEB tag at the server. containerId must be the SERVER container.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -2426,15 +2420,15 @@ export function buildToolRegistry(
     {
       name: 'setup_ecommerce_funnel',
       description:
-        "ONE STEP: install the FULL GA4 ecommerce funnel in a WEB container. For each funnel event (default: view_item, add_to_cart, view_cart, begin_checkout, add_shipping_info, add_payment_info, purchase) it creates a Custom Event trigger + a GA4 event tag with 'Send Ecommerce data' ON — the tag forwards the WHOLE dataLayer ecommerce object (items, value, currency, transaction_id), so NO per-parameter variable mapping is needed. Also creates the dlv - ecommerce.* variables that downstream Ads/Meta tags read. Idempotent: same-named tags/triggers/variables are skipped, so re-running completes a partial install instead of erroring. Requires accountId, containerId, workspaceId (a WEB container), measurementId (G-XXXXXXX — derive it from the existing Google tag or ask). Optional events to override the funnel list (e.g. add generate_lead).",
+        "ONE STEP: install the FULL GA4 ecommerce funnel in a WEB container. Per funnel event (default view_item, add_to_cart, view_cart, begin_checkout, add_shipping_info, add_payment_info, purchase) it creates a Custom Event trigger plus a GA4 event tag with 'Send Ecommerce data' ON, so the tag forwards the WHOLE dataLayer ecommerce object and no per-parameter mapping is needed. Also creates the dlv - ecommerce.* variables downstream Ads/Meta tags read. Idempotent: same-named resources are skipped, so re-running completes a partial install. Derive measurementId from the existing Google tag or ask.",
       inputSchema: {
         type: 'object',
         properties: {
           accountId: { type: 'string' },
           containerId: { type: 'string' },
           workspaceId: { type: 'string' },
-          measurementId: { type: 'string', description: 'GA4 Measurement ID (G-XXXXXXX) the event tags send to.' },
-          events: { type: 'array', items: { type: 'string' }, description: 'Funnel events to install. Omit for the standard 7-event ecommerce funnel.' },
+          measurementId: { type: 'string', description: 'GA4 Measurement ID the event tags send to.' },
+          events: { type: 'array', items: { type: 'string' }, description: 'Funnel events to install. Omit for the standard 7.' },
         },
         required: ['accountId', 'containerId', 'workspaceId', 'measurementId'],
         additionalProperties: false,
@@ -2475,16 +2469,16 @@ export function buildToolRegistry(
     {
       name: 'setup_server_ecommerce_funnel',
       description:
-        'ONE STEP: install the server-side ecommerce funnel in a SERVER container. For each funnel event (default: the standard 7-event ecommerce funnel) it creates a per-event trigger ({{_event}} equals the event, scoped to the GA4 client) + a GA4 server tag relaying it, and — when adsConversionId plus a per-event conversionLabel are given — a Google Ads conversion server tag for that event (typically purchase). Enables the Client Name built-in. Idempotent by name; re-running completes a partial install. Run AFTER create_server_container_from_web. Requires accountId, containerId (the SERVER container), workspaceId, measurementId. Optional events, adsConversionId (AW-XXXXXXXX) + adsConversionLabels [{event, conversionLabel}].',
+        'ONE STEP: install the server-side ecommerce funnel in a SERVER container (containerId must be the SERVER one). Per funnel event (default the standard 7) it creates a trigger ({{_event}} equals the event, scoped to the GA4 client) plus a GA4 server tag relaying it, and with adsConversionId plus a per-event conversionLabel, a Google Ads conversion server tag for that event (typically purchase). Enables the Client Name built-in. Idempotent by name. Run AFTER create_server_container_from_web.',
       inputSchema: {
         type: 'object',
         properties: {
           accountId: { type: 'string' },
           containerId: { type: 'string', description: 'The SERVER container id.' },
           workspaceId: { type: 'string' },
-          measurementId: { type: 'string', description: 'GA4 Measurement ID (G-XXXXXXX) the server relays to.' },
-          events: { type: 'array', items: { type: 'string' }, description: 'Funnel events. Omit for the standard 7-event ecommerce funnel.' },
-          adsConversionId: { type: 'string', description: 'Google Ads conversion ID (AW-XXXXXXXX) — needed only for server Ads conversion tags.' },
+          measurementId: { type: 'string', description: 'GA4 Measurement ID the server relays to.' },
+          events: { type: 'array', items: { type: 'string' }, description: 'Funnel events. Omit for the standard 7.' },
+          adsConversionId: { type: 'string', description: 'AW-XXXXXXXX, only for server Ads conversion tags.' },
           adsConversionLabels: {
             type: 'array',
             items: {
@@ -2493,7 +2487,7 @@ export function buildToolRegistry(
               required: ['event', 'conversionLabel'],
               additionalProperties: false,
             },
-            description: 'Per-event Ads conversion labels, e.g. [{"event":"purchase","conversionLabel":"AbCdEf..."}]. Only listed events get an Ads tag.',
+            description: 'Per-event Ads conversion labels. Only listed events get an Ads tag.',
           },
         },
         required: ['accountId', 'containerId', 'workspaceId', 'measurementId'],
@@ -2521,7 +2515,7 @@ export function buildToolRegistry(
     {
       name: 'setup_consent_mode_defaults',
       description:
-        "Install the Consent Mode v2 DEFAULT-consent tag in a WEB container: a Custom HTML gtag('consent','default',…) covering ALL v2 signals (ad_storage, analytics_storage, ad_user_data, ad_personalization, functionality_storage, security_storage) with wait_for_update, firing on the built-in 'Consent Initialization - All Pages' trigger — BEFORE any other tag. Ad/analytics signals default to DENIED (GDPR-safe); the CMP then upgrades via gtag('consent','update'). This sets DEFAULTS only — the user still needs a CMP/consent banner for the update call. Skipped if a tag with the same name already exists. Requires accountId, containerId, workspaceId. Optional per-signal overrides ('granted'/'denied'), waitForUpdate ms (default 500), name (default 'Consent Mode - Defaults').",
+        "Install the Consent Mode v2 DEFAULT-consent tag in a WEB container: a Custom HTML gtag('consent','default',...) covering ALL v2 signals (ad_storage, analytics_storage, ad_user_data, ad_personalization, functionality_storage, security_storage) with wait_for_update, firing on the built-in 'Consent Initialization - All Pages' trigger, BEFORE any other tag. Ad/analytics signals default to DENIED (GDPR-safe); the CMP then upgrades via gtag('consent','update'). DEFAULTS only: the user still needs a CMP for the update call. Skipped if a same-named tag exists.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -2535,7 +2529,7 @@ export function buildToolRegistry(
           adPersonalization: { type: 'string', enum: ['granted', 'denied'] },
           functionalityStorage: { type: 'string', enum: ['granted', 'denied'] },
           securityStorage: { type: 'string', enum: ['granted', 'denied'] },
-          waitForUpdate: { type: 'number', description: 'ms to wait for the CMP consent update before tags fire (default 500).' },
+          waitForUpdate: { type: 'number', description: 'ms to wait for the CMP update before tags fire. Default 500.' },
         },
         required: ['accountId', 'containerId', 'workspaceId'],
         additionalProperties: false,
@@ -2561,7 +2555,7 @@ export function buildToolRegistry(
     {
       name: 'create_server_tag',
       description:
-        'Create a tag in a SERVER container workspace (reads event data from the GA4 client). platform: "ga4" (forward events to GA4 — needs measurementId, optional eventName, defaults to forwarding the incoming event), "ads_conversion" (Google Ads conversion — needs conversionId + conversionLabel; set productReporting=true ONLY for an ecommerce/purchase conversion so it forwards the event\'s product data, otherwise it stays off), "ads_conversion_linker" (Google Ads conversion linker), or "ads_remarketing" (Google Ads dynamic remarketing — needs conversionId). Optional firingTriggerId. Requires accountId, containerId, workspaceId, platform, name.',
+        'Create a tag in a SERVER container workspace (it reads event data from the GA4 client). Fields per platform: ga4 (measurementId, optional eventName, defaults to forwarding the incoming event); ads_conversion (conversionId + conversionLabel; set productReporting=true ONLY for an ecommerce/purchase conversion); ads_conversion_linker (none); ads_remarketing (conversionId).',
       inputSchema: {
         type: 'object',
         properties: {
@@ -2574,7 +2568,7 @@ export function buildToolRegistry(
           conversionId: { type: 'string' },
           conversionLabel: { type: 'string' },
           eventName: { type: 'string' },
-          productReporting: { type: 'boolean', description: 'ads_conversion only — forward the event\'s product/cart data (Shopping reporting). Default false; set true only for ecommerce/purchase conversions.' },
+          productReporting: { type: 'boolean', description: 'ads_conversion only: forward product/cart data (Shopping reporting). Default false.' },
           firingTriggerId: { type: 'array', items: { type: 'string' } },
         },
         required: ['accountId', 'containerId', 'workspaceId', 'platform', 'name'],
@@ -2612,7 +2606,7 @@ export function buildToolRegistry(
     {
       name: 'create_server_trigger',
       description:
-        'Create the firing trigger for a SERVER container — a Custom Event trigger, optionally SCOPED to a client via "Client Name equals <clientName>". Pass `eventName` to fire on ONE specific event ("{{_event}} equals purchase" — the dominant server pattern, e.g. to fire a GA4 Purchase or Ads Purchase conversion tag only on the purchase event); OMIT eventName to fire on ALL events (a base/relay trigger). Use THIS (not create_gtm_trigger) for server triggers — it builds the exact customEvent shape GTM requires ({{_event}} filter + the optional Client Name filter), which is easy to get wrong by hand. When clientName is given it also enables the Client Name built-in so the filter resolves. `pageUrlContains` additionally scopes the trigger to pages whose URL contains that substring (the multi-tenant campaign pattern: one event + one page + one destination tag, e.g. per-charity petition pages); it reads {{ed - page_location}}, which is auto-created if missing. IMPORTANT: type event names EXACTLY as they arrive — with spaces, never URL-encoded ("Sign Petition Click", NOT "Sign+Petition+Click"; a pasted-encoded value silently never matches). Requires accountId, containerId, workspaceId, name; optional eventName, clientName (e.g. "GA4"), pageUrlContains.',
+        'Create the firing trigger for a SERVER container: a Custom Event trigger, optionally SCOPED to a client via "Client Name equals <clientName>". `eventName` fires on ONE event ({{_event}} equals it, the dominant server pattern); omit it to fire on ALL events (a base/relay trigger). Use THIS, not create_gtm_trigger, for server triggers: it builds the exact customEvent shape GTM requires, and enables the Client Name built-in when clientName is given. `pageUrlContains` further scopes to pages whose URL contains that substring, reading {{ed - page_location}}, auto-created if missing. IMPORTANT: type event names EXACTLY as they arrive, with spaces, NEVER URL-encoded ("Sign Petition Click", not "Sign+Petition+Click"): an encoded value silently never matches.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -2620,9 +2614,9 @@ export function buildToolRegistry(
           containerId: { type: 'string' },
           workspaceId: { type: 'string' },
           name: { type: 'string' },
-          eventName: { type: 'string', description: 'Fire only on this event ({{_event}} equals <eventName>, e.g. "purchase"). Omit to fire on all events. Use the event name EXACTLY as sent (spaces, not "+").' },
-          clientName: { type: 'string', description: 'Scope the trigger to this client (Client Name equals …). Omit to fire on all events regardless of client.' },
-          pageUrlContains: { type: 'string', description: 'Also require the event page URL to CONTAIN this substring (e.g. "/petition/minister-for-children/"). Reads {{ed - page_location}} (auto-created).' },
+          eventName: { type: 'string', description: 'Fire only on this event. Omit to fire on all. Use the name EXACTLY as sent (spaces, not "+").' },
+          clientName: { type: 'string', description: 'Scope to this client (Client Name equals). Omit for any client.' },
+          pageUrlContains: { type: 'string', description: 'Also require the event page URL to CONTAIN this substring.' },
         },
         required: ['accountId', 'containerId', 'workspaceId', 'name'],
         additionalProperties: false,
@@ -2668,7 +2662,7 @@ export function buildToolRegistry(
     {
       name: 'create_meta_emq_variables',
       description:
-        'Create the standard Meta CAPI "Event Match Quality" Event Data variables (ed - fbp, fbc, event_id, value, currency, transaction_id, content_ids, email_address, phone_number, first_name, last_name, country, city, postal_code, ip_override, user_agent; email/phone get a nested user_data.* fallback, and ip/user_agent get a request-header fallback via rh - x-forwarded-for / rh - user-agent) in a SERVER container. Idempotent — skips variables that already exist. NOTE: the CAPI tag itself is built by create_meta_capi_server_tag (it imports + configures the Stape template via the API AND auto-runs this tool), so you rarely need to call this directly — only to pre-provision the variables. The CAPI tag hashes user_data itself, so these source the RAW values. Requires accountId, containerId (the SERVER container), workspaceId.',
+        'Create the standard Meta CAPI "Event Match Quality" Event Data variables (ed - fbp, fbc, event_id, value, currency, transaction_id, content_ids, email_address, phone_number, first_name, last_name, country, city, postal_code, ip_override, user_agent) in a SERVER container, with nested user_data.* fallbacks for email/phone and request-header fallbacks for ip/user_agent. Idempotent. create_meta_capi_server_tag auto-runs this, so call it directly only to pre-provision. Values are RAW (the CAPI tag hashes user_data itself). containerId must be the SERVER container.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -2686,19 +2680,19 @@ export function buildToolRegistry(
     {
       name: 'create_meta_pixel_tag',
       description:
-        'Create a Meta (Facebook) Pixel tag from the official community template with the CORRECT event fields — use this instead of hand-building a cvt_ template tag (which gets the event wrong). Pass the Meta `event`: a STANDARD event (PageView, ViewContent, Search, AddToCart, AddToWishlist, InitiateCheckout, AddPaymentInfo, Purchase, Lead, CompleteRegistration, Contact, CustomizeProduct, Donate, FindLocation, Schedule, StartTrial, SubmitApplication, Subscribe) is set as eventName=standard + standardEventName; ANY other value becomes a CUSTOM event (eventName=custom + customEventName=<event>). Free text like "add to cart" resolves to AddToCart. `objectProperties` is an array of {name, value} → the Meta Object Properties (event params). If you OMIT it, the tool AUTO-FILLS the event\'s recommended properties (e.g. Purchase/ViewContent → value, currency, content_ids, content_type) from {{dlv - ecommerce.*}} dataLayer variables and auto-creates those variables, so the tag ships with its event params; pass an explicit array to override, or [] for none. `advancedMatching` (OPTIONAL) is the Pixel\'s USER-IDENTITY params (the web analog of GA4 user properties / CAPI user_data): {name, value} rows where name ∈ em/fn/ln/ph/ct/st/zp/cn/external_id/ge/db (country uses the SHORT web-Pixel code `cn`; passing "country" is auto-mapped to it) and value is usually a {{variable}} carrying the (hashed or raw) PII — passing any rows turns Advanced Matching ON. `name` is OPTIONAL — defaults to "Meta - Event - <Event> Tag". Imports Facebook\'s OFFICIAL Meta Pixel template if needed (you do NOT pass the cvt_ type). Optional firingTriggerId (create/identify the trigger first — without it the tag will not fire). Requires accountId, containerId, workspaceId, pixelId, event.',
+        'Create a Meta (Facebook) Pixel WEB tag from the official community template (imported automatically) with the CORRECT event fields. Use this instead of hand-building a cvt_ template tag, which gets the event wrong. `event`: a Meta standard event (PageView, ViewContent, Search, AddToCart, InitiateCheckout, AddPaymentInfo, Purchase, Lead, CompleteRegistration, Contact, Donate, Subscribe) sets eventName=standard + standardEventName; anything else becomes a CUSTOM event, and free text like "add to cart" resolves to AddToCart. `objectProperties` are the Meta Object Properties; OMIT it and the tool auto-fills the event\'s recommended properties from {{dlv - ecommerce.*}} variables, creating them; pass [] for none. `advancedMatching` rows are the Pixel\'s user-identity params (em/fn/ln/ph/ct/st/zp/cn/external_id/ge/db; country auto-maps to cn). Without firingTriggerId the tag will not fire.',
       inputSchema: {
         type: 'object',
         properties: {
           accountId: { type: 'string' },
           containerId: { type: 'string' },
           workspaceId: { type: 'string' },
-          name: { type: 'string', description: 'Optional — defaults to "Meta - Event - <Event> Tag".' },
+          name: { type: 'string', description: 'Optional, defaults to "Meta - Event - <Event> Tag".' },
           pixelId: { type: 'string' },
-          event: { type: 'string', description: 'Meta event, e.g. ViewContent / AddToCart / Purchase / Donate, or a custom name.' },
+          event: { type: 'string', description: 'e.g. ViewContent / AddToCart / Purchase, or a custom name.' },
           objectProperties: {
             type: 'array',
-            description: 'Meta Object Properties (event params): {name, value} rows, e.g. {name:"value", value:"{{Ecommerce Value}}"}.',
+            description: 'Meta Object Properties (event params): {name,value} rows.',
             items: {
               type: 'object',
               properties: { name: { type: 'string' }, value: { type: 'string' } },
@@ -2708,7 +2702,7 @@ export function buildToolRegistry(
           },
           advancedMatching: {
             type: 'array',
-            description: 'Advanced Matching (user-identity) rows { name, value }; name ∈ em/fn/ln/ph/ct/st/zp/cn/external_id/ge/db (country → cn, auto-mapped), value usually a {{variable}}. Any rows turn Advanced Matching ON.',
+            description: 'Advanced Matching rows {name,value}. Any rows turn it ON.',
             items: {
               type: 'object',
               properties: { name: { type: 'string' }, value: { type: 'string' } },
@@ -2754,27 +2748,27 @@ export function buildToolRegistry(
     {
       name: 'create_meta_capi_server_tag',
       description:
-        'Create a Meta/Facebook Conversions API (CAPI) SERVER tag from the Stape "Facebook Conversion API" community template (stape-io / facebook-tag), tuned for high Event Match Quality: action source = website, Event Enhancement (gtmeec cookie) ON, generate _fbp ON, and the EMQ user-data (em/ph/external_id + client_ip_address/client_user_agent — em/ph read {{ed - email_address}}/{{ed - phone_number}} with nested user_data.* fallbacks; ip/UA are raw context fields with a request-header fallback), ecommerce custom_data (content_ids/value/currency/order_id) and event_id AUTO-MAPPED into the tag — it also auto-creates those `ed - …` Event Data variables when missing (idempotent), so ONE call yields a complete, working tag. Pass mapEmqVariables=false to skip the mapping (the template still auto-extracts user data from the incoming event). Pass pixelId + accessToken (typically {{Facebook Pixel ID}} / {{Facebook Api Token}} variables) and the Meta `event` — a STANDARD event (ViewContent, AddToCart, Purchase, Lead, …) sets eventNameStandard with Override; anything else inherits the incoming event_name. USER-IDENTITY OVERRIDE: pass `userData` to ADD explicit advanced-matching rows ON TOP of the auto-map — {name, value} rows where name ∈ em/ph/fn/ln/ct/st/zp/country/external_id/fbc/fbp/client_ip_address/client_user_agent/subscription_id/lead_id/fb_login_id/ge/db (value usually a {{variable}}); a caller row WINS a name collision with the auto-mapped em/ph/external_id, and these rows still ship even with mapEmqVariables=false. Imports the Stape template if needed (you do NOT pass the cvt_ type). Optional firingTriggerId, eventEnhancement, generateFbp, actionSource, mapEmqVariables, userData, name (defaults to "Meta CAPI - <Event> Tag"). Requires accountId, containerId (SERVER), workspaceId, pixelId, accessToken, event.',
+        'Create a Meta/Facebook Conversions API (CAPI) SERVER tag from the Stape template (stape-io / facebook-tag), imported automatically. containerId must be the SERVER container. Tuned for high Event Match Quality: action source website, Event Enhancement (gtmeec) ON, generate _fbp ON, and the EMQ user_data (em/ph/external_id plus client_ip_address/client_user_agent), ecommerce custom_data and event_id AUTO-MAPPED from {{ed - }} variables that are created if missing, so ONE call yields a working tag; mapEmqVariables=false skips that mapping and the template still auto-extracts user data from the event. pixelId and accessToken are usually {{variables}}. `event`: a Meta standard event (ViewContent, AddToCart, Purchase, Lead) sets eventNameStandard with Override; anything else inherits the incoming event_name. `userData` ADDS advanced-matching rows on top of the auto-map (em/ph/fn/ln/ct/st/zp/country/external_id/fbc/fbp/client_ip_address/client_user_agent/subscription_id/lead_id/fb_login_id/ge/db); a caller row wins a collision, and these rows ship even with mapEmqVariables=false.',
       inputSchema: {
         type: 'object',
         properties: {
           accountId: { type: 'string' },
           containerId: { type: 'string' },
           workspaceId: { type: 'string' },
-          name: { type: 'string', description: 'Optional — defaults to "Meta CAPI - <Event> Tag".' },
+          name: { type: 'string', description: 'Optional, defaults to "Meta CAPI - <Event> Tag".' },
           pixelId: { type: 'string' },
-          accessToken: { type: 'string', description: 'Meta CAPI access token (usually a {{variable}}).' },
-          event: { type: 'string', description: 'Meta event, e.g. AddToCart / Purchase / ViewContent.' },
+          accessToken: { type: 'string' },
+          event: { type: 'string', description: 'e.g. AddToCart / Purchase / ViewContent.' },
           actionSource: { type: 'string', description: 'Default "website".' },
-          eventEnhancement: { type: 'boolean', description: 'Event Enhancement (gtmeec) — default true.' },
-          generateFbp: { type: 'boolean', description: 'Generate _fbp cookie — default true.' },
-          mapEmqVariables: { type: 'boolean', description: 'Map the ed-variable EMQ/ecommerce rows into the tag (default true). false = leave the lists empty; the template still auto-extracts from the event.' },
+          eventEnhancement: { type: 'boolean', description: 'gtmeec, default true.' },
+          generateFbp: { type: 'boolean', description: 'Generate _fbp cookie, default true.' },
+          mapEmqVariables: { type: 'boolean', description: 'Map the ed-variable EMQ/ecommerce rows in (default true).' },
           userData: {
             type: 'array',
-            description: 'Explicit advanced-matching rows { name, value } ADDED to the auto-map (caller wins a name collision); name ∈ em/ph/fn/ln/ct/st/zp/country/external_id/fbc/fbp/client_ip_address/client_user_agent/subscription_id/lead_id/fb_login_id/ge/db, value usually a {{variable}}. Ships even when mapEmqVariables=false.',
+            description: 'Advanced-matching rows {name,value} added to the auto-map (caller wins collisions).',
             items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
           },
-          userDataObject: { type: 'string', description: 'Optional variable whose object is merged into user_data (the template\'s userDataObject field).' },
+          userDataObject: { type: 'string', description: 'Variable whose object is merged into user_data.' },
           firingTriggerId: { type: 'array', items: { type: 'string' } },
         },
         required: ['accountId', 'containerId', 'workspaceId', 'pixelId', 'accessToken', 'event'],
@@ -2820,35 +2814,35 @@ export function buildToolRegistry(
     {
       name: 'create_tiktok_capi_server_tag',
       description:
-        'Create a TikTok Events API SERVER tag from the Stape "TikTok Events API" community template (stape-io / tiktok-tag), tuned for match quality: Event Enhancement ON, generate _ttp ON. This is the SERVER-side Events API tag — DISTINCT from the TikTok WEB pixel (tiktok / gtm-template-pixel) and it uses DIFFERENT field keys (pixelId / accessToken / eventName, NOT the web pixel_code / event). Pass pixelId + accessToken (the TikTok Events Manager access token, usually {{variables}}) and the `event`. A TikTok STANDARD event sets eventName (Purchase, AddToCart, ViewContent, InitiateCheckout, CompleteRegistration, SubmitForm, Search, …); GA4 names are mapped (purchase→Purchase [NOT the legacy CompletePayment], add_to_cart→AddToCart, view_item→ViewContent, begin_checkout→InitiateCheckout, generate_lead→SubmitForm, sign_up→CompleteRegistration, file_download→Download); anything unrecognised becomes a custom event. By default (mapEventData) the tag AUTO-FILLS user_data (email/phone/external_id + client ip/user_agent, each ip/UA row backed by a request-header fallback so it resolves even when the event omits it), the event\'s recommended eventProperties, and event_id from ed- Event Data variables — and auto-creates those variables — so ONE call yields a complete, sending tag. Pass matchAddress=true to ALSO auto-map first_name/last_name/city/state/country/zip_code from the event\'s user_data.address.* (best for Purchase/registration). Pass explicit userData / eventProperties / eventId to override (name ∈ email/phone/external_id/ttclid/ttp/ip/user_agent/first_name/last_name/city/state/country/zip_code for userData; commerce keys like contents/content_type/value/currency/num_items/order_id/query for eventProperties — commerce keys land in the TikTok customDataList, the rest in additional properties, routed automatically). Pass mapEventData=false to leave the lists to exactly what you pass. Imports the Stape template if needed (you do NOT pass the cvt_ type). The tag needs a SERVER trigger (create_server_trigger) scoped to the client that claims the events. Optional eventSource (web/app/offline/crm, default web), testEventCode, generateTtp, eventEnhancement, requireConsent, firingTriggerId, name (defaults to "TikTok CAPI - <Event> Tag"). Requires accountId, containerId (SERVER), workspaceId, pixelId, accessToken, event.',
+        'Create a TikTok Events API SERVER tag from the Stape template (stape-io / tiktok-tag), imported automatically. containerId must be the SERVER container. DISTINCT from the TikTok WEB pixel and using DIFFERENT field keys (pixelId / accessToken / eventName, NOT the web pixel_code / event). `event`: a TikTok standard event (Purchase, AddToCart, ViewContent, InitiateCheckout, CompleteRegistration, SubmitForm, Search); GA4 names are mapped (purchase becomes Purchase, NOT the legacy CompletePayment); anything else becomes a custom event. By default mapEventData auto-fills user_data (email/phone/external_id plus client ip/user_agent), the recommended eventProperties and event_id from ed- variables that are created if missing, so ONE call yields a sending tag; set it false to keep only the rows you pass. matchAddress=true also maps first_name/last_name/city/state/country/zip_code from user_data.address.*, best for Purchase and registration. Explicit userData / eventProperties / eventId override the auto-map; commerce eventProperties keys land in customDataList and the rest in additional properties, routed automatically. Needs a SERVER trigger (create_server_trigger) scoped to the client claiming the events.',
       inputSchema: {
         type: 'object',
         properties: {
           accountId: { type: 'string' },
           containerId: { type: 'string' },
           workspaceId: { type: 'string' },
-          name: { type: 'string', description: 'Optional — defaults to "TikTok CAPI - <Event> Tag".' },
-          pixelId: { type: 'string', description: 'TikTok Pixel ID (usually a {{variable}}).' },
-          accessToken: { type: 'string', description: 'TikTok Events API access token (usually a {{variable}}).' },
-          event: { type: 'string', description: 'Event, e.g. purchase / AddToCart / ViewContent / a custom name.' },
-          eventSource: { type: 'string', description: 'web | app | offline | crm — default web.' },
-          eventId: { type: 'string', description: 'Event ID for dedup with the web pixel (usually a {{variable}}).' },
+          name: { type: 'string', description: 'Optional, defaults to "TikTok CAPI - <Event> Tag".' },
+          pixelId: { type: 'string' },
+          accessToken: { type: 'string' },
+          event: { type: 'string', description: 'e.g. purchase / AddToCart / ViewContent / a custom name.' },
+          eventSource: { type: 'string', description: 'web | app | offline | crm, default web.' },
+          eventId: { type: 'string', description: 'Dedup id shared with the web pixel.' },
           userData: {
             type: 'array',
-            description: 'Advanced-matching rows { name, value }; name ∈ email/phone/external_id/ttclid/ttp/ip/user_agent/first_name/last_name/city/state/country/zip_code.',
+            description: 'Advanced-matching rows {name,value}.',
             items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
           },
           eventProperties: {
             type: 'array',
-            description: 'Event-data rows { name, value } (currency/value/contents/content_ids/content_type/num_items/order_id/…).',
+            description: 'Event-data rows {name,value} (currency/value/contents/content_type/order_id).',
             items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
           },
           testEventCode: { type: 'string' },
-          generateTtp: { type: 'boolean', description: 'Generate _ttp cookie — default true.' },
-          eventEnhancement: { type: 'boolean', description: 'Event Enhancement — default true.' },
-          requireConsent: { type: 'boolean', description: 'Gate on ad_storage consent — default false (optional).' },
-          mapEventData: { type: 'boolean', description: 'Auto-fill user_data (email/phone/external_id + client ip/user_agent) + the event\'s properties + event_id from ed- Event Data variables when you pass no explicit userData/eventProperties (default true; also auto-creates those variables). false = leave the lists to what you passed.' },
-          matchAddress: { type: 'boolean', description: 'OPT-IN address advanced-matching (default false): also send first_name/last_name/city/state/country/zip_code from the incoming event\'s user_data.address.* — best for Purchase/registration events that carry address. Only applies when auto-filling (no explicit userData, and mapEventData not false); the template drops blank rows so an absent field is simply not sent.' },
+          generateTtp: { type: 'boolean', description: 'Default true.' },
+          eventEnhancement: { type: 'boolean', description: 'Default true.' },
+          requireConsent: { type: 'boolean', description: 'Gate on ad_storage consent, default false.' },
+          mapEventData: { type: 'boolean', description: 'Default true. See the tool description.' },
+          matchAddress: { type: 'boolean', description: 'Default false. Only applies while auto-filling; blank rows are dropped.' },
           firingTriggerId: { type: 'array', items: { type: 'string' } },
         },
         required: ['accountId', 'containerId', 'workspaceId', 'pixelId', 'accessToken', 'event'],
@@ -2901,35 +2895,35 @@ export function buildToolRegistry(
     {
       name: 'create_linkedin_capi_server_tag',
       description:
-        'Create a LinkedIn Conversions API SERVER tag from the Stape "LinkedIn Conversion API" community template (stape-io / linkedin-tag) in a server container. LinkedIn conversions are keyed by a pre-defined Conversion Rule (NOT an event name), so pass accessToken + conversionRuleUrn (both usually {{variables}}); get them from LinkedIn Campaign Manager → Measurement → Conversions (the token via Manage sources → Google Tag Manager → Generate token; the rule ID on the conversion rule settings). By default autoMapEventData/UserIds/UserInfo are ON, so the tag derives currency/amount + the match IDs (hashed email, LinkedIn first-party li_fat_id, …) + user info from the incoming GA4 event with no explicit rows — the LinkedIn analog of Meta CAPI automap. Pass eventId for dedup with the LinkedIn Insight Tag. Optionally add/override rows: userIds (name ∈ email/linkedinFirstPartyId/acxiomID/moatID/ipAddress/googleAid), userInfo (name ∈ firstName/lastName/jobTitle/companyName/countryCode), eventData (name ∈ conversionHappenedAt/currency/amount/eventId) — values usually {{variables}}. Imports the Stape template if needed (you do NOT pass the cvt_ type). The tag needs a SERVER trigger (create_server_trigger). Optional autoMap, optimistic, requireConsent, firingTriggerId, name (default "LinkedIn CAPI Tag"). Requires accountId, containerId (SERVER), workspaceId, accessToken, conversionRuleUrn.',
+        'Create a LinkedIn Conversions API SERVER tag from the Stape template (stape-io / linkedin-tag), imported automatically. containerId must be the SERVER container. LinkedIn conversions are keyed by a pre-defined Conversion Rule, NOT an event name, so accessToken + conversionRuleUrn (usually {{variables}}) come from LinkedIn Campaign Manager under Measurement > Conversions. autoMap is ON by default, deriving event data, match IDs (hashed email, li_fat_id) and user info from the incoming GA4 event with no explicit rows. eventId dedups against the LinkedIn Insight Tag. Optional override rows: userIds (email/linkedinFirstPartyId/acxiomID/moatID/ipAddress/googleAid), userInfo (firstName/lastName/jobTitle/companyName/countryCode), eventData (conversionHappenedAt/currency/amount/eventId). Needs a SERVER trigger (create_server_trigger).',
       inputSchema: {
         type: 'object',
         properties: {
           accountId: { type: 'string' },
           containerId: { type: 'string' },
           workspaceId: { type: 'string' },
-          name: { type: 'string', description: 'Optional — defaults to "LinkedIn CAPI Tag".' },
-          accessToken: { type: 'string', description: 'LinkedIn Conversions API access token (usually a {{variable}}).' },
-          conversionRuleUrn: { type: 'string', description: 'LinkedIn Conversion Rule ID / URN from Campaign Manager (usually a {{variable}}).' },
-          eventId: { type: 'string', description: 'Event ID for dedup with the LinkedIn Insight Tag (usually a {{variable}}).' },
+          name: { type: 'string', description: 'Optional, defaults to "LinkedIn CAPI Tag".' },
+          accessToken: { type: 'string' },
+          conversionRuleUrn: { type: 'string', description: 'Conversion Rule ID / URN from Campaign Manager.' },
+          eventId: { type: 'string', description: 'Dedup id shared with the LinkedIn Insight Tag.' },
           userIds: {
             type: 'array',
-            description: 'Match-ID rows { name, value }; name ∈ email/linkedinFirstPartyId/acxiomID/moatID/ipAddress/googleAid.',
+            description: 'Match-ID rows {name,value}.',
             items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
           },
           userInfo: {
             type: 'array',
-            description: 'User-info rows { name, value }; name ∈ firstName/lastName/jobTitle/companyName/countryCode.',
+            description: 'User-info rows {name,value}.',
             items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
           },
           eventData: {
             type: 'array',
-            description: 'Event-data rows { name, value }; name ∈ conversionHappenedAt/currency/amount/eventId.',
+            description: 'Event-data rows {name,value}.',
             items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
           },
-          autoMap: { type: 'boolean', description: 'Auto-derive event data + match IDs + user info from the incoming event — default true. false = only the rows you pass.' },
-          optimistic: { type: 'boolean', description: 'Optimistic scenario (gtmOnSuccess without waiting for LinkedIn) — default false.' },
-          requireConsent: { type: 'boolean', description: 'Gate on ad_storage consent — default false (optional).' },
+          autoMap: { type: 'boolean', description: 'Default true.' },
+          optimistic: { type: 'boolean', description: 'gtmOnSuccess without waiting for LinkedIn, default false.' },
+          requireConsent: { type: 'boolean', description: 'Gate on ad_storage consent, default false.' },
           firingTriggerId: { type: 'array', items: { type: 'string' } },
         },
         required: ['accountId', 'containerId', 'workspaceId', 'accessToken', 'conversionRuleUrn'],
@@ -2964,29 +2958,29 @@ export function buildToolRegistry(
     {
       name: 'create_pinterest_capi_server_tag',
       description:
-        'Create a Pinterest Conversions API SERVER tag from the OFFICIAL Pinterest server template (pinterest / ss-gtm-template) in a server container — the server counterpart of the create_pinterest_tag WEB pixel. Pass advertiserId (your Pinterest Ad Account ID, starts "549…") + apiAccessToken (both from Pinterest Ads Manager → "Generate conversion access token"; usually {{variables}}). By default the tag INHERITS the event name from the incoming GA4 event and reads all event/user/custom data straight from it (getAllEventData) — no explicit rows, the Pinterest analog of Meta CAPI automap. Pass `event` to force a specific Pinterest standard event (checkout [=purchase], add_to_cart, view_content, page_visit, lead, search, signup, initiate_checkout, … or a custom name → custom_event). Pass override rows (serverEventData / userData / customData as {name,value}) only to add or override specific fields. testMode routes events to Pinterest\'s test mode (verify without recording). The tag needs a SERVER trigger (create_server_trigger). Optional log, firingTriggerId, name (default "Pinterest CAPI Tag"). Requires accountId, containerId (SERVER), workspaceId, advertiserId, apiAccessToken.',
+        'Create a Pinterest Conversions API SERVER tag from the official Pinterest server template (pinterest / ss-gtm-template), imported automatically: the server counterpart of create_pinterest_tag. containerId must be the SERVER container. advertiserId and apiAccessToken come from Pinterest Ads Manager, "Generate conversion access token". By default the tag INHERITS the event name from the incoming GA4 event and reads all event/user/custom data from it (getAllEventData), so no rows are needed; pass `event` to force a Pinterest standard event (checkout = purchase, add_to_cart, view_content, page_visit, lead, search, signup, initiate_checkout, or a custom name), and serverEventData / userData / customData rows only to add or override fields. Needs a SERVER trigger (create_server_trigger).',
       inputSchema: {
         type: 'object',
         properties: {
           accountId: { type: 'string' },
           containerId: { type: 'string' },
           workspaceId: { type: 'string' },
-          name: { type: 'string', description: 'Optional — defaults to "Pinterest CAPI Tag".' },
-          advertiserId: { type: 'string', description: 'Pinterest Advertiser / Ad Account ID (starts "549…"; usually a {{variable}}).' },
-          apiAccessToken: { type: 'string', description: 'Pinterest Conversions API access token (usually a {{variable}}).' },
-          event: { type: 'string', description: 'Optional — force a Pinterest event (checkout/add_to_cart/view_content/page_visit/lead/…, a GA4 name, or a custom name). Omit to inherit from the incoming event.' },
-          testMode: { type: 'boolean', description: 'Send as a test request (not recorded) — default false.' },
-          log: { type: 'boolean', description: 'Log requests (logMode) — default false.' },
+          name: { type: 'string', description: 'Optional, defaults to "Pinterest CAPI Tag".' },
+          advertiserId: { type: 'string', description: 'Ad Account ID, starts "549".' },
+          apiAccessToken: { type: 'string' },
+          event: { type: 'string', description: 'Force an event; omit to inherit from the incoming one.' },
+          testMode: { type: 'boolean', description: 'Test request, not recorded. Default false.' },
+          log: { type: 'boolean', description: 'logMode, default false.' },
           serverEventData: {
-            type: 'array', description: 'Override rows { name, value } for event data (sets overrideMode on).',
+            type: 'array', description: 'Override rows {name,value} for event data (sets overrideMode on).',
             items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
           },
           userData: {
-            type: 'array', description: 'Override rows { name, value } for user data (match keys).',
+            type: 'array', description: 'Override rows {name,value} for user data (match keys).',
             items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
           },
           customData: {
-            type: 'array', description: 'Override rows { name, value } for custom data (value/currency/content_ids/…).',
+            type: 'array', description: 'Override rows {name,value} for custom data.',
             items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
           },
           firingTriggerId: { type: 'array', items: { type: 'string' } },
@@ -3020,23 +3014,23 @@ export function buildToolRegistry(
     {
       name: 'create_stackadapt_server_tag',
       description:
-        'Create a StackAdapt SERVER pixel tag from the official StackAdapt server template (StackAdapt / stackadapt-gtm-server-side-pixel) in a server container. UNLIKE the CAPI tags, StackAdapt is ID-ONLY: pass pixelID (the StackAdapt pixel/audience/conversion id, usually a {{variable}}) + pixelType — "conv" (Conversion Event, sent as cid=), "rt" (Retargeting Audience, sid=), "lal" (Lookalike Audience, sid=), or "universal" (Universal Event, uid=). There is NO access token and NO event_id dedup field (identity is first-party-cookie based, handled by the template). For a conversion, pass `action` to name the event (lands as a commonProperties "action" row). Add standard fields via commonProperties (name ∈ email/first_name/last_name/phone/order_id/revenue/product_id/product_name/product_price/product_category/action) or arbitrary ones via customProperties; values usually {{variables}}. The tag needs a SERVER trigger (create_server_trigger). Optional firingTriggerId, name (default "StackAdapt Pixel"). Requires accountId, containerId (SERVER), workspaceId, pixelID, pixelType.',
+        'Create a StackAdapt SERVER pixel tag from the official StackAdapt server template, imported automatically. containerId must be the SERVER container. UNLIKE the CAPI tags, StackAdapt is ID-ONLY: pixelID plus pixelType conv (sent as cid=), rt or lal (sid=) or universal (uid=). There is NO access token and NO event_id dedup field: identity is first-party-cookie based and handled by the template. For a conversion, `action` names the event. commonProperties accepts email/first_name/last_name/phone/order_id/revenue/product_id/product_name/product_price/product_category/action; anything else goes in customProperties. Needs a SERVER trigger (create_server_trigger).',
       inputSchema: {
         type: 'object',
         properties: {
           accountId: { type: 'string' },
           containerId: { type: 'string' },
           workspaceId: { type: 'string' },
-          name: { type: 'string', description: 'Optional — defaults to "StackAdapt Pixel".' },
-          pixelID: { type: 'string', description: 'StackAdapt pixel/audience/conversion id (usually a {{variable}}).' },
-          pixelType: { type: 'string', enum: ['conv', 'rt', 'lal', 'universal'], description: 'conv=Conversion Event, rt=Retargeting Audience, lal=Lookalike Audience, universal=Universal Event.' },
-          action: { type: 'string', description: 'Optional action/event name for a conversion (a commonProperties "action" row).' },
+          name: { type: 'string', description: 'Optional, defaults to "StackAdapt Pixel".' },
+          pixelID: { type: 'string', description: 'Pixel / audience / conversion id.' },
+          pixelType: { type: 'string', enum: ['conv', 'rt', 'lal', 'universal'], description: 'conv=Conversion, rt=Retargeting, lal=Lookalike, universal=Universal Event.' },
+          action: { type: 'string', description: 'Event name for a conversion (a commonProperties "action" row).' },
           commonProperties: {
-            type: 'array', description: 'Standard property rows { name, value }; name ∈ email/first_name/last_name/phone/order_id/revenue/product_id/product_name/product_price/product_category/action.',
+            type: 'array', description: 'Standard property rows {name,value}.',
             items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
           },
           customProperties: {
-            type: 'array', description: 'Arbitrary custom property rows { name, value }.',
+            type: 'array', description: 'Arbitrary property rows {name,value}.',
             items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
           },
           firingTriggerId: { type: 'array', items: { type: 'string' } },
@@ -3069,32 +3063,32 @@ export function buildToolRegistry(
     {
       name: 'create_reddit_capi_server_tag',
       description:
-        'Create a Reddit Conversions API SERVER tag from the Stape "Reddit Conversion API" community template (stape-io / reddit-tag) in a server container — the server counterpart of the create_reddit_pixel_tag WEB pixel. Pass pixelId (the Reddit Pixel/Advertiser ID, t2_/a2_) + accessToken (the Conversion Access Token from Reddit Ads → Events Manager → Conversions API) — both usually {{variables}}. By default the event name is INHERITED from the incoming client event; pass `event` to force a Reddit standard event (PAGE_VISIT/VIEW_CONTENT/SEARCH/ADD_TO_CART/ADD_TO_WISHLIST/PURCHASE/LEAD/SIGN_UP, a GA4 name, or a custom name). autoMap (default true) derives conversion_id (from the incoming event_id || transaction_id), value, currency + user match keys with no explicit rows — the Reddit analog of Meta CAPI automap. Pass eventId for dedup with the Reddit Pixel (lands as the conversion_id override row). Optional override rows: serverEventData (name ∈ conversion_id/currency/item_count/products/value), userData (name ∈ email/phone_number/external_id/idfa/aaid/ip_address/user_agent/uuid). Optional testId (Reddit Event Testing tool), clickId (rdt_cid), eventSourceUrl, optimistic (useOptimisticScenario), requireConsent (adStorageConsent), firingTriggerId, name (default "Reddit CAPI Tag"). The tag needs a SERVER trigger (create_server_trigger). Requires accountId, containerId (SERVER), workspaceId, pixelId, accessToken.',
+        'Create a Reddit Conversions API SERVER tag from the Stape template (stape-io / reddit-tag), imported automatically: the server counterpart of the Reddit WEB pixel. containerId must be the SERVER container. accessToken is the Conversion Access Token from Reddit Ads, Events Manager > Conversions API. The event name is INHERITED from the incoming event by default; pass `event` to force a Reddit standard event (PAGE_VISIT/VIEW_CONTENT/SEARCH/ADD_TO_CART/PURCHASE/LEAD/SIGN_UP, a GA4 name, or a custom name). autoMap (default true) derives conversion_id (from the incoming event_id or transaction_id), value, currency and user match keys with no explicit rows. Override rows: serverEventData (conversion_id/currency/item_count/products/value), userData (email/phone_number/external_id/idfa/aaid/ip_address/user_agent/uuid). Needs a SERVER trigger (create_server_trigger).',
       inputSchema: {
         type: 'object',
         properties: {
           accountId: { type: 'string' },
           containerId: { type: 'string' },
           workspaceId: { type: 'string' },
-          name: { type: 'string', description: 'Optional — defaults to "Reddit CAPI Tag".' },
-          pixelId: { type: 'string', description: 'Reddit Pixel / Advertiser ID (t2_/a2_; usually a {{variable}}).' },
-          accessToken: { type: 'string', description: 'Reddit Conversions API access token (usually a {{variable}}).' },
-          event: { type: 'string', description: 'Optional — force a Reddit event (PAGE_VISIT/VIEW_CONTENT/ADD_TO_CART/PURCHASE/…, a GA4 name, or a custom name). Omit to inherit.' },
-          eventId: { type: 'string', description: 'Event ID for dedup with the Reddit Pixel — a conversion_id override row (usually a {{variable}}).' },
-          testId: { type: 'string', description: 'Reddit Event Testing tool Test ID (optional).' },
-          clickId: { type: 'string', description: 'Reddit click id (rdt_cid) override (optional).' },
-          eventSourceUrl: { type: 'string', description: 'Event source URL override (optional).' },
+          name: { type: 'string', description: 'Optional, defaults to "Reddit CAPI Tag".' },
+          pixelId: { type: 'string', description: 'Pixel / Advertiser ID (t2_/a2_).' },
+          accessToken: { type: 'string' },
+          event: { type: 'string', description: 'Force an event; omit to inherit from the incoming one.' },
+          eventId: { type: 'string', description: 'Dedup id, sent as the conversion_id override row.' },
+          testId: { type: 'string', description: 'Event Testing tool Test ID.' },
+          clickId: { type: 'string', description: 'rdt_cid override.' },
+          eventSourceUrl: { type: 'string' },
           serverEventData: {
-            type: 'array', description: 'Override rows { name, value }; name ∈ conversion_id/currency/item_count/products/value.',
+            type: 'array', description: 'Override rows {name,value}.',
             items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
           },
           userData: {
-            type: 'array', description: 'User-match rows { name, value }; name ∈ email/phone_number/external_id/idfa/aaid/ip_address/user_agent/uuid.',
+            type: 'array', description: 'User-match rows {name,value}.',
             items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
           },
-          autoMap: { type: 'boolean', description: 'Auto-derive conversion_id + event/user data from the incoming event — default true. false = only the rows you pass.' },
-          optimistic: { type: 'boolean', description: 'Optimistic scenario (gtmOnSuccess without waiting for Reddit) — default false.' },
-          requireConsent: { type: 'boolean', description: 'Gate on ad_storage consent — default false (optional).' },
+          autoMap: { type: 'boolean', description: 'Default true.' },
+          optimistic: { type: 'boolean', description: 'gtmOnSuccess without waiting for Reddit, default false.' },
+          requireConsent: { type: 'boolean', description: 'Gate on ad_storage consent, default false.' },
           firingTriggerId: { type: 'array', items: { type: 'string' } },
         },
         required: ['accountId', 'containerId', 'workspaceId', 'pixelId', 'accessToken'],
@@ -3132,36 +3126,36 @@ export function buildToolRegistry(
     {
       name: 'create_amazon_capi_server_tag',
       description:
-        'Create an Amazon Ads Conversions API SERVER tag from the Stape "Amazon" community template (stape-io / amazon-tag) in a server container. Amazon has NO api key / OAuth here — the only "credential" is tagIds: one or more Amazon Ads Tag IDs (UUIDs from Amazon DSP → Events Manager → View Tag Code); the event is sent to every id. tagRegion is "NA" or "EU". By default the event name is INHERITED from the incoming event; pass `event` to force an Amazon standard event (PageView/AddToShoppingCart/Checkout/Search/Signup/Lead/Off-AmazonPurchases [=purchase]/…, a GA4 name, or a custom name). Pass eventId for dedup — it lands as the clientDedupeId row (Amazon otherwise auto-derives it from the incoming event_id || transaction_id). Optional matchId (default reads eventData.user_id), ipAddress, countryCode; enableAdvancedMatching + userData (name ∈ email/phonenumber, hashed by Amazon); override tables defaultAttributes (name ∈ clientDedupeId/value/brand/category/productId/attr1…attr10), purchaseAttributes (currencyCode/unitsSold), customAttributes (free-form). Values usually {{variables}}. The tag needs a SERVER trigger (create_server_trigger). Optional firingTriggerId, name (default "Amazon CAPI Tag"). Requires accountId, containerId (SERVER), workspaceId, tagIds, tagRegion.',
+        'Create an Amazon Ads Conversions API SERVER tag from the Stape template (stape-io / amazon-tag), imported automatically. containerId must be the SERVER container. Amazon has NO api key or OAuth here: the only credential is tagIds, one or more Amazon Ads Tag ID UUIDs from Amazon DSP > Events Manager > View Tag Code. The event name is INHERITED from the incoming event by default; pass `event` to force an Amazon standard event (PageView/AddToShoppingCart/Checkout/Search/Signup/Lead/Off-AmazonPurchases = purchase, a GA4 name, or a custom name). eventId lands as the clientDedupeId row, otherwise auto-derived from the incoming event_id or transaction_id. Override tables: defaultAttributes (clientDedupeId/value/brand/category/productId/attr1 to attr10), purchaseAttributes (currencyCode/unitsSold), customAttributes. Needs a SERVER trigger (create_server_trigger).',
       inputSchema: {
         type: 'object',
         properties: {
           accountId: { type: 'string' },
           containerId: { type: 'string' },
           workspaceId: { type: 'string' },
-          name: { type: 'string', description: 'Optional — defaults to "Amazon CAPI Tag".' },
-          tagIds: { type: 'array', description: 'Amazon Ads Tag ID UUID(s) (from Events Manager → View Tag Code). Sent to every id.', items: { type: 'string' } },
-          tagRegion: { type: 'string', enum: ['NA', 'EU'], description: 'Amazon endpoint region — NA (Americas/Japan/Australia) or EU (Europe). Default NA.' },
-          event: { type: 'string', description: 'Optional — force an Amazon event (PageView/AddToShoppingCart/Checkout/Off-AmazonPurchases/…, a GA4 name, or a custom name). Omit to inherit.' },
-          eventId: { type: 'string', description: 'Event ID for dedup — a clientDedupeId attribute (usually a {{variable}}).' },
-          matchId: { type: 'string', description: 'User-unique match id (default reads eventData.user_id).' },
-          ipAddress: { type: 'string', description: 'User IP override (default reads eventData.ip_override).' },
-          countryCode: { type: 'string', description: 'ISO 3166-1 alpha-2 country code (required when consent fields are set).' },
-          enableAdvancedMatching: { type: 'boolean', description: 'Send hashed email/phone for match — default false.' },
+          name: { type: 'string', description: 'Optional, defaults to "Amazon CAPI Tag".' },
+          tagIds: { type: 'array', description: 'Tag ID UUID(s); the event is sent to every id.', items: { type: 'string' } },
+          tagRegion: { type: 'string', enum: ['NA', 'EU'], description: 'NA (Americas/Japan/Australia) or EU. Default NA.' },
+          event: { type: 'string', description: 'Force an event; omit to inherit from the incoming one.' },
+          eventId: { type: 'string', description: 'Dedup id, sent as clientDedupeId.' },
+          matchId: { type: 'string', description: 'Defaults to eventData.user_id.' },
+          ipAddress: { type: 'string', description: 'Defaults to eventData.ip_override.' },
+          countryCode: { type: 'string', description: 'ISO alpha-2; required when consent fields are set.' },
+          enableAdvancedMatching: { type: 'boolean', description: 'Send hashed email/phone, default false.' },
           userData: {
-            type: 'array', description: 'Advanced-matching rows { name, value }; name ∈ email/phonenumber (hashed by Amazon). Only sent when enableAdvancedMatching.',
+            type: 'array', description: 'Rows {name,value}: email/phonenumber. Only sent when enableAdvancedMatching.',
             items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
           },
           defaultAttributes: {
-            type: 'array', description: 'Standard event attribute rows { name, value }; name ∈ clientDedupeId/value/brand/category/productId/attr1…attr10.',
+            type: 'array', description: 'Standard attribute rows {name,value}.',
             items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
           },
           purchaseAttributes: {
-            type: 'array', description: 'Off-AmazonPurchases attribute rows { name, value }; name ∈ currencyCode/unitsSold.',
+            type: 'array', description: 'Off-AmazonPurchases rows {name,value}.',
             items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
           },
           customAttributes: {
-            type: 'array', description: 'Arbitrary custom event attribute rows { name, value }.',
+            type: 'array', description: 'Arbitrary attribute rows {name,value}.',
             items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
           },
           firingTriggerId: { type: 'array', items: { type: 'string' } },
@@ -3202,19 +3196,19 @@ export function buildToolRegistry(
     {
       name: 'create_hotjar_tag',
       description:
-        'Create a Hotjar tracking tag (a Custom HTML tag that installs the hj() queue + loads static.hotjar.com). Pass `siteId` = the Hotjar Site ID (hjid) — a number or a {{variable}}. USER IDENTITY: pass `userId` and/or `userAttributes` to ALSO emit hj(\'identify\', <userId>, { … }) — Hotjar\'s user-identity mechanism, the analog of GA4 user properties (attributes like email, plan, signup_date; values usually {{variables}}). Hotjar has NO gallery template that carries identify, so this is intentionally a Custom HTML tag. Hotjar is a session-replay/analytics pixel, so AFTER creating it call set_gtm_tag_consent with consentStatus "needed" and consentTypes ["analytics_storage"] (NOT the ad_* set). Optional firingTriggerId (usually the All Pages / Consent Initialization trigger — create/identify it first), name (defaults to "Hotjar - Tracking Code"). Requires accountId, containerId, workspaceId, siteId.',
+        'Create a Hotjar tracking tag (Custom HTML installing the hj() queue and loading static.hotjar.com). `siteId` is the Hotjar Site ID (hjid). Pass `userId` and/or `userAttributes` to also emit hj(\'identify\', userId, {...}), Hotjar\'s user-identity mechanism (email, plan, signup_date). Hotjar has no gallery template carrying identify, so Custom HTML is intentional. AFTER creating, call set_gtm_tag_consent with consentStatus "needed" and consentTypes ["analytics_storage"] (NOT the ad_* set). firingTriggerId is usually All Pages or Consent Initialization.',
       inputSchema: {
         type: 'object',
         properties: {
           accountId: { type: 'string' },
           containerId: { type: 'string' },
           workspaceId: { type: 'string' },
-          name: { type: 'string', description: 'Optional — defaults to "Hotjar - Tracking Code".' },
-          siteId: { type: 'string', description: 'Hotjar Site ID (hjid), numeric or a {{variable}}.' },
-          userId: { type: 'string', description: 'Optional stable user id for hj(\'identify\', …) — usually a {{variable}}.' },
+          name: { type: 'string', description: 'Optional, defaults to "Hotjar - Tracking Code".' },
+          siteId: { type: 'string', description: 'Hotjar Site ID (hjid).' },
+          userId: { type: 'string', description: 'Stable user id for hj(\'identify\').' },
           userAttributes: {
             type: 'array',
-            description: 'Optional identity/user attributes { name, value } sent via hj(\'identify\', userId, {…}); values usually {{variables}} (e.g. {name:"email", value:"{{User Email}}"}).',
+            description: 'Identity attributes {name,value}.',
             items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
           },
           firingTriggerId: { type: 'array', items: { type: 'string' } },
@@ -3242,17 +3236,17 @@ export function buildToolRegistry(
     {
       name: 'create_pinterest_tag',
       description:
-        'Create a Pinterest web tag from the Pinterest community template (pinterest / ws-gtm-template). Pass `tagId` (the Pinterest Tag ID) and `event`: a standard Pinterest event (pagevisit, viewcategory, viewcontent, addtocart, checkout [=purchase], search, signup, lead, watchvideo) — GA4 names are mapped (page_view→pagevisit, view_item→viewcontent, add_to_cart→addtocart, purchase→checkout, generate_lead→lead, sign_up→signup); ANY other value becomes a CUSTOM event (eventName="ADE" + adeEventName). ENHANCED MATCH (Pinterest\'s user-identity param, analog of GA4 user properties): pass `enhancedMatchEmail` = a SHA-256-hashed email (usually a {{variable}}) → the tag\'s `em` field. Imports the template if needed (you do NOT pass the cvt_ type). AFTER creating, call set_gtm_tag_consent with consentStatus "needed" and consentTypes ["ad_storage","ad_user_data","ad_personalization"] (Pinterest is a marketing pixel with no built-in Consent Mode). Optional firingTriggerId (create/identify first), name (defaults to "Pinterest - <Event> Tag"). Requires accountId, containerId, workspaceId, tagId, event.',
+        'Create a Pinterest WEB tag from the Pinterest community template, imported automatically. `event`: a standard Pinterest event (pagevisit, viewcategory, viewcontent, addtocart, checkout = purchase, search, signup, lead, watchvideo); GA4 names are mapped; anything else becomes a CUSTOM event (eventName "ADE" + adeEventName). `enhancedMatchEmail` is a SHA-256-hashed email feeding the tag\'s Enhanced Match `em` field. AFTER creating, call set_gtm_tag_consent with consentStatus "needed" and consentTypes ["ad_storage","ad_user_data","ad_personalization"] (no built-in Consent Mode).',
       inputSchema: {
         type: 'object',
         properties: {
           accountId: { type: 'string' },
           containerId: { type: 'string' },
           workspaceId: { type: 'string' },
-          name: { type: 'string', description: 'Optional — defaults to "Pinterest - <Event> Tag".' },
-          tagId: { type: 'string', description: 'Pinterest Tag ID (usually numeric or a {{variable}}).' },
-          event: { type: 'string', description: 'Pinterest event, e.g. checkout / addtocart / viewcontent, a GA4 name, or a custom name.' },
-          enhancedMatchEmail: { type: 'string', description: 'Enhanced Match: a SHA-256-hashed email (usually a {{variable}}) → the tag\'s em field.' },
+          name: { type: 'string', description: 'Optional, defaults to "Pinterest - <Event> Tag".' },
+          tagId: { type: 'string' },
+          event: { type: 'string', description: 'e.g. checkout / addtocart / viewcontent, a GA4 name, or a custom name.' },
+          enhancedMatchEmail: { type: 'string', description: 'SHA-256-hashed email for the tag\'s em field.' },
           firingTriggerId: { type: 'array', items: { type: 'string' } },
         },
         required: ['accountId', 'containerId', 'workspaceId', 'tagId', 'event'],
@@ -3285,19 +3279,19 @@ export function buildToolRegistry(
     {
       name: 'create_snap_pixel_tag',
       description:
-        'Create a Snap Pixel web tag from the Snapchat community template (Snapchat / snapchat-google-tag-manager). Pass `pixelId` (the Snap Pixel ID, a UUID or {{variable}}) and `event` → the event_type SELECT: a Snap event (PAGE_VIEW, ADD_CART, PURCHASE, START_CHECKOUT, SIGN_UP, SEARCH, VIEW_CONTENT, SUBSCRIBE, ADD_TO_WISHLIST, LOGIN, START_TRIAL, ADD_BILLING, …) — GA4 names are mapped (page_view→PAGE_VIEW, add_to_cart→ADD_CART, purchase→PURCHASE, begin_checkout→START_CHECKOUT, view_item→VIEW_CONTENT, sign_up→SIGN_UP); unrecognised → PAGE_VIEW. ADVANCED MATCHING (Snap\'s user-identity params, analog of GA4 user properties): pass `advancedMatching` rows { name, value } where name ∈ user_email / user_hashed_email / user_phone_number / user_hashed_phone_number / user_mobile_ad_id / user_hashed_mobile_ad_id (raw user_email/user_phone_number are hashed by Snap on ingest; pre-hashed values go in the user_hashed_* fields; values usually {{variables}}). Imports the template if needed (you do NOT pass the cvt_ type). AFTER creating, call set_gtm_tag_consent with consentStatus "needed" and consentTypes ["ad_storage","ad_user_data","ad_personalization"] (Snap is a marketing pixel with no built-in Consent Mode). Optional firingTriggerId (create/identify first), name (defaults to "Snap - <Event> Tag"). Requires accountId, containerId, workspaceId, pixelId, event.',
+        'Create a Snap Pixel WEB tag from the Snapchat community template, imported automatically. `event` sets event_type: a Snap event (PAGE_VIEW, ADD_CART, PURCHASE, START_CHECKOUT, SIGN_UP, SEARCH, VIEW_CONTENT, SUBSCRIBE, ADD_TO_WISHLIST, LOGIN, START_TRIAL, ADD_BILLING); GA4 names are mapped; unrecognised values fall back to PAGE_VIEW. `advancedMatching` rows carry user identity: names user_email / user_hashed_email / user_phone_number / user_hashed_phone_number / user_mobile_ad_id / user_hashed_mobile_ad_id (raw values are hashed by Snap on ingest; pre-hashed values go in the user_hashed_* fields). AFTER creating, call set_gtm_tag_consent with consentStatus "needed" and consentTypes ["ad_storage","ad_user_data","ad_personalization"] (no built-in Consent Mode).',
       inputSchema: {
         type: 'object',
         properties: {
           accountId: { type: 'string' },
           containerId: { type: 'string' },
           workspaceId: { type: 'string' },
-          name: { type: 'string', description: 'Optional — defaults to "Snap - <Event> Tag".' },
-          pixelId: { type: 'string', description: 'Snap Pixel ID (a UUID or a {{variable}}).' },
-          event: { type: 'string', description: 'Snap event_type, e.g. PURCHASE / ADD_CART / VIEW_CONTENT, a GA4 name, or a custom name.' },
+          name: { type: 'string', description: 'Optional, defaults to "Snap - <Event> Tag".' },
+          pixelId: { type: 'string', description: 'Snap Pixel ID (a UUID).' },
+          event: { type: 'string', description: 'e.g. PURCHASE / ADD_CART / VIEW_CONTENT, a GA4 name, or a custom name.' },
           advancedMatching: {
             type: 'array',
-            description: 'Advanced-matching (user-identity) rows { name, value }; name ∈ user_email/user_hashed_email/user_phone_number/user_hashed_phone_number/user_mobile_ad_id/user_hashed_mobile_ad_id, value usually a {{variable}}.',
+            description: 'Advanced-matching rows {name,value}.',
             items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
           },
           firingTriggerId: { type: 'array', items: { type: 'string' } },
@@ -3339,7 +3333,7 @@ export function buildToolRegistry(
     {
       name: 'import_gallery_template',
       description:
-        'Import a Community Template Gallery template into a workspace by GitHub owner + repository — the GTM API DOES support this (templates.import_from_gallery); do NOT tell the user templates can only be imported in the GTM UI. Works for ANY gallery template. Common pixel templates (owner / repository): Meta Pixel = facebook / GoogleTagManager-WebTemplate-For-FacebookPixel; TikTok Pixel = tiktok / gtm-template-pixel; LinkedIn Insight Tag = linkedin / linkedin-gtm-community-template; Snap Pixel = Snapchat / snapchat-google-tag-manager; Pinterest Tag = pinterest / ws-gtm-template (Pinterest server CAPI = pinterest / ss-gtm-template); Meta CAPI (server) = stape-io / facebook-tag; TikTok Events API (server) = stape-io / tiktok-tag (official alt = tiktok / gtm-template-eapi). Idempotent (returns the existing one if already imported). Returns the template + its tag TYPE code (cvt_…). After importing, build a tag from it with create_gtm_tag using that returned `type` and the template\'s own field keys (e.g. Meta Pixel: pixelId, eventName, standardEventName) — those fields are template-specific, so check the template in GTM if a create is rejected. Requires accountId, containerId, workspaceId, owner, repository; optional sha (defaults to latest).',
+        'Import a Community Template Gallery template into a workspace by GitHub owner + repository. The GTM API DOES support this (templates.import_from_gallery); do NOT tell the user it is UI-only. Works for ANY gallery template. Common owner/repository pairs: facebook / GoogleTagManager-WebTemplate-For-FacebookPixel; tiktok / gtm-template-pixel; linkedin / linkedin-gtm-community-template; Snapchat / snapchat-google-tag-manager; pinterest / ws-gtm-template (server: ss-gtm-template); stape-io / facebook-tag; stape-io / tiktok-tag. Idempotent. Returns the template and its tag TYPE code (cvt_), which you pass as `type` to create_gtm_tag along with the template\'s own field keys (template-specific, e.g. Meta Pixel uses pixelId, eventName, standardEventName).',
       inputSchema: {
         type: 'object',
         properties: {
@@ -3360,7 +3354,7 @@ export function buildToolRegistry(
     {
       name: 'create_gtm_folder',
       description:
-        'Create a folder in a GTM workspace to organise tags/triggers/variables. Folders are PURELY organisational — they do not change what fires. Requires accountId, containerId, workspaceId, name. To then file items into it, call move_gtm_entities_to_folder with the returned folderId.',
+        'Create a folder in a GTM workspace to organise tags/triggers/variables. Folders are PURELY organisational, they do not change what fires. File items into it with move_gtm_entities_to_folder using the returned folderId.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -3379,7 +3373,7 @@ export function buildToolRegistry(
     {
       name: 'move_gtm_entities_to_folder',
       description:
-        'Move tags, triggers, and/or variables into a GTM folder (organisational only — does NOT change firing). Requires accountId, containerId, workspaceId, folderId, and at least one of tagIds / triggerIds / variableIds (arrays of ids). To file all GA4 tags: list_gtm_tags, keep the gaawe/gaawc/googtag ids, create_gtm_folder, then call this with those tagIds.',
+        'Move tags, triggers and/or variables into a GTM folder (organisational only, does NOT change firing). Pass at least one of tagIds / triggerIds / variableIds. To file all GA4 tags: list_gtm_tags, keep the gaawe/gaawc/googtag ids, create_gtm_folder, then call this with those tagIds.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -3409,7 +3403,7 @@ export function buildToolRegistry(
     {
       name: 'rename_gtm_folder',
       description:
-        'Rename a GTM folder. Organisational only — does not change what fires. Requires accountId, containerId, workspaceId, folderId, name (the new name).',
+        'Rename a GTM folder (organisational only). `name` is the new name.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -3429,7 +3423,7 @@ export function buildToolRegistry(
     {
       name: 'delete_gtm_folder',
       description:
-        'Delete a GTM folder (draft, not published). GTM does NOT delete the folder\'s contents — its tags/triggers/variables simply become unfiled. Requires accountId, containerId, workspaceId, folderId. Destructive — requires the user to confirm twice (and type "delete").',
+        'Delete a GTM folder (draft, not published). GTM does NOT delete its contents: the tags/triggers/variables become unfiled. Destructive, requires two confirmations.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -3452,23 +3446,20 @@ export function buildToolRegistry(
       description:
         'Create a tag in a GTM workspace (draft). `tag` is a GTM API Tag resource ' +
         '{name, type, parameter?, firingTriggerId?}; link to a trigger via firingTriggerId:["<id>"]. ' +
-        'GA4 EVENT tag — type "gaawe". PREFER create_gtm_tracking_tag, which builds this correctly. If ' +
-        'using this raw tool, `parameter` MUST be exactly this shape — event parameters go in ' +
-        'eventSettingsTable as a LIST of MAP entries keyed parameter/parameterValue (NOT an ' +
-        '"eventParameters" list of name/value, which GTM silently ignores): ' +
+        'PREFER create_gtm_tracking_tag, which builds these correctly. Using this raw tool, ' +
+        '`parameter` must be exactly the GTM shape. GA4 EVENT tag, type "gaawe": event parameters go in ' +
+        'eventSettingsTable as a LIST of MAP entries keyed parameter/parameterValue, NOT an ' +
+        '"eventParameters" list of name/value, which GTM silently ignores: ' +
         '[{"type":"tagReference","key":"measurementId","value":""},' +
         '{"type":"template","key":"measurementIdOverride","value":"G-XXXXXXX or {{GA4 Variable}}"},' +
         '{"type":"template","key":"eventName","value":"email_click"},' +
         '{"type":"list","key":"eventSettingsTable","list":[' +
-        '{"type":"map","map":[{"type":"template","key":"parameter","value":"link_url"},{"type":"template","key":"parameterValue","value":"{{Click URL}}"}]},' +
-        '{"type":"map","map":[{"type":"template","key":"parameter","value":"link_text"},{"type":"template","key":"parameterValue","value":"{{Click Text}}"}]}]}]. ' +
-        'The Google tag — type "googtag" with [{"type":"template","key":"tagId","value":"G-XXXX/AW-XXXX/GT-XXXX"}]. ' +
-        'Google Ads conversion — type "awct" with {"type":"template","key":"conversionId","value":"123456789"} ' +
-        '(the NUMERIC id only — GTM rejects an "AW-" prefix) and ' +
-        '{"type":"template","key":"conversionLabel","value":"…"}. Google Ads remarketing — type "sp". ' +
-        'Facebook Pixel, LinkedIn Insight, TikTok, Pinterest, or any platform without a native GTM ' +
-        'template — type "html" (Custom HTML) with a {"type":"template","key":"html","value":"<script>…</script>"} ' +
-        'parameter containing that platform\'s snippet. Pick the right type for the platform the user names.',
+        '{"type":"map","map":[{"type":"template","key":"parameter","value":"link_url"},{"type":"template","key":"parameterValue","value":"{{Click URL}}"}]}]}]. ' +
+        'Google tag, type "googtag" with [{"type":"template","key":"tagId","value":"G-XXXX/AW-XXXX/GT-XXXX"}]. ' +
+        'Google Ads conversion, type "awct" with conversionId as the NUMERIC id only (GTM rejects an "AW-" prefix) ' +
+        'plus conversionLabel. Google Ads remarketing, type "sp". Any platform with no native GTM template ' +
+        '(Facebook Pixel, LinkedIn Insight, TikTok, Pinterest) uses type "html" (Custom HTML) with an ' +
+        'html parameter carrying that platform\'s snippet. Pick the type matching the platform the user names.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -3488,7 +3479,7 @@ export function buildToolRegistry(
     {
       name: 'update_gtm_tag',
       description:
-        'Update an existing tag in a GTM workspace (read-modify-write — the current tag is fetched and only the fields you pass are overlaid; `parameter` is merged by key, so omitted fields like eventName/measurementId are preserved). Pass only the fields you want to change. To ADD GA4 event parameters (session_id, user_id, click_text, …) to GA4 event tags, use add_ga4_event_parameters instead — it appends to the eventSettingsTable without wiping the tag.',
+        'Update an existing tag in a GTM workspace. Read-modify-write: the current tag is fetched and only the fields you pass are overlaid, with `parameter` merged by key, so omitted fields like eventName/measurementId are preserved. To ADD GA4 event parameters use add_ga4_event_parameters instead: it appends to the eventSettingsTable without wiping the tag.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -3496,7 +3487,7 @@ export function buildToolRegistry(
           containerId: { type: 'string' },
           workspaceId: { type: 'string' },
           tagId: { type: 'string' },
-          tag: { type: 'object', description: 'Partial tag — only the fields to change. parameter[] is merged by key.' },
+          tag: { type: 'object', description: 'Partial tag: only the fields to change. parameter[] is merged by key.' },
         },
         required: ['accountId', 'containerId', 'workspaceId', 'tagId', 'tag'],
         additionalProperties: false,
@@ -3508,7 +3499,7 @@ export function buildToolRegistry(
     {
       name: 'add_ga4_event_parameters',
       description:
-        'Add GA4 event parameters to an existing GA4 Event tag (type "gaawe"). Appends them to the tag\'s eventSettingsTable — the correct place for GA4 event parameters — and preserves eventName/measurementId, so it never triggers "measurementIdOverride/eventName must not be empty". A parameter whose name already exists has its value updated (not duplicated). Use this for requests like "add session_id and user_id to all GA4 event tags". Values may be GTM variables like {{Click Text}}. Call once per tag.',
+        'Add GA4 event parameters to an existing GA4 Event tag (type "gaawe"). Appends to the tag\'s eventSettingsTable, the correct place for them, and preserves eventName/measurementId so it never triggers "measurementIdOverride/eventName must not be empty". A name that already exists has its value updated, not duplicated. Values may be GTM variables like {{Click Text}}. Call once per tag.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -3548,7 +3539,7 @@ export function buildToolRegistry(
     {
       name: 'add_ga4_server_parameters',
       description:
-        'Add event parameters ("Event Parameters to Add / Edit") and/or user properties ("User Properties to Add / Edit") to a GA4 SERVER tag (type "sgtmgaaw") in a server container — the server-side counterpart of add_ga4_event_parameters. Read-modify-write: preserves measurementId / eventName / "Include: All" / excludes / triggers, and a repeated name updates its value instead of duplicating. NOTE: a straight GA4 server relay already forwards every parameter of the incoming event (Default Parameters to Include: All) — including client_id, user_id, and the ecommerce fields — so use this only for ENRICHMENT: server-derived values NOT already on the incoming event (e.g. a country from a request-header {{rh - ...}} variable, a hashed id, a corrected page_location) or to override a value. Values may be {{variables}}. Requires accountId, containerId (SERVER), workspaceId, tagId, and at least one of eventParameters / userProperties.',
+        'Add event parameters and/or user properties to a GA4 SERVER tag (type "sgtmgaaw"): the server-side counterpart of add_ga4_event_parameters. Read-modify-write, preserving measurementId, eventName, "Include: All", excludes and triggers; a repeated name updates its value instead of duplicating. NOTE: a straight GA4 server relay already forwards every parameter of the incoming event, including client_id, user_id and the ecommerce fields, so use this only for ENRICHMENT (a country from a {{rh - ...}} header variable, a hashed id, a corrected page_location) or to override a value. Pass at least one of eventParameters / userProperties.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -3558,12 +3549,12 @@ export function buildToolRegistry(
           tagId: { type: 'string', description: 'The GA4 SERVER (sgtmgaaw) tag ID.' },
           eventParameters: {
             type: 'array',
-            description: 'Event parameters to add/edit (the sgtmgaaw "eventParameters" table): {name, value} rows.',
+            description: 'Rows {name,value} for the sgtmgaaw "eventParameters" table.',
             items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
           },
           userProperties: {
             type: 'array',
-            description: 'User properties to add/edit (the sgtmgaaw "userProperties" table): {name, value} rows.',
+            description: 'Rows {name,value} for the sgtmgaaw "userProperties" table.',
             items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
           },
         },
@@ -3582,7 +3573,7 @@ export function buildToolRegistry(
     {
       name: 'set_ga4_measurement_id',
       description:
-        'Set/replace the Measurement ID on a GA4 tag. The value may be a literal id (G-XXXX, AW-XXXX, GT-XXXX) OR a GTM variable like {{GA4 Variable}}. For a GA4 Event tag (gaawe) it sets measurementIdOverride; for a Google tag (googtag) it sets the tag ID. Use this for requests like "replace {{GA4 Measurement ID}} with {{GA4 Variable}} on all GA4 tags" or "point all GA4 tags at G-1234567890" — it builds the parameter correctly and preserves the rest of the tag, so it never produces the "measurementIdOverride/template key" errors you get from hand-editing the tag. Call once per tag.',
+        'Set/replace the Measurement ID on ONE GA4 tag. The value may be a literal id (G-/AW-/GT-XXXX) or a GTM variable like {{GA4 Variable}}. For a GA4 Event tag (gaawe) it sets measurementIdOverride; for a Google tag (googtag) it sets the tag ID. It builds the parameter correctly and preserves the rest of the tag, avoiding the "measurementIdOverride/template key" errors hand-editing produces. Call once per tag.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -3592,7 +3583,7 @@ export function buildToolRegistry(
           tagId: { type: 'string', description: 'The GA4 Event (gaawe) or Google tag (googtag) tag ID.' },
           measurementId: {
             type: 'string',
-            description: 'The Measurement ID (G-/AW-/GT-XXXX) or a GTM variable reference such as {{GA4 Variable}}.',
+            description: 'Measurement ID (G-/AW-/GT-XXXX) or a GTM variable like {{GA4 Variable}}.',
           },
         },
         required: ['accountId', 'containerId', 'workspaceId', 'tagId', 'measurementId'],
@@ -3606,7 +3597,7 @@ export function buildToolRegistry(
     {
       name: 'set_gtm_tag_consent',
       description:
-        'Set a tag\'s Consent Mode v2 settings — the fix for the "no Consent Mode v2 settings" audit finding. consentStatus "needed" + consentTypes (ad_storage, analytics_storage, ad_user_data, ad_personalization) makes GTM block the tag until those are granted; consentStatus "notNeeded" declares the tag needs no additional consent (it relies on Consent Mode at the Google-tag level). Read-modify-write; preserves the rest of the tag.',
+        'Set a tag\'s Consent Mode v2 settings: the fix for the "no Consent Mode v2 settings" audit finding. consentStatus "needed" plus consentTypes (ad_storage, analytics_storage, ad_user_data, ad_personalization) makes GTM block the tag until those are granted; "notNeeded" declares no additional consent is required (relying on Consent Mode at the Google-tag level). Read-modify-write, preserves the rest of the tag.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -3614,10 +3605,10 @@ export function buildToolRegistry(
           containerId: { type: 'string' },
           workspaceId: { type: 'string' },
           tagId: { type: 'string' },
-          consentStatus: { type: 'string', enum: ['needed', 'notNeeded'], description: 'needed = require the consentTypes; notNeeded = no additional consent required.' },
+          consentStatus: { type: 'string', enum: ['needed', 'notNeeded'], description: 'needed = require the consentTypes; notNeeded = none required.' },
           consentTypes: {
             type: 'array',
-            description: 'Required consent types when consentStatus is "needed" (e.g. ["analytics_storage"] for GA4, ["ad_storage","ad_user_data","ad_personalization"] for Ads).',
+            description: 'Required when consentStatus is "needed": ["analytics_storage"] for GA4, the three ad_* types for Ads.',
             items: { type: 'string' },
           },
           name: { type: 'string', description: 'Tag name, for display only.' },
@@ -3645,7 +3636,7 @@ export function buildToolRegistry(
     {
       name: 'set_ga4_measurement_id_on_all_tags',
       description:
-        'Set/replace the Measurement ID on ALL GA4 tags in the workspace in ONE call (GA4 event tags + the Google tag). The value may be a literal id (G-/AW-/GT-XXXX) or a GTM variable like {{GA4 Variable}}. PREFER this whenever the user says "all GA4 tags" / "every GA4 tag" (e.g. "replace {{GA4 Measurement ID}} with {{GA4 Variable}} on all GA4 tags") — do NOT loop set_ga4_measurement_id tag-by-tag. It builds each parameter correctly, preserves the rest of every tag, continues past any single failure, and returns a summary of updated/failed tags.',
+        'Set/replace the Measurement ID on ALL GA4 tags in the workspace in ONE call (GA4 event tags plus the Google tag). The value may be a literal id (G-/AW-/GT-XXXX) or a GTM variable like {{GA4 Variable}}. PREFER this whenever the user says "all GA4 tags" or "every GA4 tag"; do NOT loop set_ga4_measurement_id tag-by-tag. Preserves the rest of every tag, continues past a single failure, and returns an updated/failed summary.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -3654,7 +3645,7 @@ export function buildToolRegistry(
           workspaceId: { type: 'string' },
           measurementId: {
             type: 'string',
-            description: 'The Measurement ID (G-/AW-/GT-XXXX) or a GTM variable reference such as {{GA4 Variable}}.',
+            description: 'Measurement ID (G-/AW-/GT-XXXX) or a GTM variable like {{GA4 Variable}}.',
           },
         },
         required: ['accountId', 'containerId', 'workspaceId', 'measurementId'],
@@ -3668,7 +3659,7 @@ export function buildToolRegistry(
     {
       name: 'add_ga4_event_parameters_to_all_tags',
       description:
-        'Add GA4 event parameters to ALL GA4 Event tags (gaawe) in the workspace in ONE call. PREFER this whenever the user says "all GA4 tags" / "every GA4 event tag" (e.g. "add user_id and session_id to all GA4 event tags") — do NOT loop add_ga4_event_parameters tag-by-tag. It appends to each tag\'s eventSettingsTable, updates a value in place if the name already exists, preserves each tag, continues past any single failure, and returns a summary. Values may be GTM variables like {{User ID}}.',
+        'Add GA4 event parameters to ALL GA4 Event tags (gaawe) in the workspace in ONE call. PREFER this whenever the user says "all GA4 tags" or "every GA4 event tag"; do NOT loop add_ga4_event_parameters tag-by-tag. Appends to each eventSettingsTable, updates in place if the name exists, preserves each tag, continues past a single failure, returns a summary. Values may be GTM variables like {{User ID}}.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -3703,7 +3694,7 @@ export function buildToolRegistry(
     {
       name: 'set_gtm_tag_paused',
       description:
-        'Pause or unpause a tag in a GTM workspace, preserving all its other settings. Use this to apply the audit fix for a paused tag. Requires accountId, containerId, workspaceId, tagId, and paused (boolean — false to unpause/enable, true to pause). Optional name is used in logs.',
+        'Pause or unpause a tag in a GTM workspace, preserving its other settings. Applies the audit fix for a paused tag. paused=true pauses, false enables.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -3735,7 +3726,7 @@ export function buildToolRegistry(
     {
       name: 'delete_gtm_tag',
       description:
-        'Delete a tag from a GTM workspace (draft, not published). Requires accountId, containerId, workspaceId, tagId. Destructive — requires the user to confirm twice.',
+        'Delete a tag from a GTM workspace (draft, not published). Destructive, requires two confirmations.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -3755,7 +3746,7 @@ export function buildToolRegistry(
     {
       name: 'delete_gtm_trigger',
       description:
-        'Delete a trigger from a GTM workspace (draft, not published). Use this to apply the audit fix for an unused trigger. Requires accountId, containerId, workspaceId, triggerId. Destructive — requires the user to confirm twice. Optional name is shown in the approval prompt.',
+        'Delete a trigger from a GTM workspace (draft, not published). Applies the audit fix for an unused trigger. Destructive, requires two confirmations.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -3777,14 +3768,14 @@ export function buildToolRegistry(
     {
       name: 'delete_unused_gtm_triggers',
       description:
-        'Bulk-delete the UNUSED (orphaned) triggers in a GTM workspace — those referenced by no tag (firing or blocking) and not a Trigger Group member. By DEFAULT deletes ALL unused triggers; pass triggerIds (the filter/selection) to delete only specific ones — any id you pass that is actually in use, or not found, is skipped and reported, NEVER deleted. It lists tags + triggers itself (you do NOT pass them); prefer calling list_unused_gtm_triggers first so the user can see what will go. Destructive — confirms twice. Requires accountId, containerId, workspaceId; optional triggerIds (string[]).',
+        'Bulk-delete the UNUSED (orphaned) triggers in a GTM workspace: referenced by no tag (firing or blocking) and not a Trigger Group member. By DEFAULT deletes ALL unused ones; pass triggerIds to delete only those, and any id actually in use or not found is skipped and reported, NEVER deleted. Prefer list_unused_gtm_triggers first so the user sees what will go. Destructive, confirms twice.',
       inputSchema: {
         type: 'object',
         properties: {
           accountId: { type: 'string' },
           containerId: { type: 'string' },
           workspaceId: { type: 'string' },
-          triggerIds: { type: 'array', items: { type: 'string' }, description: 'Optional selection filter — only delete these ids (and only if actually unused). Omit to delete ALL unused triggers.' },
+          triggerIds: { type: 'array', items: { type: 'string' }, description: 'Only these ids, and only if actually unused. Omit to delete ALL unused ones.' },
         },
         required: ['accountId', 'containerId', 'workspaceId'],
         additionalProperties: false,
@@ -3833,14 +3824,14 @@ export function buildToolRegistry(
     {
       name: 'delete_unused_gtm_variables',
       description:
-        'Bulk-delete the UNUSED (orphaned) variables in a GTM workspace — variables whose {{name}} is referenced by no tag, trigger, or other variable in the readable fields. By DEFAULT deletes ALL unused variables; pass variableIds (the filter/selection) to delete only specific ones — any id you pass that is actually referenced (or not found) is skipped and reported. It lists the container itself (you do NOT pass it); prefer calling list_unused_gtm_variables first so the user can see what will go. CAUTION: unlike triggers, the GTM API does NOT refuse to delete a REFERENCED variable, and this detection is a strong hint (not proof) — a variable used only in a published version or a field the audit cannot read could be wrongly deleted, silently breaking that {{reference}}. Destructive — confirms twice. Requires accountId, containerId, workspaceId; optional variableIds (string[]).',
+        'Bulk-delete the UNUSED (orphaned) variables in a GTM workspace: {{name}} referenced by no tag, trigger or other variable in the readable fields. By DEFAULT deletes ALL unused ones; pass variableIds to delete only those, and any id actually referenced or not found is skipped and reported. Prefer list_unused_gtm_variables first. CAUTION: unlike triggers, the GTM API does NOT refuse to delete a REFERENCED variable, and this detection is a hint, not proof: a variable used only in a published version, or in a field the audit cannot read, could be wrongly deleted, silently breaking that {{reference}}. Destructive, confirms twice.',
       inputSchema: {
         type: 'object',
         properties: {
           accountId: { type: 'string' },
           containerId: { type: 'string' },
           workspaceId: { type: 'string' },
-          variableIds: { type: 'array', items: { type: 'string' }, description: 'Optional selection filter — only delete these ids (and only if actually unused). Omit to delete ALL unused variables.' },
+          variableIds: { type: 'array', items: { type: 'string' }, description: 'Only these ids, and only if actually unused. Omit to delete ALL unused ones.' },
         },
         required: ['accountId', 'containerId', 'workspaceId'],
         additionalProperties: false,
@@ -3889,7 +3880,7 @@ export function buildToolRegistry(
     {
       name: 'delete_gtm_variable',
       description:
-        'Delete a variable from a GTM workspace (draft, not published). Requires accountId, containerId, workspaceId, variableId. Destructive — requires the user to confirm twice; verify the variable is not used by a published version first. Optional name is shown in the approval prompt.',
+        'Delete a variable from a GTM workspace (draft, not published). Destructive, requires two confirmations; verify it is not used by a published version first.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -3911,12 +3902,11 @@ export function buildToolRegistry(
     {
       name: 'enable_gtm_builtin_variables',
       description:
-        'Enable built-in variables in a GTM workspace. Requires accountId, containerId, workspaceId, ' +
-        'and types (array of built-in variable TYPE KEYS). Valid keys include: clickUrl ({{Click URL}}), ' +
-        'clickText ({{Click Text}}), clickClasses, clickId, clickElement, pageUrl ({{Page URL}}), ' +
-        'pageHostname, pagePath, referrer. NOTE: there is NO built-in for "Page Title" — to use page ' +
-        'title, create a Custom JavaScript variable returning document.title (GA4 also auto-collects ' +
-        'page_title and page_location, so you usually do not need to send them as event parameters).',
+        'Enable built-in variables in a GTM workspace. `types` are built-in TYPE KEYS: clickUrl ' +
+        '({{Click URL}}), clickText ({{Click Text}}), clickClasses, clickId, clickElement, pageUrl, ' +
+        'pageHostname, pagePath, referrer. There is NO built-in for "Page Title": create a Custom ' +
+        'JavaScript variable returning document.title (GA4 auto-collects page_title and page_location, ' +
+        'so usually you do not need them as event parameters).',
       inputSchema: {
         type: 'object',
         properties: {
@@ -3941,14 +3931,13 @@ export function buildToolRegistry(
     {
       name: 'create_gtm_tag_with_trigger',
       description:
-        'PREFERRED one-shot tool: create a tag that fires on a trigger, in a single call. ' +
-        'Enables any needed built-in variables, REUSES an existing trigger with the same name (no ' +
-        'duplicates) or creates it, then creates the tag linked to that trigger. Requires accountId, ' +
-        'containerId, workspaceId, `tag` (GTM Tag resource {name,type,parameter?}), `trigger` (GTM ' +
-        'Trigger resource {name,type,filter?}), and optional `builtInVariables` (TYPE KEYS, e.g. ' +
-        '["clickUrl","clickText","pageUrl"] — there is NO built-in for Page Title). For a GA4 event ' +
-        '`tag`, use type "gaawe" with the eventSettingsTable (parameter/parameterValue) shape described in create_gtm_tag. ' +
-        'Use this instead of separate create_gtm_trigger + create_gtm_tag calls so the pieces land consistently in one step.',
+        'One-shot: create a tag that fires on a trigger in a single call. Enables needed built-in ' +
+        'variables, REUSES a same-named trigger or creates it, then creates the tag linked to it. Use ' +
+        'this rather than separate create_gtm_trigger + create_gtm_tag calls. `tag` is a GTM Tag ' +
+        'resource {name,type,parameter?} and `trigger` a GTM Trigger resource {name,type,filter?}; ' +
+        '`builtInVariables` are TYPE KEYS like ["clickUrl","clickText","pageUrl"] (there is NO built-in ' +
+        'for Page Title). For a GA4 event tag use type "gaawe" with the eventSettingsTable shape ' +
+        'described in create_gtm_tag.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -4015,25 +4004,19 @@ export function buildToolRegistry(
       name: 'create_gtm_trigger',
       description:
         'Create a trigger in a GTM workspace. `trigger` is a GTM API Trigger resource. ' +
-        'An ALL-ELEMENTS click trigger uses type "click"; click-on-links uses type "linkClick" ' +
-        '(NOT "all_clicks"/"allElements"/"form_submit" - the tool auto-corrects common aliases, ' +
-        'but prefer the exact value). Filter operator types are LOWERCASE ' +
-        '(equals, contains, startsWith, endsWith, matchRegex) and conditions go in `filter` ' +
-        'with arg0/arg1 template parameters. Example (Click URL contains mailto:): ' +
+        'All-elements click uses type "click"; click-on-links uses "linkClick" (NOT "all_clicks" / ' +
+        '"allElements" / "form_submit"; common aliases are auto-corrected but prefer the exact value). ' +
+        'Filter operator types are LOWERCASE (equals, contains, startsWith, endsWith, matchRegex) and ' +
+        'conditions go in `filter` with arg0/arg1 template parameters, e.g. Click URL contains mailto: ' +
         '{"name":"Email link click","type":"linkClick","filter":[{"type":"contains",' +
         '"parameter":[{"type":"template","key":"arg0","value":"{{Click URL}}"},' +
-        '{"type":"template","key":"arg1","value":"mailto:"}]}]}. ' +
-        'The {{Click URL}} built-in variable must be enabled in the container. ' +
-        'For a CUSTOM EVENT trigger (a dataLayer event like purchase / add_to_cart), use type ' +
-        '"customEvent" and put the event name in customEventFilter as {{_event}} equals <name> — ' +
-        'do NOT use a top-level "eventName" field (that is TIMER-only; the API rejects it on a ' +
-        'customEvent trigger). Example: {"name":"Purchase","type":"customEvent","customEventFilter":' +
-        '[{"type":"equals","parameter":[{"type":"template","key":"arg0","value":"{{_event}}"},' +
-        '{"type":"template","key":"arg1","value":"purchase"}]}]}. ' +
-        'customEventFilter must hold ONLY that single {{_event}} match. Any ADDITIONAL scope conditions ' +
-        '(e.g. {{Page Path}} contains /checkout, {{Form ID}} equals x) go in `filter`, not ' +
-        'customEventFilter (the API rejects more than one custom-event filter; the tool also moves ' +
-        'mis-placed extras to `filter` for you).',
+        '{"type":"template","key":"arg1","value":"mailto:"}]}]} ' +
+        '(the {{Click URL}} built-in must be enabled). ' +
+        'A CUSTOM EVENT trigger uses type "customEvent" with the event name in customEventFilter as ' +
+        '{{_event}} equals <name>. Do NOT use a top-level "eventName" field: that is TIMER-only and the ' +
+        'API rejects it here. customEventFilter must hold ONLY that single {{_event}} match; any ' +
+        'ADDITIONAL scope conditions ({{Page Path}} contains /checkout, {{Form ID}} equals x) go in ' +
+        '`filter` (the API rejects more than one custom-event filter; misplaced extras are moved for you).',
       inputSchema: {
         type: 'object',
         properties: {
@@ -4060,7 +4043,7 @@ export function buildToolRegistry(
     {
       name: 'update_gtm_trigger',
       description:
-        'Update an existing trigger IN PLACE (read-modify-write) — the GTM API DOES support this; do NOT delete + recreate a trigger to change it (and you can\'t delete one that tags reference). Set its display `name` and/or, for a Custom Event trigger, its `eventName` — the dataLayer Event name it matches, normalized to snake_case (so "CE - Purchase" → "purchase"). Tags keep firing on the same trigger id. Requires accountId, containerId, workspaceId, triggerId; pass name and/or eventName.',
+        'Update an existing trigger IN PLACE (read-modify-write). The GTM API DOES support this: do NOT delete and recreate a trigger to change it (and you cannot delete one that tags reference). Sets its display `name` and/or, for a Custom Event trigger, its `eventName`, the dataLayer event it matches, normalized to snake_case. Tags keep firing on the same trigger id. Pass name and/or eventName.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -4069,7 +4052,7 @@ export function buildToolRegistry(
           workspaceId: { type: 'string' },
           triggerId: { type: 'string' },
           name: { type: 'string', description: 'New display name (optional).' },
-          eventName: { type: 'string', description: 'New Custom Event "Event name" — the dataLayer event it matches, e.g. purchase (optional).' },
+          eventName: { type: 'string', description: 'New Custom Event name: the dataLayer event it matches, e.g. purchase.' },
         },
         required: ['accountId', 'containerId', 'workspaceId', 'triggerId'],
         additionalProperties: false,
@@ -4087,7 +4070,7 @@ export function buildToolRegistry(
     },
     {
       name: 'create_gtm_variable',
-      description: 'Create a variable in a GTM workspace. Requires accountId, containerId, workspaceId, and a variable object {name, type, ...}.',
+      description: 'Create a variable in a GTM workspace from a raw GTM Variable resource {name, type, ...}. Prefer create_gtm_variable_typed.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -4113,7 +4096,7 @@ export function buildToolRegistry(
         {
           name: 'set_gtm_workspace',
           description:
-            'Switch the ACTIVE GTM workspace — the one shown in the app bar and used by the Container audit and new operations — within the current account and container. Accepts workspaceId OR workspaceName (e.g. "MCP-TEST", case-insensitive). Use when the user says "switch to / use / change to workspace X". Does NOT modify GTM; it only re-points the app.',
+            'Switch the ACTIVE GTM workspace (the one in the app bar, used by the audit and new operations) within the current account and container. Accepts workspaceId OR workspaceName (case-insensitive). Use when the user says "switch to workspace X". Does NOT modify GTM, it only re-points the app.',
           inputSchema: {
             type: 'object',
             properties: { workspaceId: { type: 'string' }, workspaceName: { type: 'string' } },
@@ -4142,7 +4125,7 @@ export function buildToolRegistry(
         {
           name: 'set_gtm_container',
           description:
-            'Switch the ACTIVE GTM container within the current account, by containerId OR containerName (case-insensitive). Optionally also set the workspace (workspaceId/workspaceName); otherwise the "Default Workspace" — or the first workspace — is selected. Use when the user says "switch to container X". Does NOT modify GTM; it only re-points the app.',
+            'Switch the ACTIVE GTM container within the current account, by containerId OR containerName (case-insensitive). Optionally set the workspace too; otherwise "Default Workspace", or the first workspace, is selected. Use when the user says "switch to container X". Does NOT modify GTM, it only re-points the app.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -4200,16 +4183,16 @@ export function buildToolRegistry(
           name: 'remember_memory',
           description:
             'Save a durable NOTE to the assistant\'s memory for this account/client so it is recalled in FUTURE chats. ' +
-            'Call this when the user tells you to remember something ("remember ...", "note that ...", "keep in mind ..."), ' +
-            'states a lasting preference/correction/decision ("we use order_completed for purchase", "don\'t suggest scroll tracking again", "always name tags like ..."), ' +
-            'or after you make a NOTABLE persistent change the user would want on record (e.g. created or deleted a key tag/trigger). ' +
-            'Be CONSERVATIVE: do not save transient values, one-off numbers, secrets, API keys, or personal data. Confirm briefly what you saved.',
+            'Call this when the user tells you to remember something, states a lasting preference, correction or ' +
+            'decision ("we use order_completed for purchase", "don\'t suggest scroll tracking again"), or after a ' +
+            'NOTABLE persistent change they would want on record. Be CONSERVATIVE: never save transient values, ' +
+            'one-off numbers, secrets, API keys or personal data. Confirm briefly what you saved.',
           inputSchema: {
             type: 'object',
             properties: {
-              text: { type: 'string', description: 'The note, as a short standalone statement (not "the user said ..."). Under 200 chars.' },
-              kind: { type: 'string', enum: [...MEMORY_KINDS], description: 'rule = a correction/instruction to follow; preference; decision; fact; glossary = a client-specific term/event mapping. Default fact.' },
-              scope: { type: 'string', enum: ['account', 'client'], description: 'client = only for the current container/property; account = all of this account. Default client when a container/property is active.' },
+              text: { type: 'string', description: 'The note, a short standalone statement (not "the user said..."). Under 200 chars.' },
+              kind: { type: 'string', enum: [...MEMORY_KINDS], description: 'rule = an instruction to follow; glossary = a client term/event mapping. Default fact.' },
+              scope: { type: 'string', enum: ['account', 'client'], description: 'client = current container/property only; account = all of it. Default client when one is active.' },
             },
             required: ['text'],
             additionalProperties: false,
@@ -4228,18 +4211,17 @@ export function buildToolRegistry(
         {
           name: 'recall_memories',
           description:
-            'SEARCH the saved memories for this Google account and read back what matches. Each turn a few of the most ' +
-            'relevant notes are already injected automatically; call this when that is not enough: the user asks what you ' +
-            'remember ("what do you know about this client?", "did I tell you how we name events?"), refers to something ' +
-            'agreed earlier that is not in front of you, or you are about to build/change something and want the client\'s ' +
-            'saved rules first. Set scope="all" to look across OTHER clients of this account too (the default), "context" ' +
-            'for just the active client plus account-wide notes. Returns only what is saved: if nothing matches, say you ' +
-            'have no note on it rather than guessing.',
+            'SEARCH the saved memories for this Google account and read back what matches. A few of the most relevant ' +
+            'notes are injected automatically each turn; call this when that is not enough: the user asks what you ' +
+            'remember, refers to something agreed earlier that is not in front of you, or you are about to build or ' +
+            'change something and want the client\'s saved rules first. scope="all" (default) looks across OTHER ' +
+            'clients of this account too; "context" is the active client plus account-wide notes. Returns only what ' +
+            'is saved: if nothing matches, say you have no note on it rather than guessing.',
           inputSchema: {
             type: 'object',
             properties: {
-              query: { type: 'string', description: 'What to look for, in the user\'s words (e.g. "event naming", "checkout tags"). Leave empty to list the most relevant saved notes.' },
-              scope: { type: 'string', enum: ['all', 'context', 'account'], description: 'all = every note under this account incl. other clients (default); context = active client + account-wide; account = account-wide only.' },
+              query: { type: 'string', description: 'What to look for, in the user\'s words. Empty lists the most relevant notes.' },
+              scope: { type: 'string', enum: ['all', 'context', 'account'], description: 'all = every note under this account (default); context = active client plus account-wide; account = account-wide only.' },
               limit: { type: 'number', description: 'Max notes to return (default 10, max 25).' },
             },
             required: [],
@@ -4297,12 +4279,12 @@ export function buildToolRegistry(
         {
           name: 'forget_memory',
           description:
-            'Remove saved memories that match a description. Call this when the user says to forget or stop applying something ' +
-            '("forget that", "don\'t remember X anymore", "stop suggesting Y"). Pass a distinctive query; it removes every memory ' +
-            'whose text matches and reports them. If nothing matches, say so.',
+            'Remove saved memories matching a description. Call this when the user says to forget or stop applying ' +
+            'something ("forget that", "stop suggesting Y"). Pass a distinctive query: every memory whose text ' +
+            'matches is removed and reported. If nothing matches, say so.',
           inputSchema: {
             type: 'object',
-            properties: { query: { type: 'string', description: 'A description of what to forget (matched against saved memory text).' } },
+            properties: { query: { type: 'string', description: 'What to forget, matched against saved memory text.' } },
             required: ['query'],
             additionalProperties: false,
           },
@@ -4326,22 +4308,21 @@ export function buildToolRegistry(
       name: 'lookup_corpus_patterns',
       description:
         'Look up how tags, triggers and variables were ACTUALLY built across the operator\'s own past GTM containers ' +
-        '(an anonymized, aggregated pattern library that ships with the app). Call this before proposing a naming ' +
-        'convention, an event name, a trigger shape, or a vendor setup, and whenever the user asks what is typical, ' +
-        'standard, or "how do we usually do this". Search by intent ("form submit", "purchase ecommerce", "meta pixel"). ' +
-        'Each result carries the number of distinct containers it appeared in, so cite the real count ("128 of 561 of ' +
-        'your containers") instead of vague words like "commonly". IMPORTANT: these are FREQUENCY counts from past work, ' +
-        'not industry benchmarks and not proof a pattern is correct; never present them as a live reading of the ' +
-        'current container (use the GTM read tools for that).',
+        '(an anonymized pattern library shipped with the app). Call this before proposing a naming convention, an ' +
+        'event name, a trigger shape or a vendor setup, and whenever the user asks what is typical or "how do we ' +
+        'usually do this". Search by intent ("form submit", "purchase ecommerce", "meta pixel"). Each result carries ' +
+        'the number of distinct containers it appeared in, so cite the real count instead of saying "commonly". ' +
+        'IMPORTANT: these are FREQUENCY counts from past work, not industry benchmarks and not proof a pattern is ' +
+        'correct; never present them as a reading of the CURRENT container (use the GTM read tools for that).',
       inputSchema: {
         type: 'object',
         properties: {
-          query: { type: 'string', description: 'What you are looking for, in plain words or an event name (e.g. "form submit", "purchase", "tiktok"). Leave empty to list the most common patterns.' },
-          kind: { type: 'string', enum: ['all', 'tag', 'trigger', 'variable', 'vendor'], description: 'Restrict to one kind. vendor = platform adoption counts (how many containers use GA4, Meta, TikTok...). Default all.' },
+          query: { type: 'string', description: 'What you are looking for, in plain words or an event name. Empty lists the most common patterns.' },
+          kind: { type: 'string', enum: ['all', 'tag', 'trigger', 'variable', 'vendor'], description: 'Restrict to one kind. vendor = platform adoption counts. Default all.' },
           brand: {
             type: 'string',
             enum: ['ga4', 'googtag', 'gads', 'meta', 'tiktok', 'linkedin', 'msads', 'snap', 'pinterest', 'hotjar', 'clarity', 'floodlight', 'consent', 'amplitude', 'x', 'html', 'img'],
-            description: 'Restrict TAG results to one vendor. Common names are accepted too (facebook = meta, google ads = gads, bing = msads).',
+            description: 'Restrict TAG results to one vendor. Common names work too (facebook = meta, bing = msads).',
           },
           limit: { type: 'number', description: `Max patterns to return (default ${LOOKUP_DEFAULT_LIMIT}, max ${LOOKUP_MAX_LIMIT}).` },
         },
