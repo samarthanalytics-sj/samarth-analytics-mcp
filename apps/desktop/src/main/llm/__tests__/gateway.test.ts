@@ -9,6 +9,7 @@ import {
   formatToolMemory,
   isReadOnlyToolName,
 } from '../tool-memory';
+import { TOOL_RESULT_MAX_CHARS } from '../../../shared/context-budget';
 import type { LlmChatInput, LlmClient, LlmReply, LlmToolCall, RetryNotice, ToolExecutor } from '../types';
 
 let passed = 0;
@@ -376,6 +377,50 @@ await test('ToolMemoryStore keeps threads apart and evicts old ones (bounded pro
   for (let i = 0; i < 30; i++) if (store.get(`t${i}`).length) live++;
   assert.ok(live <= 8, `at most 8 threads retained, saw ${live}`);
   assert.equal(store.get('t29').length, 1, 'the most recent thread is the one kept');
+});
+
+await test('an oversized tool result is capped for the MODEL but delivered in full to the UI', async () => {
+  // The uncapped payload was re-sent on every remaining step of the turn, so one large list could
+  // dominate a whole build. The UI and the change journal must still receive the real thing.
+  const huge = JSON.stringify({ tags: Array.from({ length: 4000 }, (_, i) => ({ tagId: String(i), name: `GA4 - Event - Tag ${i}`, type: 'gaawe' })) });
+  const client = new ScriptedClient([
+    { toolCalls: [{ id: '1', name: 'list_gtm_tags', args: {} }] },
+    { text: 'done' },
+  ]);
+  let uiContent = '';
+  await runChat(
+    client,
+    { system: 's', model: 'm', apiKey: 'k', messages: [{ role: 'user', text: 'list them' }] },
+    executor(async () => huge),
+    { onToolResult: (r) => { uiContent = r.content ?? ''; } }
+  );
+
+  // What the provider saw on the SECOND request (after the tool result was folded in).
+  const sent = client.inputs[1].messages.find((m) => m.role === 'tool') as { results: Array<{ content: string }> };
+  const modelSaw = sent.results[0].content;
+  assert.ok(modelSaw.length < huge.length, 'the model copy is smaller');
+  assert.ok(modelSaw.length <= TOOL_RESULT_MAX_CHARS, `capped to the budget (${modelSaw.length})`);
+  assert.equal(uiContent, huge, 'the UI callback still receives the FULL result');
+  // The model must know it is holding partial data.
+  assert.match(modelSaw, /truncated/i);
+  assert.match(modelSaw, /never present it as the complete set/i);
+  assert.doesNotThrow(() => JSON.parse(modelSaw), 'the capped payload is still valid JSON');
+});
+
+await test('an ordinary tool result reaches the model untouched', async () => {
+  const small = JSON.stringify({ tags: [{ tagId: '1', name: 'GA4 - Purchase' }] });
+  const client = new ScriptedClient([
+    { toolCalls: [{ id: '1', name: 'list_gtm_tags', args: {} }] },
+    { text: 'done' },
+  ]);
+  await runChat(
+    client,
+    { system: 's', model: 'm', apiKey: 'k', messages: [{ role: 'user', text: 'hi' }] },
+    executor(async () => small),
+    {}
+  );
+  const sent = client.inputs[1].messages.find((m) => m.role === 'tool') as { results: Array<{ content: string }> };
+  assert.equal(sent.results[0].content, small, 'no cap, no marker, byte-identical');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

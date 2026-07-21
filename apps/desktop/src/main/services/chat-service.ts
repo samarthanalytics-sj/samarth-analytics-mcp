@@ -8,6 +8,7 @@ import type { MemoryStore } from '../storage/memory-store';
 import { selectRelevantMemories, formatMemoriesForPrompt, creditMemoryUse, type Memory, type MemoryProvenance } from '../../shared/chat-memory';
 import { containerKindFromUsageContext, type ContainerKind } from '../../shared/tool-scope';
 import { gtmPromptSections } from '../../shared/gtm-prompt-sections';
+import { boundChatHistory } from '../../shared/context-budget';
 import { MEMORY_EXTRACT_SYSTEM, buildExtractionTranscript, parseMemoryCandidates, type MemoryCandidate } from '../../shared/memory-extract';
 import { buildToolRegistry } from '../tools/registry';
 import type { ConfirmFn } from '../tools/registry';
@@ -468,9 +469,21 @@ export class ChatService {
       'Be concise and factual. ' +
       'Style: do NOT use em dashes (the "—" character) anywhere in your replies; use commas, colons, parentheses, or a hyphen "-" instead.';
 
+    // Replayed history is bounded: every prior turn used to be re-sent in full on EVERY request, and
+    // the tool loop then re-sent that whole array on every step. Oldest turns go first, the newest
+    // few are never dropped, and when anything is dropped the model is TOLD - a silently shortened
+    // thread would have it answer confidently about messages it can no longer see.
+    const bounded = boundChatHistory(history);
+    if (bounded.dropped) {
+      console.error(`[chat] history bounded: dropped ${bounded.dropped} older turn(s) to fit the request budget`);
+    }
     const messages: LlmTurn[] = [
       // History replays each user turn's media too, so follow-up questions keep seeing the doc.
-      ...history.map((h): LlmTurn => (h.role === 'user' && h.media?.length ? { role: 'user', text: h.text, media: h.media } : { role: h.role, text: h.text })),
+      ...bounded.turns.map((h, i): LlmTurn => {
+        // The notice rides on the oldest SURVIVING turn, so it reads as context, not as a user message.
+        const text = i === 0 && bounded.notice ? bounded.notice + h.text : h.text;
+        return h.role === 'user' && h.media?.length ? { role: 'user', text, media: h.media } : { role: h.role, text };
+      }),
       { role: 'user', text: message, ...(media?.length ? { media } : {}) },
     ];
 
