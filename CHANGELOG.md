@@ -1,3 +1,13 @@
+## [1.360.5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.360.4...v1.360.5) (2026-07-21)
+
+### Bug Fixes
+
+* **desktop:** confirm before auto-verify consumes the GTM workspace ([#615](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/615)) ([f6544ec](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/f6544ecdfd9f7f84d1451f959f66e29468ea5679))
+
+### Performance Improvements
+
+* **desktop:** cut ~6,600 tokens per chat request by trimming tool descriptions ([dae9877](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/dae987768e755746237442c734ee0832ed8fa0e6))
+
 ## [1.360.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.360.3...v1.360.4) (2026-07-21)
 
 ### Bug Fixes
