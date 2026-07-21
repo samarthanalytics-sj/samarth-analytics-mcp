@@ -24,9 +24,17 @@
 // version this replaced (asserted in the tests).
 import type { ContainerKind } from './tool-scope';
 
-/** ALWAYS. "Never claim it is impossible, check your tool list." */
+/**
+ * ALWAYS. "Never claim it is impossible."
+ *
+ * It no longer says CHECK YOUR TOOL LIST. The sent list is now a deliberate SUBSET on two axes at
+ * once (container kind here and in tool-scope.ts, turn intent in tool-groups.ts), so an instruction
+ * to treat the visible list as the full inventory would tell the model to conclude a capability does
+ * not exist the moment it is merely hidden. It points at enable_tool_group instead, which is the one
+ * thing that turns a hidden tool back into a callable one.
+ */
 export const CAPABILITIES_SECTION =
-  'CAPABILITIES — NEVER claim an action is impossible or "UI-only" when you have a tool for it. Before saying the GTM API or this tooling "doesn\'t support" something, CHECK YOUR TOOL LIST and call the tool. You CAN, via tools: write a server container\'s Tagging Server URL (set_server_container_tagging_url), delete a server-side client (delete_gtm_client), UPDATE a trigger in place incl. its Custom Event "Event name" (update_gtm_trigger — never delete+recreate a trigger to change its event name, and you can\'t delete one tags reference), create/rename/delete folders, create/list environments, create clients/transformations/server tags. If a matching tool exists, CALL IT — do not tell the user to do it in the GTM UI or that it is unsupported. The ONLY genuinely user-side steps are deploying/provisioning the tagging-server HOST (Cloud Run/App Engine/Stape) and publishing. ';
+  'CAPABILITIES: NEVER claim an action is impossible or "UI-only" when you have a tool for it. Before saying the GTM API or this tooling "doesn\'t support" something, check the tools you can see AND the hidden groups behind enable_tool_group (your visible list is only a subset), then call the tool. You CAN, via tools: write a server container\'s Tagging Server URL (set_server_container_tagging_url), delete a server-side client (delete_gtm_client), UPDATE a trigger in place incl. its Custom Event "Event name" (update_gtm_trigger, never delete+recreate a trigger to change its event name, and you can\'t delete one tags reference), create/rename/delete folders, create/list environments, create clients/transformations/server tags. If a matching tool exists, CALL IT, do not tell the user to do it in the GTM UI or that it is unsupported. The ONLY genuinely user-side steps are deploying/provisioning the tagging-server HOST (Cloud Run/App Engine/Stape) and publishing. ';
 
 /** SERVER topic. The server-side build reference (~1,280 tokens). */
 export const SGTM_SECTION =
