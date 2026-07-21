@@ -6,6 +6,7 @@ import type { AuditHistoryStore } from '../storage/audit-history';
 import type { ManifestStore } from '../storage/manifest-store';
 import type { MemoryStore } from '../storage/memory-store';
 import { selectRelevantMemories, formatMemoriesForPrompt, creditMemoryUse, type Memory, type MemoryProvenance } from '../../shared/chat-memory';
+import { containerKindFromUsageContext, type ContainerKind } from '../../shared/tool-scope';
 import { MEMORY_EXTRACT_SYSTEM, buildExtractionTranscript, parseMemoryCandidates, type MemoryCandidate } from '../../shared/memory-extract';
 import { buildToolRegistry } from '../tools/registry';
 import type { ConfirmFn } from '../tools/registry';
@@ -150,6 +151,30 @@ export class ChatService {
    *  question ("how many of those are Ads tags?") is answered from the list already fetched instead
    *  of re-calling the tool. See tool-memory.ts for the bound and the reasoning. */
   private readonly toolMemory = new ToolMemoryStore();
+  /** accountId -> containerId -> kind. A container never changes kind, so one list call per account
+   *  per session is enough to keep every later turn's tool payload trimmed. */
+  private readonly containerKinds = new Map<string, Map<string, ContainerKind | undefined>>();
+
+  /**
+   * The active container's kind, for scoping the tool list. Cached per account and BEST-EFFORT: any
+   * failure (auth expired, offline, a container we cannot see) resolves to undefined, which sends the
+   * full tool list. Never let a size optimization break a turn.
+   */
+  private async activeContainerKind(accountId?: string, containerId?: string): Promise<ContainerKind | undefined> {
+    if (!accountId || !containerId) return undefined;
+    let byContainer = this.containerKinds.get(accountId);
+    if (!byContainer) {
+      try {
+        const containers = await this.data.listGtmContainers(accountId);
+        byContainer = new Map(containers.map((c) => [c.containerId, containerKindFromUsageContext(c.usageContext)]));
+        this.containerKinds.set(accountId, byContainer);
+      } catch (e) {
+        console.error('[chat] container-kind lookup failed, sending the full tool list:', e instanceof Error ? e.message : e);
+        return undefined;
+      }
+    }
+    return byContainer.get(containerId);
+  }
 
   /** Thread identity for the tool-result carry-over: the same account + product + working-client
    *  scoping the renderer uses to key a conversation, so one container's results never leak into
@@ -289,7 +314,12 @@ export class ChatService {
           },
         }
       : undefined;
-    const tools = buildToolRegistry(this.data, confirm, product, this.history, ctxControl, this.manifests, memoryCtx, this.ads);
+    // Scope the SENT tool list to what the active container can actually do. Skipped entirely for a
+    // GA4 turn (no GTM container in play).
+    const containerKind = product === 'gtm'
+      ? await this.activeContainerKind(active.gtmContext?.accountId, active.gtmContext?.containerId)
+      : undefined;
+    const tools = buildToolRegistry(this.data, confirm, product, this.history, ctxControl, this.manifests, memoryCtx, this.ads, containerKind);
 
     // Tool-result carry-over. An EMPTY history means a brand-new conversation (the user cleared the
     // thread or switched target), so nothing may carry over into it.

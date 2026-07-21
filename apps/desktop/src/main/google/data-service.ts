@@ -121,6 +121,10 @@ export interface GtmContainerView {
   name: string;
   publicId: string;
   path: string;
+  /** GTM's usageContext ("web", "server", "amp", "ios", "android"). The list call has always
+   *  returned it; declared here so callers can scope behaviour to the container kind. Optional so
+   *  the fixtures and fakes that build this view by hand keep compiling. */
+  usageContext?: string[];
 }
 
 export interface Ga4PropertyView {

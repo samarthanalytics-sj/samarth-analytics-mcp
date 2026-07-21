@@ -6,6 +6,7 @@ import type { GoogleProduct, GtmContext } from '../../shared/ipc';
 import type { AuditHistoryStore } from '../storage/audit-history';
 import { ManifestStore } from '../storage/manifest-store';
 import type { MemoryStore } from '../storage/memory-store';
+import { toolAllowedForContainer, type ContainerKind } from '../../shared/tool-scope';
 import {
   MEMORY_KINDS,
   findMemoriesMatching,
@@ -599,7 +600,11 @@ export function buildToolRegistry(
   memoryCtx?: MemoryToolContext,
   /** Google Ads. Optional so every non-chat caller (audit/suggestion fix appliers, the startup
    *  diagnostic, the test fakes) keeps compiling and simply gets no Ads tools. */
-  ads?: GoogleAdsService
+  ads?: GoogleAdsService,
+  /** The ACTIVE container's kind. Tools that cannot act on that kind are left out of the list, which
+   *  is the difference between a ~26k-token GTM request and one that fits a small TPM budget. Omit
+   *  (or pass undefined) to send everything: unknown kind must never hide a tool. */
+  containerKind?: ContainerKind
 ): ToolExecutor {
   const readTools: Tool[] = [
     {
@@ -4360,8 +4365,14 @@ export function buildToolRegistry(
   const tools = [...(product ? all.filter((t) => productOf(t.name) === product) : all), ...memoryTools, ...corpusTools];
 
   return {
+    // SENT list only. Tools that cannot act on the active container's kind are withheld to keep the
+    // request small, but they stay EXECUTABLE below: the system prompt names several of them
+    // outright, so a model that switched container mid-turn and calls one by name must still get the
+    // real behaviour rather than "Unknown tool".
     list: (): LlmToolDef[] =>
-      tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })),
+      tools
+        .filter((t) => toolAllowedForContainer(t.name, containerKind))
+        .map(({ name, description, inputSchema }) => ({ name, description, inputSchema })),
     execute: async (name, args): Promise<string> => {
       const tool = tools.find((t) => t.name === name);
       if (!tool) {

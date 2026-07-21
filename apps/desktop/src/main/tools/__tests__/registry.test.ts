@@ -7,6 +7,7 @@ import { buildGa4WriteTools } from '../ga4-write-tools';
 import { AuditHistoryStore } from '../../storage/audit-history';
 import { ManifestStore } from '../../storage/manifest-store';
 import { MemoryStore } from '../../storage/memory-store';
+import { SERVER_ONLY_TOOLS, WEB_ONLY_TOOLS } from '../../../shared/tool-scope';
 import type { GoogleDataService } from '../../google/data-service';
 import { AdsError, type GoogleAdsService } from '../../google/ads-service';
 import type { GtmContext } from '../../../shared/ipc';
@@ -2574,6 +2575,37 @@ async function main(): Promise<void> {
     assert.equal(out.error, 'That Google Ads account is not active.');
     assert.equal(out.remedy, 'Pick another account.');
     assert.equal(out.code, 'CUSTOMER_NOT_ENABLED');
+  });
+
+  await test('container-kind scoping shrinks the SENT tool list without making anything unreachable', async () => {
+    const build = (kind?: 'web' | 'server'): ReturnType<typeof buildToolRegistry> =>
+      buildToolRegistry(fakeData().data, approveAsIs, 'gtm', undefined, undefined, undefined, undefined, undefined, kind);
+    const names = (kind?: 'web' | 'server'): string[] => build(kind).list().map((t) => t.name);
+    const cost = (kind?: 'web' | 'server'): number => Math.round(JSON.stringify(build(kind).list()).length / 3.4);
+
+    const all = names();
+    const web = names('web');
+    const server = names('server');
+
+    // Every scoped name must still EXIST in the registry. Without this, renaming a tool silently
+    // turns its scope entry into a no-op and the payload quietly grows back.
+    for (const n of [...SERVER_ONLY_TOOLS, ...WEB_ONLY_TOOLS]) {
+      assert.ok(all.includes(n), `scoped tool "${n}" no longer exists in the registry - update tool-scope.ts`);
+    }
+
+    assert.ok(web.length < all.length && server.length < all.length, 'both kinds send fewer tools');
+    assert.equal(web.some((n) => SERVER_ONLY_TOOLS.has(n)), false, 'web sends no server-only tool');
+    assert.equal(server.some((n) => WEB_ONLY_TOOLS.has(n)), false, 'server sends no web-only tool');
+    assert.deepEqual(names(undefined), all, 'unknown kind sends everything (fail-open)');
+
+    // The saving is the entire point, so assert it is real and not a rounding difference.
+    const saved = cost() - cost('web');
+    assert.ok(saved > 4000, `web scoping should save thousands of tokens, saved ~${saved}`);
+
+    // Withheld does NOT mean disabled: the system prompt names these tools, so one called by name
+    // after a mid-turn container switch must still run.
+    const out = await build('web').execute('list_gtm_clients', { accountId: '1', containerId: '2', workspaceId: '3' });
+    assert.ok(!/Unknown tool/i.test(out), 'a withheld tool is still executable');
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);
