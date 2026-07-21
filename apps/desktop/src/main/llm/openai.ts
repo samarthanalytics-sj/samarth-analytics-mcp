@@ -1,4 +1,4 @@
-import { sseEvents, startStream } from './sse';
+import { sseEvents, startStream, withRequestTimeout } from './sse';
 import type { LlmChatInput, LlmClient, LlmReply, LlmToolCall, LlmTurn, StreamAccumulator } from './types';
 
 // OpenAI Chat Completions API. Pure mappers exported for unit tests.
@@ -134,22 +134,26 @@ export function openaiChatBody(input: LlmChatInput): Record<string, unknown> {
 
 export const openaiClient: LlmClient = {
   async chatStream(input: LlmChatInput, onDelta: (t: string) => void): Promise<LlmReply> {
-    const res = await startStream(
-      'https://api.openai.com/v1/chat/completions',
-      { authorization: `Bearer ${input.apiKey}` },
-      openaiChatBody(input),
-      'OpenAI',
-      input.signal
-    );
-    const acc = openaiStreamAccumulator(onDelta);
-    for await (const data of sseEvents(res)) {
-      if (data === '[DONE]') break;
-      try {
-        acc.push(JSON.parse(data));
-      } catch {
-        // ignore keep-alive / non-JSON lines
+    // The budget covers the request AND the body stream AND any retry sleeps.
+    return withRequestTimeout('OpenAI', input.signal, async ({ signal, deadlineAt }) => {
+      const res = await startStream(
+        'https://api.openai.com/v1/chat/completions',
+        { authorization: `Bearer ${input.apiKey}` },
+        openaiChatBody(input),
+        'OpenAI',
+        signal,
+        { onRetry: input.onRetry, deadlineAt }
+      );
+      const acc = openaiStreamAccumulator(onDelta);
+      for await (const data of sseEvents(res)) {
+        if (data === '[DONE]') break;
+        try {
+          acc.push(JSON.parse(data));
+        } catch {
+          // ignore keep-alive / non-JSON lines
+        }
       }
-    }
-    return acc.result();
+      return acc.result();
+    });
   },
 };

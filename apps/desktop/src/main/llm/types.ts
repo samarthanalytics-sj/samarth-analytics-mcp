@@ -1,6 +1,8 @@
 import type { LlmProvider, ChatMediaPart } from '../../shared/ipc';
+import type { RetryNotice } from './sse';
 
 export type { ChatMediaPart };
+export type { RetryNotice };
 
 export type { LlmProvider };
 
@@ -41,6 +43,9 @@ export interface LlmChatInput {
   messages: LlmTurn[];
   /** Aborts the in-flight provider request when the user stops the chat. */
   signal?: AbortSignal;
+  /** Fired when a transient provider failure (429 / 500 / 503) is about to be retried, so the wait
+   *  reaches the user instead of looking like a hang. */
+  onRetry?: (notice: RetryNotice) => void;
 }
 
 export interface LlmReply {

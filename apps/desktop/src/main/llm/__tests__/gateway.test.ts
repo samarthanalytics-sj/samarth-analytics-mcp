@@ -1,6 +1,15 @@
 import assert from 'node:assert/strict';
 import { runChat } from '../gateway';
-import type { LlmChatInput, LlmClient, LlmReply, LlmToolCall, ToolExecutor } from '../types';
+import {
+  MAX_BLOCK_CHARS,
+  MAX_CARRIED_RESULTS,
+  MAX_RESULT_CHARS,
+  ToolMemoryStore,
+  foldToolResults,
+  formatToolMemory,
+  isReadOnlyToolName,
+} from '../tool-memory';
+import type { LlmChatInput, LlmClient, LlmReply, LlmToolCall, RetryNotice, ToolExecutor } from '../types';
 
 let passed = 0;
 let failed = 0;
@@ -226,6 +235,147 @@ await test('stop: a provider AbortError is returned as "Stopped." (not thrown)',
     executor(async () => 'ok')
   );
   assert.equal(res.text, 'Stopped.');
+});
+
+await test('a provider TIMEOUT is surfaced as an error, never swallowed as "Stopped."', async () => {
+  // withRequestTimeout rewrites a budget expiry into a plain Error (not an AbortError) precisely so
+  // this path reports the real reason instead of pretending the user cancelled.
+  const client: LlmClient = {
+    async chatStream() {
+      throw new Error('OpenAI did not respond within 180s, so the request was cancelled.');
+    },
+  };
+  await assert.rejects(
+    () =>
+      runChat(
+        client,
+        { system: 's', model: 'm', apiKey: 'k', messages: [{ role: 'user', text: 'hi' }] },
+        executor(async () => 'ok')
+      ),
+    /did not respond within 180s/
+  );
+});
+
+await test('onRetry is threaded to the provider so a rate-limit wait reaches the UI', async () => {
+  const seen: RetryNotice[] = [];
+  const client: LlmClient = {
+    async chatStream(input) {
+      input.onRetry?.({ provider: 'OpenAI', status: 429, attempt: 2, maxAttempts: 4, delayMs: 42_000 });
+      return { text: 'answered after the wait' };
+    },
+  };
+  const res = await runChat(
+    client,
+    { system: 's', model: 'm', apiKey: 'k', messages: [{ role: 'user', text: 'hi' }] },
+    executor(async () => 'ok'),
+    { onRetry: (n) => seen.push(n) }
+  );
+  assert.equal(res.text, 'answered after the wait');
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].delayMs, 42_000);
+  assert.equal(seen[0].attempt, 2);
+  assert.equal(seen[0].maxAttempts, 4);
+});
+
+await test('onToolResult carries the tool OUTPUT (so the next turn need not re-call the tool)', async () => {
+  const got: Array<{ name: string; ok: boolean; content?: string; args?: Record<string, unknown> }> = [];
+  const client = new ScriptedClient([
+    { toolCalls: [{ id: '1', name: 't', args: { workspaceId: '9' } }] },
+    { text: 'done' },
+  ]);
+  await runChat(
+    client,
+    { system: 's', model: 'm', apiKey: 'k', messages: [{ role: 'user', text: 'hi' }] },
+    executor(async () => '["tag a","tag b"]'),
+    { onToolResult: (r) => got.push(r) }
+  );
+  assert.equal(got.length, 1);
+  assert.equal(got[0].content, '["tag a","tag b"]', 'the raw result is handed to the caller');
+  assert.deepEqual(got[0].args, { workspaceId: '9' }, 'with the args that produced it');
+});
+
+/* ── Tool-result carry-over (the duplicate-tool-call fix), and its BOUNDS ── */
+console.log('\nTool-result carry-over (tool-memory):');
+
+const okRead = (name: string, content: string, args: Record<string, unknown> = {}) => ({ name, args, content, ok: true });
+
+await test('a read result is carried, so a follow-up question can answer from it', async () => {
+  const carried = foldToolResults([], [okRead('list_gtm_tags', '80 tags here', { containerId: '1' })]);
+  assert.equal(carried.length, 1);
+  const block = formatToolMemory(carried);
+  assert.match(block, /RECENT TOOL RESULTS/);
+  assert.match(block, /list_gtm_tags/);
+  assert.match(block, /80 tags here/);
+  assert.match(block, /do NOT call the tool again/i);
+});
+
+await test('BOUND: never more than MAX_CARRIED_RESULTS entries, oldest dropped first', async () => {
+  let carried = foldToolResults([], [okRead('list_gtm_tags', 'A', { i: 1 })]);
+  carried = foldToolResults(carried, [okRead('list_gtm_triggers', 'B', { i: 2 })]);
+  carried = foldToolResults(carried, [okRead('list_gtm_variables', 'C', { i: 3 })]);
+  carried = foldToolResults(carried, [okRead('list_ga4_key_events', 'D', { i: 4 })]);
+  assert.equal(carried.length, MAX_CARRIED_RESULTS, 'capped at the carry limit');
+  assert.deepEqual(carried.map((c) => c.content), ['B', 'C', 'D'], 'the oldest fell off');
+});
+
+await test('BOUND: a huge result is truncated to MAX_RESULT_CHARS and FLAGGED as partial', async () => {
+  const huge = 'x'.repeat(MAX_RESULT_CHARS * 3);
+  const carried = foldToolResults([], [okRead('audit_gtm_container', huge)]);
+  assert.equal(carried[0].content.length, MAX_RESULT_CHARS);
+  assert.equal(carried[0].truncated, true);
+  const block = formatToolMemory(carried);
+  assert.match(block, /TRUNCATED/, 'the model is told it is partial, so it re-calls instead of guessing');
+});
+
+await test('BOUND: the whole injected block never exceeds MAX_BLOCK_CHARS', async () => {
+  const big = 'y'.repeat(MAX_RESULT_CHARS);
+  const carried = foldToolResults(
+    [],
+    [okRead('list_gtm_tags', big, { i: 1 }), okRead('list_gtm_triggers', big, { i: 2 }), okRead('list_gtm_variables', big, { i: 3 })]
+  );
+  assert.equal(carried.length, 3);
+  const block = formatToolMemory(carried);
+  assert.ok(block.length <= MAX_BLOCK_CHARS, `block is ${block.length}, cap is ${MAX_BLOCK_CHARS}`);
+  assert.match(block, /list_gtm_variables/, 'the NEWEST result survives the cap');
+});
+
+await test('a WRITE clears the carry-over, so a stale list is never re-quoted after a change', async () => {
+  const carried = foldToolResults([], [okRead('list_gtm_tags', 'old list')]);
+  const after = foldToolResults(carried, [{ name: 'create_gtm_tag', args: {}, content: '{"tagId":"5"}', ok: true }]);
+  assert.deepEqual(after, [], 'everything read before the write is dropped');
+  assert.equal(isReadOnlyToolName('create_gtm_tag'), false);
+  assert.equal(isReadOnlyToolName('list_gtm_tags'), true);
+  assert.equal(isReadOnlyToolName('audit_ga4_property'), true);
+  assert.equal(isReadOnlyToolName('delete_gtm_trigger'), false);
+});
+
+await test('a FAILED tool result is not carried (an error is not an answer)', async () => {
+  const carried = foldToolResults([], [{ name: 'list_gtm_tags', args: {}, content: 'boom', ok: false }]);
+  assert.deepEqual(carried, []);
+  assert.equal(formatToolMemory([]), '', 'nothing carried means nothing added to the prompt');
+});
+
+await test('re-reading the same tool+args replaces its own entry instead of stacking', async () => {
+  let carried = foldToolResults([], [okRead('list_gtm_tags', 'v1', { containerId: '1' })]);
+  carried = foldToolResults(carried, [okRead('list_gtm_tags', 'v2', { containerId: '1' })]);
+  assert.equal(carried.length, 1);
+  assert.equal(carried[0].content, 'v2', 'the fresher read wins');
+});
+
+await test('ToolMemoryStore keeps threads apart and evicts old ones (bounded process memory)', async () => {
+  const store = new ToolMemoryStore();
+  store.record('acct|gtm|containerA', [okRead('list_gtm_tags', 'A tags')]);
+  store.record('acct|gtm|containerB', [okRead('list_gtm_tags', 'B tags')]);
+  assert.equal(store.get('acct|gtm|containerA')[0].content, 'A tags');
+  assert.equal(store.get('acct|gtm|containerB')[0].content, 'B tags', 'one container never sees another\'s results');
+  store.clear('acct|gtm|containerA');
+  assert.deepEqual(store.get('acct|gtm|containerA'), [], 'clearing a thread (new conversation) drops its carry-over');
+
+  for (let i = 0; i < 30; i++) store.record(`t${i}`, [okRead('list_gtm_tags', `tags ${i}`)]);
+  let live = 0;
+  for (let i = 0; i < 30; i++) if (store.get(`t${i}`).length) live++;
+  assert.ok(live <= 8, `at most 8 threads retained, saw ${live}`);
+  assert.equal(store.get('t29').length, 1, 'the most recent thread is the one kept');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

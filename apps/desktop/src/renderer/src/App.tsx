@@ -938,6 +938,17 @@ interface ChatMessage {
   /** Provenance: the memories injected into this reply's context ("why did you say that"). A snapshot
    *  at answer time, so it stays truthful even if a memory is later edited or deleted. */
   memoriesUsed?: Array<{ id: string; kind: string; text: string }>;
+  /** Provider rate-limit / overload retries that happened while producing this reply, in order.
+   *  Shown so a long wait reads as "waiting out a rate limit", not as a frozen app. */
+  retries?: Array<{ provider: string; status: number; attempt: number; maxAttempts: number; delayMs: number }>;
+}
+
+/** The one-line notice for a provider retry, e.g. "Rate limited by OpenAI, retrying in 42s
+ *  (attempt 2 of 4)". PURE. */
+function formatRetryNotice(r: { provider: string; status: number; attempt: number; maxAttempts: number; delayMs: number }): string {
+  const secs = Math.max(1, Math.round(r.delayMs / 1000));
+  const cause = r.status === 429 ? `Rate limited by ${r.provider}` : `${r.provider} is busy (${r.status})`;
+  return `${cause}, retrying in ${secs}s (attempt ${r.attempt} of ${r.maxAttempts})`;
 }
 
 /** Short timestamp shown under a chat bubble: just the time for today's messages, date + time
@@ -1224,6 +1235,14 @@ function ChatView({
             copy[copy.length - 1] = { ...last, toolErrors: [...(last.toolErrors ?? []), { name: ev.name, error: ev.error ?? 'failed' }] };
           else if (ev.type === 'memories')
             copy[copy.length - 1] = { ...last, memoriesUsed: ev.used };
+          else if (ev.type === 'retry')
+            copy[copy.length - 1] = {
+              ...last,
+              retries: [
+                ...(last.retries ?? []),
+                { provider: ev.provider, status: ev.status, attempt: ev.attempt, maxAttempts: ev.maxAttempts, delayMs: ev.delayMs },
+              ],
+            };
           return copy;
         });
         if (ev.type === 'confirm') {
@@ -1352,7 +1371,15 @@ function ChatView({
               <div style={{ ...(m.role === 'user' ? styles.userMsg : styles.asstMsg), maxWidth: '100%' }}>
                 {m.role === 'assistant' ? (
                   <>
-                    {m.text ? <Markdown text={m.text} /> : m.toolErrors?.length ? null : <span style={{ opacity: 0.6 }}>…</span>}
+                    {m.text ? <Markdown text={m.text} /> : m.toolErrors?.length || m.retries?.length ? null : <span style={{ opacity: 0.6 }}>…</span>}
+                    {/* A rate-limit wait is announced live, so a 60s provider backoff reads as a
+                        wait with a countdown rather than a frozen "Thinking…". */}
+                    {m.retries?.length ? (
+                      <div style={styles.retryLine}>
+                        ⏳ {formatRetryNotice(m.retries[m.retries.length - 1])}
+                        {m.retries.length > 1 ? ` · ${m.retries.length} retries so far this reply` : ''}
+                      </div>
+                    ) : null}
                     {m.toolErrors?.length ? (
                       <div style={styles.toolErrors}>
                         {m.toolErrors.map((te, j) => (
@@ -10266,6 +10293,8 @@ const styles: Record<string, React.CSSProperties> = {
   msgTime: { fontSize: 10.5, color: 'var(--text-faint)', margin: '3px 4px 0', userSelect: 'none', fontFamily: 'ui-monospace, monospace', letterSpacing: 0.3 },
   toolErrors: { marginTop: 6, display: 'flex', flexDirection: 'column', gap: 4 },
   toolErrorLine: { background: 'var(--c-red-bg)', border: '1px solid var(--c-red-border)', color: 'var(--c-red)', borderRadius: 8, padding: '6px 9px', fontSize: 12, lineHeight: 1.4, wordBreak: 'break-word' },
+  // Provider rate-limit / overload retry notice: a WAIT, not a failure, so it uses the amber tokens.
+  retryLine: { marginTop: 6, background: 'var(--warning-bg)', border: '1px solid var(--warning-border)', color: 'var(--warning)', borderRadius: 8, padding: '6px 9px', fontSize: 12, lineHeight: 1.4, wordBreak: 'break-word' },
   composer: { display: 'flex', flexDirection: 'column', gap: 6, padding: '12px 16px 10px', borderTop: '1px solid var(--border)', position: 'relative' },
   // The input is a single rounded shell (textarea + icon send button inside); the focus ring lives on
   // the shell via .composer-shell:focus-within in global.css since the textarea itself is borderless.

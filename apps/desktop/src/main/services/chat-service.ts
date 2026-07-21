@@ -10,6 +10,7 @@ import { MEMORY_EXTRACT_SYSTEM, buildExtractionTranscript, parseMemoryCandidates
 import { buildToolRegistry } from '../tools/registry';
 import type { ConfirmFn } from '../tools/registry';
 import { createProvider, runChat } from '../llm/gateway';
+import { ToolMemoryStore, formatToolMemory } from '../llm/tool-memory';
 import { changeJournal } from '../google/change-journal';
 import type { ChatMediaPart, ChatReply, ChatStreamEvent, ChatToolCall, ChatTurn, GoogleProduct, GtmContext } from '../../shared/ipc';
 import type { LlmTurn } from '../llm/types';
@@ -119,6 +120,15 @@ export function dateContextLine(now: Date): string {
 // Ties the active account (provider + model + vaulted key) to the LLM gateway and
 // the read-only GTM/GA4 tool registry. The model can call tools, which run as the
 // active account against Google, to answer questions about that account's setup.
+/** House style: no em or en dashes in anything the user sees. Applied to BOTH the streamed deltas and
+ *  the final persisted text, from one definition, so the two can never disagree. The same pair is what
+ *  the repo's export-boundary tests assert on, and the rule is about what a USER sees, not about source
+ *  comments (which carry plenty of them).
+ *
+ *  The class is [U+2014 EM DASH, U+2013 EN DASH]. Both are single UTF-16 code units, so a streamed
+ *  delta can never split one across chunks and a per-chunk replace is safe. */
+const stripDashes = (v: string): string => v.replace(/[—–]/g, '-');
+
 export class ChatService {
   constructor(
     private readonly registry: RegistryService,
@@ -135,6 +145,19 @@ export class ChatService {
      *  asking the user for a Conversion ID and Label instead of reading them. */
     private readonly ads?: GoogleAdsService
   ) {}
+
+  /** Bounded, in-memory carry-over of each thread's most recent READ tool results, so a follow-up
+   *  question ("how many of those are Ads tags?") is answered from the list already fetched instead
+   *  of re-calling the tool. See tool-memory.ts for the bound and the reasoning. */
+  private readonly toolMemory = new ToolMemoryStore();
+
+  /** Thread identity for the tool-result carry-over: the same account + product + working-client
+   *  scoping the renderer uses to key a conversation, so one container's results never leak into
+   *  another container's chat. */
+  private threadKey(active: { id: string; gtmContext?: GtmContext; ga4Context?: { property?: string } }, product: GoogleProduct): string {
+    const scope = product === 'gtm' ? active.gtmContext?.containerId : active.ga4Context?.property;
+    return `${active.id}|${product}|${scope ?? 'na'}`;
+  }
 
   /** The REMEMBERED-CONTEXT block for this turn: the account's memories scoped to the active client
    *  (GTM container / GA4 property) and ranked against the message. Empty when there are none.
@@ -267,6 +290,12 @@ export class ChatService {
         }
       : undefined;
     const tools = buildToolRegistry(this.data, confirm, product, this.history, ctxControl, this.manifests, memoryCtx, this.ads);
+
+    // Tool-result carry-over. An EMPTY history means a brand-new conversation (the user cleared the
+    // thread or switched target), so nothing may carry over into it.
+    const threadKey = this.threadKey(active, product);
+    if (!history.length) this.toolMemory.clear(threadKey);
+    const toolMemoryBlock = formatToolMemory(this.toolMemory.get(threadKey));
 
     // The memories injected into THIS turn — kept for provenance: streamed to the UI ("why did you say
     // that"), recorded in the usage log, and returned on the reply.
@@ -406,6 +435,7 @@ export class ChatService {
           'To look BEYOND the notes shown above (another client of this account, or something the user says was agreed earlier), call recall_memories with a short query instead of guessing. '
         : '') +
       CORPUS_PROMPT +
+      toolMemoryBlock +
       dateContextLine(new Date()) +
       'Call tools when asked; never invent ids. When the user asks to list or count ' +
       'tags, triggers, variables, accounts, containers, or workspaces, the tools already ' +
@@ -440,19 +470,49 @@ export class ChatService {
       }
     }
 
-    const result = await runChat(client, { system, model: active.llm.model, apiKey, messages, signal }, tools, {
-      // House style: never surface em dashes. Strip them from the live stream (a "—" is a single code
-      // unit, so it can't span chunks) as a hard guarantee on top of the system-prompt instruction.
-      onDelta: emit ? (delta) => emit({ type: 'text', delta: delta.replace(/—/g, '-') }) : undefined,
-      onToolCall: (call) => {
-        toolCalls.push({ name: call.name, args: call.args });
-        emit?.({ type: 'tool', name: call.name });
-      },
-      onToolResult: emit ? (r) => emit({ type: 'tool_result', name: r.name, ok: r.ok, error: r.error }) : undefined,
-    }, MAX_TOOL_STEPS);
+    // Every tool result from THIS turn, folded into the thread's carry-over once the turn ends.
+    const turnToolResults: Array<{ name: string; args?: Record<string, unknown>; content?: string; ok: boolean }> = [];
+
+    let result;
+    try {
+      result = await runChat(client, { system, model: active.llm.model, apiKey, messages, signal }, tools, {
+        // House style: never surface an em OR en dash. Stripped from the live stream as a hard guarantee
+        // on top of the system-prompt instruction. Safe per chunk because both are single UTF-16 code
+        // units, so neither can be split across deltas. The final text is stripped the same way below;
+        // the two MUST use the same pattern or the streamed text and the persisted text disagree.
+        onDelta: emit ? (delta) => emit({ type: 'text', delta: stripDashes(delta) }) : undefined,
+        onToolCall: (call) => {
+          toolCalls.push({ name: call.name, args: call.args });
+          emit?.({ type: 'tool', name: call.name });
+        },
+        onToolResult: (r) => {
+          turnToolResults.push({ name: r.name, args: r.args, content: r.content, ok: r.ok });
+          emit?.({ type: 'tool_result', name: r.name, ok: r.ok, error: r.error });
+        },
+        // A provider rate-limit retry used to be a silent sleep of up to 60s (x4) inside one fetch,
+        // which is what a "Thinking…" hang actually was. Surface it.
+        onRetry: emit
+          ? (n) =>
+              emit({
+                type: 'retry',
+                provider: n.provider,
+                status: n.status,
+                attempt: n.attempt,
+                maxAttempts: n.maxAttempts,
+                delayMs: n.delayMs,
+              })
+          : undefined,
+      }, MAX_TOOL_STEPS);
+    } finally {
+      // In a finally so a turn that DIED on a rate limit still keeps what it already read: that is
+      // exactly the turn whose reads we least want repeated. The key is recomputed because
+      // set_gtm_container can switch the working container mid-turn, which would make these results
+      // a mix of two clients; in that case they are dropped rather than filed under either one.
+      if (this.threadKey(active, product) === threadKey) this.toolMemory.record(threadKey, turnToolResults);
+    }
 
     // Injected + anything the model recalled mid-turn via the memory tool.
     const memoriesUsed = [...usedMemories.values()];
-    return { text: result.text.replace(/—/g, '-'), toolCalls, ...(memoriesUsed.length ? { memoriesUsed } : {}) };
+    return { text: stripDashes(result.text), toolCalls, ...(memoriesUsed.length ? { memoriesUsed } : {}) };
   }
 }
