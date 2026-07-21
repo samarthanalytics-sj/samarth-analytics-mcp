@@ -1,3 +1,9 @@
+## [1.362.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.361.0...v1.362.0) (2026-07-21)
+
+### Features
+
+* **desktop:** make the seeded conversion name visibly editable ([#622](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/622)) ([fa17f6a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/fa17f6ada399c71314928b421e9c909e9767cd5f)), closes [#621](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/621)
+
 ## [1.361.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.360.10...v1.361.0) (2026-07-21)
 
 ### Features
