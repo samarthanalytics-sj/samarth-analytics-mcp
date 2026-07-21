@@ -108,6 +108,9 @@ export interface PatternLibrary {
   version: 1;
   /** Date only (YYYY-MM-DD) — never a precise timestamp. */
   minedAt: string;
+  /** DISTINCT containers mined (by publicId), NOT the number of export files: several files can be
+   *  workspaces of one container. This is the denominator every `containers` count is a share of, so
+   *  the two must be the same unit or every published percentage is wrong. */
   containersScanned: number;
   /** The k-anonymity threshold every pattern met (distinct containers). */
   minContainers: number;
@@ -348,14 +351,16 @@ export function minePatternLibrary(exports_: CorpusExport[], minedAt: string, mi
   const triggers = new Map<string, Agg<Omit<TriggerPattern, 'containers' | 'occurrences'>>>();
   const variables = new Map<string, Agg<Omit<VariablePattern, 'containers' | 'occurrences'>>>();
   const vendorContainers = new Map<TagBrand, Set<string>>();
-  let scanned = 0;
+  const scanned = new Set<string>();
 
   exports_.forEach((exp, idx) => {
     const cv = exp?.containerVersion;
     if (!cv) return;
-    scanned += 1;
     // Container identity = publicId; a duplicate export file of the same container must not count twice.
     const cid = String(cv.container?.publicId ?? '').trim() || `file:${idx}`;
+    // Count IDENTITIES, not files: `containers` on every pattern is a distinct-publicId count, so the
+    // denominator has to be too. Counting files here would understate every share the app publishes.
+    scanned.add(cid);
     const triggerTypeById = new Map<string, string>(arr<CorpusTrigger>(cv.trigger).map((t) => [String(t?.triggerId ?? ''), normEnum(t?.type)]));
     const add = <T>(store: Map<string, Agg<T>>, pattern: T): void => {
       const key = stableStringify(pattern);
@@ -392,7 +397,7 @@ export function minePatternLibrary(exports_: CorpusExport[], minedAt: string, mi
   return {
     version: 1,
     minedAt,
-    containersScanned: scanned,
+    containersScanned: scanned.size,
     minContainers,
     tagPatterns: finish(tags, MAX_TAG_PATTERNS),
     triggerPatterns: finish(triggers, MAX_TRIGGER_PATTERNS),

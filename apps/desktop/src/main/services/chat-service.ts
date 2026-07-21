@@ -4,13 +4,13 @@ import type { ProviderKeyStore } from '../storage/provider-keys';
 import type { AuditHistoryStore } from '../storage/audit-history';
 import type { ManifestStore } from '../storage/manifest-store';
 import type { MemoryStore } from '../storage/memory-store';
-import { selectRelevantMemories, formatMemoriesForPrompt, type Memory } from '../../shared/chat-memory';
+import { selectRelevantMemories, formatMemoriesForPrompt, creditMemoryUse, type Memory, type MemoryProvenance } from '../../shared/chat-memory';
 import { MEMORY_EXTRACT_SYSTEM, buildExtractionTranscript, parseMemoryCandidates, type MemoryCandidate } from '../../shared/memory-extract';
 import { buildToolRegistry } from '../tools/registry';
 import type { ConfirmFn } from '../tools/registry';
 import { createProvider, runChat } from '../llm/gateway';
 import { changeJournal } from '../google/change-journal';
-import type { ChatMediaPart, ChatMemoryUsed, ChatReply, ChatStreamEvent, ChatToolCall, ChatTurn, GoogleProduct, GtmContext } from '../../shared/ipc';
+import type { ChatMediaPart, ChatReply, ChatStreamEvent, ChatToolCall, ChatTurn, GoogleProduct, GtmContext } from '../../shared/ipc';
 import type { LlmTurn } from '../llm/types';
 // Shared GA4/GTM creation methodology — the SAME rules the tag-suggestion engine + AI scan follow,
 // so chat tag creation stays consistent with what the audit/suggestion surfaces propose. Re-exported
@@ -229,37 +229,36 @@ export class ChatService {
     // the live property (deletes/archives are approval-gated).
     // The chat memory tools (remember_memory / forget_memory) write to the LOCAL per-account store, scoped
     // to the active client (container in a GTM turn, property in a GA4 turn) — matching how memories inject.
-    // Provenance ledger for this turn, keyed by memory id so a note injected AND later recalled is
-    // credited once. Seeded with the injected memories below; `recall_memories` adds to it mid-turn.
-    // A snapshot of the text, so the record stays truthful if the memory is edited later — dash-stripped
-    // (house style: no em dashes on any UI surface) and clamped to 200 chars so the per-reply snapshot
-    // persisted in the renderer's chat thread stays small.
-    const snapText = (t: string): string => {
-      const s = t.replace(/[—–]/g, '-');
-      return s.length > 200 ? `${s.slice(0, 200)}...` : s;
-    };
-    const usedMemories = new Map<string, ChatMemoryUsed>();
-    const creditMemories = (mems: Memory[]): boolean => {
-      let added = false;
-      for (const m of mems) {
-        if (usedMemories.has(m.id)) continue;
-        usedMemories.set(m.id, { id: m.id, kind: m.kind, text: snapText(m.text) });
-        added = true;
+    // Provenance ledger for this turn, keyed by memory id so a note that is BOTH injected and recalled
+    // is credited (and usage-logged) exactly once. `creditMemoryUse` returns the ids it newly added.
+    const usedMemories = new Map<string, MemoryProvenance>();
+    // The usage log is best-effort by design: a provenance side-write must NEVER kill the chat turn
+    // (a transient disk-full or AV file-lock on memory-store.json would otherwise abort the answer).
+    const logUse = (ids: string[]): void => {
+      if (!ids.length) return;
+      try {
+        this.memory?.recordUse(active.id, ids);
+      } catch (e) {
+        console.error('[chat] memory usage log failed (continuing):', e instanceof Error ? e.message : e);
       }
-      return added;
     };
     const memoryCtx = this.memory
       ? {
           store: this.memory,
           accountId: active.id,
-          scope: {
+          // A THUNK, not a snapshot: set_gtm_container can switch the active container mid-turn, and a
+          // frozen scope would then recall (and file new notes under) the previous client.
+          scope: (): { containerId?: string; property?: string } => ({
             ...(product === 'gtm' && active.gtmContext?.containerId ? { containerId: active.gtmContext.containerId } : {}),
             ...(product === 'ga4' && active.ga4Context?.property ? { property: active.ga4Context.property } : {}),
-          },
+          }),
           // A mid-turn recall counts as provenance too: re-emit the FULL ledger (the renderer replaces
           // the list on each event) so "N memories used" covers injected + recalled.
           onRecall: (mems: Memory[]): void => {
-            if (creditMemories(mems)) emit?.({ type: 'memories', used: [...usedMemories.values()] });
+            const added = creditMemoryUse(usedMemories, mems);
+            if (!added.length) return;
+            logUse(added);
+            emit?.({ type: 'memories', used: [...usedMemories.values()] });
           },
         }
       : undefined;
@@ -429,14 +428,11 @@ export class ChatService {
     const MAX_TOOL_STEPS = 40;
     // Provenance: tell the UI which memories are in this turn's context (before the answer streams), and
     // log the use on each memory.
-    if (creditMemories(mem.used)) {
-      emit?.({ type: 'memories', used: [...usedMemories.values()] });
-      // Best-effort usage log: a provenance side-write must NEVER kill the chat turn (a transient
-      // disk-full / AV file-lock on memory-store.json would otherwise abort before the LLM is called).
-      try {
-        this.memory?.recordUse(active.id, mem.used.map((u) => u.id));
-      } catch (e) {
-        console.error('[chat] memory usage log failed (continuing):', e instanceof Error ? e.message : e);
+    {
+      const added = creditMemoryUse(usedMemories, mem.used);
+      if (added.length) {
+        logUse(added);
+        emit?.({ type: 'memories', used: [...usedMemories.values()] });
       }
     }
 

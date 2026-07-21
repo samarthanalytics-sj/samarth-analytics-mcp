@@ -54,6 +54,8 @@ export interface CorpusLookupResult {
   minContainers: number;
   query: string;
   kind: CorpusLookupKind;
+  /** The vendor filter that was actually applied (normalized), so an empty result is attributable. */
+  brand?: string;
   /** Total patterns that matched before the limit was applied. */
   matched: number;
   hits: CorpusHit[];
@@ -73,11 +75,17 @@ export function lookupTerms(s: string): string[] {
     .filter((t) => t.length >= 2);
 }
 
-// A term matches a token exactly, or is a >= 4-char prefix of it (purchase/purchases, form/forms).
-const termHits = (term: string, tokens: Set<string>): boolean => {
+// A term matches a token exactly, or by prefix in EITHER direction so inflections match both ways:
+// "purchase" finds `purchases_completed` AND "purchases" finds `purchase`. One-directional matching
+// silently returned zero for every plural query ("clicks", "conversions"), which the tool then reports
+// as "nothing in the library" - a confident false absence. The >= 4 floor keeps short fragments
+// ("ga", "id") from matching half the corpus.
+export const termHits = (term: string, tokens: Set<string>): boolean => {
   if (tokens.has(term)) return true;
-  if (term.length < 4) return false;
-  for (const tok of tokens) if (tok.length > term.length && tok.startsWith(term)) return true;
+  for (const tok of tokens) {
+    if (term.length >= 4 && tok.length > term.length && tok.startsWith(term)) return true;
+    if (tok.length >= 4 && term.length > tok.length && term.startsWith(tok)) return true;
+  }
   return false;
 };
 
@@ -90,11 +98,18 @@ const tokenSet = (parts: Array<string | undefined>): Set<string> => {
 /** Locale-independent tiebreak so results are identical on every machine. */
 const byCodepoint = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
-const pct = (n: number, total: number): number => (total > 0 ? Math.round((n / total) * 100) : 0);
+// One decimal: with k = 2 and a ~500-container corpus, whole percents round 42% of the library to "0%"
+// next to a non-zero container count, which reads as "never used".
+const pct = (n: number, total: number): number => (total > 0 ? Math.round((n / total) * 1000) / 10 : 0);
 
 // Strip em/en dashes: house style forbids them on every output surface, and GTM_TYPE_LABELS has some
 // ("Click — Just Links").
 const plain = (s: string): string => s.replace(/[—–]/g, '-');
+
+/** The attribution line on every result. `total` is DISTINCT containers, matching what each hit counts. */
+const sourceLine = (total: number, minedAt: string): string =>
+  `${total} of your own historical GTM containers (anonymized pattern library, mined ${minedAt}). ` +
+  'These are frequency counts of how YOUR containers were built, not industry benchmarks and not a correctness signal.';
 
 /** Readable one-liner for a tag pattern. */
 export function describeTag(p: TagPattern): string {
@@ -119,6 +134,19 @@ export function describeVariable(p: VariablePattern): string {
 
 interface Scored { hit: CorpusHit; score: number; key: string }
 
+/** Relevance bands are scaled so a stronger field always beats a weaker one; see `blend`. */
+const BAND = 10;
+/**
+ * Final rank = relevance band + a bounded frequency bonus.
+ *
+ * Frequency used to be a pure tiebreak, which let a 2-container coincidence outrank a 121-container
+ * pattern forever whenever it scored one band higher (the query "meta pixel" returned twelve
+ * `formMetaData` variables and zero Meta tags). The bonus is log-scaled and capped BELOW one band, so
+ * relevance still decides across bands while widely practiced shapes win inside a band.
+ */
+const blend = (score: number, containers: number): number =>
+  score * BAND + Math.min(BAND - 1, Math.log2(Math.max(1, containers) + 1));
+
 function scoreOf(terms: string[], weighted: Array<{ tokens: Set<string>; weight: number }>): number {
   if (!terms.length) return 1; // no query = browse mode, everything qualifies
   let score = 0;
@@ -130,13 +158,31 @@ function scoreOf(terms: string[], weighted: Array<{ tokens: Set<string>; weight:
   return score;
 }
 
+/** Vendor names people actually type, mapped to the library's brand keys. Without this, "facebook"
+ *  returns an empty result the model reports as "no such pattern" while `meta` has hundreds. */
+const BRAND_ALIASES: Record<string, string> = {
+  facebook: 'meta', fb: 'meta', 'facebook pixel': 'meta', metapixel: 'meta',
+  'google ads': 'gads', googleads: 'gads', google_ads: 'gads', adwords: 'gads', gads: 'gads',
+  'microsoft ads': 'msads', bing: 'msads', uet: 'msads',
+  google: 'googtag', gtag: 'googtag',
+  analytics: 'ga4', 'google analytics': 'ga4',
+  snapchat: 'snap', x: 'x', twitter: 'x',
+  dv360: 'floodlight', 'campaign manager': 'floodlight', cm360: 'floodlight',
+};
+/** Normalize a caller-supplied vendor to a library brand key. */
+export const normalizeBrand = (raw: string): string => {
+  const v = String(raw ?? '').trim().toLowerCase();
+  if (!v) return '';
+  return BRAND_ALIASES[v] ?? v.replace(/[\s_-]+/g, '');
+};
+
 /**
  * Rank the library's patterns against a free-text query.
  *
  * Matching is token-based, so "form submit" finds `form_submit` and `formSubmission`. Terms that hit
- * the pattern's NAME (event name / key path) outrank terms that only hit its type, and those outrank
- * terms that only hit its parameter keys. Ties break on container count, so the most widely practiced
- * shape surfaces first; the final tiebreak is codepoint order for machine-independent determinism.
+ * the pattern's NAME (event name, key path, vendor) outrank terms that only hit its type, and those
+ * outrank terms that only hit its parameter keys. Within a band, the more widely practiced shape wins
+ * (see `blend`); the final tiebreak is codepoint order for machine-independent determinism.
  *
  * An empty query returns the most common patterns of the requested kind ("what do we usually do?").
  */
@@ -146,20 +192,36 @@ export function lookupCorpusPatterns(
 ): CorpusLookupResult {
   const query = String(opts.query ?? '').trim();
   const kind: CorpusLookupKind = opts.kind ?? 'all';
-  const brand = String(opts.brand ?? '').trim().toLowerCase();
+  const brand = normalizeBrand(opts.brand ?? '');
   const limit = Math.min(LOOKUP_MAX_LIMIT, Math.max(1, Math.floor(Number(opts.limit) || LOOKUP_DEFAULT_LIMIT)));
   const terms = lookupTerms(query);
   const total = lib.containersScanned;
 
+  // A query that survives trimming but tokenizes to nothing (CJK, "A/B", punctuation) must NOT fall
+  // through to browse mode: that returned the ENTIRE library as if it all matched.
+  if (query && !terms.length) {
+    return {
+      source: sourceLine(total, lib.minedAt),
+      minedAt: lib.minedAt, containersScanned: total, minContainers: lib.minContainers,
+      query, kind, ...(brand ? { brand } : {}), matched: 0, hits: [],
+      note: 'The query contained no searchable term (at least two letters or digits), so nothing was searched. Ask for the term in English or retry with a different word; do not report this as "no such pattern".',
+    };
+  }
+
   const scored: Scored[] = [];
   const want = (k: CorpusKind): boolean => kind === 'all' || kind === k;
+  // A brand filter is a TAG concept. In 'all' mode it suppresses trigger/variable noise, but when the
+  // caller explicitly asked for triggers or variables, honouring it would return a guaranteed zero.
+  const brandBlocksOtherKinds = kind === 'all' && !!brand;
 
   if (want('tag')) {
     for (const p of lib.tagPatterns) {
       if (brand && p.brand !== brand) continue;
       const score = scoreOf(terms, [
-        { tokens: tokenSet([p.eventName]), weight: 6 },
-        { tokens: tokenSet([p.type, gtmTypeLabel(p.type), p.brand]), weight: 4 },
+        // Vendor sits in the NAME band: "meta pixel" is a request for Meta tags, and at type-strength
+        // it lost to any variable whose camelCase key path happened to contain "meta".
+        { tokens: tokenSet([p.eventName, p.brand]), weight: 6 },
+        { tokens: tokenSet([p.type, gtmTypeLabel(p.type)]), weight: 4 },
         { tokens: tokenSet([...p.triggerKinds, p.consent ?? '']), weight: 2 },
         { tokens: tokenSet(p.paramKeys), weight: 1 },
       ]);
@@ -183,7 +245,7 @@ export function lookupCorpusPatterns(
       });
     }
   }
-  if (want('trigger') && !brand) {
+  if (want('trigger') && !brandBlocksOtherKinds) {
     for (const p of lib.triggerPatterns) {
       const score = scoreOf(terms, [
         { tokens: tokenSet([p.event]), weight: 6 },
@@ -207,7 +269,7 @@ export function lookupCorpusPatterns(
       });
     }
   }
-  if (want('variable') && !brand) {
+  if (want('variable') && !brandBlocksOtherKinds) {
     for (const p of lib.variablePatterns) {
       const score = scoreOf(terms, [
         { tokens: tokenSet([p.keyPath]), weight: 6 },
@@ -233,8 +295,7 @@ export function lookupCorpusPatterns(
   }
 
   scored.sort((a, b) =>
-    b.score - a.score ||
-    b.hit.containers - a.hit.containers ||
+    blend(b.score, b.hit.containers) - blend(a.score, a.hit.containers) ||
     b.hit.occurrences - a.hit.occurrences ||
     byCodepoint(a.key, b.key) ||
     byCodepoint(a.hit.pattern, b.hit.pattern));
@@ -252,21 +313,37 @@ export function lookupCorpusPatterns(
   }
 
   const hits = scored.slice(0, limit).map((s) => s.hit);
+  // An empty result has three very different causes, and the model must not report a filter artefact
+  // as "your containers never do this".
+  const knownBrands = new Set<string>([...lib.vendorStats.map((v) => String(v.brand)), ...lib.tagPatterns.map((p) => String(p.brand))]);
+  const note = ((): string | undefined => {
+    if (!scored.length && !vendors) {
+      if (brand && !knownBrands.has(brand)) {
+        return `"${brand}" is not a vendor key in this library, so nothing was searched. Known keys: ${[...knownBrands].sort().join(', ')}. Retry with one of those; do not report this as a pattern the containers never use.`;
+      }
+      return 'No pattern in the library matched. Say so plainly instead of guessing a frequency.';
+    }
+    if (scored.length > hits.length) {
+      // Ranking is relevance-first, so the returned slice is NOT the most frequent slice: a more widely
+      // used pattern can sit outside it. Saying "most common" here would be a fabricated superlative.
+      return terms.length
+        ? `${scored.length} patterns matched; the ${hits.length} closest to the query are returned, ranked by relevance and NOT purely by frequency. A more widely used pattern may sit outside this list, so cite each hit's own container count rather than calling any of them the most common.`
+        : `${scored.length} patterns matched; the ${hits.length} most common are returned.`;
+    }
+    return undefined;
+  })();
+
   return {
-    source: `${total} of your own historical GTM containers (anonymized pattern library, mined ${lib.minedAt}). ` +
-      'These are frequency counts of how YOUR containers were built, not industry benchmarks and not a correctness signal.',
+    source: sourceLine(total, lib.minedAt),
     minedAt: lib.minedAt,
     containersScanned: total,
     minContainers: lib.minContainers,
     query,
     kind,
+    ...(brand ? { brand } : {}),
     matched: scored.length,
     hits,
     ...(vendors ? { vendors } : {}),
-    ...(scored.length === 0 && !vendors
-      ? { note: 'No pattern in the library matched. Say so plainly instead of guessing a frequency.' }
-      : scored.length > hits.length
-        ? { note: `${scored.length} patterns matched; the ${hits.length} most common are returned.` }
-        : {}),
+    ...(note ? { note } : {}),
   };
 }

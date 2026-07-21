@@ -123,6 +123,38 @@ export function findMemoriesMatching(memories: Memory[], query: string): Memory[
   });
 }
 
+/** One entry of a turn's provenance ledger: which memory shaped the answer, as the UI shows it. */
+export interface MemoryProvenance {
+  id: string;
+  kind: MemoryKind;
+  /** Snapshot of the text AT USE TIME, so the record stays truthful if the memory is edited later. */
+  text: string;
+}
+
+/** Clamp + house-style a memory's text for the provenance record (no em dashes, bounded length). */
+export function snapshotMemoryText(text: string, max = 200): string {
+  const s = String(text ?? '').replace(/[—–]/g, '-');
+  return s.length > max ? `${s.slice(0, max)}...` : s;
+}
+
+/**
+ * Fold memories into a turn's provenance ledger, keyed by id.
+ *
+ * A memory that is BOTH injected at turn start and recalled mid-turn by the memory tool must be
+ * credited exactly once: the UI would otherwise double-count it, and the persisted useCount (documented
+ * as "turns used") would drift. Returns the ids newly added, so the caller writes the usage log for
+ * those and only those. Mutates `ledger` in place; PURE otherwise.
+ */
+export function creditMemoryUse(ledger: Map<string, MemoryProvenance>, memories: Memory[]): string[] {
+  const added: string[] = [];
+  for (const m of memories) {
+    if (!m || ledger.has(m.id)) continue;
+    ledger.set(m.id, { id: m.id, kind: m.kind, text: snapshotMemoryText(m.text) });
+    added.push(m.id);
+  }
+  return added;
+}
+
 /** Where a recall search may look. 'context' = what this turn would inject anyway (account-wide + the
  *  active client); 'account' = account-wide notes only; 'all' = every note saved under this Google
  *  account, including other clients (for "what did I tell you about the other site?"). */
@@ -151,6 +183,10 @@ export function searchMemories(
   const scope = opts.scope ?? 'all';
   const ctx = opts.ctx ?? {};
   const limit = Math.max(0, Math.floor(opts.limit ?? 10));
+  // Browse mode keys on a BLANK query, not on an empty token set: a query of "购买" or "A/B" tokenizes
+  // to nothing, and treating that as "no query" returned (and credited as used) every memory in the
+  // account for a search that matched none of them.
+  const blank = String(query ?? '').trim() === '';
   const q = tokens(String(query ?? ''));
   const inScope = (m: Memory): boolean => {
     if (scope === 'context') return memoryApplies(m, ctx);
@@ -166,7 +202,7 @@ export function searchMemories(
       return { memory: m, matchedTerms };
     })
     // With a query, only real matches; with an empty query, browse the most relevant notes.
-    .filter((h) => (q.size === 0 ? true : h.matchedTerms > 0));
+    .filter((h) => (blank ? true : h.matchedTerms > 0));
   scored.sort((a, b) =>
     b.matchedTerms - a.matchedTerms ||
     Number(b.memory.pinned) - Number(a.memory.pinned) ||
@@ -185,9 +221,24 @@ export function memoryApplies(m: Memory, ctx: { containerId?: string; property?:
   return false;
 }
 
-// Tokenize for keyword overlap ranking (lowercased words >= 3 chars).
+// Tokenize for keyword overlap (lowercased words >= 3 chars). Identifiers are indexed BOTH whole and
+// split, because analytics notes are full of them: "form_submit" and "formSubmission" each yield
+// {form_submit | formsubmission, form, submit | submission}. Without the split, a note whose only
+// mention of a concept is inside an identifier could not be found by typing that concept in words -
+// which for `searchMemories` (a hard filter) meant reporting a saved note as nonexistent.
 function tokens(s: string): Set<string> {
-  return new Set((s.toLowerCase().match(/[a-z0-9_]{3,}/g) ?? []));
+  const out = new Set<string>();
+  for (const whole of s.toLowerCase().match(/[a-z0-9_]{3,}/g) ?? []) {
+    out.add(whole);
+    for (const part of whole.replace(/([a-z])([0-9])/g, '$1 $2').split(/[^a-z0-9]+/)) {
+      if (part.length >= 3) out.add(part);
+    }
+  }
+  // camelCase lives in the ORIGINAL casing, which the match above has already flattened.
+  for (const part of s.replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase().match(/[a-z0-9]{3,}/g) ?? []) {
+    out.add(part);
+  }
+  return out;
 }
 
 /** Pick the memories to inject for this turn: enabled + in-scope, ranked (pinned → keyword overlap with the

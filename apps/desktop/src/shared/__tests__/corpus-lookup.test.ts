@@ -179,6 +179,106 @@ check('describe: the whole result payload is em-dash free', !/[—–]/.test(JSO
   { query: 'click' },
 ))));
 
+// ── Inflections: a plural query must not read as "the corpus has nothing" ───────
+check('inflection: plural query finds the singular pattern', (() => {
+  const r = lookupCorpusPatterns(LIB, { query: 'purchases', kind: 'tag' });
+  return r.hits.length === 2 && r.hits.every((h) => h.eventName === 'purchase');
+})());
+check('inflection: singular query still finds a longer pattern name', lookupCorpusPatterns(
+  { ...LIB, tagPatterns: [tag({ eventName: 'purchases_completed', containers: 5 })], triggerPatterns: [], variablePatterns: [] },
+  { query: 'purchase' },
+).hits.length === 1);
+check('inflection: a short token cannot prefix-match its way into everything', (() => {
+  // "for" (3 chars) must NOT match "form_submit": below the 4-char floor in both directions.
+  const r = lookupCorpusPatterns(LIB, { query: 'for', kind: 'trigger' });
+  return r.hits.length === 0;
+})());
+
+// ── Frequency blending: a rare coincidence must not permanently bury a common pattern ──
+check('rank: a widely used pattern outranks a rare one in the SAME relevance band', (() => {
+  const lib: PatternLibrary = {
+    ...LIB,
+    tagPatterns: [tag({ eventName: 'purchase', containers: 3 }), tag({ eventName: 'purchase', type: 'html', brand: 'meta', containers: 300 })],
+    triggerPatterns: [], variablePatterns: [], vendorStats: [],
+  };
+  return lookupCorpusPatterns(lib, { query: 'purchase' }).hits[0].containers === 300;
+})());
+check('rank: relevance still beats frequency ACROSS bands', (() => {
+  // A name match on a 3-container pattern must still outrank a paramKey-only match on a 300-container one.
+  const lib: PatternLibrary = {
+    ...LIB,
+    tagPatterns: [
+      tag({ eventName: 'checkout_start', containers: 3, paramKeys: [] }),
+      tag({ eventName: undefined, containers: 300, paramKeys: ['checkout_start'] }),
+    ],
+    triggerPatterns: [], variablePatterns: [], vendorStats: [],
+  };
+  const hits = lookupCorpusPatterns(lib, { query: 'checkout_start' }).hits;
+  return hits[0].containers === 3 && hits[1].containers === 300;
+})());
+check('rank: a vendor term is name-strength (a brand tag beats an incidental key-path match)', (() => {
+  const lib: PatternLibrary = {
+    ...LIB,
+    tagPatterns: [tag({ type: 'html', brand: 'meta', eventName: undefined, containers: 121, paramKeys: ['html'] })],
+    triggerPatterns: [],
+    variablePatterns: [vari({ keyPath: 'formMetaData.formCampaign', containers: 3 })],
+    vendorStats: [{ brand: 'meta', containers: 150 }],
+  };
+  const hits = lookupCorpusPatterns(lib, { query: 'meta pixel' }).hits;
+  return hits[0].kind === 'tag' && hits[0].brand === 'meta';
+})(), JSON.stringify(lookupCorpusPatterns({ ...LIB, tagPatterns: [tag({ type: 'html', brand: 'meta', eventName: undefined, containers: 121, paramKeys: ['html'] })], triggerPatterns: [], variablePatterns: [vari({ keyPath: 'formMetaData.formCampaign', containers: 3 })], vendorStats: [] }, { query: 'meta pixel' }).hits.map((h) => h.pattern)));
+
+// ── Brand filter ────────────────────────────────────────────────────────────────
+check('brand: an EXPLICIT kind is not voided by a brand filter', (() => {
+  const withBrand = lookupCorpusPatterns(LIB, { query: 'form submit', kind: 'trigger', brand: 'ga4' });
+  const without = lookupCorpusPatterns(LIB, { query: 'form submit', kind: 'trigger' });
+  return withBrand.matched === without.matched && withBrand.matched > 0;
+})());
+check('brand: a synonym resolves to the library key', (() => {
+  const r = lookupCorpusPatterns(LIB, { query: 'purchase', brand: 'facebook' });
+  return r.brand === 'meta' && r.hits.length === 1 && r.hits[0].brand === 'meta';
+})());
+check('brand: an UNKNOWN vendor says so instead of asserting absence', (() => {
+  const r = lookupCorpusPatterns(LIB, { query: 'purchase', brand: 'nosuchvendor' });
+  return r.hits.length === 0 && /not a vendor key/i.test(r.note ?? '') && !/No pattern in the library matched/.test(r.note ?? '');
+})());
+check('brand: the applied filter is echoed so an empty result is attributable', lookupCorpusPatterns(LIB, { query: 'x', brand: 'Meta' }).brand === 'meta');
+
+// ── Untokenizable query: must not silently become "everything matched" ──────────
+check('guard: a non-empty query with no searchable term returns nothing, not the whole library', (() => {
+  const r = lookupCorpusPatterns(LIB, { query: '购买 转化' });
+  return r.matched === 0 && r.hits.length === 0 && /no searchable term/i.test(r.note ?? '');
+})());
+check('guard: the untokenizable note does NOT tell the model the pattern is absent', !/No pattern in the library matched/.test(lookupCorpusPatterns(LIB, { query: 'A/B' }).note ?? ''));
+
+// ── Truncation honesty ──────────────────────────────────────────────────────────
+check('truncation: a QUERIED overflow is never CLAIMED to be the most common (ranking is relevance-first)', (() => {
+  const note = lookupCorpusPatterns(LIB, { query: 'purchase form currency', limit: 1 }).note ?? '';
+  // The claim "the N most common are returned" would be false here; the note may still warn against it.
+  return note.includes('closest to the query') && !/most common are returned/.test(note) && /NOT purely by frequency/.test(note);
+})());
+check('truncation: an EMPTY-query overflow is genuinely frequency-ordered, so "most common" is true', (() => {
+  const r = lookupCorpusPatterns(LIB, { query: '', limit: 2 });
+  return (r.note ?? '').includes('most common') && r.hits[0].containers >= r.hits[1].containers;
+})());
+
+// ── Limits (a fixture big enough to actually exercise the cap) ──────────────────
+check('limit: the max is really enforced, not just nominally', (() => {
+  const many: PatternLibrary = {
+    ...LIB,
+    tagPatterns: Array.from({ length: 80 }, (_, i) => tag({ eventName: `purchase_${i}`, containers: 80 - i })),
+    triggerPatterns: [], variablePatterns: [], vendorStats: [],
+  };
+  const r = lookupCorpusPatterns(many, { query: '', limit: 9999 });
+  return r.hits.length === LOOKUP_MAX_LIMIT && r.matched === 80;
+})());
+
+// ── Share precision ─────────────────────────────────────────────────────────────
+check('share: a k=2 pattern in a 500-container corpus is not rounded to 0%', (() => {
+  const lib: PatternLibrary = { ...LIB, tagPatterns: [tag({ eventName: 'purchase', containers: 2 })], triggerPatterns: [], variablePatterns: [], vendorStats: [] };
+  return lookupCorpusPatterns(lib, { query: 'purchase' }).hits[0].containerShare === 0.4;
+})());
+
 // ── Robustness (a malformed/empty library must not throw) ────────────────────────
 check('robust: an empty library returns an empty, honest result', (() => {
   const r = lookupCorpusPatterns({ ...LIB, tagPatterns: [], triggerPatterns: [], variablePatterns: [], vendorStats: [] }, { query: 'purchase' });

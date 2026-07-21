@@ -2214,7 +2214,7 @@ async function main(): Promise<void> {
   await test('memory tools (remember/forget) appear only with a memory context, in BOTH products, and work', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'reg-mem-'));
     const store = new MemoryStore(join(dir, 'm.json'), 500, () => 1);
-    const memCtx = { store, accountId: 'acct1', scope: { containerId: 'GTM-A' } };
+    const memCtx = { store, accountId: 'acct1', scope: () => ({ containerId: 'GTM-A' }) };
     const regGtm = buildToolRegistry(fakeData().data, undefined, 'gtm', undefined, undefined, undefined, memCtx);
     const regGa4 = buildToolRegistry(fakeData().data, undefined, 'ga4', undefined, undefined, undefined, memCtx);
     assert.ok(regGtm.list().some((t) => t.name === 'remember_memory') && regGtm.list().some((t) => t.name === 'forget_memory'), 'present in gtm');
@@ -2243,7 +2243,7 @@ async function main(): Promise<void> {
     const memCtx = {
       store,
       accountId: 'acct1',
-      scope: { containerId: 'GTM-A' },
+      scope: () => ({ containerId: 'GTM-A' }),
       onRecall: (mems: { id: string }[]): void => { for (const m of mems) recalled.push(m.id); },
     };
     const reg = buildToolRegistry(fakeData().data, undefined, 'gtm', undefined, undefined, undefined, memCtx);
@@ -2261,9 +2261,52 @@ async function main(): Promise<void> {
     assert.equal(none.found, 0);
     assert.match(String(none.note), /no note|rather than guessing/i, 'tells the model not to guess');
 
-    assert.equal(recalled.length, 3, 'every recalled memory is reported for provenance (2 + 1)');
-    const used = store.list('acct1').filter((m) => (m.useCount ?? 0) > 0);
-    assert.equal(used.length, 2, 'recall counts as a use in the usage log');
+    // Plain words must find a note that only spells the concept as an identifier, or the model is
+    // told to deny a rule the user actually saved.
+    const words = rec(JSON.parse(await reg.execute('recall_memories', { query: 'order completed' })));
+    assert.equal(words.found, 1, 'plain-words query finds the snake_case identifier');
+
+    // Truncation is disclosed, not silent: matched is the pre-limit total.
+    const capped = rec(JSON.parse(await reg.execute('recall_memories', { query: 'purchase', limit: 1 })));
+    assert.equal(capped.found, 1);
+    assert.equal(capped.matched, 2, 'reports how many matched before the limit');
+    assert.match(String(capped.note), /partial|higher limit/i, 'discloses the truncation');
+
+    // A muted note is neither returned nor counted in the searchable pool.
+    const muted = store.add('acct1', { kind: 'fact', text: 'muted purchase note', scope: {}, source: 'chat' }).memory;
+    store.update('acct1', muted.id, { enabled: false });
+    const afterMute = rec(JSON.parse(await reg.execute('recall_memories', { query: 'purchase' })));
+    assert.equal(afterMute.matched, 2, 'disabled notes stay muted');
+    assert.equal(afterMute.searched, 3, 'searched counts only enabled notes');
+
+    assert.ok(recalled.length >= 3, 'every recalled memory is reported for provenance');
+    // The tool no longer writes the usage log itself: the chat service credits each memory once per
+    // turn (a note both injected and recalled must not count twice).
+    assert.equal(store.list('acct1').every((m) => (m.useCount ?? 0) === 0), true, 'usage log is owned by the chat service');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  await test('recall_memories resolves the client scope LIVE, so a mid-turn container switch is respected', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'reg-scope-'));
+    const store = new MemoryStore(join(dir, 'm.json'), 500, () => 1);
+    store.add('acct1', { kind: 'fact', text: 'site A uses order_completed', scope: { containerId: 'GTM-A' }, source: 'chat' });
+    store.add('acct1', { kind: 'fact', text: 'site B uses purchase directly', scope: { containerId: 'GTM-B' }, source: 'chat' });
+    let activeContainer = 'GTM-A';
+    const memCtx = { store, accountId: 'acct1', scope: () => ({ containerId: activeContainer }) };
+    const reg = buildToolRegistry(fakeData().data, undefined, 'gtm', undefined, undefined, undefined, memCtx);
+
+    const onA = rec(JSON.parse(await reg.execute('recall_memories', { query: 'uses', scope: 'context' })));
+    assert.equal(onA.found, 1);
+    assert.match(String((onA.memories as Array<{ text: string }>)[0].text), /site A/);
+
+    activeContainer = 'GTM-B'; // the model called set_gtm_container mid-turn
+    const onB = rec(JSON.parse(await reg.execute('recall_memories', { query: 'uses', scope: 'context' })));
+    assert.match(String((onB.memories as Array<{ text: string }>)[0].text), /site B/, 'follows the new container');
+
+    // The same live scope must file NEW notes under the container the user is actually on.
+    await reg.execute('remember_memory', { text: 'B ships a separate consent banner', kind: 'fact' });
+    const saved = store.list('acct1').find((m) => m.text.includes('consent banner'));
+    assert.equal(saved?.scope.containerId, 'GTM-B', 'remember_memory files under the CURRENT container');
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -2290,6 +2333,16 @@ async function main(): Promise<void> {
     const miss = rec(JSON.parse(await regGtm.execute('lookup_corpus_patterns', { query: 'zorbex quantum widget' })));
     assert.equal((miss.hits as unknown[]).length, 0);
     assert.match(String(miss.note), /instead of guessing/i, 'a miss instructs honesty, not invention');
+
+    // A vendor synonym must not read as "your containers never do this".
+    const fb = rec(JSON.parse(await regGtm.execute('lookup_corpus_patterns', { query: 'pixel', brand: 'facebook' })));
+    assert.ok((fb.hits as unknown[]).length > 0, 'facebook resolves to the meta brand key');
+    assert.equal(fb.brand, 'meta', 'the applied filter is echoed back');
+
+    // A share can never exceed 100, and a count can never exceed the corpus.
+    const vendorRows = vendors.vendors as Array<{ containers: number; containerShare: number }>;
+    assert.ok(vendorRows.every((v) => v.containerShare <= 100 && v.containers <= Number(vendors.containersScanned)),
+      'no vendor share exceeds the corpus');
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);

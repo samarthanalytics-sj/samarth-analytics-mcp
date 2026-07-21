@@ -122,10 +122,12 @@ export interface GtmContextControl {
 export interface MemoryToolContext {
   store: MemoryStore;
   accountId: string;
-  /** The client scope for a client-scoped memory: containerId in a GTM turn, property in a GA4 turn. */
-  scope: MemoryScope;
+  /** The client scope for a client-scoped memory: containerId in a GTM turn, property in a GA4 turn.
+   *  A FUNCTION, not a value: the active container can change mid-turn (set_gtm_container), and a
+   *  snapshot would file new notes under, and recall from, the container the user just left. */
+  scope: () => MemoryScope;
   /** Provenance hook: memories the model pulled in MID-turn via `recall_memories`. The chat service
-   *  folds these into the turn's "memories used" list so the UI credits them like injected ones. */
+   *  folds these into the turn's "memories used" list, credits each one once, and owns the usage log. */
   onRecall?: (memories: Memory[]) => void;
 }
 
@@ -3949,8 +3951,9 @@ export function buildToolRegistry(
             const text = s(a.text).trim();
             if (!text) return { saved: false, message: 'No text to remember.' };
             const kind = (MEMORY_KINDS.includes(a.kind as MemoryKind) ? a.kind : 'fact') as MemoryKind;
-            const wantClient = a.scope === 'client' || (a.scope == null && (memoryCtx.scope.containerId || memoryCtx.scope.property));
-            const scope: MemoryScope = wantClient ? { ...memoryCtx.scope } : {};
+            const active = memoryCtx.scope(); // resolved NOW: the container may have changed this turn
+            const wantClient = a.scope === 'client' || (a.scope == null && (active.containerId || active.property));
+            const scope: MemoryScope = wantClient ? { ...active } : {};
             const res = memoryCtx.store.add(memoryCtx.accountId, { kind, text, scope, source: 'chat' });
             return { saved: true, deduped: res.deduped, secretRemoved: res.redacted, kind: res.memory.kind, text: res.memory.text, scope: res.memory.scope.containerId || res.memory.scope.property ? 'client' : 'account' };
           },
@@ -3979,25 +3982,31 @@ export function buildToolRegistry(
             const query = s(a.query).trim();
             const scope = (['all', 'context', 'account'].includes(s(a.scope)) ? s(a.scope) : 'all') as MemorySearchScope;
             const limit = Math.min(25, Math.max(1, Math.floor(Number(a.limit) || 10)));
+            const active = memoryCtx.scope();
             const all = memoryCtx.store.list(memoryCtx.accountId);
-            const hits = searchMemories(all, query, {
+            // Search UNLIMITED, then slice here, so the model is told how much it is NOT seeing instead
+            // of being handed a silently truncated list it would present as everything saved.
+            const matched = searchMemories(all, query, {
               scope,
-              ctx: { containerId: memoryCtx.scope.containerId, property: memoryCtx.scope.property },
-              limit,
+              ctx: { containerId: active.containerId, property: active.property },
+              limit: Number.MAX_SAFE_INTEGER,
             });
-            // Recalled notes count as used: the usage log stays truthful, and the chat service adds them
-            // to this turn's provenance so "N memories used" credits them too. Best-effort — a provenance
-            // side-write must never fail the answer.
+            const hits = matched.slice(0, limit);
+            // Recalled notes shape the answer, so they belong in this turn's provenance. The chat
+            // service credits each id once and owns the usage log (counting here too would double-count
+            // a note that was also injected). Best-effort: provenance must never fail the answer.
             if (hits.length) {
               try {
-                memoryCtx.store.recordUse(memoryCtx.accountId, hits.map((h) => h.memory.id));
                 memoryCtx.onRecall?.(hits.map((h) => h.memory));
               } catch (e) {
-                console.error('[tool] recall_memories usage log failed (continuing):', e instanceof Error ? e.message : e);
+                console.error('[tool] recall_memories provenance failed (continuing):', e instanceof Error ? e.message : e);
               }
             }
             return {
-              searched: all.length,
+              // Only enabled notes are searchable at all, so report that as the pool rather than a
+              // total that includes muted ones.
+              searched: all.filter((m) => m.enabled).length,
+              matched: matched.length,
               found: hits.length,
               scope,
               memories: hits.map((h) => ({
@@ -4012,7 +4021,9 @@ export function buildToolRegistry(
               })),
               ...(hits.length === 0
                 ? { note: 'Nothing saved matches. Tell the user you have no note on this rather than guessing.' }
-                : {}),
+                : matched.length > hits.length
+                  ? { note: `${matched.length} notes matched; the ${hits.length} most relevant are returned. Say the list is partial, or call again with a narrower query or a higher limit.` }
+                  : {}),
             };
           },
         },
@@ -4060,7 +4071,11 @@ export function buildToolRegistry(
         properties: {
           query: { type: 'string', description: 'What you are looking for, in plain words or an event name (e.g. "form submit", "purchase", "tiktok"). Leave empty to list the most common patterns.' },
           kind: { type: 'string', enum: ['all', 'tag', 'trigger', 'variable', 'vendor'], description: 'Restrict to one kind. vendor = platform adoption counts (how many containers use GA4, Meta, TikTok...). Default all.' },
-          brand: { type: 'string', description: 'Restrict TAG results to one vendor: ga4, googtag, gads, meta, tiktok, linkedin, msads, snap, pinterest, hotjar, clarity, floodlight, consent, html.' },
+          brand: {
+            type: 'string',
+            enum: ['ga4', 'googtag', 'gads', 'meta', 'tiktok', 'linkedin', 'msads', 'snap', 'pinterest', 'hotjar', 'clarity', 'floodlight', 'consent', 'amplitude', 'x', 'html', 'img'],
+            description: 'Restrict TAG results to one vendor. Common names are accepted too (facebook = meta, google ads = gads, bing = msads).',
+          },
           limit: { type: 'number', description: `Max patterns to return (default ${LOOKUP_DEFAULT_LIMIT}, max ${LOOKUP_MAX_LIMIT}).` },
         },
         required: [],

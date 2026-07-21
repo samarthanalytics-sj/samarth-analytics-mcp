@@ -3,7 +3,7 @@
 import {
   redactSecrets, normalizeMemoryText, memoryApplies, memoryDedupeKey,
   selectRelevantMemories, formatMemoriesForPrompt, findMemoriesMatching, searchMemories,
-  MEMORY_MAX_LEN, type Memory,
+  creditMemoryUse, snapshotMemoryText, MEMORY_MAX_LEN, type Memory, type MemoryProvenance,
 } from '../chat-memory';
 
 let passed = 0;
@@ -126,6 +126,65 @@ check('dedupe: different scope → different key', memoryDedupeKey({ kind: 'fact
     const same = [mem({ id: 'z', text: 'purchase', updatedAt: 1 }), mem({ id: 'y', text: 'purchase', updatedAt: 1 })];
     return ids(searchMemories(same, 'purchase')) === 'y,z';
   })());
+
+  // The whole point of the tool: analytics notes are full of identifiers, and a user asks about them
+  // in plain words. Missing here means the assistant DENIES a rule the user saved.
+  const idNotes: Memory[] = [
+    mem({ id: 'i1', text: 'we name GA4 events in snake_case' }),
+    mem({ id: 'i2', text: 'checkout pushes order_completed to the dataLayer' }),
+    mem({ id: 'i3', text: 'the theme fires formSubmission on every form' }),
+  ];
+  check('recall: plain words match a snake_case identifier', ids(searchMemories(idNotes, 'snake case')) === 'i1');
+  check('recall: plain words match a camelCase identifier', ids(searchMemories(idNotes, 'form submission')) === 'i3');
+  check('recall: multi-word plain query matches an identifier', ids(searchMemories(idNotes, 'order completed')) === 'i2');
+  check('recall: the verbatim identifier still matches', ids(searchMemories(idNotes, 'order_completed')) === 'i2');
+
+  check('recall: an unsearchable query (no tokens) matches nothing rather than everything', (() => {
+    // Would otherwise fall through to browse mode and credit every memory as "used".
+    return searchMemories(idNotes, '购买').length === 0 && searchMemories(idNotes, 'A/B').length === 0;
+  })());
+
+  check('recall: scope=account also excludes PROPERTY-scoped notes, not just container-scoped ones', (() => {
+    const list2: Memory[] = [
+      mem({ id: 'p1', text: 'retention is 14 months', scope: { property: 'properties/222' } }),
+      mem({ id: 'p2', text: 'retention policy account default' }),
+    ];
+    return ids(searchMemories(list2, 'retention', { scope: 'account' })) === 'p2';
+  })());
+  check('recall: scope=context matches a GA4 property context', (() => {
+    const list2: Memory[] = [
+      mem({ id: 'p1', text: 'retention is 14 months', scope: { property: 'properties/222' } }),
+      mem({ id: 'p3', text: 'retention is 2 months', scope: { property: 'properties/999' } }),
+    ];
+    return ids(searchMemories(list2, 'retention', { scope: 'context', ctx: { property: 'properties/222' } })) === 'p1';
+  })());
+}
+
+// ── creditMemoryUse — the per-turn provenance ledger ("why did you say that") ────────────────────
+{
+  const led = new Map<string, MemoryProvenance>();
+  const a = mem({ id: 'a', text: 'note A', kind: 'rule' });
+  const b = mem({ id: 'b', text: 'note B' });
+
+  check('ledger: first credit records the memory', (() => {
+    const added = creditMemoryUse(led, [a, b]);
+    return added.join() === 'a,b' && led.size === 2 && led.get('a')?.kind === 'rule';
+  })());
+  check('ledger: a memory injected AND recalled is credited ONCE (no double useCount)', (() => {
+    const added = creditMemoryUse(led, [a]);
+    return added.length === 0 && led.size === 2;
+  })());
+  check('ledger: a later recall of a NEW memory returns only that id', (() => {
+    const c = mem({ id: 'c', text: 'note C' });
+    return creditMemoryUse(led, [a, c]).join() === 'c' && led.size === 3;
+  })());
+  check('ledger: the snapshot is dash-free and clamped (house style + bounded storage)', (() => {
+    const long = mem({ id: 'd', text: `x${'y'.repeat(300)} — dash` });
+    creditMemoryUse(led, [long]);
+    const rec = led.get('d');
+    return !!rec && rec.text.length <= 203 && rec.text.endsWith('...') && !/[—–]/.test(rec.text);
+  })());
+  check('ledger: snapshotMemoryText leaves a short note intact', snapshotMemoryText('short note') === 'short note');
 }
 
 console.log(`\nchat-memory: ${passed} passed, ${failed} failed`);
