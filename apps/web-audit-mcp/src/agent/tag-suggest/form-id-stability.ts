@@ -56,11 +56,26 @@ export interface FormIdScope {
  * Returns null when no id can be trusted, which tells the caller to fall back down its ladder
  * (class, then page).
  */
-export function formIdScope(ids: readonly string[]): FormIdScope | null {
+export function formIdScope(ids: readonly string[], providerFormId?: string): FormIdScope | null {
   const seen = [...new Set((ids ?? []).map((s) => String(s ?? '').trim()).filter(Boolean))];
   if (!seen.length) return null;
 
   const ephemeral = seen.some((id) => looksEphemeralFormId(id));
+
+  // The provider TELLS us the durable id (HubSpot's data-form-id), and the DOM id contains it. That
+  // beats inferring one from several samples: a single page, scanned once, still yields a trigger
+  // that survives every re-render.
+  const provider = String(providerFormId ?? '').trim();
+  if (ephemeral && provider && seen.every((id) => id.toLowerCase().includes(provider.toLowerCase()))) {
+    return {
+      operator: 'contains',
+      value: provider,
+      stabilized: true,
+      note:
+        `This form's DOM id is generated per page load, so an exact {{Form ID}} match would never fire again. ` +
+        `The trigger matches the provider's own durable form id instead: {{Form ID}} contains "${provider}".`,
+    };
+  }
   if (!ephemeral) {
     // Ordinary hand-written ids: unchanged behaviour.
     if (seen.length === 1) return { operator: 'equals', value: seen[0] };
@@ -89,10 +104,10 @@ export function formIdScope(ids: readonly string[]): FormIdScope | null {
 }
 
 /** Why the id was refused, for the suggestion's note. Null when there is nothing to explain. */
-export function ephemeralFormIdNote(ids: readonly string[]): string | null {
+export function ephemeralFormIdNote(ids: readonly string[], providerFormId?: string): string | null {
   const seen = [...new Set((ids ?? []).map((s) => String(s ?? '').trim()).filter(Boolean))];
   if (!seen.length || !seen.some(looksEphemeralFormId)) return null;
-  if (formIdScope(seen)?.stabilized) return null;
+  if (formIdScope(seen, providerFormId)?.stabilized) return null;
   return (
     `This form's id looks generated per page load (it contains a UUID), so a {{Form ID}} trigger built on it would be accepted by GTM and then never fire. ` +
     'It is scoped by class or page instead. For a form-specific trigger, add a stable id to the form, or scope on the provider id that does not change between loads.'
@@ -102,3 +117,26 @@ export function ephemeralFormIdNote(ids: readonly string[]): string | null {
 function escapeRe(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
+
+/**
+ * Normalize a form-identity key so ONE form read twice is not counted twice.
+ *
+ * The union that merges the scroll-pass reads with the final read keys forms on
+ * action|method|field-names. Embedded providers put a per-render token INSIDE a field name (HubSpot
+ * emits `<instanceGuid>-<epochMs>-input`), so a form that re-rendered between two reads produced two
+ * different keys and was reported as two forms. Observed live: get.chownow.com has exactly ONE
+ * HubSpot form, and scans reported two.
+ *
+ * Replacing the volatile parts (UUIDs, 6+ digit runs) makes the key stable across re-renders while
+ * still separating genuinely different forms, which differ by action or by real field names.
+ */
+export function stableFormKey(key: string): string {
+  return String(key ?? '')
+    .replace(UUID_KEY_RE, '<uid>')
+    .replace(/\d{6,}/g, '<n>')
+    .toLowerCase();
+}
+
+/** Same UUID shape as UUID_RE. Declared separately so the two uses never share a lastIndex; both are
+ *  only ever used with String.replace, which resets it. */
+const UUID_KEY_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;

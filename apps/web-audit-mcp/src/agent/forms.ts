@@ -36,6 +36,11 @@ export interface RawForm {
   /** The form element's own id/name/classes — used to scope the GTM trigger to
    *  THIS form (filter {{Form ID}} / {{Form Classes}}) instead of all forms. */
   formId: string;
+  /** The PROVIDER's own form id, from data-form-id (HubSpot and friends put the durable form GUID
+   *  there). The DOM `id` of an embedded form is often minted per render, so this is the identity
+   *  that survives a reload - see tag-suggest/form-id-stability. Absent when the page exposes none;
+   *  optional so the many hand-written RawForm fixtures stay valid. */
+  providerFormId?: string;
   formName: string;
   formClasses: string;
   /** The form's visible heading/label (aria-label, a heading/legend inside it, or
@@ -217,6 +222,7 @@ export function extractFormsInPage(): RawForm[] {
         action,
         method: (form.getAttribute('method') || 'get').toLowerCase(),
         formId: form.getAttribute('id') || '',
+        providerFormId: form.getAttribute('data-form-id') || '',
         formName: form.getAttribute('name') || '',
         formClasses: form.getAttribute('class') || '',
         title: titleOf(form),
@@ -264,6 +270,7 @@ export function extractFormsInPage(): RawForm[] {
         action: '', // div/JS forms submit via JS — no element action to read
         method: 'js',
         formId: host.getAttribute('id') || '',
+        providerFormId: host.getAttribute('data-form-id') || host.querySelector('[data-form-id]')?.getAttribute('data-form-id') || '',
         formName: '',
         formClasses: host.getAttribute('class') || '',
         title: titleOf(host),
@@ -305,6 +312,7 @@ export function extractFormsInPage(): RawForm[] {
         action: '',
         method: 'js',
         formId: host.getAttribute('id') || '',
+        providerFormId: host.getAttribute('data-form-id') || host.querySelector('[data-form-id]')?.getAttribute('data-form-id') || '',
         formName: '',
         formClasses: host.getAttribute('class') || '',
         title: titleOf(host),
@@ -541,6 +549,7 @@ export function analyzeForms(rawForms: RawForm[], pageUrl: string): FormAnalysis
       action: form.action,
       method: form.method,
       formId: form.formId,
+      ...(form.providerFormId ? { providerFormId: form.providerFormId } : {}),
       formClasses: form.formClasses,
       title: form.title,
       purpose,

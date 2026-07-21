@@ -438,8 +438,8 @@ function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null
   // accepts and which can never fire again. formIdScope() keeps the durable fragment when several
   // samples prove one, and otherwise refuses the id so the ladder falls through to class/page —
   // firing too widely is recoverable, firing never is not.
-  const idScope = groupIds && groupIds.length ? formIdScope(groupIds) : null;
-  const idRefusedNote = groupIds && groupIds.length ? ephemeralFormIdNote(groupIds) : null;
+  const idScope = groupIds && groupIds.length ? formIdScope(groupIds, f.providerFormId) : null;
+  const idRefusedNote = groupIds && groupIds.length ? ephemeralFormIdNote(groupIds, f.providerFormId) : null;
   if (idScope) {
     trigger.formIdValue = idScope.value;
     trigger.formIdOperator = idScope.operator;
