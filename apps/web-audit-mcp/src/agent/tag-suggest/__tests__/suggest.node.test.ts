@@ -26,6 +26,8 @@ check('provider: HubSpot via class', detectFormProvider(sig({ classNames: ['hs-f
 check('provider: Typeform via data attr', detectFormProvider(sig({ selectorsPresent: ['[data-tf-widget]'] })).vendor === 'typeform');
 check('provider: Typeform via action', detectFormProvider(sig({}), 'https://acme.typeform.com/to/abc').vendor === 'typeform');
 check('provider: Mailchimp via action', detectFormProvider(sig({}), 'https://x.us1.list-manage.com/subscribe/post').vendor === 'mailchimp');
+check('provider: Salesforce Web-to-Lead via action', detectFormProvider(sig({}), 'https://webto.salesforce.com/servlet/servlet.WebToLead?encoding=UTF-8').vendor === 'salesforce');
+check('provider: a Salesforce-adjacent page signal alone does NOT flip a plain form', detectFormProvider(sig({ scriptSrcs: ['https://cdn.salesforce.com/tracker.js'] })).vendor === 'unknown');
 check('provider: Gravity Forms via class', detectFormProvider(sig({ classNames: ['gform_wrapper'] })).vendor === 'gravityforms');
 check('provider: CF7 via class', detectFormProvider(sig({ classNames: ['wpcf7'] })).vendor === 'contactform7');
 check('provider: WPForms via class', detectFormProvider(sig({ classNames: ['wpforms-form'] })).vendor === 'wpforms');

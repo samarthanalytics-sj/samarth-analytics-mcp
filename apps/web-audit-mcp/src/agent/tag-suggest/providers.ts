@@ -137,6 +137,15 @@ const SIGNATURES: Signature[] = [
       actionLike(action, /pardot\.com/i, 'pardot.com'), // form-handler endpoints
   },
   {
+    vendor: 'salesforce',
+    // Salesforce Web-to-Lead: the classic <form action="https://webto.salesforce.com/servlet/
+    // servlet.WebToLead?..."> POST (an `oid` hidden field + 00N... custom-field names ride along).
+    // The ACTION is the definitive marker - the page loads no vendor script for it, so nothing
+    // page-level may match here (a site-wide Salesforce/Pardot tracker must not flip ordinary forms).
+    test: (_s, action) =>
+      actionLike(action, /webto\.salesforce\.com|servlet\.WebToLead/i, 'webto.salesforce.com Web-to-Lead'),
+  },
+  {
     vendor: 'typeform',
     test: (s, action) =>
       anySel(s, '[data-tf-widget]', '[data-tf-live]', '[data-tf-popup]') ??
