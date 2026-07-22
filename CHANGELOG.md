@@ -1,3 +1,9 @@
+## [1.372.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.371.0...v1.372.0) (2026-07-22)
+
+### Features
+
+* **desktop:** show what each provider can actually do, in Settings ([#641](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/641)) ([5e49251](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/5e492513ed3c43025155bab88e78ce7887ce98ed))
+
 ## [1.371.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.370.0...v1.371.0) (2026-07-22)
 
 ### Features
