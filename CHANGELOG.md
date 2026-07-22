@@ -1,3 +1,9 @@
+## [1.373.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.373.0...v1.373.1) (2026-07-22)
+
+### Bug Fixes
+
+* **desktop:** show the chat export bar only when a report or table was asked for ([#643](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/643)) ([9f2ee2e](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/9f2ee2e98a00614e8c8a466c5308a696f1d49fba))
+
 ## [1.373.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.372.1...v1.373.0) (2026-07-22)
 
 ### Features
