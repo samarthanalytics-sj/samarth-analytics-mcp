@@ -6,7 +6,8 @@
 // create_gtm_tracking_tag tool.
 
 import type { DetectedForm, DetectedElement, SuggestInput, SuggestedTag, SuggestPlatform, FormProvider, VideoEmbed, TriggerKind, CtaIntent } from './types.js';
-import { formIdScope, ephemeralFormIdNote } from './form-id-stability.js';
+import { formIdScope, ephemeralFormIdNote, stableFormKey, looksEphemeralFormId } from './form-id-stability.js';
+import { groupFormIdentity, type ProviderFormIdentity, type FormIdCondition } from './provider-form-id.js';
 import { CTA_BY_INTENT, classifyCtaIntent } from './cta-intents.js';
 import { buildSocialUrlPattern } from './social.js';
 import { buildFormInstallPlan, buildTriggerInstallPlan, type FormMechanism, type InstallRequirement } from './install-plan.js';
@@ -218,15 +219,20 @@ function pickFormClass(classes?: string): string | null {
   return null;
 }
 
-/** Stable per-form signature (purpose + field shape + action) — two forms with
- *  the SAME id but different signatures are DIFFERENT forms sharing a non-unique
- *  id, so that id can't scope a trigger. NEVER includes entered values. */
+/** Stable per-form signature (purpose + field shape + action). Two forms with the SAME id but
+ *  different signatures are DIFFERENT forms sharing a non-unique id, so that id can't scope a
+ *  trigger. NEVER includes entered values.
+ *
+ *  Routed through stableFormKey because embedded providers put a PER-RENDER token inside a field
+ *  NAME (HubSpot emits `<instanceGuid>-<epochMs>-input`). Without that normalization, one form read
+ *  twice produced two signatures, which both split its page group and poisoned nonUniqueIds by
+ *  making one form look like two forms sharing an id. */
 function formSignature(f: DetectedForm): string {
   const fields = (f.fields ?? [])
     .map((x) => `${x.type}:${x.name}`)
     .sort()
     .join(',');
-  return `${f.purpose}|${fields}|${f.action}`;
+  return stableFormKey(`${f.purpose}|${fields}|${f.action}`);
 }
 
 interface FormScopeCtx {
@@ -249,6 +255,23 @@ interface FormScopeCtx {
   formIdsByLabel: Map<string, string[] | null>;
   /** lowercased label → the {{Form Classes}} value, same group-uniform rule as formIdByLabel. */
   formClassByLabel: Map<string, string | null>;
+  /** lowercased label → EVERY distinct id the group's instances carried, whether or not the group
+   *  could be scoped by them. Lets the ephemeral-id explanation be produced even when the id ladder
+   *  collapsed, so an id is never dropped in silence. */
+  allFormIdsByLabel: Map<string, string[]>;
+  /** lowercased label → true when at least one instance of the group carried NO id (the "mixed
+   *  group" case that forces the whole group off {{Form ID}} scoping). */
+  idGapByLabel: Map<string, boolean>;
+  /** lowercased label → the providerFormId shared by every instance that exposes one, else null.
+   *  A single durable provider id is what rescues a group whose DOM ids are minted per render. */
+  providerFormIdByLabel: Map<string, string | null>;
+  /** lowercased label → the VENDOR's durable identity agreed by every instance of the group (or a
+   *  unanimous "this vendor exposes nothing durable", which carries the reason). */
+  durableIdByLabel: Map<string, ProviderFormIdentity | null>;
+  /** lowercased label → true when that identity's {{Form ID}} condition is one GTM could really
+   *  match on EVERY instance of the group, so it is safe to ship on a native Form Submission
+   *  trigger. False when the vendor id lives somewhere other than the <form> element's own id. */
+  durableFormIdOkByLabel: Map<string, boolean>;
   /** For UNTITLED forms only: `${purpose}|${fieldSig}` → a 1-based, first-seen index disambiguating
    *  STRUCTURALLY-DIFFERENT untitled forms that share a purpose (so two field-different "contact" forms
    *  on a page become "Contact Form" + "Contact Form 2" instead of collapsing to one). The SAME form
@@ -326,6 +349,36 @@ function formDisplayLabel(f: DetectedForm, ctx: Pick<FormScopeCtx, 'untitledForm
 }
 
 const escRe = (t: string): string => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** Would GTM's {{Form ID}} (the <form> element's own id, exactly as scanned) satisfy this condition? */
+function formIdSatisfies(scannedId: string | undefined, c: FormIdCondition): boolean {
+  const id = String(scannedId ?? '');
+  if (!id) return false; // no id on the element → {{Form ID}} resolves to '' and matches nothing
+  return c.operator === 'equals' ? id === c.value : id.includes(c.value);
+}
+
+/**
+ * Would a NATIVE Form Submission trigger built on this vendor identity actually match every scanned
+ * instance of the group?
+ *
+ * A vendor rule reads its id from the whole scanned haystack (the DOM id, the provider attribute,
+ * the classes, the action), but GTM's {{Form ID}} only ever reads the <form> element's own id. A
+ * rule that resolves its number from a wrapper class or a container id (Unbounce names the wrapper
+ * lp-pom-form-<n> while the inner <form> is named generically), or a group instance rendered with no
+ * id at all, therefore yields a condition GTM accepts and never matches.
+ *
+ * Judged over the WHOLE group, never per instance: letting some instances keep the id scope while
+ * others fall through would emit two same-named tags for one form, which collides at create.
+ *
+ * Only consulted on the native route. On the pushed-event route the condition is deleted before it
+ * ships, so there the identity still marks "the vendor pinned this form" and keeps the trigger off a
+ * page-path scope it does not need.
+ */
+function durableFormIdMatchesGroup(dur: ProviderFormIdentity | null, group: DetectedForm[]): boolean {
+  const c = dur?.formIdCondition;
+  if (!c) return false;
+  return group.every((f) => formIdSatisfies(f.formId, c));
+}
 
 function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null {
   // Skip: search/login submits aren't conversions; checkout is ECOMMERCE — it
@@ -423,6 +476,26 @@ function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null
   // that id — it would split the group into an id-tag + a page-regex tag with the SAME name (a
   // duplicate-name collision at create) — so it falls through to the page RegEx (one tag for the group).
   const trigger: SuggestedTag['trigger'] = { name: trigNameOf(displayLabel, 'form_submit'), kind: 'form_submit' };
+  // HOW this form submits is decided BEFORE the scope ladder, because it decides whether a
+  // {{Form ID}} condition can reach the trigger at all: on the pushed-event route below every
+  // {{Form ID}}/{{Form Classes}} condition is deleted (those built-ins do not resolve on a dataLayer
+  // push), so there the ladder's id rung is only a marker for "the vendor pinned this form", while
+  // on the native route the same condition really ships and must be provably matchable.
+  // Pardot's form-HANDLER mode is a native <form> POST the native trigger handles
+  // (only its iframe-embed mode, method 'js' or no native form, needs a listener).
+  const isEmbed =
+    EMBED_PROVIDERS.has(f.provider.vendor) &&
+    !(f.provider.vendor === 'pardot' && (f.method === 'post' || f.method === 'get'));
+  // On-page WordPress AJAX plugin (CF7 / Gravity / Ninja / WPForms / Elementor): the native trigger
+  // usually won't fire either, so it takes the same Custom Event route (but keeps the Form-ID fallback).
+  const isAjaxPlugin = AJAX_FORM_PROVIDERS.has(f.provider.vendor);
+  // AJAX/embed + JS/div forms: the native Form Submission trigger usually never fires there, and the
+  // corpus' dominant ("Best"-rated) route is a CUSTOM EVENT trigger, so suggest THAT trigger, fired
+  // by the provider listener / submit-handler push described in the note. The {{Form ID}}/{{Form
+  // Classes}} built-ins do NOT resolve on a pushed event, so drop them; instead, when the form has an
+  // id, scope by {{dlv - form_id}} equals <id>, a Data Layer Variable reading the `form_id` the
+  // install-plan listener pushes (belt-and-suspenders with the page-path scope kept below).
+  const dlEvent = isEmbed || isAjaxPlugin || f.method === 'js' ? (PROVIDER_DL_EVENT[f.provider.vendor] ?? 'form_submit') : null;
   const rawClass = pickFormClass(f.formClasses);
   const groupIds = ctx.formIdsByLabel.get(labelKey) ?? null;
   const groupClass = ctx.formClassByLabel.get(labelKey) ?? null;
@@ -438,11 +511,35 @@ function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null
   // accepts and which can never fire again. formIdScope() keeps the durable fragment when several
   // samples prove one, and otherwise refuses the id so the ladder falls through to class/page —
   // firing too widely is recoverable, firing never is not.
-  const idScope = groupIds && groupIds.length ? formIdScope(groupIds, f.providerFormId) : null;
-  const idRefusedNote = groupIds && groupIds.length ? ephemeralFormIdNote(groupIds, f.providerFormId) : null;
+  // The ids the group ACTUALLY carried, and the provider id shared across it. Both are read from
+  // the group, not from this one instance, so the explanation matches the trigger that ships.
+  const groupAllIds = ctx.allFormIdsByLabel.get(labelKey) ?? (f.formId ? [f.formId] : []);
+  const sharedProviderId = ctx.providerFormIdByLabel.get(labelKey) ?? f.providerFormId;
+  const durable = ctx.durableIdByLabel.get(labelKey) ?? null;
+  const durableFormIdOk = ctx.durableFormIdOkByLabel.get(labelKey) ?? false;
+  const idGap = ctx.idGapByLabel.get(labelKey) ?? false;
+  const idScope = groupIds && groupIds.length ? formIdScope(groupIds, sharedProviderId) : null;
+  // NOT gated on groupIds: an id that was REFUSED (ephemeral, or dropped because one instance of the
+  // group lacked one) is exactly the case the operator most needs explained. Gating the explanation
+  // behind the same condition that suppressed the id meant the reason was never shown at all.
+  const idRefusedNote = groupAllIds.length ? ephemeralFormIdNote(groupAllIds, sharedProviderId) : null;
+  let usedDurable: ProviderFormIdentity | null = null;
   if (idScope) {
     trigger.formIdValue = idScope.value;
     trigger.formIdOperator = idScope.operator;
+  } else if (durable?.formIdCondition && (dlEvent || durableFormIdOk)) {
+    // DEGRADE, do not collapse. The group could not be scoped by its DOM ids, but the vendor's own
+    // durable identity still pins the trigger to this form (HubSpot's form GUID, Gravity's gform_<n>,
+    // Contact Form 7's wpcf7-f<id> without the placement ordinal). A page-path scope would fire for
+    // every other form on those pages, so this is strictly tighter and still fires.
+    //
+    // On the NATIVE route the condition really ships, so it is taken only when GTM could match it on
+    // every instance of the group (durableFormIdOk); otherwise the ladder falls through to class or
+    // page, which over-fires but fires. On the pushed-event route it is deleted below either way,
+    // and taking this rung is what keeps that trigger off a page-path scope it does not need.
+    trigger.formIdValue = durable.formIdCondition.value;
+    trigger.formIdOperator = durable.formIdCondition.operator;
+    usedDurable = durable;
   } else if (groupClass) {
     trigger.formClassesValue = groupClass;
     trigger.formClassesOperator = 'contains';
@@ -468,22 +565,6 @@ function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null
   // else: the form is on MORE than 50 pages (effectively site-wide) → a page RegEx would be unwieldy,
   // so leave the trigger unscoped (fires on every form submit); the note below warns about that.
 
-  // Flag the cases where the trigger won't fire / won't scope correctly.
-  // Pardot's form-HANDLER mode is a native <form> POST the native trigger handles
-  // — only its iframe-embed mode (method 'js' / no native form) needs a listener.
-  const isEmbed =
-    EMBED_PROVIDERS.has(f.provider.vendor) &&
-    !(f.provider.vendor === 'pardot' && (f.method === 'post' || f.method === 'get'));
-  // On-page WordPress AJAX plugin (CF7 / Gravity / Ninja / WPForms / Elementor) — the native trigger
-  // usually won't fire either, so it takes the same Custom Event route (but keeps the Form-ID fallback).
-  const isAjaxPlugin = AJAX_FORM_PROVIDERS.has(f.provider.vendor);
-  // AJAX/embed + JS/div forms: the native Form Submission trigger usually never fires there, and the
-  // corpus' dominant ("Best"-rated) route is a CUSTOM EVENT trigger — so suggest THAT trigger, fired
-  // by the provider listener / submit-handler push described in the note. The {{Form ID}}/{{Form
-  // Classes}} built-ins do NOT resolve on a pushed event, so drop them; instead, when the form has an
-  // id, scope by {{dlv - form_id}} equals <id> — a Data Layer Variable reading the `form_id` the
-  // install-plan listener pushes (belt-and-suspenders with the page-path scope kept below).
-  const dlEvent = isEmbed || isAjaxPlugin || f.method === 'js' ? (PROVIDER_DL_EVENT[f.provider.vendor] ?? 'form_submit') : null;
   // Build the install plan FIRST — it is the single source of truth for what the paired listener actually
   // pushes. A custom_event trigger can only scope by {{dlv - <key>}} if the listener REALLY pushes that
   // key=value; the install plan sets `dlvScope` only when it does (the generic submit delegate, which
@@ -499,6 +580,11 @@ function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null
     // Prefer a {{Form ID}}-style selector when we have one, else fall through to the generic 'form'.
     selector: f.formId ? `#${f.formId}` : undefined,
     formHasNativeForm,
+    // The vendor's DURABLE id, which is the value its own listener pushes (HubSpot's hs_form_id is
+    // the form GUID, Contact Form 7's form_id is the post id). Supplying it is what turns the
+    // provider listener from "fires, but page-wide" into a trigger scoped to THIS form. Only the
+    // GROUP-agreed identity is passed: if the instances disagree, there is no one form to scope to.
+    providerFormId: durable?.value ?? undefined,
   });
   const dlvScope = install.requires.find(
     (r): r is Extract<InstallRequirement, { kind: 'listener-tag' }> => r.kind === 'listener-tag' && !!r.dlvScope,
@@ -510,28 +596,55 @@ function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null
     delete trigger.formIdOperator;
     delete trigger.formClassesValue;
     delete trigger.formClassesOperator;
-    // Scope to THIS form ONLY when the paired listener provably pushes a matching form_id (the generic
-    // submit delegate). Otherwise the page-path scope (kept above) carries the trigger — it still fires,
-    // just page-wide — instead of a {{dlv - form_id}} condition that could never match the provider's push.
+    // Scope to THIS form ONLY when the paired listener provably pushes a matching key/value: the
+    // generic submit delegate (form_id = the DOM id) or a VENDOR listener whose pushed key is
+    // declared in LISTENER_DLV_KEY and whose value is the vendor's durable form id (hs_form_id =
+    // the HubSpot form GUID, form_id = the Contact Form 7 post id). Otherwise the page-path scope
+    // kept above carries the trigger: it still fires, just page-wide, which is recoverable, while a
+    // condition on a key nobody pushes never fires at all.
     if (dlvScope) {
       trigger.dataLayerConditions = [{ key: dlvScope.key, value: dlvScope.value, operator: 'equals' }];
     }
   }
   let note: string | undefined;
-  // How this pushed-event tag is scoped to THIS form. With a form id → {{dlv - form_id}} equals "<id>"
-  // (a Data Layer Variable reading the form_id the listener pushes); {{Form ID}} does not resolve on a
-  // pushed event. Without an id → page-only scope carries over (+ a nudge to add a unique id).
+  // The id this note may hand to a developer. An id carrying a per-render token is NOT one: telling
+  // the site to push it, or to match it, reproduces the tag-that-cannot-fire in the site's own code,
+  // one layer below where the engine can see it. When the id is ephemeral the advice is to add a
+  // stable one instead, which is the only thing that actually works.
+  const stableId = f.formId && !looksEphemeralFormId(f.formId) ? f.formId : '';
+  // Once a real dlv scope exists, a second id in the push is noise that contradicts it.
+  const pushIdHint = !dlvScope && stableId ? `, form_id: "${stableId}"` : '';
+  // The "if the plugin is NOT set to AJAX" fallback, which really is a native Form Submission
+  // trigger. It has to be stated with the VENDOR's durable condition wherever one exists, and only
+  // when GTM could match it: naming the raw DOM id here handed the operator
+  // {{Form ID}} equals "wpcf7-f34-p9-o1", an exact match on Contact Form 7's placement ordinal that
+  // stops matching as soon as a second CF7 form is added above it. Same dead trigger, arrived at by
+  // following the advice instead of by clicking create.
+  const nativeFallbackCond =
+    durable?.formIdCondition && durableFormIdOk
+      ? `${durable.formIdCondition.operator} "${durable.formIdCondition.value}"`
+      : stableId
+        ? `equals "${stableId}"`
+        : '';
+  const nativeFallbackClause = nativeFallbackCond
+    ? ` (If the plugin is set to NON-AJAX submit, a Form Submission trigger on {{Form ID}} ${nativeFallbackCond} also works.)`
+    : '';
+  // How this pushed-event tag is scoped to THIS form. With a stable form id, {{dlv - form_id}} equals
+  // "<id>" (a Data Layer Variable reading the form_id the listener pushes); {{Form ID}} does not
+  // resolve on a pushed event. Without one, the page-only scope carries over (+ what to change).
   const dlvScopeClause = dlvScope
-    ? ` Scoped to this form via {{dlv - form_id}} equals "${dlvScope.value}" (a Data Layer Variable reading the form_id the auto-created listener pushes) — {{Form ID}} does not resolve on a pushed event.`
-    : f.formId
-      ? ` The provider's own listener pushes its internal submit id (not this form's DOM id), so the tag stays page-scoped ({{Form ID}} does not resolve on a pushed event); for form-specific scoping, have the push also carry form_id: "${f.formId}" and AND {{dlv - form_id}} equals "${f.formId}".`
-      : ` Only the page scope carries over ({{Form ID}} does not resolve on a pushed event) — add a unique id to the <form> so a generic listener can push form_id and the trigger can scope via {{dlv - form_id}}.`;
+    ? ` Scoped to this form via {{dlv - ${dlvScope.key}}} equals "${dlvScope.value}" (a Data Layer Variable reading the ${dlvScope.key} the auto-created listener pushes), because {{Form ID}} does not resolve on a pushed event.`
+    : stableId
+      ? ` The provider's own listener pushes its internal submit id (not this form's DOM id), so the tag stays page-scoped ({{Form ID}} does not resolve on a pushed event); for form-specific scoping, have the push also carry form_id: "${stableId}" and AND {{dlv - form_id}} equals "${stableId}".`
+      : f.formId
+        ? ` Only the page scope carries over ({{Form ID}} does not resolve on a pushed event), and this form's DOM id is generated per page load, so matching it would never fire either: give the <form> a stable unique id, push it as form_id, and scope on {{dlv - form_id}}.`
+        : ` Only the page scope carries over ({{Form ID}} does not resolve on a pushed event); add a unique id to the <form> so a generic listener can push form_id and the trigger can scope via {{dlv - form_id}}.`;
   if (isEmbed) {
-    note = `${cap(f.provider.vendor)} submits in an iframe / via AJAX — GTM's native Form Submission trigger usually won't fire, so this tag fires on a "${dlEvent}" Custom Event. Add the push: ${PROVIDER_EVENT_HINT[f.provider.vendor] ?? 'listen for the provider submit event'} → dataLayer.push({event: "${dlEvent}"${f.formId ? `, form_id: "${f.formId}"` : ''}}).${dlvScopeClause} Fallback: an Element Visibility trigger on the thank-you message.`;
+    note = `${cap(f.provider.vendor)} submits in an iframe / via AJAX, so GTM's native Form Submission trigger usually won't fire and this tag fires on a "${dlEvent}" Custom Event. Add the push: ${PROVIDER_EVENT_HINT[f.provider.vendor] ?? 'listen for the provider submit event'} → dataLayer.push({event: "${dlEvent}"${pushIdHint}}).${dlvScopeClause} Fallback: an Element Visibility trigger on the thank-you message.`;
   } else if (isAjaxPlugin) {
-    note = `${cap(f.provider.vendor)} submits via AJAX (it preventDefaults the native submit), so GTM's Form Submission trigger usually won't fire — this tag fires on a "${dlEvent}" Custom Event instead. Add a Custom HTML listener: ${PROVIDER_EVENT_HINT[f.provider.vendor] ?? 'listen for the plugin submit event'} → dataLayer.push({event: "${dlEvent}"${f.formId ? `, form_id: "${f.formId}"` : ''}}).${dlvScopeClause} AnalyticsMania publishes an importable recipe for this.${f.formId ? ` (If the plugin is set to NON-AJAX submit, a Form Submission trigger on {{Form ID}} equals "${f.formId}" also works.)` : ''}`;
+    note = `${cap(f.provider.vendor)} submits via AJAX (it preventDefaults the native submit), so GTM's Form Submission trigger usually won't fire and this tag fires on a "${dlEvent}" Custom Event instead. Add a Custom HTML listener: ${PROVIDER_EVENT_HINT[f.provider.vendor] ?? 'listen for the plugin submit event'} → dataLayer.push({event: "${dlEvent}"${pushIdHint}}).${dlvScopeClause} AnalyticsMania publishes an importable recipe for this.${nativeFallbackClause}`;
   } else if (f.method === 'js') {
-    note = `JS/div form (no native <form> submit) — GTM's Form Submission trigger may not fire, so this tag fires on a "${dlEvent}" Custom Event; push dataLayer.push({event: "${dlEvent}"${f.formId ? `, form_id: "${f.formId}"` : ''}}) from the form's submit handler.${dlvScopeClause} Fallbacks: an All-Clicks trigger on the submit button, or an Element Visibility trigger on the thank-you message.`;
+    note = `JS/div form (no native <form> submit), so GTM's Form Submission trigger may not fire and this tag fires on a "${dlEvent}" Custom Event; push dataLayer.push({event: "${dlEvent}"${pushIdHint}}) from the form's submit handler.${dlvScopeClause} Fallbacks: an All-Clicks trigger on the submit button, or an Element Visibility trigger on the thank-you message.`;
   } else if (trigger.pagePathOperator === 'matchRegex') {
     // The multi-page consolidated case: ONE tag scoped by a {{Page Path}} RegEx over the group's pages.
     // A Page-Path-only Form Submission trigger fires on EVERY form submit on those pages, so warn that
@@ -558,11 +671,39 @@ function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null
   // element (name → id → aria-label → nearest heading). Auto-created with the tag (see FORM_NAME_JS in
   // the desktop builder). NOTE: for embed/AJAX forms that fire on a dataLayer Custom Event (not a
   // native form submit), {{Form Element}} isn't set, so it falls back to "form".
-  // An ephemeral id we refused, or a durable fragment we proved, is the most actionable thing to say
-  // about this trigger's scope, so it leads the note.
-  const stabilizedNote = idScope?.stabilized ? idScope.note : undefined;
-  if (stabilizedNote) note = note ? `${stabilizedNote} ${note}` : stabilizedNote;
-  else if (idRefusedNote) note = note ? `${idRefusedNote} ${note}` : idRefusedNote;
+  // How this trigger came to be scoped the way it is. Every decision that DROPPED or REPLACED an id
+  // has to say so: a scope chosen in silence is indistinguishable from a scope that never fires.
+  // Ordered most-actionable first, and prepended so it leads the note.
+  // A {{Form ID}} explanation is only true while a {{Form ID}} condition survived: the dataLayer
+  // branch above DELETES it (that built-in does not resolve on a pushed event), and its own scope is
+  // explained by dlvScopeClause.
+  const idScopeSurvived = !!trigger.formIdValue;
+  const dlScoped = !!trigger.dataLayerConditions?.length;
+  const scopeNotes: string[] = [];
+  if (idScopeSurvived && idScope?.stabilized && idScope.note) scopeNotes.push(idScope.note);
+  if (idScopeSurvived && usedDurable?.note) scopeNotes.push(usedDurable.note);
+  // Only a PARTIAL gap is worth this note: it explains ids that exist and were still not used. A
+  // group where NO instance has an id has nothing to explain here, and the "add a unique id" advice
+  // in the branches below already covers it.
+  if (idGap && groupAllIds.length > 0 && !idScope && !dlScoped) {
+    const gapLead = 'An instance of this form in the group had no id, so the ids of the instances that DO have one were not used (that would split one form into two same-named tags).';
+    scopeNotes.push(
+      trigger.formIdValue
+        ? `${gapLead} It is scoped by the provider's durable form id instead${usedDurable?.partial ? ', which covers the instances that expose that id; the instance without one may not fire until it carries the same id' : ''}.`
+        : `${gapLead} Give every copy of the <form> the SAME unique id to scope it by {{Form ID}}.`,
+    );
+  }
+  if (!idScopeSurvived && !dlScoped && idRefusedNote) scopeNotes.push(idRefusedNote);
+  // A vendor we RECOGNISE that exposes nothing durable, on a trigger that ended up with no
+  // form-level scope at all: say which vendor and why, rather than leaving a page-wide trigger
+  // looking deliberate.
+  if (!usedDurable && durable && !durable.value && durable.note && !idScopeSurvived && !trigger.formClassesValue && !dlScoped) {
+    scopeNotes.push(durable.note);
+  }
+  if (scopeNotes.length) {
+    const lead = scopeNotes.join(' ');
+    note = note ? `${lead} ${note}` : lead;
+  }
 
   const formNameValue = '{{Form Name}}';
 
@@ -579,7 +720,8 @@ function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null
     label: `${cap(f.purpose)} form${prov} → GA4 "${eventName}" on form submit`,
     evidence:
       `form purpose=${f.purpose}; provider=${f.provider.vendor} (${f.provider.evidence})` +
-      (trigger.formIdValue ? `; id=#${f.formId}` : usedClass ? `; class=.${usedClass}` : usedPage ? `; page=${usedPage}` : '') +
+      (usedDurable?.value ? `; ${usedDurable.source}=${usedDurable.value}` : '') +
+      (trigger.formIdValue && !usedDurable ? `; id=#${f.formId}` : usedClass ? `; class=.${usedClass}` : usedPage ? `; page=${usedPage}` : '') +
       (sig.length ? `; fields: ${sig.join(', ')}` : '') +
       (f.hidden ? '; hidden at page load — typically opens in a modal/popup or tab (e.g. a "Book a demo" overlay)' : ''),
     ...(note ? { note } : {}),
@@ -664,9 +806,36 @@ function nonUniqueFormScopes(forms: DetectedForm[]): FormScopeCtx {
   // group (id on some pages, not others) falls through to the page RegEx.
   const formIdsByLabel = new Map<string, string[] | null>();
   const formClassByLabel = new Map<string, string | null>();
+  const allFormIdsByLabel = new Map<string, string[]>();
+  const idGapByLabel = new Map<string, boolean>();
+  const providerFormIdByLabel = new Map<string, string | null>();
+  const durableIdByLabel = new Map<string, ProviderFormIdentity | null>();
+  const durableFormIdOkByLabel = new Map<string, boolean>();
   for (const [key, group] of labelForms) {
+    const allIds = [...new Set(group.map((f) => (f.formId ?? '').trim()).filter(Boolean))].sort();
+    allFormIdsByLabel.set(key, allIds);
+    idGapByLabel.set(key, group.some((f) => !(f.formId ?? '').trim()));
+    // ONE provider id shared by every instance that has one. Two different provider ids under one
+    // label are two different forms, so neither may scope the group.
+    const provIds = new Set(group.map((f) => (f.providerFormId ?? '').trim()).filter(Boolean));
+    providerFormIdByLabel.set(key, provIds.size === 1 ? [...provIds][0] : null);
+    // The VENDOR's own durable identity, which does not care whether every instance carried a DOM
+    // id. This is what lets the ladder DEGRADE (to the identity that survives a re-render) instead
+    // of COLLAPSING all the way to a page-path scope the moment one instance lacks an id.
+    const durable = groupFormIdentity(
+      group.map((f) => ({
+        vendor: f.provider.vendor,
+        formId: f.formId,
+        providerFormId: f.providerFormId,
+        formClasses: f.formClasses,
+        action: f.action,
+      })),
+    );
+    durableIdByLabel.set(key, durable);
+    // Whether that identity may become a real {{Form ID}} condition (see durableFormIdMatchesGroup).
+    durableFormIdOkByLabel.set(key, durableFormIdMatchesGroup(durable, group));
     const allUniqueId = group.every((f) => !!f.formId && !nonUniqueIds.has(f.formId));
-    formIdsByLabel.set(key, allUniqueId ? [...new Set(group.map((f) => f.formId!))].sort() : null);
+    formIdsByLabel.set(key, allUniqueId ? allIds : null);
     const classes = new Set(group.map((f) => pickFormClass(f.formClasses) ?? ''));
     const uniformClass = !allUniqueId && classes.size === 1 && !classes.has('') && !nonUniqueClasses.has([...classes][0]) ? [...classes][0] : null;
     formClassByLabel.set(key, uniformClass);
@@ -680,6 +849,11 @@ function nonUniqueFormScopes(forms: DetectedForm[]): FormScopeCtx {
     canonicalLabel,
     formIdsByLabel,
     formClassByLabel,
+    allFormIdsByLabel,
+    idGapByLabel,
+    providerFormIdByLabel,
+    durableIdByLabel,
+    durableFormIdOkByLabel,
     untitledFormIndex,
   };
 }

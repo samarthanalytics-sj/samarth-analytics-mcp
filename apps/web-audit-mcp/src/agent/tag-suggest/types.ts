@@ -29,6 +29,7 @@ export type FormProvider =
   | 'hubspot' | 'typeform' | 'paperform' | 'mailchimp' | 'gravityforms' | 'contactform7'
   | 'wpforms' | 'ninjaforms' | 'elementor' | 'marketo' | 'pardot'
   | 'calendly' | 'jotform' | 'formstack' | 'tally' | 'googleforms' | 'wufoo'
+  | 'klaviyo' | 'activecampaign' | 'unbounce' | 'webflow'
   | 'embed' | 'unknown';
 
 export interface ProviderMatch {

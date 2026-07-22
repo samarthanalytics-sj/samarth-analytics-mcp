@@ -289,6 +289,10 @@ async function scanTarget(
     action: f.action,
     method: f.method,
     formId: f.formId,
+    // The provider's own durable form id (data-form-id / data-formid / data-wpcf7-id). Dropping it
+    // here is what made the whole capture dead code: the engine could never scope an embedded form
+    // on the one identity that survives a re-render.
+    providerFormId: f.providerFormId,
     formClasses: f.formClasses,
     title: f.title,
     fields: f.fields.map((x) => ({ type: x.type, name: x.name, required: x.required })),
@@ -406,6 +410,10 @@ export function pageScanFromDriven(driven: DrivenPage, url: string, siteHost: st
     action: f.action,
     method: f.method,
     formId: f.formId,
+    // The provider's own durable form id (data-form-id / data-formid / data-wpcf7-id). Dropping it
+    // here is what made the whole capture dead code: the engine could never scope an embedded form
+    // on the one identity that survives a re-render.
+    providerFormId: f.providerFormId,
     formClasses: f.formClasses,
     title: f.title,
     fields: f.fields.map((x) => ({ type: x.type, name: x.name, required: x.required })),
