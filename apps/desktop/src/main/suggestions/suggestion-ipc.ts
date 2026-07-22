@@ -18,6 +18,10 @@ import { reportHtmlDocument } from '../google/ga4-report-export';
 import { buildToolRegistry, type ConfirmFn } from '../tools/registry';
 import type { CreateTagOutcome, SuggestedTagView, TagScanOptions, VerifyTagInput, VerifyTagsOptions, VerifyTagsResult, VerifyProgressView, DetectedElementView, FormsForFillOptions, FormsForFillResult, SubmitFormVerifyOptions, SubmitFormVerifyResult, FormTagVerifyPlanOptions, FormTagVerifyPlanResult, SuggestionScreenshotResult } from '../../shared/ipc';
 import { crawlAndSuggest, scanUrls, type ScanProgress } from './scan-core';
+import type { MemoryStore } from '../storage/memory-store';
+import type { RegistryService } from '../services/registry-service';
+import { memoryApplies } from '../../shared/chat-memory';
+import { deriveSuggestionRules, applySuggestionRules, describeAppliedRules } from '../../shared/suggestion-rules';
 import { runVerifyDriver, runSuggestionScreenshots, type SuggestionShotTag } from './verify-driver';
 import { runFormSubmitDriver, type FormSubmitFieldInput } from './form-submit-driver';
 import { evaluateVerify, verdictsFromMonitor } from './verify-tags';
@@ -64,7 +68,37 @@ function takeVerifyEls(url: string): { els: DetectedElementView[]; pagesCrawled:
 let verifyCancelled = false;
 const shouldStopVerify = (): boolean => verifyCancelled;
 
-export function registerSuggestionsIpc(data: GoogleDataService): void {
+export function registerSuggestionsIpc(data: GoogleDataService, memory?: MemoryStore, registry?: RegistryService): void {
+  /**
+   * Apply the saved notes for the ACTIVE account/container to a finished scan.
+   *
+   * Cross-feature leverage: a correction the user gave the chat ("we use order_completed, not
+   * purchase") used to be honoured in conversation and nowhere else, so every scan proposed the old
+   * name again. Only the unambiguous subset is read (see suggestion-rules), and every rule that fires
+   * is appended to the scan's own warnings, because a silently reshaped scan is indistinguishable
+   * from a broken one.
+   *
+   * Best-effort in every direction: no stores wired, no active account, or a read that throws all
+   * leave the scan exactly as the engine produced it.
+   */
+  function honourSavedRules<T extends { suggestions: SuggestedTagView[]; warnings: string[] }>(result: T): T {
+    try {
+      if (!memory || !registry) return result;
+      const active = registry.getActiveView();
+      if (!active) return result;
+      const ctx = { containerId: active.gtmContext?.containerId, property: active.ga4Context?.property };
+      const notes = memory.list(active.id).filter((m) => memoryApplies(m, ctx));
+      const rules = deriveSuggestionRules(notes);
+      if (!rules.renames.length && !rules.suppress.length) return result;
+      const applied = applySuggestionRules(result.suggestions ?? [], rules);
+      if (!applied.renamed.length && !applied.dropped.length) return result;
+      return { ...result, suggestions: applied.suggestions, warnings: [...(result.warnings ?? []), ...describeAppliedRules(applied)] };
+    } catch (e) {
+      console.error('[suggestions] saved-rule pass skipped:', e instanceof Error ? e.message : e);
+      return result;
+    }
+  }
+
   // Stop the in-flight verify scan/drive. Sets the flag the crawl + Tag-Assistant drive loops poll; they
   // finish the current page and resolve with a partial result. The renderer also stops the orchestration.
   ipcMain.handle('suggestions:cancelVerify', () => { verifyCancelled = true; });
@@ -140,7 +174,7 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
     // Parallel crawl: a pool of drivers scans pages concurrently (bounded by the page budget).
     const n = Math.min(scanConcurrency(o.scanConcurrency), o.maxPages ?? 25);
     const pool = await makeDrivers(n, o);
-    return crawlAndSuggest(pool[0], target, { maxPages: o.maxPages, maxDepth: o.maxDepth, platforms: o.platforms ?? ['ga4'], drivers: pool.slice(1) });
+    return honourSavedRules(await crawlAndSuggest(pool[0], target, { maxPages: o.maxPages, maxDepth: o.maxDepth, platforms: o.platforms ?? ['ga4'], drivers: pool.slice(1) }));
   });
 
   // Locate-only PROOF screenshots for suggested (creatable) tags: open each page a tag lives on, ring
@@ -193,7 +227,7 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
     } catch {
       /* per-URL admission still applies in scanUrls */
     }
-    return scanUrls(pool[0], list, siteHost, undefined, { platforms: o.platforms ?? ['ga4'], drivers: pool.slice(1) });
+    return honourSavedRules(await scanUrls(pool[0], list, siteHost, undefined, { platforms: o.platforms ?? ['ga4'], drivers: pool.slice(1) }));
   });
 
   // Auto-mint a workspace-PREVIEW snippet so Verify firing can load DRAFT tags with
@@ -620,7 +654,7 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
     const o = opts ?? {};
     const n = Math.min(scanConcurrency(o.scanConcurrency), o.maxPages ?? 25);
     const pool = await makeDrivers(n, o);
-    return crawlAndSuggest(pool[0], target, { maxPages: o.maxPages, maxDepth: o.maxDepth, platforms: o.platforms ?? ['ga4'], drivers: pool.slice(1) }, streamSink(event, String(requestId ?? '')));
+    return honourSavedRules(await crawlAndSuggest(pool[0], target, { maxPages: o.maxPages, maxDepth: o.maxDepth, platforms: o.platforms ?? ['ga4'], drivers: pool.slice(1) }, streamSink(event, String(requestId ?? ''))));
   });
 
   ipcMain.handle('suggestions:scanUrlsStream', async (event, requestId: unknown, urls: unknown, opts?: TagScanOptions) => {
