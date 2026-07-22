@@ -1,3 +1,9 @@
+## [1.386.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.385.0...v1.386.0) (2026-07-22)
+
+### Features
+
+* **desktop:** Google Ads as a first-class chat product alongside GTM and GA4 ([#660](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/660)) ([615ad54](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/615ad541efe4e159e00320ae4926066451e2af4e))
+
 ## [1.385.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.384.0...v1.385.0) (2026-07-22)
 
 ### Features
