@@ -59,6 +59,7 @@ import { parseCsvUrls, parseCsvUrlStats, CSV_URL_CAP } from '../../shared/csv-ur
 import { platformIdHints } from '../../shared/platform-id-hints';
 import { planAdsConversionActions } from '../../shared/ads-bulk-plan';
 import type { MemoryImportPlanView, SemanticCorpusStatus } from '../../shared/ipc';
+import { PROVIDER_PROFILES, CAPABILITY_IDS, providerProfile, providerLimitations } from '../../shared/provider-capabilities';
 import { annotationLabel } from '../../shared/audit-annotations';
 import { parseRateLimit } from '../../shared/rate-limit';
 import { autoHealConfirmMessage } from '../../shared/workspace-warnings';
@@ -9867,6 +9868,8 @@ function SettingsView({
       {sec === 'providers' && (
       <section style={styles.card}>
         <p style={styles.settingsSub}>App-level API keys, shared by every account that picks the provider.</p>
+        <ProviderCapabilityMatrix activeProvider={active?.llm?.provider} />
+        <div style={{ height: 1, background: 'var(--border-2)', margin: '18px 0' }} />
         <ProvidersEditor status={provStatus} onStatus={setProvStatus} onChange={refresh} onError={onError} />
         <div style={{ height: 1, background: 'var(--border-2)', margin: '18px 0' }} />
         <SemanticCorpusCard onError={onError} />
@@ -10102,6 +10105,87 @@ function SemanticCorpusCard({ onError }: { onError: (m: string) => void }): JSX.
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+/**
+ * What each provider can actually do IN THIS APP.
+ *
+ * These differences are invisible until they bite: a PDF reaches Claude and Gemini as pages, so their
+ * charts are read, while OpenAI receives only the extracted words. Someone attaching a scanned report
+ * on OpenAI would otherwise just see the model ignore it. The table states what the code does (the
+ * claims are cross-checked against it in the tests) and every mark carries its reason.
+ */
+function ProviderCapabilityMatrix({ activeProvider }: { activeProvider?: string }): JSX.Element {
+  const mark = (level: string): { glyph: string; color: string } =>
+    level === 'yes' ? { glyph: '✓', color: 'var(--c-green)' }
+      : level === 'partial' ? { glyph: '~', color: 'var(--c-amber)' }
+        : { glyph: '✗', color: 'var(--c-red)' };
+  const gaps = activeProvider ? providerLimitations(activeProvider) : [];
+
+  return (
+    <div>
+      <div style={{ fontWeight: 600, fontSize: 13.5 }}>What each provider can do here</div>
+      <p style={{ ...styles.muted, fontSize: 12.5, marginTop: 4, lineHeight: 1.5 }}>
+        Differences in how this app sends attachments and searches the corpus. Everything else (tag
+        building, audits, verification, memory) works the same on all three.
+      </p>
+
+      {/* The active provider's gaps first: it is the only part that needs acting on. */}
+      {gaps.length > 0 && (
+        <div style={{ marginTop: 8, padding: '8px 10px', borderRadius: 8, background: 'var(--surface-2)', borderLeft: '3px solid var(--c-amber)' }}>
+          <div style={{ fontSize: 12.5, fontWeight: 600 }}>
+            This account uses {providerProfile(activeProvider ?? '')?.label ?? activeProvider}. Worth knowing:
+          </div>
+          {gaps.map((g) => (
+            <div key={g.id} style={{ ...styles.muted, fontSize: 12, marginTop: 3 }}>• <b>{g.label}:</b> {g.note}</div>
+          ))}
+        </div>
+      )}
+
+      <div style={{ overflowX: 'auto', marginTop: 10 }}>
+        <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 12.5 }}>
+          <thead>
+            <tr>
+              <th style={{ textAlign: 'left', padding: '6px 8px', color: 'var(--text-muted)', fontWeight: 500 }}>Capability</th>
+              {PROVIDER_PROFILES.map((p) => (
+                <th key={p.provider} style={{ textAlign: 'center', padding: '6px 8px', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                  {p.label}{p.provider === activeProvider ? ' •' : ''}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {CAPABILITY_IDS.map((id) => {
+              const label = PROVIDER_PROFILES[0].capabilities.find((c) => c.id === id)?.label ?? id;
+              return (
+                <tr key={id} style={{ borderTop: '1px solid var(--border)' }}>
+                  <td style={{ padding: '6px 8px', color: 'var(--text-dim)' }}>{label}</td>
+                  {PROVIDER_PROFILES.map((p) => {
+                    const cell = p.capabilities.find((c) => c.id === id);
+                    const m = mark(cell?.level ?? 'no');
+                    return (
+                      <td key={p.provider} style={{ padding: '6px 8px', textAlign: 'center' }}>
+                        {/* The reason is on hover, so the grid stays scannable without hiding the why. */}
+                        <span style={{ color: m.color, fontWeight: 700, cursor: 'help' }} title={cell?.note ?? ''}>{m.glyph}</span>
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <div style={{ marginTop: 8 }}>
+        {PROVIDER_PROFILES.map((p) => (
+          <div key={p.provider} style={{ ...styles.muted, fontSize: 12, marginTop: 3 }}>
+            <b style={{ color: 'var(--text-dim)' }}>{p.label}:</b> {p.bestFor}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
