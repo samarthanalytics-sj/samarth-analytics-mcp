@@ -1337,6 +1337,31 @@ export interface MonitorAlert {
 // integrity, and (optionally) Slacks new issues per property.
 
 /** One monitored GA4 property. */
+/** Tag Watch (gtag.js config monitoring) config + timeline, mirrored from tag-watch-core/service.
+ *  Config is PUBLIC gtag data - no account scoping. */
+export interface TagWatchChangeView { field: string; before: string; after: string }
+export interface TagWatchEventView {
+  at: number;
+  kind: 'first_scan' | 'changed' | 'unparsed_now' | 'reparsed' | 'scan_error';
+  changes: TagWatchChangeView[];
+  summary: string;
+  error?: string;
+}
+export interface TagWatchTargetView {
+  measurementId: string;
+  label?: string;
+  lastSnapshot: Record<string, unknown> | null;
+  timeline: TagWatchEventView[];
+  lastScanAt: number | null;
+  lastParsed: boolean;
+}
+export interface TagWatchConfigView {
+  enabled: boolean;
+  intervalHours: number;
+  slackWebhook?: string;
+  targets: TagWatchTargetView[];
+}
+
 export interface Ga4MonitorTarget {
   /** Like "properties/123456". */
   propertyId: string;

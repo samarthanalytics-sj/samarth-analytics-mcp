@@ -20,6 +20,7 @@ import type {
   Ga4MonitorRun,
   Ga4PropertyAuditResult,
   Ga4PropertyListItem,
+  TagWatchConfigView,
   Ga4PlanView,
   Ga4PlanApplyResultView,
   GoogleClientStatus,
@@ -153,7 +154,7 @@ function initialsOf(name: string): string {
   return init || name.slice(0, 2).toUpperCase();
 }
 type GtmTab = 'suggestions' | 'audit' | 'verify' | 'server';
-type Ga4Tab = 'audit' | 'monitoring';
+type Ga4Tab = 'audit' | 'monitoring' | 'tagwatch';
 
 // GTM type labels + gtmTypeLabel now live in shared/tag-brand.ts (imported above) so the PDF export
 // and this panel can't drift.
@@ -3027,11 +3028,135 @@ function Ga4ToolsView({
         <button style={tab === 'monitoring' ? styles.subTabOn : styles.subTabOff} onClick={() => setTab('monitoring')} role="tab" aria-selected={tab === 'monitoring'}>
           🔔 GA4 Monitoring
         </button>
+        <button style={tab === 'tagwatch' ? styles.subTabOn : styles.subTabOff} onClick={() => setTab('tagwatch')} role="tab" aria-selected={tab === 'tagwatch'}>
+          🔭 Tag Watch<span style={styles.betaBadge}>BETA</span>
+        </button>
       </div>
       {tab === 'audit' ? (
         <Ga4AuditPanel key={(active?.id ?? 'none') + ':ga4aud'} active={active} onError={onError} />
-      ) : (
+      ) : tab === 'monitoring' ? (
         <Ga4MonitoringPanel key={(active?.id ?? 'none') + ':ga4mon'} active={active} onError={onError} />
+      ) : (
+        <TagWatchPanel onError={onError} />
+      )}
+    </div>
+  );
+}
+
+// Tag Watch: monitor the PUBLIC gtag.js config of any measurement id (yours or a competitor's) on a
+// schedule; a change posts to Slack and lands on the timeline. No GA4 login - the data is public.
+function TagWatchPanel({ onError }: { onError: (m: string) => void }): JSX.Element {
+  const [cfg, setCfg] = useState<TagWatchConfigView | null>(null);
+  const [id, setId] = useState('');
+  const [label, setLabel] = useState('');
+  const [slack, setSlack] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState<string | null>(null);
+  useEffect(() => {
+    void window.desktop.tagWatch.get().then((c) => { setCfg(c); setSlack(c.slackWebhook ?? ''); }).catch((e) => onError(e instanceof Error ? e.message : String(e)));
+    return window.desktop.tagWatch.onChange(setCfg);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const run = async (fn: () => Promise<TagWatchConfigView>): Promise<void> => {
+    setBusy(true);
+    onError('');
+    try { setCfg(await fn()); } catch (e) { onError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
+  };
+  const rel = (ts: number | null): string => (ts == null ? 'never' : relTimeAgo(ts));
+  const KIND: Record<string, { c: string; label: string }> = {
+    changed: { c: 'var(--c-amber)', label: 'CHANGED' },
+    first_scan: { c: 'var(--c-blue)', label: 'BASELINE' },
+    unparsed_now: { c: 'var(--c-red)', label: 'UNPARSED' },
+    reparsed: { c: 'var(--c-green)', label: 'RECOVERED' },
+    scan_error: { c: 'var(--c-red)', label: 'ERROR' },
+  };
+  return (
+    <div style={{ padding: '12px 20px', display: 'flex', flexDirection: 'column', gap: 14, minWidth: 0, overflowY: 'auto' }}>
+      <div style={{ fontSize: 12.5, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+        Watch the PUBLIC gtag.js config of any measurement id - yours or a competitor&apos;s (no GA4 login needed; it&apos;s what every visitor downloads). A scheduled scan diffs enhanced measurement, key events, user-data collection, redaction, Google Signals, linked destinations, the sGTM URL and cross-domain domains; a real change lands on the timeline and posts to Slack. Config-level only - runtime behaviour needs Tag verification.
+      </div>
+      {cfg && (
+        <>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+              <span style={styles.ctxFieldLabel}>Measurement / tag id</span>
+              <input style={{ ...styles.ctxSelect, minWidth: 160 }} placeholder="G-XXXXXXX" value={id} onChange={(e) => setId(e.target.value)} />
+            </label>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+              <span style={styles.ctxFieldLabel}>Label (optional)</span>
+              <input style={{ ...styles.ctxSelect, minWidth: 160 }} placeholder="e.g. Competitor A" value={label} onChange={(e) => setLabel(e.target.value)} />
+            </label>
+            <button style={styles.primaryBtn} disabled={busy || !id.trim()} onClick={() => void run(async () => { const c = await window.desktop.tagWatch.add(id.trim(), label.trim() || undefined); setId(''); setLabel(''); return c; })}>
+              {busy ? 'Adding…' : 'Watch this tag'}
+            </button>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+              <SettingSwitch on={cfg.enabled} onChange={(v) => void run(() => window.desktop.tagWatch.setEnabled(v))} label="Enable scheduled scans" />
+              <span style={{ fontSize: 13 }}>Scheduled scans {cfg.enabled ? 'on' : 'off'}</span>
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--text-dim)' }}>
+              every
+              <select style={styles.ctxSelect} value={cfg.intervalHours} onChange={(e) => void run(() => window.desktop.tagWatch.setInterval(Number(e.target.value)))}>
+                <option value={1}>1 hour</option>
+                <option value={6}>6 hours</option>
+                <option value={12}>12 hours</option>
+                <option value={24}>24 hours</option>
+              </select>
+            </label>
+            <button style={styles.ghostBtn} disabled={busy || cfg.targets.length === 0} onClick={() => void run(() => window.desktop.tagWatch.scanAll())}>↻ Scan all now</button>
+          </div>
+
+          <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 3, flex: 1, minWidth: 240 }}>
+              <span style={styles.ctxFieldLabel}>Slack webhook for change alerts (optional)</span>
+              <input style={styles.promptSearch} type="password" placeholder={cfg.slackWebhook ? 'saved (enter to replace)' : 'https://hooks.slack.com/services/…'} value={slack} onChange={(e) => setSlack(e.target.value)} />
+            </label>
+            <button style={styles.ghostBtn} disabled={busy} onClick={() => void run(() => window.desktop.tagWatch.setSlack(slack.trim()))}>Save webhook</button>
+          </div>
+
+          {cfg.targets.length === 0 ? (
+            <div style={{ fontSize: 12.5, color: 'var(--text-faint)' }}>No tags watched yet. Add a measurement id above to capture its baseline.</div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {cfg.targets.map((t) => {
+                const last = t.timeline[0];
+                return (
+                  <div key={t.measurementId} style={{ border: '1px solid var(--border)', borderRadius: 10, padding: '10px 12px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <b style={{ fontSize: 13.5 }}>{t.label ? `${t.label} · ` : ''}<span style={{ fontFamily: 'var(--font-mono)' }}>{t.measurementId}</span></b>
+                      {last && <span style={{ fontSize: 10.5, fontWeight: 700, color: KIND[last.kind]?.c ?? 'var(--text-muted)' }}>{KIND[last.kind]?.label ?? last.kind}</span>}
+                      <span style={{ flex: 1 }} />
+                      <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>scanned {rel(t.lastScanAt)}</span>
+                      <button style={styles.acctRowBtn} disabled={busy} onClick={() => void run(() => window.desktop.tagWatch.scanNow(t.measurementId))}>Scan now</button>
+                      <button style={{ ...styles.acctRowBtn, color: 'var(--c-blue)' }} onClick={() => setOpen(open === t.measurementId ? null : t.measurementId)}>{open === t.measurementId ? 'Hide' : `Timeline (${t.timeline.length})`}</button>
+                      <button style={styles.acctRowBtnDanger} disabled={busy} onClick={() => void run(() => window.desktop.tagWatch.remove(t.measurementId))}>Remove</button>
+                    </div>
+                    {last && <div style={{ fontSize: 12.5, color: 'var(--text-dim)', marginTop: 5 }}>{last.summary}</div>}
+                    {open === t.measurementId && (
+                      <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6, borderTop: '1px dashed var(--border)', paddingTop: 8 }}>
+                        {t.timeline.length === 0 && <span style={{ fontSize: 12, color: 'var(--text-faint)' }}>No events yet.</span>}
+                        {t.timeline.map((e, i) => (
+                          <div key={i} style={{ fontSize: 12 }}>
+                            <span style={{ fontWeight: 700, color: KIND[e.kind]?.c ?? 'var(--text-muted)' }}>{KIND[e.kind]?.label ?? e.kind}</span>
+                            <span style={{ color: 'var(--text-faint)' }}> · {rel(e.at)}</span>
+                            <div style={{ color: 'var(--text-dim)', marginTop: 1 }}>{e.summary}</div>
+                            {e.changes.map((c, j) => (
+                              <div key={j} style={{ color: 'var(--text-muted)', marginLeft: 10 }}>
+                                <b>{c.field}</b>: {c.before} → {c.after}
+                              </div>
+                            ))}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </>
       )}
     </div>
   );

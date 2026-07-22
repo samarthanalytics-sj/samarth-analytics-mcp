@@ -35,6 +35,7 @@ import type {
   MonitorStatus,
   NetworkLocationView,
   NetworkTestResultView,
+  TagWatchConfigView,
   Ga4PlanView,
   Ga4PlanApplyResultView,
   Ga4MonitorConfig,
@@ -554,6 +555,21 @@ const api = {
   // Network & Location: the public egress location (IP, country/region/city, VPN/proxy verdict + provider)
   // the app's website audits, form submissions and click events run from. getLocation is cached (60s);
   // refreshLocation forces a fresh check (the Refresh button, or after switching VPN server).
+  tagWatch: {
+    get: (): Promise<TagWatchConfigView> => ipcRenderer.invoke('tagwatch:get'),
+    add: (measurementId: string, label?: string): Promise<TagWatchConfigView> => ipcRenderer.invoke('tagwatch:add', measurementId, label),
+    remove: (measurementId: string): Promise<TagWatchConfigView> => ipcRenderer.invoke('tagwatch:remove', measurementId),
+    setEnabled: (enabled: boolean): Promise<TagWatchConfigView> => ipcRenderer.invoke('tagwatch:setEnabled', enabled),
+    setInterval: (hours: number): Promise<TagWatchConfigView> => ipcRenderer.invoke('tagwatch:setInterval', hours),
+    setSlack: (webhook: string): Promise<TagWatchConfigView> => ipcRenderer.invoke('tagwatch:setSlack', webhook),
+    scanNow: (measurementId: string): Promise<TagWatchConfigView> => ipcRenderer.invoke('tagwatch:scanNow', measurementId),
+    scanAll: (): Promise<TagWatchConfigView> => ipcRenderer.invoke('tagwatch:scanAll'),
+    onChange: (cb: (config: TagWatchConfigView) => void): (() => void) => {
+      const listener = (_e: unknown, config: TagWatchConfigView): void => cb(config);
+      ipcRenderer.on('tagwatch:changed', listener);
+      return () => ipcRenderer.removeListener('tagwatch:changed', listener);
+    },
+  },
   network: {
     getLocation: (): Promise<NetworkLocationView> => ipcRenderer.invoke('network:getLocation'),
     refreshLocation: (): Promise<NetworkLocationView> => ipcRenderer.invoke('network:refreshLocation'),
