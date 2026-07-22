@@ -61,5 +61,53 @@ test('Gemini: text parts stream, functionCall parts collected', () => {
   assert.deepEqual(r.toolCalls?.[0].args, { property: 'properties/1' });
 });
 
+// -- Prompt-cache usage riding the SAME streams --------------------------------
+// The counts have to survive the real chunk order (usage arrives on a different event to the text),
+// otherwise the feature is unverifiable and we would be assuming caching works.
+
+test('OpenAI: the trailing usage chunk is read, and its empty choices do not disturb the text', () => {
+  const deltas: string[] = [];
+  const acc = openaiStreamAccumulator((d) => deltas.push(d));
+  acc.push({ choices: [{ delta: { content: 'hi' } }] });
+  acc.push({ choices: [], usage: { prompt_tokens: 20_438, prompt_tokens_details: { cached_tokens: 19_968 } } });
+  const r = acc.result();
+  assert.equal(r.text, 'hi', 'text unaffected by the usage chunk');
+  assert.equal(r.usage?.read, 19_968);
+  assert.equal(r.usage?.input, 470);
+});
+
+test('Anthropic: cache counts come off message_start, before any text arrives', () => {
+  const acc = anthropicStreamAccumulator(() => {});
+  acc.push({ type: 'message_start', message: { usage: { input_tokens: 21, cache_read_input_tokens: 20_417 } } });
+  acc.push({ type: 'content_block_start', index: 0, content_block: { type: 'text' } });
+  acc.push({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'ok' } });
+  const r = acc.result();
+  assert.equal(r.text, 'ok');
+  assert.equal(r.usage?.read, 20_417, 'the cache hit is what step 2+ of a turn should show');
+  assert.equal(r.usage?.written, 0);
+});
+
+test('Anthropic: step 1 of a turn reports the WRITE, not a read', () => {
+  const acc = anthropicStreamAccumulator(() => {});
+  acc.push({ type: 'message_start', message: { usage: { input_tokens: 21, cache_creation_input_tokens: 20_417 } } });
+  assert.equal(acc.result().usage?.written, 20_417);
+  assert.equal(acc.result().usage?.read, 0);
+});
+
+test('Gemini: usageMetadata on a chunk is picked up', () => {
+  const acc = geminiStreamAccumulator(() => {});
+  acc.push({ candidates: [{ content: { parts: [{ text: 'hi' }] } }] });
+  acc.push({ usageMetadata: { promptTokenCount: 12_000, cachedContentTokenCount: 8_000 } });
+  const r = acc.result();
+  assert.equal(r.text, 'hi');
+  assert.equal(r.usage?.read, 8_000);
+});
+
+test('a provider that reports NO usage leaves the field undefined (never a fake zero)', () => {
+  const acc = openaiStreamAccumulator(() => {});
+  acc.push({ choices: [{ delta: { content: 'hi' } }] });
+  assert.equal(acc.result().usage, undefined);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

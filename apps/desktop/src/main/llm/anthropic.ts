@@ -1,4 +1,5 @@
 import { sseEvents, startStream, withRequestTimeout } from './sse';
+import { anthropicCacheUsage, anthropicSystem, shouldCachePrefix } from '../../shared/prompt-cache';
 import type { LlmChatInput, LlmClient, LlmReply, LlmToolCall, LlmTurn, StreamAccumulator } from './types';
 
 // Anthropic Messages API. Pure mappers are exported for unit tests.
@@ -68,9 +69,12 @@ export function parseAnthropicReply(data: unknown): LlmReply {
 // content_block_start (id/name) then input_json_delta fragments (partial JSON).
 export function anthropicStreamAccumulator(onDelta: (t: string) => void): StreamAccumulator {
   let text = '';
+  let usage: LlmReply['usage'];
   const blocks = new Map<number, { type?: string; id?: string; name?: string; json: string }>();
   return {
     push(chunk: unknown): void {
+      // message_start carries the input accounting, including how much of the prefix was a cache hit.
+      usage = anthropicCacheUsage(chunk) ?? usage;
       const ev = chunk as {
         type?: string;
         index?: number;
@@ -102,8 +106,28 @@ export function anthropicStreamAccumulator(onDelta: (t: string) => void): Stream
           }
           return { id: b.id ?? '', name: b.name ?? '', args };
         });
-      return { text: text || undefined, toolCalls: toolCalls.length ? toolCalls : undefined };
+      return { text: text || undefined, toolCalls: toolCalls.length ? toolCalls : undefined, usage };
     },
+  };
+}
+
+/** Build the /v1/messages request body. Exported for testing, mirroring openaiChatBody. */
+export function anthropicChatBody(input: LlmChatInput): Record<string, unknown> {
+  return {
+    model: input.model,
+    max_tokens: 4096,
+    // One cache breakpoint at the end of the system prompt. Anthropic's cache prefix runs
+    // tools -> system -> messages, so this single marker covers the tool schemas as well, which
+    // is the whole stable part of the request. See shouldCachePrefix for why a request with no
+    // tools is deliberately left unmarked.
+    system: anthropicSystem(input.system, shouldCachePrefix(input.system, input.tools)),
+    messages: toAnthropicMessages(input.messages),
+    tools: input.tools.map((t) => ({
+      name: t.name,
+      description: t.description,
+      input_schema: t.inputSchema,
+    })),
+    stream: true,
   };
 }
 
@@ -114,18 +138,7 @@ export const anthropicClient: LlmClient = {
       const res = await startStream(
         'https://api.anthropic.com/v1/messages',
         { 'x-api-key': input.apiKey, 'anthropic-version': '2023-06-01' },
-        {
-          model: input.model,
-          max_tokens: 4096,
-          system: input.system,
-          messages: toAnthropicMessages(input.messages),
-          tools: input.tools.map((t) => ({
-            name: t.name,
-            description: t.description,
-            input_schema: t.inputSchema,
-          })),
-          stream: true,
-        },
+        anthropicChatBody(input),
         'Anthropic',
         signal,
         { onRetry: input.onRetry, deadlineAt }

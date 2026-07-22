@@ -3,6 +3,7 @@ import { openaiClient } from './openai';
 import { geminiClient } from './gemini';
 import { capToolResult } from '../../shared/context-budget';
 import { attachReference, referenceForResult, referenceForError } from '../../shared/jit-reference';
+import { addCacheUsage, formatCacheUsage, type CacheUsage } from '../../shared/prompt-cache';
 import type {
   LlmClient,
   LlmProvider,
@@ -38,6 +39,10 @@ export interface RunChatInput {
 export interface RunChatResult {
   text: string;
   steps: number;
+  /** Input-token accounting summed over every step of the loop, when the provider reported it.
+   *  This is the number that shows whether prompt caching is earning its keep: the prefix is
+   *  re-sent on every step, so `read` should climb from step 2 onward. */
+  usage?: CacheUsage;
 }
 
 export interface RunChatCallbacks {
@@ -67,12 +72,13 @@ export async function runChat(
   maxSteps = 6
 ): Promise<RunChatResult> {
   const messages: LlmTurn[] = [...input.messages];
+  let usage: CacheUsage | undefined;
   let lastToolError: { name: string; message: string } | null = null;
 
   for (let step = 1; step <= maxSteps; step++) {
     if (input.signal?.aborted) {
       console.error('[chat] stopped by user');
-      return { text: 'Stopped.', steps: step - 1 };
+      return { text: 'Stopped.', steps: step - 1, usage };
     }
     // Re-listed ONCE per step, not once per turn: a gated executor (see tool-groups.ts) sends a
     // minimal tool set by default and grows it when the model asks for a group, so the definitions
@@ -96,9 +102,14 @@ export async function runChat(
     } catch (e) {
       if (input.signal?.aborted || (e as { name?: string })?.name === 'AbortError') {
         console.error('[chat] stopped by user (mid-stream)');
-        return { text: 'Stopped.', steps: step };
+        return { text: 'Stopped.', steps: step, usage };
       }
       throw e;
+    }
+
+    if (reply.usage) {
+      usage = addCacheUsage(usage, reply.usage);
+      console.error(`[chat] step ${step} ${formatCacheUsage(reply.usage)}`);
     }
 
     if (reply.toolCalls && reply.toolCalls.length > 0) {
@@ -163,7 +174,8 @@ export async function runChat(
     }
 
     console.error(`[chat] step ${step}: model returned a final answer (no tool calls)`);
-    return { text: reply.text ?? '', steps: step };
+    if (usage) console.error(`[chat] turn total ${formatCacheUsage(usage)} over ${step} step(s)`);
+    return { text: reply.text ?? '', steps: step, usage };
   }
 
   // Ran out of steps without the model giving a final answer — surface WHY (the real tool

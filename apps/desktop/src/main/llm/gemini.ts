@@ -1,4 +1,5 @@
 import { sseEvents, startStream, withRequestTimeout } from './sse';
+import { geminiCacheUsage } from '../../shared/prompt-cache';
 import type { LlmChatInput, LlmClient, LlmReply, LlmToolCall, LlmTurn, StreamAccumulator } from './types';
 
 // Google Gemini (generativelanguage v1beta generateContent). Pure mappers
@@ -88,9 +89,12 @@ export function geminiFunctionDecl(tool: { name: string; description: string; in
 // text parts stream incrementally, functionCall parts arrive whole.
 export function geminiStreamAccumulator(onDelta: (t: string) => void): StreamAccumulator {
   let text = '';
+  let usage: LlmReply['usage'];
   const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
   return {
     push(chunk: unknown): void {
+      // Gemini 2.5 caches implicitly; usageMetadata is how we see whether it hit.
+      usage = geminiCacheUsage(chunk) ?? usage;
       const parts = ((chunk as { candidates?: Array<{ content?: GeminiContent }> }).candidates?.[0]
         ?.content?.parts ?? []) as GeminiPart[];
       for (const p of parts) {
@@ -104,7 +108,7 @@ export function geminiStreamAccumulator(onDelta: (t: string) => void): StreamAcc
     },
     result(): LlmReply {
       const toolCalls: LlmToolCall[] = calls.map((c, i) => ({ id: `gem_${i}`, name: c.name, args: c.args }));
-      return { text: text || undefined, toolCalls: toolCalls.length ? toolCalls : undefined };
+      return { text: text || undefined, toolCalls: toolCalls.length ? toolCalls : undefined, usage };
     },
   };
 }
