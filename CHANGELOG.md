@@ -1,3 +1,9 @@
+## [1.383.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.382.0...v1.383.0) (2026-07-22)
+
+### Features
+
+* **ga4:** Tag Watch phase 2 - scheduled gtag config monitoring with Slack alerts + timeline ([#657](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/657)) ([34dd27b](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/34dd27b738d2023a05731d16004034f87cbcf215)), closes [#656](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/656)
+
 ## [1.382.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.381.0...v1.382.0) (2026-07-22)
 
 ### Features
