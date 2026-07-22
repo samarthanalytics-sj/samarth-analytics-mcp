@@ -290,7 +290,11 @@ await testAsync('an out-of-credit 429 is not retried and does not claim to be a 
 });
 
 await testAsync('a per-MINUTE limit still retries exactly as before', async () => {
-  const tpm = 'Request too large for gpt-4o in organization org-abc on tokens per min (TPM): Limit 30000, Requested 30062.';
+  // An ORDINARY per-minute squeeze: the request (19,121) fits the ceiling (30,000), the window just has
+  // not refilled. This is the self-healing case that must keep retrying quietly. The fixture here used to
+  // be OpenAI's "Request too large" variant (Requested 30062 > Limit 30000), which is the OPPOSITE case:
+  // waiting can never shrink the request, so it is no longer retried. See the test below.
+  const tpm = 'Rate limit reached for gpt-4o in organization org-abc on tokens per min (TPM): Limit 30000, Used 19183, Requested 19121. Please try again in 17s.';
   const { fetchImpl, calls } = scriptedFetch([res429('2', tpm), resOk()]);
   const { sleepImpl, waits } = recordingSleep();
   const notices: RetryNotice[] = [];
@@ -299,6 +303,20 @@ await testAsync('a per-MINUTE limit still retries exactly as before', async () =
   assert.equal(calls(), 2, 'the transient case is unchanged');
   assert.equal(notices.length, 1);
   assert.deepEqual(waits, [2250]);
+});
+
+await testAsync('a request LARGER than the whole per-minute limit is not retried', async () => {
+  // "Request too large": an empty bucket is still too small, so the four backoff attempts would burn
+  // roughly 14s to fail identically. Fail fast and say what actually has to change instead.
+  const tooBig = 'Request too large for gpt-4o in organization org-abc on tokens per min (TPM): Limit 30000, Requested 30062. The input or output tokens must be reduced in order to run successfully.';
+  const { fetchImpl, calls } = scriptedFetch([res429('2', tooBig), resOk()]);
+  const { sleepImpl, waits } = recordingSleep();
+  await assert.rejects(
+    startStream('u', {}, {}, 'OpenAI', undefined, { fetchImpl, sleepImpl }),
+    (e: Error) => /larger than the whole/i.test(e.message) && /waiting cannot fix this/i.test(e.message),
+  );
+  assert.equal(calls(), 1, 'no retry: waiting cannot shrink the request');
+  assert.deepEqual(waits, [], 'and no time is spent sleeping');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

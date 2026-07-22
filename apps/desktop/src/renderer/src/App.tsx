@@ -948,14 +948,31 @@ interface ChatMessage {
 
 /** The one-line notice for a provider retry, e.g. "Rate limited by OpenAI, retrying in 42s
  *  (attempt 2 of 4)". PURE. */
-function formatRetryNotice(r: { provider: string; status: number; attempt: number; maxAttempts: number; delayMs: number; reason?: string }): string {
+type RetryNotice = { provider: string; status: number; attempt: number; maxAttempts: number; delayMs: number; reason?: string };
+
+/** Is this retry worth interrupting the reader for?
+ *
+ *  An ordinary per-minute squeeze is NOT: the window refills on its own within a minute, and a banner
+ *  quoting limit/used/requested mid-answer is noise about something the user cannot act on and that
+ *  fixes itself. What IS worth showing is anything they must DO something about: a request bigger than
+ *  the whole ceiling (waiting can never fit it), a daily cap, or exhausted credit. Non-429 failures
+ *  (a 500, an overloaded provider) stay visible because they are not self-explanatory. */
+function retryWorthShowing(r: RetryNotice): boolean {
+  if (r.status !== 429) return true;
+  return parseRateLimit(r.reason, r.provider).actionable;
+}
+
+function formatRetryNotice(r: RetryNotice): string {
   const secs = Math.max(1, Math.round(r.delayMs / 1000));
   // Name the limit that was actually hit. "Rate limited, retrying" left the user unable to tell a
   // per-minute cap (waiting works) from a model they thought they had switched away from.
-  const cause = r.status === 429
-    ? parseRateLimit(r.reason, r.provider).summary.replace(/\.$/, '')
-    : `${r.provider} is busy (${r.status})`;
-  return `${cause} - retrying in ${secs}s (attempt ${r.attempt} of ${r.maxAttempts})`;
+  if (r.status === 429) {
+    const info = parseRateLimit(r.reason, r.provider);
+    // An oversized request is not being waited out, it is being given up on, so do not promise a retry.
+    if (!info.retryable) return `${info.summary.replace(/\.$/, '')}. ${info.advice}`;
+    return `${info.summary.replace(/\.$/, '')} - retrying in ${secs}s (attempt ${r.attempt} of ${r.maxAttempts})`;
+  }
+  return `${r.provider} is busy (${r.status}) - retrying in ${secs}s (attempt ${r.attempt} of ${r.maxAttempts})`;
 }
 
 /** Short timestamp shown under a chat bubble: just the time for today's messages, date + time
@@ -1381,12 +1398,19 @@ function ChatView({
                     {m.text ? <Markdown text={m.text} /> : m.toolErrors?.length || m.retries?.length ? null : <span style={{ opacity: 0.6 }}>…</span>}
                     {/* A rate-limit wait is announced live, so a 60s provider backoff reads as a
                         wait with a countdown rather than a frozen "Thinking…". */}
-                    {m.retries?.length ? (
-                      <div style={styles.retryLine}>
-                        ⏳ {formatRetryNotice(m.retries[m.retries.length - 1])}
-                        {m.retries.length > 1 ? ` · ${m.retries.length} retries so far this reply` : ''}
-                      </div>
-                    ) : null}
+                    {(() => {
+                      // Only the retries the user can act on. A reply that quietly waited out a
+                      // per-minute window shows nothing: it resolved itself, and saying so mid-answer
+                      // was noise. The Stop button and the wall-clock timeout still bound the wait.
+                      const shown = (m.retries ?? []).filter(retryWorthShowing);
+                      const last = shown[shown.length - 1];
+                      return last ? (
+                        <div style={styles.retryLine}>
+                          ⏳ {formatRetryNotice(last)}
+                          {shown.length > 1 ? ` · ${shown.length} this reply` : ''}
+                        </div>
+                      ) : null;
+                    })()}
                     {m.toolErrors?.length ? (
                       <div style={styles.toolErrors}>
                         {m.toolErrors.map((te, j) => (
