@@ -60,11 +60,48 @@ export function shouldCachePrefix(system: string, tools: Array<{ name: string; d
   return cacheablePrefixChars(system, tools) >= MIN_CACHEABLE_CHARS;
 }
 
-/** The `system` field for an Anthropic request. Returns the PLAIN STRING when caching does not
- *  apply, so an ineligible request is byte-identical to what we sent before this feature existed. */
-export function anthropicSystem(system: string, cache: boolean): string | AnthropicTextBlock[] {
+/** A second breakpoint only earns its keep if the volatile tail is big enough to be worth caching
+ *  within a turn. Below this the tail just rides as fresh input on each step, which costs less than
+ *  the bookkeeping of another cache entry. */
+export const SECOND_BREAKPOINT_MIN_CHARS = 1000;
+
+/**
+ * The `system` field for an Anthropic request.
+ *
+ * Providers match the LONGEST COMMON PREFIX, so where the breakpoint sits decides what survives
+ * between turns. With one marker at the very end, ANY change (a different memory selected for this
+ * message, a new day, tool-result carry-over) misses the whole prompt. So when the caller tells us
+ * where the fixed instructions end, the first breakpoint goes THERE:
+ *
+ *   [ fixed instructions ]* [ per-message context ]*
+ *                         ^                       ^
+ *                         |                       one entry per turn, re-read across the tool loop
+ *                         survives across turns, and across accounts on the same product
+ *
+ * Returns the PLAIN STRING when caching does not apply, so an ineligible request is byte-identical
+ * to what we sent before any of this existed.
+ */
+export function anthropicSystem(system: string, cache: boolean, staticPart?: string): string | AnthropicTextBlock[] {
   if (!cache) return system;
-  return [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }];
+  const mark = { type: 'ephemeral' } as const;
+  // A staticPart that is not really a prefix is a caller bug. Never send a breakpoint that claims a
+  // boundary the text does not have; fall back to caching the prompt as one unit.
+  if (!staticPart || !system.startsWith(staticPart) || staticPart.length === system.length) {
+    return [{ type: 'text', text: system, cache_control: mark }];
+  }
+  const situational = system.slice(staticPart.length);
+  if (situational.length < SECOND_BREAKPOINT_MIN_CHARS) {
+    // Mark the stable half only. The short tail is fresh input on every step, which is cheaper than
+    // a second entry, and the big half still survives from turn to turn.
+    return [
+      { type: 'text', text: staticPart, cache_control: mark },
+      { type: 'text', text: situational },
+    ];
+  }
+  return [
+    { type: 'text', text: staticPart, cache_control: mark },
+    { type: 'text', text: situational, cache_control: mark },
+  ];
 }
 
 /** What a provider reported about cache use on one request. All counts are input tokens. */

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { dateContextLine, GTM_AUDIT_METHODOLOGY, GA4_TAG_NAMING, GA4_ECOMMERCE_REFERENCE, GTM_CREATION_METHODOLOGY, GTM_TRIGGER_VARIABLE_REFERENCE, GTM_DECISION_RULES, GA4_DATA_FRESHNESS, CORPUS_PROMPT } from '../chat-service';
+import { dateContextLine, buildSituationalContext, GTM_AUDIT_METHODOLOGY, GA4_TAG_NAMING, GA4_ECOMMERCE_REFERENCE, GTM_CREATION_METHODOLOGY, GTM_TRIGGER_VARIABLE_REFERENCE, GTM_DECISION_RULES, GA4_DATA_FRESHNESS, CORPUS_PROMPT } from '../chat-service';
 import { AUDIT_REPORTING_METHODOLOGY } from '../../../shared/jit-reference';
 
 let passed = 0;
@@ -145,4 +145,60 @@ test('CORPUS_PROMPT points at the tool and fences off every way its counts could
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
+// ── The per-message context block (prompt-cache boundary) ──
+// Everything volatile lives at the END of the system prompt so the fixed half stays byte-identical
+// across turns and can be served from the provider's cache. These pin what belongs in it.
+console.log('\nChat system prompt - per-message context block:');
+
+const ctxArgs = {
+  email: 'user@example.com',
+  product: 'gtm' as const,
+  gtmContext: { accountId: '111', accountName: 'Acme', containerId: 'GTM-ABC', containerName: 'Web', workspaceId: '7', workspaceName: 'Default' },
+  now: new Date('2026-07-22T10:00:00Z'),
+  memoryBlock: 'REMEMBERED CONTEXT\n- [fact] we use order_completed\n',
+  toolMemoryBlock: 'RECENT TOOL RESULTS: 3 tags\n',
+};
+
+test('carries the identity, the container ids, the date, the memories and the tool carry-over', () => {
+  const c = buildSituationalContext(ctxArgs);
+  assert.ok(c.includes('user@example.com'), 'the account email');
+  assert.ok(c.includes('GTM-ABC') && c.includes('workspace 7'), 'the ids the model must use');
+  assert.ok(c.includes('CURRENT DATE'), 'the real date');
+  assert.ok(c.includes('order_completed'), 'the selected memories');
+  assert.ok(c.includes('RECENT TOOL RESULTS'), 'the tool-result carry-over');
+});
+
+test('a GA4 turn gets the property, never the GTM container', () => {
+  const c = buildSituationalContext({ ...ctxArgs, product: 'ga4', ga4Context: { property: 'properties/123', propertyName: 'Site' } });
+  assert.ok(c.includes('properties/123'));
+  assert.equal(c.includes('GTM-ABC'), false, 'the GTM container is not mentioned on a GA4 turn');
+});
+
+test('the SAME account and container produce a byte-identical block, so only real changes miss', () => {
+  assert.equal(buildSituationalContext(ctxArgs), buildSituationalContext({ ...ctxArgs }));
+});
+
+test('switching account or container CHANGES it (the cache must miss when the facts change)', () => {
+  const base = buildSituationalContext(ctxArgs);
+  assert.notEqual(base, buildSituationalContext({ ...ctxArgs, email: 'other@example.com' }));
+  assert.notEqual(base, buildSituationalContext({ ...ctxArgs, gtmContext: { ...ctxArgs.gtmContext, containerId: 'GTM-XYZ' } }));
+});
+
+test('missing context degrades to identity only, never to a broken sentence', () => {
+  const c = buildSituationalContext({ ...ctxArgs, gtmContext: undefined, memoryBlock: '', toolMemoryBlock: '' });
+  assert.ok(c.includes('user@example.com'));
+  assert.equal(c.includes('The user is working in'), false);
+  assert.ok(c.includes('CURRENT DATE'), 'the date survives with no container');
+});
+
+test('the block ENDS with the most volatile content, so the stable part stays a shared prefix', () => {
+  // Two turns differing only in the memories must share everything up to the memory block. If a
+  // volatile field ever drifts earlier, this shortens and the cross-turn cache hit shrinks with it.
+  const a = buildSituationalContext(ctxArgs);
+  const b = buildSituationalContext({ ...ctxArgs, memoryBlock: 'REMEMBERED CONTEXT\n- [fact] something else entirely\n' });
+  let shared = 0;
+  while (shared < a.length && shared < b.length && a[shared] === b[shared]) shared += 1;
+  assert.ok(shared > a.indexOf('CURRENT DATE'), 'identity, ids and the date all precede the first difference');
+});
+
 if (failed > 0) process.exit(1);

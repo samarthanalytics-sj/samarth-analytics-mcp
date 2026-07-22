@@ -116,11 +116,12 @@ export function anthropicChatBody(input: LlmChatInput): Record<string, unknown> 
   return {
     model: input.model,
     max_tokens: 4096,
-    // One cache breakpoint at the end of the system prompt. Anthropic's cache prefix runs
-    // tools -> system -> messages, so this single marker covers the tool schemas as well, which
-    // is the whole stable part of the request. See shouldCachePrefix for why a request with no
-    // tools is deliberately left unmarked.
-    system: anthropicSystem(input.system, shouldCachePrefix(input.system, input.tools)),
+    // Cache breakpoints. Anthropic's cache prefix runs tools -> system -> messages, so a marker in
+    // the system prompt covers the tool schemas too. The FIRST one sits at the end of the fixed
+    // instructions (systemStatic), which is what lets the hit survive from one turn to the next;
+    // a second covers the per-message context for the steps within a turn. See shouldCachePrefix
+    // for why a request with no tools is deliberately left unmarked.
+    system: anthropicSystem(input.system, shouldCachePrefix(input.system, input.tools), input.systemStatic),
     messages: toAnthropicMessages(input.messages),
     tools: input.tools.map((t) => ({
       name: t.name,

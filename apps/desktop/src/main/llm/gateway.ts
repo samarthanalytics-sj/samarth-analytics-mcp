@@ -29,6 +29,8 @@ export function createProvider(provider: LlmProvider): LlmClient {
 
 export interface RunChatInput {
   system: string;
+  /** The fixed leading part of `system`, passed through to the provider so it can cache it. */
+  systemStatic?: string;
   model: string;
   apiKey: string;
   messages: LlmTurn[];
@@ -90,6 +92,7 @@ export async function runChat(
       reply = await client.chatStream(
         {
           system: input.system,
+          systemStatic: input.systemStatic,
           model: input.model,
           apiKey: input.apiKey,
           tools,
