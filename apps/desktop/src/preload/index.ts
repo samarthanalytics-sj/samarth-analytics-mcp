@@ -214,6 +214,11 @@ const api = {
     // (possibly edited) args to apply, or null to decline.
     confirm: (confirmId: string, result: Record<string, unknown> | null): Promise<void> =>
       ipcRenderer.invoke('llm:confirm:respond', confirmId, result),
+
+    // Save an assistant reply via the "Export report" bar (save dialog in the main process).
+    // Resolves with the path written, or null if the user cancelled the dialog.
+    exportReply: (format: 'pdf' | 'csv' | 'xlsx' | 'md', defaultName: string, markdown: string): Promise<string | null> =>
+      ipcRenderer.invoke('llm:exportReply', format, defaultName, markdown),
   },
 
   // Chat memory ("remember what I told you"): CRUD over the ACTIVE account's saved notes, which the chat
