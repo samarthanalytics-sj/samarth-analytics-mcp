@@ -1,3 +1,9 @@
+## [1.382.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.381.0...v1.382.0) (2026-07-22)
+
+### Features
+
+* **ga4:** tag watch phase 1 - spy_gtag_config parses ANY property's public gtag.js config ([#656](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/656)) ([b669213](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/b669213a72dd47cd41ae35d6ca424d22d6548119))
+
 ## [1.381.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.380.0...v1.381.0) (2026-07-22)
 
 ### Features
