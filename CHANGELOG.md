@@ -1,3 +1,9 @@
+## [1.369.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.368.0...v1.369.0) (2026-07-22)
+
+### Features
+
+* **desktop:** propagate deletions in a memory export, without shipping the deleted text ([#636](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/636)) ([4e41e2a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/4e41e2ab5e7eb22fa11b68cb857c2ce281891e13))
+
 ## [1.368.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.367.0...v1.368.0) (2026-07-22)
 
 ### Features
