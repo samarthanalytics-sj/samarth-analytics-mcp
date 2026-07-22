@@ -181,6 +181,8 @@ const api = {
 
     // OS file picker + main-process text extraction for a chat attachment (null = cancelled).
     pickAttachment: (): Promise<ChatAttachmentView | null> => ipcRenderer.invoke('llm:pickAttachment'),
+    attachBytes: (name: string, base64: string): Promise<ChatAttachmentView> =>
+      ipcRenderer.invoke('llm:attachBytes', name, base64),
 
     // Streaming chat. `onEvent` fires for text chunks + tool calls as they arrive;
     // the returned promise resolves with the final reply (or rejects on error).
