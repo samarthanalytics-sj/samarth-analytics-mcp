@@ -1,3 +1,9 @@
+## [1.364.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.363.3...v1.364.0) (2026-07-22)
+
+### Features
+
+* **desktop:** create Google Ads conversion actions for the ticked tags in one go ([#631](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/631)) ([7348ad1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/7348ad15b219325dc14e398cf5e7f73d84273eeb))
+
 ## [1.363.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.363.2...v1.363.3) (2026-07-22)
 
 ### Bug Fixes
