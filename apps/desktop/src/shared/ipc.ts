@@ -1036,6 +1036,9 @@ export interface AuditFindingView {
   /** True when `fix` is a ready-to-run tool call (pause/unpause/delete). */
   autoFixable: boolean;
   fix?: { tool: string; args: Record<string, unknown> };
+  /** A saved note of the user's that relates to this finding. STRICTLY additive context: it never
+   *  changes the severity, confidence or recommendation above (see shared/audit-annotations). */
+  userNote?: { text: string; memoryId?: string; basis: 'named' | 'topic'; acknowledged: boolean };
 }
 /** Server-container remediation PLAN (mirrors server-plan.ts). */
 export interface ServerPlanView {

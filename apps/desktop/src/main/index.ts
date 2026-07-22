@@ -252,7 +252,7 @@ app.whenReady().then(() => {
   registerMemoryIpc(memory, registry, chatService, dataService);
   registerMonitorIpc(monitor);
   registerSuggestionsIpc(dataService, memory, registry);
-  registerGtmAuditIpc(dataService);
+  registerGtmAuditIpc(dataService, memory, registry);
   registerGa4AuditIpc(dataService);
   registerGa4MonitoringIpc(ga4Monitoring);
   registerNetworkIpc({ configPath: join(dataDir, 'network-config.json') });

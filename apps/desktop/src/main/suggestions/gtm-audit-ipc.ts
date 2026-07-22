@@ -29,7 +29,11 @@ import { buildVariable, findGa4BaseTag, ga4VariablePlan } from '../google/gtm-bu
 import { withQuotaRetry } from '../google/quota-retry';
 import { reportHtmlDocument, dedupedReportPath } from '../google/ga4-report-export';
 import { gtmAuditHtml, type GtmAuditHtmlMeta } from '../../shared/gtm-audit-html';
-import type { AuditReportView, WorkspaceCompareResultView, VerifyExportPayload } from '../../shared/ipc';
+import type { AuditReportView, WorkspaceCompareResultView, VerifyExportPayload, AuditFindingView } from '../../shared/ipc';
+import type { MemoryStore } from '../storage/memory-store';
+import type { RegistryService } from '../services/registry-service';
+import { memoryApplies } from '../../shared/chat-memory';
+import { annotateFindings } from '../../shared/audit-annotations';
 
 // A prior download of the same report may still be open in a PDF viewer, which locks the file
 // (EBUSY/EPERM/EACCES on Windows). Fall back to a suffixed name so a re-download always succeeds.
@@ -49,7 +53,31 @@ async function writeReportFile(filePath: string, data: string | Uint8Array): Pro
   throw new Error('unreachable');
 }
 
-export function registerGtmAuditIpc(data: GoogleDataService): void {
+export function registerGtmAuditIpc(data: GoogleDataService, memory?: MemoryStore, registry?: RegistryService): void {
+  /**
+   * Attach the user's own notes to the findings, and change nothing else.
+   *
+   * Cross-feature leverage, in its safe form: the operator sees the finding at FULL severity plus
+   * what they already said about it. Deliberately NOT a suppression mechanism - a note typed months
+   * ago cannot prove runtime behaviour, so it can add context and never a verdict (see
+   * shared/audit-annotations). Best-effort: no stores, no active account, or a read that throws all
+   * return the audit exactly as the engine produced it.
+   */
+  function withUserNotes<T extends { findings: AuditFindingView[] }>(result: T): T {
+    try {
+      if (!memory || !registry) return result;
+      const active = registry.getActiveView();
+      if (!active) return result;
+      const ctx = { containerId: active.gtmContext?.containerId, property: active.ga4Context?.property };
+      const notes = memory.list(active.id).filter((m) => memoryApplies(m, ctx));
+      if (!notes.length) return result;
+      return { ...result, findings: annotateFindings(result.findings ?? [], notes) };
+    } catch (e) {
+      console.error('[audit] user-note pass skipped:', e instanceof Error ? e.message : e);
+      return result;
+    }
+  }
+
   ipcMain.handle('gtm:audit', (_e, accountId: unknown, containerId: unknown, workspaceId: unknown) => {
     const a = String(accountId ?? '');
     const c = String(containerId ?? '');
@@ -57,7 +85,7 @@ export function registerGtmAuditIpc(data: GoogleDataService): void {
     if (!a || !c || !w) throw new Error('Pick a GTM account, container and workspace first.');
     // The audit READ (list tags/triggers/variables) also trips GTM's per-minute quota
     // during heavy sessions — retry it with backoff so the panel doesn't crash on a 429.
-    return withQuotaRetry(() => auditWorkspace(data, { accountId: a, containerId: c, workspaceId: w }));
+    return withQuotaRetry(async () => withUserNotes(await auditWorkspace(data, { accountId: a, containerId: c, workspaceId: w })));
   });
 
   // SERVER container audit (read-only): the sGTM config audit — clients claiming, duplicate GA4

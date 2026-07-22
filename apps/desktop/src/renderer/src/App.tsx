@@ -58,6 +58,7 @@ import { findMergeGroups, mergeGroup, mergeLabel, type MergeGroup } from '../../
 import { parseCsvUrls, parseCsvUrlStats, CSV_URL_CAP } from '../../shared/csv-urls';
 import { platformIdHints } from '../../shared/platform-id-hints';
 import { planAdsConversionActions } from '../../shared/ads-bulk-plan';
+import { annotationLabel } from '../../shared/audit-annotations';
 import { parseRateLimit } from '../../shared/rate-limit';
 import { autoHealConfirmMessage } from '../../shared/workspace-warnings';
 import { MEMORY_KINDS, type Memory, type MemoryKind } from '../../shared/chat-memory';
@@ -8439,6 +8440,14 @@ function ServerAuditSection({
               </div>
               <div style={{ fontSize: 13, lineHeight: 1.5 }}>{f.message}</div>
               <div style={{ fontSize: 12.5, color: 'var(--text-muted)', marginTop: 4 }}><b>Fix:</b> {f.recommendation}</div>
+              {/* The operator's own note, shown ALONGSIDE the finding. The severity above is
+                  unchanged by it on purpose: a note cannot prove runtime behaviour. */}
+              {f.userNote && (
+                <div style={{ fontSize: 12, marginTop: 6, padding: '6px 9px', borderRadius: 6, background: 'var(--surface-2)', borderLeft: '3px solid var(--c-blue)' }}>
+                  <div style={{ color: 'var(--text-muted)' }}>🧠 {annotationLabel(f.userNote)}</div>
+                  <div style={{ marginTop: 2, fontStyle: 'italic' }}>“{f.userNote.text}”</div>
+                </div>
+              )}
             </div>
           ))}
           <div style={{ fontSize: 11.5, color: 'var(--text-faint)', lineHeight: 1.5 }}>
