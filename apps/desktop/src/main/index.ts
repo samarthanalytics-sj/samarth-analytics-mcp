@@ -30,6 +30,8 @@ import { registerGa4AuditIpc, runGa4AuditPipeline } from './google/ga4-audit-ipc
 import { probeConsentSignal } from './suggestions/consent-probe';
 import { Ga4MonitoringService } from './services/ga4-monitoring-service';
 import { registerGa4MonitoringIpc } from './ipc/ga4-monitoring-ipc';
+import { TagWatchService } from './services/tag-watch-service';
+import { registerTagWatchIpc } from './ipc/tag-watch-ipc';
 import { registerNetworkIpc } from './network/network-ipc';
 import type { MonitorAlert, Ga4MonitorRun } from '../shared/ipc';
 import { EmbeddingStore } from './storage/embedding-store';
@@ -261,6 +263,15 @@ app.whenReady().then(() => {
   registerGtmAuditIpc(dataService, memory, registry);
   registerGa4AuditIpc(dataService);
   registerGa4MonitoringIpc(ga4Monitoring);
+
+  const tagWatch = new TagWatchService({
+    fetchGtagJs: (id) => dataService.fetchGtagJs(id),
+    configPath: join(dataDir, 'tag-watch-config.json'),
+    emit: (config) => {
+      for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('tagwatch:changed', config);
+    },
+  });
+  registerTagWatchIpc(tagWatch);
   registerNetworkIpc({ configPath: join(dataDir, 'network-config.json') });
   createWindow();
 
