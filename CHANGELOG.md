@@ -1,3 +1,9 @@
+## [1.375.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.375.0...v1.375.1) (2026-07-22)
+
+### Bug Fixes
+
+* **ga4:** update_ga4_data_stream - typed defaultUri + honest refusal of Google-tag-settings fields ([#647](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/647)) ([9796a2a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/9796a2a416b0ebfc8834f955014b84123af5858b))
+
 ## [1.375.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.374.1...v1.375.0) (2026-07-22)
 
 ### Features
