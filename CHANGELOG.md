@@ -1,3 +1,9 @@
+## [1.372.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.372.0...v1.372.1) (2026-07-22)
+
+### Bug Fixes
+
+* **suggest:** detect form vendors by form markup, scope triggers on the key the listener really pushes ([9e2f39a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/9e2f39ab246986f3e1ef0802df1df2c6a315f380))
+
 ## [1.372.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.371.0...v1.372.0) (2026-07-22)
 
 ### Features
