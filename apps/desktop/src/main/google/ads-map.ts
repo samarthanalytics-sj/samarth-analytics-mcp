@@ -111,6 +111,17 @@ export interface AdsConversionAction {
   category: string;
   ownerCustomer?: string;
   primaryForGoal?: boolean;
+  /** ONE_PER_CLICK / MANY_PER_CLICK - how repeat conversions inside a click's window count. */
+  countingType?: string;
+  /** Attribution + windows + value settings - the config a conversion audit reads. Present only when
+   *  the API returned them (older fixtures and minimal rows simply omit them). */
+  attributionModel?: string;
+  dataDrivenModelStatus?: string;
+  clickLookbackDays?: number;
+  viewLookbackDays?: number;
+  defaultValue?: number;
+  defaultCurrencyCode?: string;
+  alwaysUseDefaultValue?: boolean;
   /** Parsed from THIS action's own tag snippet. null when the action has no web snippet. */
   conversionId: string | null;
   conversionLabel: string | null;
@@ -127,6 +138,9 @@ export interface ConversionCustomer {
   crossAccountTrackingId: string | null;
   /** True when conversion actions live on a DIFFERENT customer than the one queried. */
   isCrossAccount: boolean;
+  /** customer.auto_tagging_enabled - whether ad clicks carry a GCLID at all. undefined when the row
+   *  predates this field (old fixtures) so "unknown" is never reported as "off". */
+  autoTaggingEnabled?: boolean;
 }
 
 // ── conversion identity (the high-risk part) ─────────────────────────────────────────────
@@ -284,6 +298,25 @@ export function mapConversionAction(row: unknown): AdsConversionAction {
   const ownerCustomer = customerIdFromResourceName(str(get(action, 'ownerCustomer')));
   const primaryForGoal = optionalBool(get(action, 'primaryForGoal'));
 
+  // Attribution + windows + value settings. Doubles arrive as numbers, int64s as strings; a value
+  // that cannot be read is simply absent rather than 0 (0 is a meaningful default value).
+  const countingType = str(get(action, 'countingType'))?.toUpperCase();
+  const ams = asRecord(get(action, 'attributionModelSettings'));
+  const attributionModel = str(get(ams, 'attributionModel'))?.toUpperCase();
+  const dataDrivenModelStatus = str(get(ams, 'dataDrivenModelStatus'))?.toUpperCase();
+  const clickLookbackDays = toInt(get(action, 'clickThroughLookbackWindowDays'));
+  const viewLookbackDays = toInt(get(action, 'viewThroughLookbackWindowDays'));
+  const vs = asRecord(get(action, 'valueSettings'));
+  const rawDefault = get(vs, 'defaultValue');
+  const defaultValue =
+    typeof rawDefault === 'number' && Number.isFinite(rawDefault)
+      ? rawDefault
+      : typeof rawDefault === 'string' && rawDefault.trim() !== '' && Number.isFinite(Number(rawDefault))
+        ? Number(rawDefault)
+        : undefined;
+  const defaultCurrencyCode = str(get(vs, 'defaultCurrencyCode'))?.toUpperCase();
+  const alwaysUseDefaultValue = optionalBool(get(vs, 'alwaysUseDefaultValue'));
+
   return {
     resourceName,
     id,
@@ -293,11 +326,51 @@ export function mapConversionAction(row: unknown): AdsConversionAction {
     category: (str(get(action, 'category')) ?? 'UNKNOWN').toUpperCase(),
     ...(ownerCustomer ? { ownerCustomer } : {}),
     ...(primaryForGoal === undefined ? {} : { primaryForGoal }),
+    ...(countingType ? { countingType } : {}),
+    ...(attributionModel ? { attributionModel } : {}),
+    ...(dataDrivenModelStatus ? { dataDrivenModelStatus } : {}),
+    ...(clickLookbackDays !== null ? { clickLookbackDays } : {}),
+    ...(viewLookbackDays !== null ? { viewLookbackDays } : {}),
+    ...(defaultValue !== undefined ? { defaultValue } : {}),
+    ...(defaultCurrencyCode ? { defaultCurrencyCode } : {}),
+    ...(alwaysUseDefaultValue !== undefined ? { alwaysUseDefaultValue } : {}),
     conversionId: identity?.conversionId ?? null,
     conversionLabel: identity?.conversionLabel ?? null,
     taggable,
     ...(note ? { note } : {}),
   };
+}
+
+/**
+ * Config warnings computable from the action LIST alone - no metrics needed.
+ *
+ * The classic paid-for finding: a GA4-IMPORTED conversion and a WEBSITE (WEBPAGE) action of the
+ * same category BOTH counting as primary records each real conversion twice in the "Conversions"
+ * column and in Smart Bidding. `primary_for_goal` defaults to true when absent, so undefined is
+ * treated as primary. Also flags always-use-default-value with NO default value set - the API
+ * accepts it and every conversion then records as zero.
+ */
+export function conversionSetupWarnings(actions: AdsConversionAction[]): string[] {
+  const isPrimary = (a: AdsConversionAction): boolean => a.primaryForGoal !== false && a.status === 'ENABLED';
+  const out: string[] = [];
+  const ga4 = actions.filter((a) => /^GOOGLE_ANALYTICS_4_/.test(a.type) && isPrimary(a));
+  const web = actions.filter((a) => a.type === 'WEBPAGE' && isPrimary(a));
+  for (const g of ga4) {
+    for (const w of web) {
+      if (g.category !== w.category || g.category === 'UNKNOWN') continue;
+      out.push(
+        `Possible double counting: the GA4-imported action "${g.name}" and the website action "${w.name}" are BOTH primary in category ${g.category}, so each real conversion can be recorded twice (in reporting AND in Smart Bidding). Make one of them secondary in Google Ads (Goals > Conversions > edit > "Secondary action").`,
+      );
+    }
+  }
+  for (const a of actions) {
+    if (a.alwaysUseDefaultValue === true && (a.defaultValue === undefined || a.defaultValue === 0) && a.status === 'ENABLED') {
+      out.push(
+        `"${a.name}" is set to ALWAYS use its default value, but no non-zero default value is configured - every conversion it records has value 0. Set a default value, or stop forcing it.`,
+      );
+    }
+  }
+  return out;
 }
 
 // ── account tree ─────────────────────────────────────────────────────────────────────────
@@ -405,12 +478,16 @@ export function resolveConversionCustomer(row: unknown, queriedCustomerId: strin
   const trackingIdRaw = digits(get(setting, 'conversionTrackingId'));
   const crossAccountRaw = digits(get(setting, 'crossAccountConversionTrackingId'));
 
+  // auto_tagging_enabled lives on the CUSTOMER, not inside conversion_tracking_setting.
+  const autoTaggingEnabled = optionalBool(get(wrapped, 'autoTaggingEnabled'));
+
   return {
     conversionCustomerId,
     status: (str(get(setting, 'conversionTrackingStatus')) ?? 'UNKNOWN').toUpperCase(),
     trackingId: trackingIdRaw && trackingIdRaw !== '0' ? trackingIdRaw : null,
     crossAccountTrackingId: crossAccountRaw && crossAccountRaw !== '0' ? crossAccountRaw : null,
     isCrossAccount: conversionCustomerId !== null && queried !== null && conversionCustomerId !== queried,
+    ...(autoTaggingEnabled === undefined ? {} : { autoTaggingEnabled }),
   };
 }
 

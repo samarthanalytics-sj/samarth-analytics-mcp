@@ -1,6 +1,7 @@
 import type { GoogleDataService } from '../google/data-service';
 import { AdsError, type GoogleAdsService } from '../google/ads-service';
 import { CONVERSION_CATEGORIES } from '../google/ads-rest';
+import { conversionSetupWarnings } from '../google/ads-map';
 import type { LlmToolDef, ToolExecutor } from '../llm/types';
 import type { GoogleProduct, GtmContext } from '../../shared/ipc';
 import type { AuditHistoryStore } from '../storage/audit-history';
@@ -476,14 +477,18 @@ function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean): Too
     {
       name: 'google_ads_campaign_performance',
       description:
-        'Per-campaign performance over the last 7, 14 or 30 days: impressions, clicks, cost, conversions and conversion ' +
-        'value. Read-only. Cost is in MICROS of the account currency. The window EXCLUDES today (partial data), and rows ' +
-        'are already summed per campaign over the window - they are not daily rows.',
+        'Per-campaign performance: impressions, clicks, cost, conversions and conversion value. Read-only. Two ways to ' +
+        'set the window: days (7/14/30 trailing, EXCLUDES today) or an explicit startDate+endDate (YYYY-MM-DD, inclusive ' +
+        '- any span, e.g. a full quarter or a single day). Use the custom range whenever the user names dates or a ' +
+        'month/quarter. Cost is in MICROS of the account currency, and rows are already summed per campaign over the ' +
+        'window - they are not daily rows.',
       inputSchema: {
         type: 'object',
         properties: {
           customerId: { type: 'string', description: 'Google Ads account id, bare digits (strip the dashes).' },
-          days: { type: 'number', description: 'Window length: 7, 14 or 30 (default 30). Other values snap to the nearest supported window.' },
+          days: { type: 'number', description: 'Trailing window: 7, 14 or 30 (default 30; other values snap). Ignored when startDate+endDate are given.' },
+          startDate: { type: 'string', description: 'Custom range start, YYYY-MM-DD (inclusive). Requires endDate.' },
+          endDate: { type: 'string', description: 'Custom range end, YYYY-MM-DD (inclusive). Requires startDate; must be >= startDate.' },
           loginCustomerId: { type: 'string', description: 'Manager (MCC) id to act through, when reached via a manager.' },
         },
         required: ['customerId'],
@@ -491,17 +496,69 @@ function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean): Too
       },
       handler: (a) =>
         run(async () => {
-          const days = typeof a.days === 'number' ? a.days : 30;
-          const r = await ads.campaignPerformance(s(a.customerId), days, login(a));
+          const range = {
+            ...(typeof a.days === 'number' ? { days: a.days } : {}),
+            ...(s(a.startDate).trim() ? { startDate: s(a.startDate).trim() } : {}),
+            ...(s(a.endDate).trim() ? { endDate: s(a.endDate).trim() } : {}),
+          };
+          const r = await ads.campaignPerformance(s(a.customerId), range, login(a));
+          // A half-given or malformed custom range silently became the default window - say so, or the
+          // model reports figures for a window the user did not ask about.
+          const fellBack = (range.startDate || range.endDate) && !r.custom;
           return {
             ok: true,
-            window: `last ${r.window} days, excluding today`,
+            window: r.windowLabel,
             count: r.campaigns.length,
             campaigns: r.campaigns,
+            ...(fellBack ? { warning: 'The custom date range was invalid (need BOTH startDate and endDate as YYYY-MM-DD with startDate <= endDate), so the default trailing window ran instead - the window field is what actually ran.' } : {}),
             note:
               'costMicros is MICROS of the account currency (divide by 1,000,000; name the currency). "conversions" counts only ' +
               'actions marked primary for goals; "allConversions" includes secondary ones, so the two legitimately differ and ' +
-              'neither is wrong. Report the window you were given - never imply the figures are all-time or include today.',
+              'neither is wrong. Report the window field verbatim - never imply the figures are all-time. ' +
+              (r.custom ? 'A custom range that includes today contains PARTIAL data for today.' : 'The trailing window excludes today (partial data).'),
+          };
+        }),
+    },
+    {
+      name: 'get_google_ads_tracking_setup',
+      description:
+        'The account\'s measurement plumbing in one read: whether AUTO-TAGGING is enabled (no auto-tagging means ad ' +
+        'clicks carry no GCLID, so offline conversion imports, enhanced conversions and clean GA4 session attribution ' +
+        'all degrade), and WHERE conversion tracking is owned (this account, or a manager under cross-account ' +
+        'conversion tracking). Read-only. Answers "is auto-tagging on", "does GCLID exist", "who owns conversions ' +
+        'here". Requires customerId; pass loginCustomerId when reached via a manager.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          customerId: { type: 'string', description: 'Google Ads account id, bare digits (strip the dashes).' },
+          loginCustomerId: { type: 'string', description: 'Manager (MCC) id to act through, when reached via a manager.' },
+        },
+        required: ['customerId'],
+        additionalProperties: false,
+      },
+      handler: (a) =>
+        run(async () => {
+          const cc = await ads.conversionCustomer(s(a.customerId), login(a));
+          const notes: string[] = [];
+          if (cc.autoTaggingEnabled === false) {
+            notes.push('Auto-tagging is OFF: ad clicks land WITHOUT a GCLID. Conversion imports, enhanced conversions and GA4 auto-linking all depend on it - recommend enabling it in Google Ads Settings > Account settings > Auto-tagging (safe unless the site\'s URL handling breaks on unknown query params, which is rare and testable).');
+          }
+          if (cc.isCrossAccount && cc.conversionCustomerId) {
+            notes.push(`Conversion tracking is owned by manager ${cc.conversionCustomerId} (cross-account conversion tracking): conversion actions live there and are shared with its other clients. That is a normal, healthy setup - just be aware edits affect every client of that manager.`);
+          }
+          return {
+            ok: true,
+            customerId: s(a.customerId),
+            // null = the API did not return the field, which is UNKNOWN - never report it as "off".
+            autoTaggingEnabled: cc.autoTaggingEnabled ?? null,
+            conversionTracking: {
+              ownerCustomerId: cc.conversionCustomerId,
+              isCrossAccount: cc.isCrossAccount,
+              status: cc.status,
+              trackingId: cc.trackingId,
+              crossAccountTrackingId: cc.crossAccountTrackingId,
+            },
+            ...(notes.length ? { notes } : {}),
           };
         }),
     },
@@ -533,6 +590,7 @@ function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean): Too
       handler: (a) =>
         run(async () => {
           const { actions, conversionCustomer } = await ads.listConversionActions(s(a.customerId), login(a));
+          const setupWarnings = conversionSetupWarnings(actions);
           return {
             ok: true,
             customerId: s(a.customerId),
@@ -554,8 +612,21 @@ function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean): Too
               conversionLabel: x.conversionLabel,
               taggable: x.taggable,
               ...(x.primaryForGoal === undefined ? {} : { primaryForGoal: x.primaryForGoal }),
+              // Full config (when returned): counting, attribution, lookback windows, value settings -
+              // enough for a conversion-config audit without a second read.
+              ...(x.countingType ? { countingType: x.countingType } : {}),
+              ...(x.attributionModel ? { attributionModel: x.attributionModel } : {}),
+              ...(x.dataDrivenModelStatus ? { dataDrivenModelStatus: x.dataDrivenModelStatus } : {}),
+              ...(x.clickLookbackDays === undefined ? {} : { clickLookbackDays: x.clickLookbackDays }),
+              ...(x.viewLookbackDays === undefined ? {} : { viewLookbackDays: x.viewLookbackDays }),
+              ...(x.defaultValue === undefined ? {} : { defaultValue: x.defaultValue }),
+              ...(x.defaultCurrencyCode ? { defaultCurrencyCode: x.defaultCurrencyCode } : {}),
+              ...(x.alwaysUseDefaultValue === undefined ? {} : { alwaysUseDefaultValue: x.alwaysUseDefaultValue }),
               ...(x.note ? { note: x.note } : {}),
             })),
+            // Deterministic config findings (double counting, zero-value forcing) - report these to the
+            // user; they are computed from the rows above, never guessed.
+            ...(setupWarnings.length ? { setupWarnings } : {}),
             ...(conversionCustomer.isCrossAccount && conversionCustomer.conversionCustomerId
               ? { note: `Conversion tracking for this account is owned by manager ${conversionCustomer.conversionCustomerId}, so these actions are shared with its other client accounts. Editing one affects all of them.` }
               : {}),

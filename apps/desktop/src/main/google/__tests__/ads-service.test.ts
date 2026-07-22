@@ -295,6 +295,21 @@ async function main(): Promise<void> {
     check('no em dashes in the readiness messages', !/[—–]/.test(`${r.reason?.message} ${r.reason?.remedy}`));
   }
 
+  // ── Phase A: a custom date range reaches the WIRE as BETWEEN, and the label reports it ──
+  {
+    const { s, calls } = svc([{ match: 'FROM campaign', reply: [{ results: [] }] }]);
+    const r = await s.campaignPerformance('1111111111', { startDate: '2026-04-01', endDate: '2026-06-30' });
+    const query = String((calls[0]?.data as { query?: string } | undefined)?.query ?? '');
+    check('perf range: the wire query carries the BETWEEN clause', query.includes("segments.date BETWEEN '2026-04-01' AND '2026-06-30'"));
+    check('perf range: windowLabel + custom flag report what ran', r.custom && r.windowLabel === '2026-04-01 to 2026-06-30');
+  }
+  {
+    const { s, calls } = svc([{ match: 'FROM campaign', reply: [{ results: [] }] }]);
+    const r = await s.campaignPerformance('1111111111', { days: 14 });
+    const query = String((calls[0]?.data as { query?: string } | undefined)?.query ?? '');
+    check('perf range: a days window still uses DURING and the honest label', query.includes('DURING LAST_14_DAYS') && !r.custom && r.windowLabel === 'last 14 days, excluding today');
+  }
+
   if (passed < 32) { console.error(`✗ only ${passed} assertions ran (expected 32+)`); process.exit(1); }
   console.log(`\nads-service: ${passed} passed, ${failures.length} failed`);
   if (failures.length) { console.error(failures.join('\n')); process.exit(1); }

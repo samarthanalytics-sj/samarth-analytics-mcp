@@ -66,7 +66,7 @@ export const GAQL: {
   conversionTrackingSetting: string;
   conversionActions: string;
   campaigns: string;
-  campaignPerformance: (days: number) => string;
+  campaignPerformance: (range: PerfRange) => string;
 } = {
   // The MCC hierarchy walk. `level <= 1` means "this account plus its direct children": going
   // deeper returns the whole sub-tree of every manager under a large MCC, which is thousands of
@@ -82,8 +82,10 @@ export const GAQL: {
   // compares them without stripping the prefix always concludes they differ. conversion_tracking_status
   // is relative to the login-customer-id the request was made under, meaning the same account can
   // legitimately report a different status through a different manager.
+  // auto_tagging_enabled rides in the SAME query: it lives on the customer, and "is GCLID present at
+  // all" belongs to the same tracking-setup question as "who owns the conversions".
   conversionTrackingSetting:
-    'SELECT customer.id, customer.descriptive_name, customer.conversion_tracking_setting.conversion_tracking_id, customer.conversion_tracking_setting.cross_account_conversion_tracking_id, customer.conversion_tracking_setting.google_ads_conversion_customer, customer.conversion_tracking_setting.accepted_customer_data_terms, customer.conversion_tracking_setting.conversion_tracking_status FROM customer',
+    'SELECT customer.id, customer.descriptive_name, customer.auto_tagging_enabled, customer.conversion_tracking_setting.conversion_tracking_id, customer.conversion_tracking_setting.cross_account_conversion_tracking_id, customer.conversion_tracking_setting.google_ads_conversion_customer, customer.conversion_tracking_setting.accepted_customer_data_terms, customer.conversion_tracking_setting.conversion_tracking_status FROM customer',
 
   // Everything the reuse picker needs. tag_snippets is the payload that matters: the conversion
   // LABEL has no field of its own anywhere in the API, it exists only inside
@@ -101,8 +103,11 @@ export const GAQL: {
   // tag_snippets is legitimately empty for UPLOAD_CLICKS, app, store-visit and GA4-originated
   // actions (the latter usually arrive with status HIDDEN), so the caller must treat an empty
   // array as "not taggable from the web", never as an error.
+  // The FULL config read: attribution model (+ data-driven status), the two lookback windows, and the
+  // value settings ride along so a config audit needs no second query. include_in_conversions_metric
+  // stays deliberately UNSELECTED (see the omissions note above) - primary_for_goal is the field.
   conversionActions:
-    "SELECT conversion_action.resource_name, conversion_action.id, conversion_action.name, conversion_action.status, conversion_action.type, conversion_action.category, conversion_action.owner_customer, conversion_action.primary_for_goal, conversion_action.counting_type, conversion_action.tag_snippets FROM conversion_action WHERE conversion_action.status != 'REMOVED'",
+    "SELECT conversion_action.resource_name, conversion_action.id, conversion_action.name, conversion_action.status, conversion_action.type, conversion_action.category, conversion_action.owner_customer, conversion_action.primary_for_goal, conversion_action.counting_type, conversion_action.attribution_model_settings.attribution_model, conversion_action.attribution_model_settings.data_driven_model_status, conversion_action.click_through_lookback_window_days, conversion_action.view_through_lookback_window_days, conversion_action.value_settings.default_value, conversion_action.value_settings.default_currency_code, conversion_action.value_settings.always_use_default_value, conversion_action.tag_snippets FROM conversion_action WHERE conversion_action.status != 'REMOVED'",
 
   // Campaign CONFIG only - no metrics, so it needs no date range and cannot be mistaken for
   // performance. REMOVED campaigns are excluded because they can outnumber the live ones many times
@@ -114,12 +119,48 @@ export const GAQL: {
 
   // Campaign PERFORMANCE over a window. Separate from the config read because the moment a GAQL
   // query names a metric it becomes date-ranged, and rows then represent campaign-days rather than
-  // campaigns. DURING LAST_N_DAYS excludes today, whose data is still accruing and would read as a
-  // collapse in every trend. cost_micros is micros of the account currency.
-  campaignPerformance: (days: number): string =>
+  // campaigns. The date clause comes from perfDateClause: an explicit BETWEEN for a custom range,
+  // else DURING LAST_N (which excludes today, whose data is still accruing and would read as a
+  // collapse in every trend). cost_micros is micros of the account currency.
+  campaignPerformance: (range: PerfRange): string =>
     'SELECT campaign.id, campaign.name, campaign.status, metrics.impressions, metrics.clicks, metrics.cost_micros, metrics.conversions, metrics.conversions_value, metrics.all_conversions ' +
-    `FROM campaign WHERE campaign.status != 'REMOVED' AND segments.date DURING LAST_${clampWindow(days)}_DAYS`,
+    `FROM campaign WHERE campaign.status != 'REMOVED' AND ${perfDateClause(range).clause}`,
 };
+
+/** A performance window: either a trailing `days` count, or an explicit inclusive date range. */
+export interface PerfRange {
+  days?: number;
+  startDate?: string;
+  endDate?: string;
+}
+
+/** Strict YYYY-MM-DD. GAQL's BETWEEN takes quoted dates in exactly this shape; anything else is a
+ *  query error, so a malformed date must fall back rather than reach the wire. */
+export function isYmdDate(s: unknown): s is string {
+  return typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s);
+}
+
+/**
+ * The segments.date clause for a performance query, plus the human label the tool reports - decided
+ * in ONE place so the query and the wording can never disagree.
+ *
+ * A custom range is honoured only when it is fully valid (both dates YYYY-MM-DD, start <= end);
+ * anything else falls back to the fixed trailing window (see clampWindow) instead of erroring, so a
+ * model that sends a sloppy range still gets a truthful, labelled answer. BETWEEN is inclusive, and
+ * unlike DURING LAST_N it CAN include today - the caller's note must say today's data is partial.
+ */
+export function perfDateClause(range: PerfRange): { clause: string; label: string; custom: boolean } {
+  const { startDate, endDate } = range;
+  if (isYmdDate(startDate) && isYmdDate(endDate) && startDate <= endDate) {
+    return {
+      clause: `segments.date BETWEEN '${startDate}' AND '${endDate}'`,
+      label: `${startDate} to ${endDate}`,
+      custom: true,
+    };
+  }
+  const n = clampWindow(range.days ?? 30);
+  return { clause: `segments.date DURING LAST_${n}_DAYS`, label: `last ${n} days, excluding today`, custom: false };
+}
 
 /** Google Ads only accepts a fixed set of LAST_N_DAYS windows; anything else is a query error rather
  *  than a nearest match, so snap to the closest supported one instead of passing the number through. */
