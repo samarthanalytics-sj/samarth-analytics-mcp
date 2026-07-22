@@ -1,3 +1,9 @@
+## [1.370.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.369.0...v1.370.0) (2026-07-22)
+
+### Features
+
+* **desktop:** opt-in semantic search over the corpus, fused with keyword ([#637](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/637)) ([17a945f](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/17a945f695102edec1e4fc1625b3ad0e1c5b9e58))
+
 ## [1.369.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.368.0...v1.369.0) (2026-07-22)
 
 ### Features
