@@ -19,13 +19,19 @@ import {
   mutateConversionActionsUrl,
   normalizeCustomerId,
   searchStreamUrl,
+  clampWindow,
   type CreateConversionActionInput,
 } from './ads-rest';
 import {
   buildAccountTree,
+  mapCampaign,
+  mapCampaignPerformance,
   mapConversionAction,
   resolveConversionCustomer,
+  sumCampaignPerformance,
   type AdsAccount,
+  type AdsCampaign,
+  type AdsCampaignPerformance,
   type AdsConversionAction,
   type ConversionCustomer,
 } from './ads-map';
@@ -201,6 +207,23 @@ export class GoogleAdsService {
     const rows = await this.search(customerId, GAQL.conversionActions, loginCustomerId);
     const actions = rows.map(mapConversionAction).sort((a, b) => a.name.localeCompare(b.name));
     return { actions, conversionCustomer: cc };
+  }
+
+  /** Campaign CONFIG (no metrics, so no date range). A MANAGER account has no campaigns of its own,
+   *  which is a different thing from an advertiser with none, so the caller is told which it is
+   *  rather than being left to read an empty array. */
+  async listCampaigns(customerId: string, loginCustomerId?: string): Promise<AdsCampaign[]> {
+    const rows = await this.search(customerId, GAQL.campaigns, loginCustomerId);
+    return rows.map(mapCampaign);
+  }
+
+  /** Per-campaign performance over a window. The API returns one row per campaign-DAY, so the rows
+   *  are summed to one per campaign before they leave this method - handing campaign-days to a
+   *  caller that expects campaigns inflates every count by the length of the window. */
+  async campaignPerformance(customerId: string, days = 30, loginCustomerId?: string): Promise<{ window: number; campaigns: AdsCampaignPerformance[] }> {
+    const window = clampWindow(days);
+    const rows = await this.search(customerId, GAQL.campaignPerformance(window), loginCustomerId);
+    return { window, campaigns: sumCampaignPerformance(rows.map(mapCampaignPerformance)) };
   }
 
   /** Validate a create WITHOUT executing it, so the review UI can surface a name collision or a bad

@@ -4,7 +4,7 @@
 // the menu + input to it. Each command that needs a specific toolset declares its `product` (the chat's
 // GTM vs GA4 mode gates which tools the brain has), so the renderer can flip to it before sending.
 
-export type ChatProduct = 'gtm' | 'ga4';
+export type ChatProduct = 'gtm' | 'ga4' | 'ads';
 
 export interface SlashCommand {
   /** The slash name (what the user types after "/"). */

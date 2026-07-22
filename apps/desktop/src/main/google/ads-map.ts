@@ -413,3 +413,99 @@ export function resolveConversionCustomer(row: unknown, queriedCustomerId: strin
     isCrossAccount: conversionCustomerId !== null && queried !== null && conversionCustomerId !== queried,
   };
 }
+
+/** One campaign as the chat needs it. Money is kept in MICROS exactly as the API returns it and is
+ *  converted at the presentation boundary only: rounding to a currency unit here would quietly lose
+ *  the fractional bids that Ads reports, and a number that has already been divided is impossible to
+ *  tell from one that has not. */
+export interface AdsCampaign {
+  id: string;
+  name: string;
+  status: string;
+  channelType: string;
+  channelSubType?: string;
+  startDate?: string;
+  endDate?: string;
+  biddingStrategyType?: string;
+  budget?: {
+    id: string;
+    amountMicros: number;
+    /** A shared budget backs SEVERAL campaigns, so its amount is not this campaign's alone. */
+    shared: boolean;
+  };
+}
+
+export function mapCampaign(row: unknown): AdsCampaign {
+  const c = asRecord(get(row, 'campaign')) ?? asRecord(row) ?? {};
+  const b = asRecord(get(row, 'campaignBudget'));
+  const amount = b ? toInt(get(b, 'amountMicros')) : null;
+  const budgetId = b ? digits(get(b, 'id')) : null;
+  return {
+    id: digits(get(c, 'id')) ?? '',
+    name: str(get(c, 'name')) ?? '',
+    status: (str(get(c, 'status')) ?? 'UNKNOWN').toUpperCase(),
+    channelType: (str(get(c, 'advertisingChannelType')) ?? 'UNKNOWN').toUpperCase(),
+    ...(str(get(c, 'advertisingChannelSubType')) ? { channelSubType: (str(get(c, 'advertisingChannelSubType')) as string).toUpperCase() } : {}),
+    ...(str(get(c, 'startDate')) ? { startDate: str(get(c, 'startDate')) as string } : {}),
+    ...(str(get(c, 'endDate')) ? { endDate: str(get(c, 'endDate')) as string } : {}),
+    ...(str(get(c, 'biddingStrategyType')) ? { biddingStrategyType: (str(get(c, 'biddingStrategyType')) as string).toUpperCase() } : {}),
+    ...(budgetId !== null && amount !== null
+      ? { budget: { id: budgetId, amountMicros: amount, shared: optionalBool(get(b, 'explicitlyShared')) === true } }
+      : {}),
+  };
+}
+
+/** Per-campaign metrics over a window. Every count is a plain number; only cost is in micros. */
+export interface AdsCampaignPerformance {
+  id: string;
+  name: string;
+  status: string;
+  impressions: number;
+  clicks: number;
+  costMicros: number;
+  conversions: number;
+  conversionsValue: number;
+  allConversions: number;
+}
+
+/** Google Ads returns metrics as STRINGS for int64 fields and numbers for doubles, so every metric
+ *  goes through one coercion. A metric that cannot be read becomes 0, never NaN: NaN propagates
+ *  silently through a sum and turns a whole report into "NaN" without ever raising an error. */
+const metric = (v: unknown): number => {
+  const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : NaN;
+  return Number.isFinite(n) ? n : 0;
+};
+
+export function mapCampaignPerformance(row: unknown): AdsCampaignPerformance {
+  const c = asRecord(get(row, 'campaign')) ?? {};
+  const m = asRecord(get(row, 'metrics')) ?? {};
+  return {
+    id: digits(get(c, 'id')) ?? '',
+    name: str(get(c, 'name')) ?? '',
+    status: (str(get(c, 'status')) ?? 'UNKNOWN').toUpperCase(),
+    impressions: metric(get(m, 'impressions')),
+    clicks: metric(get(m, 'clicks')),
+    costMicros: metric(get(m, 'costMicros')),
+    conversions: metric(get(m, 'conversions')),
+    conversionsValue: metric(get(m, 'conversionsValue')),
+    allConversions: metric(get(m, 'allConversions')),
+  };
+}
+
+/** Sum the campaign-day rows a metrics query returns into ONE row per campaign. A GAQL query that
+ *  names a metric is date-ranged, so a 30-day window returns up to 30 rows per campaign; reporting
+ *  those as campaigns would multiply the account's campaign count by the window length. */
+export function sumCampaignPerformance(rows: AdsCampaignPerformance[]): AdsCampaignPerformance[] {
+  const byId = new Map<string, AdsCampaignPerformance>();
+  for (const r of rows) {
+    const prev = byId.get(r.id);
+    if (!prev) { byId.set(r.id, { ...r }); continue; }
+    prev.impressions += r.impressions;
+    prev.clicks += r.clicks;
+    prev.costMicros += r.costMicros;
+    prev.conversions += r.conversions;
+    prev.conversionsValue += r.conversionsValue;
+    prev.allConversions += r.allConversions;
+  }
+  return [...byId.values()].sort((a, b) => b.costMicros - a.costMicros);
+}

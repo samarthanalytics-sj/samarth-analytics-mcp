@@ -11,7 +11,7 @@
 import type { InstallPlan } from '../../../web-audit-mcp/src/agent/tag-suggest/install-plan';
 
 export type LlmProvider = 'anthropic' | 'openai' | 'gemini';
-export type GoogleProduct = 'gtm' | 'ga4';
+export type GoogleProduct = 'gtm' | 'ga4' | 'ads';
 
 /** Which ad platforms a Tag Suggestions scan generates tags for (mirrors web-audit's SuggestPlatform,
  *  declared locally so the renderer/shared layer stays dependency-free). Any subset may be selected;
@@ -45,6 +45,8 @@ export interface AccountView {
   /** Remembered GTM account/container/workspace selection. */
   gtmContext?: GtmContext;
   ga4Context?: Ga4Context;
+  /** Remembered Google Ads customer selection (the Ads mirror of GtmContext / Ga4Context). */
+  adsContext?: AdsContext;
 }
 
 export interface AddAccountInput {
@@ -151,6 +153,32 @@ export interface Ga4Context {
   propertyName?: string;
   /** Display name of the parent GA4 account (for the breadcrumb). */
   accountName?: string;
+}
+
+/** Which Google Ads customer the Ads chat works against. `loginCustomerId` is the manager the account
+ *  must be reached THROUGH: Google rejects a manager-mediated client call made without it, so it is
+ *  remembered with the selection rather than re-derived per call. */
+export interface AdsContext {
+  /** Bare 10-digit customer id, no dashes (what the API takes). */
+  customerId?: string;
+  customerName?: string;
+  /** True when the selected customer is an MCC. A manager serves no ads of its own, so a chat scoped
+   *  to one is for reading the tree, not for conversion work. */
+  manager?: boolean;
+  loginCustomerId?: string;
+  /** A test account cannot serve real conversions; carried so the chat can say so instead of
+   *  explaining an empty conversion list as "nothing configured". */
+  testAccount?: boolean;
+}
+
+/** Why the Google Ads integration is or is not usable right now. Mirrors GoogleAdsService.readiness(),
+ *  which is the single source of truth: the UI never re-derives this from parts. */
+export interface AdsReadinessView {
+  state: 'ready' | 'not_signed_in' | 'no_developer_token' | 'no_scope' | 'error';
+  /** One line naming what is wrong, in the user's terms. Absent when ready. */
+  message?: string;
+  /** What to do about it. Absent when ready. */
+  remedy?: string;
 }
 
 export interface GtmContext {

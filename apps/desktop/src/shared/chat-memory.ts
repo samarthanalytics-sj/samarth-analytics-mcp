@@ -10,13 +10,24 @@
 export type MemoryKind = 'fact' | 'preference' | 'rule' | 'decision' | 'glossary';
 export type MemorySource = 'manual' | 'chat' | 'auto';
 
-/** Where a memory applies. Empty (no container + no property) = account-wide (used in every chat for this
- *  account). A containerId scopes it to that GTM container; a property scopes it to that GA4 property. */
+/** Where a memory applies. Empty (no container, property or customer) = account-wide (used in every
+ *  chat for this account). A containerId scopes it to that GTM container, a property to that GA4
+ *  property, a customerId to that Google Ads customer. */
 export interface MemoryScope {
   containerId?: string;
   property?: string;
+  /** Bare Google Ads customer id, no dashes. */
+  customerId?: string;
   /** A human label for the client/container/property, shown in the UI (never used for matching). */
   label?: string;
+}
+
+/** The client a chat turn is scoped to. Exactly one of these is set per turn: a GTM chat has a
+ *  container, a GA4 chat a property, an Ads chat a customer. */
+export interface MemoryCtx {
+  containerId?: string;
+  property?: string;
+  customerId?: string;
 }
 
 export interface Memory {
@@ -106,7 +117,7 @@ export function normalizeMemoryText(raw: string): { text: string; redacted: bool
 /** A stable key for de-duplicating a memory within an account (same kind + scope + text). */
 export function memoryDedupeKey(m: { kind: MemoryKind; text: string; scope?: MemoryScope }): string {
   const s = m.scope ?? {};
-  return `${m.kind}|${s.containerId ?? ''}|${s.property ?? ''}|${m.text.toLowerCase()}`;
+  return `${m.kind}|${s.containerId ?? ''}|${s.property ?? ''}|${s.customerId ?? ''}|${m.text.toLowerCase()}`;
 }
 
 /** Memories matching a free-text "forget X" query — text contains the whole query, OR contains every
@@ -178,7 +189,7 @@ export interface MemorySearchHit {
 export function searchMemories(
   memories: Memory[],
   query: string,
-  opts: { scope?: MemorySearchScope; ctx?: { containerId?: string; property?: string }; limit?: number } = {},
+  opts: { scope?: MemorySearchScope; ctx?: MemoryCtx; limit?: number } = {},
 ): MemorySearchHit[] {
   const scope = opts.scope ?? 'all';
   const ctx = opts.ctx ?? {};
@@ -190,7 +201,7 @@ export function searchMemories(
   const q = tokens(String(query ?? ''));
   const inScope = (m: Memory): boolean => {
     if (scope === 'context') return memoryApplies(m, ctx);
-    if (scope === 'account') return !m.scope?.containerId && !m.scope?.property;
+    if (scope === 'account') return !m.scope?.containerId && !m.scope?.property && !m.scope?.customerId;
     return true;
   };
   const scored = memories
@@ -212,12 +223,13 @@ export function searchMemories(
 }
 
 /** Does a memory's scope apply to the current chat context? Account-wide always applies. */
-export function memoryApplies(m: Memory, ctx: { containerId?: string; property?: string }): boolean {
+export function memoryApplies(m: Memory, ctx: MemoryCtx): boolean {
   const s = m.scope ?? {};
-  const accountWide = !s.containerId && !s.property;
+  const accountWide = !s.containerId && !s.property && !s.customerId;
   if (accountWide) return true;
   if (s.containerId && ctx.containerId && s.containerId === ctx.containerId) return true;
   if (s.property && ctx.property && s.property === ctx.property) return true;
+  if (s.customerId && ctx.customerId && s.customerId === ctx.customerId) return true;
   return false;
 }
 
@@ -245,7 +257,7 @@ function tokens(s: string): Set<string> {
  *  message → recency), capped at `limit`. Pure + deterministic for a given input. */
 export function selectRelevantMemories(
   memories: Memory[],
-  ctx: { containerId?: string; property?: string },
+  ctx: MemoryCtx,
   query: string,
   limit = MEMORY_INJECT_LIMIT,
 ): Memory[] {

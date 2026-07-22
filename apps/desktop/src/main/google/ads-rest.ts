@@ -65,6 +65,8 @@ export const GAQL: {
   customerClients: string;
   conversionTrackingSetting: string;
   conversionActions: string;
+  campaigns: string;
+  campaignPerformance: (days: number) => string;
 } = {
   // The MCC hierarchy walk. `level <= 1` means "this account plus its direct children": going
   // deeper returns the whole sub-tree of every manager under a large MCC, which is thousands of
@@ -101,7 +103,31 @@ export const GAQL: {
   // array as "not taggable from the web", never as an error.
   conversionActions:
     "SELECT conversion_action.resource_name, conversion_action.id, conversion_action.name, conversion_action.status, conversion_action.type, conversion_action.category, conversion_action.owner_customer, conversion_action.primary_for_goal, conversion_action.counting_type, conversion_action.tag_snippets FROM conversion_action WHERE conversion_action.status != 'REMOVED'",
+
+  // Campaign CONFIG only - no metrics, so it needs no date range and cannot be mistaken for
+  // performance. REMOVED campaigns are excluded because they can outnumber the live ones many times
+  // over in a long-running account; PAUSED ones are kept, since "why is this paused" is a real
+  // question. The budget arrives in MICROS of the account currency (1,000,000 = 1 unit) and is
+  // SHARED: one budget can back several campaigns, so its amount is not that campaign's spend.
+  campaigns:
+    "SELECT campaign.id, campaign.name, campaign.status, campaign.advertising_channel_type, campaign.advertising_channel_sub_type, campaign.start_date, campaign.end_date, campaign.bidding_strategy_type, campaign_budget.id, campaign_budget.amount_micros, campaign_budget.explicitly_shared FROM campaign WHERE campaign.status != 'REMOVED' ORDER BY campaign.name",
+
+  // Campaign PERFORMANCE over a window. Separate from the config read because the moment a GAQL
+  // query names a metric it becomes date-ranged, and rows then represent campaign-days rather than
+  // campaigns. DURING LAST_N_DAYS excludes today, whose data is still accruing and would read as a
+  // collapse in every trend. cost_micros is micros of the account currency.
+  campaignPerformance: (days: number): string =>
+    'SELECT campaign.id, campaign.name, campaign.status, metrics.impressions, metrics.clicks, metrics.cost_micros, metrics.conversions, metrics.conversions_value, metrics.all_conversions ' +
+    `FROM campaign WHERE campaign.status != 'REMOVED' AND segments.date DURING LAST_${clampWindow(days)}_DAYS`,
 };
+
+/** Google Ads only accepts a fixed set of LAST_N_DAYS windows; anything else is a query error rather
+ *  than a nearest match, so snap to the closest supported one instead of passing the number through. */
+export function clampWindow(days: number): 7 | 14 | 30 {
+  const allowed: Array<7 | 14 | 30> = [7, 14, 30];
+  const n = Number.isFinite(days) ? days : 30;
+  return allowed.reduce((best, v) => (Math.abs(v - n) < Math.abs(best - n) ? v : best), 30);
+}
 
 export interface CreateConversionActionInput {
   name: string;
