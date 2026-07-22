@@ -591,6 +591,9 @@ export interface TagScanResult {
     pagesCrawled: number;
     pagesScanned: number;
     formsFound: number;
+    /** How many DISTINCT forms those instances collapse to (same form on many pages = 1). The gap
+     *  between formsFound and this is intended dedup, not lost forms - the UI says so. */
+    distinctForms?: number;
     trackableElements: number;
     suggestions: number;
     byConfidence: { high: number; medium: number; low: number };

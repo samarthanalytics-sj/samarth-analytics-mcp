@@ -209,6 +209,24 @@ function isHomeUrl(url: string): boolean {
   }
 }
 
+/** How many DISTINCT forms a list of per-page form instances collapses to. The same form embedded on
+ *  many pages (a blog template's newsletter box on every post, one Marketo form under different page
+ *  headings) is ONE distinct form per identity+title. Mirrors the way the suggestion engine groups
+ *  instances into tags closely enough for the honest funnel line the review toolbar shows -
+ *  "N instances → D distinct → S tags" - so a blog-heavy scan reading "3 form tags" is explainable
+ *  rather than looking like the scanner lost forms. PURE. */
+export function distinctFormCount(
+  forms: Array<{ provider?: { vendor?: string }; providerFormId?: string; formId?: string; title?: string; purpose: string }>,
+): number {
+  const keys = new Set<string>();
+  for (const f of forms) {
+    keys.add(
+      `${f.provider?.vendor ?? ''}|${f.providerFormId ?? ''}|${f.formId ?? ''}|${(f.title ?? '').trim().toLowerCase()}|${f.purpose}`,
+    );
+  }
+  return keys.size;
+}
+
 /** Order a URL list form-likely-first (STABLE): the origin root ("/") always leads, then form-likely
  *  URLs (urlPriority 1), then the rest — preserving the original relative order WITHIN each tier via an
  *  index tiebreak. Used by scanUrls (so a form page beyond the scan cap still survives) and by the
@@ -477,6 +495,7 @@ export function assembleResult(
       pagesCrawled: opened,
       pagesScanned: pageScans.length,
       formsFound: input.forms.length,
+      distinctForms: distinctFormCount(input.forms),
       trackableElements: input.elements.length,
       suggestions: suggestions.length,
       byConfidence,
