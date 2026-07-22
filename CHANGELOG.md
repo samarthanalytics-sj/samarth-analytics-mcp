@@ -1,3 +1,13 @@
+## [1.388.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.387.0...v1.388.0) (2026-07-22)
+
+### Features
+
+* **desktop:** Google Ads phase A - custom date ranges, tracking setup, full conversion config ([2eb1c59](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/2eb1c593efc391db3fa22e65249f235d01e319b2))
+
+### Bug Fixes
+
+* **desktop:** map get_google_ads_tracking_setup into the google-ads tool group ([d6d155a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d6d155a05e7ae0204369890d6b955fb9a27c84f8))
+
 ## [1.387.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.386.1...v1.387.0) (2026-07-22)
 
 ### Features
