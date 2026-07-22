@@ -1,4 +1,5 @@
 import { sseEvents, startStream, withRequestTimeout } from './sse';
+import { openaiCacheUsage } from '../../shared/prompt-cache';
 import type { LlmChatInput, LlmClient, LlmReply, LlmToolCall, LlmTurn, StreamAccumulator } from './types';
 
 // OpenAI Chat Completions API. Pure mappers exported for unit tests.
@@ -79,9 +80,12 @@ export function parseOpenAiReply(data: unknown): LlmReply {
 // arrive in fragments keyed by index (id/name first, then argument string pieces).
 export function openaiStreamAccumulator(onDelta: (t: string) => void): StreamAccumulator {
   let text = '';
+  let usage: LlmReply['usage'];
   const tools = new Map<number, { id: string; name: string; args: string }>();
   return {
     push(chunk: unknown): void {
+      // The usage chunk arrives last and has no choices; cached_tokens is the automatic-cache hit.
+      usage = openaiCacheUsage(chunk) ?? usage;
       const delta = (chunk as { choices?: Array<{ delta?: OpenAiMessage }> }).choices?.[0]?.delta;
       if (typeof delta?.content === 'string' && delta.content) {
         text += delta.content;
@@ -106,7 +110,7 @@ export function openaiStreamAccumulator(onDelta: (t: string) => void): StreamAcc
         }
         return { id: t.id, name: t.name, args };
       });
-      return { text: text || undefined, toolCalls: toolCalls.length ? toolCalls : undefined };
+      return { text: text || undefined, toolCalls: toolCalls.length ? toolCalls : undefined, usage };
     },
   };
 }
@@ -129,6 +133,10 @@ export function openaiChatBody(input: LlmChatInput): Record<string, unknown> {
         }
       : {}),
     stream: true,
+    // OpenAI caches long prefixes automatically, but a STREAMED response carries no usage at all
+    // unless this is set - so without it we could never tell whether caching was working, only
+    // assume it. The extra final chunk has an empty `choices` array, which the accumulator ignores.
+    stream_options: { include_usage: true },
   };
 }
 

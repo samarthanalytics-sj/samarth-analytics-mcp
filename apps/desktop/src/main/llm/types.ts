@@ -1,4 +1,5 @@
 import type { LlmProvider, ChatMediaPart } from '../../shared/ipc';
+import type { CacheUsage } from '../../shared/prompt-cache';
 import type { RetryNotice } from './sse';
 
 export type { ChatMediaPart };
@@ -51,6 +52,9 @@ export interface LlmChatInput {
 export interface LlmReply {
   text?: string;
   toolCalls?: LlmToolCall[];
+  /** Input-token accounting for this request, when the provider reported any. Used to show whether
+   *  prompt caching actually hit rather than assuming it did. */
+  usage?: CacheUsage;
 }
 
 export interface LlmClient {

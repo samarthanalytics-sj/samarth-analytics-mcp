@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { toOpenAiMessages, parseOpenAiReply, openaiChatBody } from '../openai';
-import { toAnthropicMessages, parseAnthropicReply } from '../anthropic';
+import { toAnthropicMessages, parseAnthropicReply, anthropicChatBody } from '../anthropic';
 import { toGeminiContents, parseGeminiReply, geminiFunctionDecl, stripGeminiUnsupported } from '../gemini';
 import type { LlmTurn } from '../types';
 
@@ -140,6 +140,41 @@ test('OpenAI: request body OMITS tools/tool_choice when there are no tools (empt
   const withTool = openaiChatBody({ ...base, tools: [{ name: 't', description: 'd', inputSchema: { type: 'object' } }] });
   assert.ok(Array.isArray(withTool.tools) && (withTool.tools as unknown[]).length === 1, 'tools present when supplied');
   assert.equal(withTool.tool_choice, 'auto', 'tool_choice auto when tools present');
+});
+
+// ── Prompt caching in the REQUEST BODIES ──
+// The prefix (tools + system) is byte-identical on every step of a tool loop and measures ~20,000
+// tokens on a GTM turn, so it is re-sent unchanged 3 to 6 times per turn. These assert the wiring
+// that stops us paying full price for it. The spend RULE itself is tested in prompt-cache.test.ts.
+const cacheBase = { model: 'm', apiKey: 'k', messages: [{ role: 'user', text: 'hi' } as LlmTurn] };
+const bigTools = Array.from({ length: 20 }, (_, i) => ({ name: `tool_${i}`, description: 'd'.repeat(400), inputSchema: { type: 'object' } }));
+
+test('Anthropic: a real-sized turn carries ONE cache breakpoint on the system prompt', () => {
+  const body = anthropicChatBody({ ...cacheBase, system: 's'.repeat(40_000), tools: bigTools });
+  const sys = body.system as Array<{ type: string; text: string; cache_control?: { type: string } }>;
+  assert.ok(Array.isArray(sys), 'system is a block array when cacheable');
+  assert.equal(sys.length, 1, 'exactly one block, so exactly one breakpoint');
+  assert.equal(sys[0].cache_control?.type, 'ephemeral');
+  assert.equal(sys[0].text.length, 40_000, 'the prompt text is unchanged');
+});
+
+test('Anthropic: a request that cannot loop is left EXACTLY as it was before caching existed', () => {
+  // No tools = a single completion (the memory-extract pass). Its prefix would be written and never
+  // read, which costs MORE than not caching, so it must go out as a plain string.
+  const body = anthropicChatBody({ ...cacheBase, system: 's'.repeat(40_000), tools: [] });
+  assert.equal(typeof body.system, 'string', 'system stays a plain string');
+  assert.equal(body.system, 's'.repeat(40_000));
+});
+
+test('Anthropic: a prefix too small for the provider to cache is not marked', () => {
+  const body = anthropicChatBody({ ...cacheBase, system: 'short', tools: [{ name: 't', description: 'd', inputSchema: {} }] });
+  assert.equal(typeof body.system, 'string');
+});
+
+test('OpenAI: asks for usage on the stream, which is the only way to SEE the automatic cache', () => {
+  const body = openaiChatBody({ ...cacheBase, system: 's', tools: [] });
+  assert.deepEqual(body.stream_options, { include_usage: true });
+  assert.equal(body.stream, true, 'still streaming');
 });
 
 
