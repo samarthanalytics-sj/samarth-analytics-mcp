@@ -75,6 +75,7 @@ import type { SeedCandidate } from '../../shared/memory-seed';
 import { resolveChatInput, slashMenuMatches, type SlashCommand } from '../../shared/chat-commands';
 import { extractReplyTables, shouldOfferExport } from '../../shared/chat-export';
 import { adsStatus, adsStatusLabel, adsUsable, adsNeedsConsent } from '../../shared/ads-status';
+import { ADS_ACCESS_DOCS, ADS_ACCESS_LEVELS, ADS_ACCESS_SUMMARY, ADS_TOKEN_INSTALL_STEPS, ADS_TOKEN_STEPS } from '../../shared/ads-onboarding';
 import { parseSuggestionEvidence, isProviderFormIdLabel, providerDisplayName } from '../../shared/suggestion-details';
 import { execSummaryHtml } from '../../shared/ga4-exec-html';
 import { stripDuplicateCharts } from '../../shared/ga4-visuals-html';
@@ -2240,6 +2241,91 @@ function Ga4ContextBar({
 }
 
 /**
+ * How to obtain a Google Ads developer token and what the access levels mean. Rendered in BOTH the
+ * Ads chat (when the token is missing) and Settings > Providers (where it is entered), from the one
+ * definition in shared/ads-onboarding, because a setup procedure written twice drifts and the copy
+ * the user happens to read is always the stale one.
+ */
+function AdsTokenGuide(): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const num = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 18, height: 18, borderRadius: 9, background: 'var(--surface-3)', fontSize: 11, fontWeight: 700, flexShrink: 0 } as const;
+  const step = (s: { title: string; detail: string; warning?: string }, i: number): JSX.Element => (
+    <li key={s.title} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginBottom: 8 }}>
+      <span style={num}>{i + 1}</span>
+      <span style={{ fontSize: 12.5, lineHeight: 1.5 }}>
+        <b>{s.title}</b>
+        <span style={{ color: 'var(--text-muted)' }}> {s.detail}</span>
+        {s.warning && (
+          <div style={{ marginTop: 4, padding: '6px 9px', borderRadius: 7, border: '1px solid var(--c-amber)', background: 'rgba(230,160,30,0.08)', fontSize: 12, lineHeight: 1.45 }}>
+            <b>Do not skip this. </b>{s.warning}
+          </div>
+        )}
+      </span>
+    </li>
+  );
+
+  return (
+    <div style={{ marginTop: 10, borderTop: '1px solid var(--border-2)', paddingTop: 10 }}>
+      <div style={{ fontSize: 12.5, marginBottom: 8 }}>{ADS_ACCESS_SUMMARY}</div>
+      <button style={styles.ctxChangeBtn} onClick={() => setOpen(!open)}>
+        {open ? '▾ Hide the setup steps' : '▸ How do I get a developer token?'}
+      </button>
+      {open && (
+        <div style={{ marginTop: 10 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-faint)', marginBottom: 6 }}>
+            Get the token from Google
+          </div>
+          <ol style={{ listStyle: 'none', padding: 0, margin: 0 }}>{ADS_TOKEN_STEPS.map(step)}</ol>
+
+          <div style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-faint)', margin: '12px 0 6px' }}>
+            Add it here
+          </div>
+          <ol style={{ listStyle: 'none', padding: 0, margin: 0 }}>{ADS_TOKEN_INSTALL_STEPS.map(step)}</ol>
+
+          <div style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-faint)', margin: '12px 0 6px' }}>
+            Access levels
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ borderCollapse: 'collapse', fontSize: 12.5, width: '100%', minWidth: 420 }}>
+              <thead>
+                <tr>
+                  {['Level', 'Daily limit', 'What it means here'].map((h) => (
+                    <th key={h} style={{ textAlign: 'left', padding: '5px 8px', borderBottom: '1px solid var(--border)', color: 'var(--text-faint)', fontWeight: 600, whiteSpace: 'nowrap' }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {ADS_ACCESS_LEVELS.map((l) => (
+                  <tr key={l.level}>
+                    <td style={{ padding: '6px 8px', borderBottom: '1px solid var(--border-2)', whiteSpace: 'nowrap', verticalAlign: 'top' }}>
+                      {/* The usable/unusable mark is the whole point of the table: Test is not a
+                          smaller Basic, it cannot reach a real account at all. */}
+                      <span style={{ color: l.worksHere ? 'var(--c-green)' : 'var(--c-red)' }}>{l.worksHere ? '●' : '○'}</span>{' '}
+                      <b>{l.level}</b>
+                    </td>
+                    <td style={{ padding: '6px 8px', borderBottom: '1px solid var(--border-2)', verticalAlign: 'top', whiteSpace: 'nowrap' }}>{l.limit}</td>
+                    <td style={{ padding: '6px 8px', borderBottom: '1px solid var(--border-2)', color: 'var(--text-muted)', lineHeight: 1.45, verticalAlign: 'top' }}>{l.meaning}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 8, lineHeight: 1.5 }}>
+            Figures are a guide; Google changes them.{' '}
+            {/* Same pattern as every other outbound link here: the main process's window-open
+                handler sends it to the real browser. */}
+            <a href={ADS_ACCESS_DOCS} target="_blank" rel="noreferrer" style={{ color: 'var(--c-cyan)' }}>
+              Google&apos;s access levels page ↗
+            </a>{' '}
+            has the current ones.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
  * The Google Ads chat's working-account bar: the same shape as the GTM and GA4 bars, plus the one
  * thing they do not need - a CONNECTION STATUS, because Google Ads can fail to be usable in several
  * distinct ways (not signed in, no developer token, scope never granted) and each needs a different
@@ -2334,29 +2420,37 @@ function AdsContextBar({
   // Not usable: show WHY and the one action that fixes it, instead of an account picker that cannot
   // populate. Re-consent is offered only for a scope gap - it does not install a developer token.
   if (status && !adsUsable(status)) {
+    // A missing developer token is not a one-line problem: nothing works until it is obtained, and
+    // obtaining it is a multi-step process outside this app that people reliably get wrong in the
+    // same two ways (starting from a non-manager account, and stopping at Test access). So that one
+    // case gets the full guide inline, where the user actually hit it, instead of a link to Settings.
+    const needsToken = status.state === 'no_developer_token';
     return (
-      <div style={{ ...styles.ctxBarEdit, borderColor: 'var(--c-amber)' }}>
-        <span style={{ ...styles.ctxMutedLabel, color: 'var(--c-amber)' }}>Google Ads</span>
-        <span style={{ fontSize: 12.5, fontWeight: 600 }}>{adsStatusLabel(status)}</span>
-        <span style={{ fontSize: 12.5, color: 'var(--text-muted)', flex: 1, minWidth: 160 }}>
-          {status.message} {status.remedy ?? ''}
-        </span>
-        {adsNeedsConsent(status) && (
-          <button
-            style={styles.ctxChangeBtn}
-            onClick={() => {
-              // Re-consent adds the adwords scope to the EXISTING grant (google.connectAds), so
-              // Tag Manager and Analytics access is untouched.
-              void window.desktop.google
-                .connectAds()
-                .then(async () => { await refresh(); await checkStatus(); })
-                .catch((e: unknown) => onError(e instanceof Error ? e.message : String(e)));
-            }}
-          >
-            Connect Google Ads
-          </button>
-        )}
-        <button style={styles.ctxChangeBtn} onClick={() => void checkStatus()}>↻ Recheck</button>
+      <div style={{ ...styles.ctxBarEdit, borderColor: 'var(--c-amber)', flexDirection: 'column', alignItems: 'stretch', gap: 0 }}>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ ...styles.ctxMutedLabel, color: 'var(--c-amber)' }}>Google Ads</span>
+          <span style={{ fontSize: 12.5, fontWeight: 600 }}>{adsStatusLabel(status)}</span>
+          <span style={{ fontSize: 12.5, color: 'var(--text-muted)', flex: 1, minWidth: 160 }}>
+            {needsToken ? 'Add a Google Ads developer token to use this tab. It takes a few minutes plus Google\'s review.' : `${status.message} ${status.remedy ?? ''}`}
+          </span>
+          {adsNeedsConsent(status) && (
+            <button
+              style={styles.ctxChangeBtn}
+              onClick={() => {
+                // Re-consent adds the adwords scope to the EXISTING grant (google.connectAds), so
+                // Tag Manager and Analytics access is untouched.
+                void window.desktop.google
+                  .connectAds()
+                  .then(async () => { await refresh(); await checkStatus(); })
+                  .catch((e: unknown) => onError(e instanceof Error ? e.message : String(e)));
+              }}
+            >
+              Connect Google Ads
+            </button>
+          )}
+          <button style={styles.ctxChangeBtn} onClick={() => void checkStatus()}>↻ Recheck</button>
+        </div>
+        {needsToken && <AdsTokenGuide />}
       </div>
     );
   }
@@ -11414,6 +11508,9 @@ function GoogleAdsCard({ onError }: { onError: (m: string) => void }): JSX.Eleme
         Issued from a Google Ads <b>manager (MCC)</b> account under Tools and Settings, API Center. A standard
         Ads account cannot issue one. Shared by every signed-in Google account; stored encrypted (DPAPI).
       </p>
+      {/* The full procedure, from the SAME definition the Ads chat shows, so the two cannot drift.
+          Collapsed by default here: someone already in Settings with a saved token does not need it. */}
+      {hasToken === false && <AdsTokenGuide />}
 
       <div style={{ ...styles.formRow, marginTop: 10 }}>
         <button style={styles.ghostBtn} onClick={test} disabled={busy !== '' || !hasToken}>
