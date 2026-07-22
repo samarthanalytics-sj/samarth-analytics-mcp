@@ -1,3 +1,9 @@
+## [1.387.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.386.1...v1.387.0) (2026-07-22)
+
+### Features
+
+* **desktop:** guide the user through getting a Google Ads developer token ([#663](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/663)) ([9cd2a74](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/9cd2a74a041c0a60a09a779faa743c8278df22d6))
+
 ## [1.386.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.386.0...v1.386.1) (2026-07-22)
 
 ### Bug Fixes
