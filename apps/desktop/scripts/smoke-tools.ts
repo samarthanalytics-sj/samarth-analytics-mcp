@@ -55,6 +55,7 @@ const MUTATIONS = new Set([
   'setupEcommerceFunnel', 'setupServerEcommerceFunnel', 'createServerContainerFromWeb',
   'ga4AdminCreate', 'ga4AdminPatch', 'ga4AdminDelete', 'ga4AdminArchive',
   'ga4CreateProperty', 'ga4UpdateProperty', 'ga4DeleteProperty', 'ga4UpdateDataRetention', 'ga4UpdateAccount', 'ga4DeleteAccount',
+  'ga4UpdateEnhancedMeasurement', 'ga4UpdateDataRedaction', 'ga4UpdateAttribution', 'ga4UpdateGoogleSignals',
   'createConversionAction',
 ]);
 
@@ -123,6 +124,10 @@ function makeFakeData(): { data: GoogleDataService; calls: string[]; mutations: 
     ga4UpdateProperty: () => r('ga4UpdateProperty', { name: 'properties/1' }),
     ga4DeleteProperty: () => r('ga4DeleteProperty', { name: 'properties/1' }),
     ga4UpdateDataRetention: () => r('ga4UpdateDataRetention', { name: 'properties/1/dataRetentionSettings' }),
+    ga4UpdateEnhancedMeasurement: () => r('ga4UpdateEnhancedMeasurement', { name: 'properties/1/dataStreams/1/enhancedMeasurementSettings' }),
+    ga4UpdateDataRedaction: () => r('ga4UpdateDataRedaction', { name: 'properties/1/dataStreams/1/dataRedactionSettings' }),
+    ga4UpdateAttribution: () => r('ga4UpdateAttribution', { name: 'properties/1/attributionSettings' }),
+    ga4UpdateGoogleSignals: () => r('ga4UpdateGoogleSignals', { name: 'properties/1/googleSignalsSettings' }),
     ga4UpdateAccount: () => r('ga4UpdateAccount', { name: 'accounts/1' }),
     ga4DeleteAccount: (name: string) => r('ga4DeleteAccount', { deleted: true, name }),
     listGtmTemplates: () => r('listGtmTemplates', [{ templateId: '261', name: 'Meta Pixel', type: 'cvt_5RM3Q', galleryOwner: 'facebook', galleryRepository: 'GoogleTagManager-WebTemplate-For-FacebookPixel' }]),

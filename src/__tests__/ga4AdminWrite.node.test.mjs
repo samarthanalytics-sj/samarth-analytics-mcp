@@ -44,6 +44,8 @@ function buildServer() {
     measurementProtocolSecrets: S('mpSecrets'),
     eventCreateRules: S('eventCreateRules'),
     sKAdNetworkConversionValueSchema: S('skad'),
+    updateEnhancedMeasurementSettings: (p) => { calls.push({ label: 'emSettings', verb: 'patch', params: p }); return Promise.resolve({ data: p }); },
+    updateDataRedactionSettings: (p) => { calls.push({ label: 'redaction', verb: 'patch', params: p }); return Promise.resolve({ data: p }); },
   };
   const properties = {
     ...S('properties'),
@@ -64,6 +66,8 @@ function buildServer() {
     rollupPropertySourceLinks: S('rollupLinks'),
     accessBindings: S('propAccessBindings'),
     updateDataRetentionSettings: (p) => { calls.push({ label: 'dataRetention', verb: 'patch', params: p }); return Promise.resolve({ data: p }); },
+    updateAttributionSettings: (p) => { calls.push({ label: 'attribution', verb: 'patch', params: p }); return Promise.resolve({ data: p }); },
+    updateGoogleSignalsSettings: (p) => { calls.push({ label: 'signals', verb: 'patch', params: p }); return Promise.resolve({ data: p }); },
     acknowledgeUserDataCollection: (p) => { calls.push({ label: 'ack', verb: 'post', params: p }); return Promise.resolve({ data: p }); },
   };
   const accounts = { ...S('accounts'), accessBindings: S('acctAccessBindings') };
@@ -113,15 +117,17 @@ await test('registers a broad create/update/delete/archive surface', () => {
     'ga4_create_account_access_binding',
     'ga4_create_property', 'ga4_update_property', 'ga4_delete_property',
     'ga4_update_data_retention', 'ga4_update_account', 'ga4_delete_account',
+    'ga4_update_enhanced_measurement', 'ga4_update_data_redaction',
+    'ga4_update_attribution_settings', 'ga4_update_google_signals',
     'ga4_acknowledge_user_data_collection',
   ]) assert.ok(names.includes(t), `missing tool ${t}`);
   // Custom dimensions/metrics/audiences ARCHIVE, never hard-delete.
   assert.ok(!names.includes('ga4_delete_custom_dimension'), 'custom dimensions must not expose a hard delete');
   assert.ok(!names.includes('ga4_delete_audience'), 'audiences must not expose a hard delete');
   // Pin the absolute count so a dropped catalog entry/verb fails here (20 factory
-  // resources = 57 verbs + 7 bespoke lifecycle/ack tools = 64).
+  // resources = 57 verbs + 11 bespoke lifecycle/settings/ack tools = 68).
   const writeNames = names.filter((n) => /^ga4_(create|update|delete|archive)_/.test(n) || n === 'ga4_acknowledge_user_data_collection');
-  assert.strictEqual(writeNames.length, 64, `expected 64 GA4 write tools, got ${writeNames.length}: ${writeNames.sort().join(', ')}`);
+  assert.strictEqual(writeNames.length, 68, `expected 68 GA4 write tools, got ${writeNames.length}: ${writeNames.sort().join(', ')}`);
   // Every factory resource contributes at least its create tool (catches a dropped resource
   // that no other assertion names — google_ads_link, firebase_link, dv360, sa360, adsense, etc.).
   for (const n of [
@@ -286,6 +292,30 @@ await test('data stream update refuses Google-tag-settings fields with direction
   assert.ok(/Configure tag settings/.test(text), 'gives the GA4 UI path');
   assert.ok(text.includes('webStreamData.domains'), 'lists the offending fields');
   assert.ok(!calls.some((c) => c.label === 'dataStreams' && c.verb === 'patch'), 'the invalid body never reached the API');
+});
+
+await test('enhanced measurement update targets the stream settings child with a field mask', async () => {
+  setEnv({ writes: true });
+  const { server, calls } = buildServer();
+  await callTool(server, 'ga4_update_enhanced_measurement', { property: '5', dataStreamId: '9', siteSearchEnabled: true, searchQueryParameter: 'q,search', confirm: true });
+  const call = calls.find((c) => c.label === 'emSettings');
+  assert.ok(call, 'updateEnhancedMeasurementSettings was called');
+  assert.strictEqual(call.params.name, 'properties/5/dataStreams/9/enhancedMeasurementSettings');
+  assert.strictEqual(call.params.updateMask, 'siteSearchEnabled,searchQueryParameter');
+  assert.deepStrictEqual(call.params.requestBody, { siteSearchEnabled: true, searchQueryParameter: 'q,search' });
+});
+
+await test('google signals + attribution updates target their property settings children', async () => {
+  setEnv({ writes: true });
+  const { server, calls } = buildServer();
+  await callTool(server, 'ga4_update_google_signals', { property: '7', state: 'GOOGLE_SIGNALS_DISABLED', confirm: true });
+  const sig = calls.find((c) => c.label === 'signals');
+  assert.strictEqual(sig.params.name, 'properties/7/googleSignalsSettings');
+  assert.deepStrictEqual(sig.params.requestBody, { state: 'GOOGLE_SIGNALS_DISABLED' });
+  await callTool(server, 'ga4_update_attribution_settings', { property: '7', reportingAttributionModel: 'PAID_AND_ORGANIC_CHANNELS_DATA_DRIVEN', confirm: true });
+  const at = calls.find((c) => c.label === 'attribution');
+  assert.strictEqual(at.params.name, 'properties/7/attributionSettings');
+  assert.strictEqual(at.params.updateMask, 'reportingAttributionModel');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

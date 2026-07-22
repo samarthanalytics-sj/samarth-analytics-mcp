@@ -25,6 +25,10 @@ function build(): { tools: ReturnType<typeof buildGa4WriteTools>; calls: Call[] 
     ga4AdminPatch: rec('patch'),
     ga4AdminDelete: rec('delete'),
     ga4AdminArchive: rec('archive'),
+    ga4UpdateEnhancedMeasurement: rec('em'),
+    ga4UpdateDataRedaction: rec('redaction'),
+    ga4UpdateAttribution: rec('attribution'),
+    ga4UpdateGoogleSignals: rec('signals'),
   } as unknown as GoogleDataService;
   return { tools: buildGa4WriteTools(fake), calls };
 }
@@ -68,6 +72,22 @@ test('create_ga4_data_stream still passes valid nested bodies and rejects tag-se
     async () => c.handler({ property: '5', type: 'WEB_DATA_STREAM', displayName: 'Web', body: { sessionTimeoutDuration: '1800s' } }),
     /not GA4 Admin API data-stream fields: sessionTimeoutDuration/,
   );
+});
+
+test('singleton settings tools target their settings children with real masks', async () => {
+  const { tools, calls } = build();
+  const em = tools.find((x) => x.name === 'update_ga4_enhanced_measurement')!;
+  await em.handler({ property: '5', dataStreamId: '9', siteSearchEnabled: true, searchQueryParameter: 'q,search' });
+  const emCall = calls.find((c) => c.verb === 'em')!;
+  assert.equal(emCall.args[0], 'properties/5/dataStreams/9/enhancedMeasurementSettings');
+  assert.equal(emCall.args[1], 'siteSearchEnabled,searchQueryParameter');
+  const sig = tools.find((x) => x.name === 'update_ga4_google_signals')!;
+  await sig.handler({ property: '7', state: 'GOOGLE_SIGNALS_DISABLED' });
+  const sigCall = calls.find((c) => c.verb === 'signals')!;
+  assert.equal(sigCall.args[0], 'properties/7/googleSignalsSettings');
+  assert.deepEqual(sigCall.args[2], { state: 'GOOGLE_SIGNALS_DISABLED' });
+  const at = tools.find((x) => x.name === 'update_ga4_attribution_settings')!;
+  await assert.rejects(async () => at.handler({ property: '7' }), /supply at least one setting/);
 });
 
 test('validateDataStreamBody: clean bodies pass; the message lists ONLY the offending fields', async () => {

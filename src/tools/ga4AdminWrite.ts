@@ -65,6 +65,13 @@ function deriveUpdateMask(body: Record<string, unknown>): string {
   return Object.keys(body).join(',');
 }
 
+/** The supplied args, keeping only the listed keys that are actually present. */
+function pickDefined(a: Record<string, unknown>, keys: string[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const k of keys) if (a[k] !== undefined) out[k] = a[k];
+  return out;
+}
+
 type ParentKind = 'property' | 'dataStream' | 'account';
 
 interface VerbSpec {
@@ -643,6 +650,97 @@ export function registerGa4AdminWriteTools(
         return errorText(formatGa4Error('ga4_update_data_retention', err));
       }
     }
+  );
+
+  // ── Singleton settings (v1alpha dedicated update methods, not collection patches) ──────────
+  // These are the API-writable side of stream/property configuration. The Google tag settings
+  // themselves (cross-domain, unwanted referrals, internal traffic, session timeout, consent
+  // defaults) have NO Admin API surface and stay UI-only - see the data-stream tool's guard.
+  const singleton = (
+    toolName: string,
+    desc: string,
+    fields: z.ZodRawShape,
+    keys: string[],
+    buildName: (a: Record<string, unknown>) => string,
+    call: (p: { name: string; updateMask: string; requestBody: object }) => Promise<{ data: unknown }>
+  ): void => {
+    server.registerTool(
+      toolName,
+      {
+        description: `[GA4 WRITE] ${desc} Requires GA4_MCP_ENABLE_WRITES=true and confirm=true.`,
+        inputSchema: z.object({ ...fields, confirm: z.boolean().describe('Must be true to apply the change.') }),
+      },
+      async (a: Record<string, unknown>) => {
+        try {
+          const { dryRun } = checkGa4Guardrails('write', a.confirm as boolean, getGuardrailConfig());
+          const requestBody = pickDefined(a, keys);
+          const updateMask = deriveUpdateMask(requestBody);
+          if (!updateMask) return errorText(`${toolName} failed: supply at least one setting to change.`);
+          const name = buildName(a);
+          if (dryRun) return textResult(`[DRY RUN] Would patch ${name} (mask ${updateMask}): ${JSON.stringify(requestBody)}`);
+          const res = await call({ name, updateMask, requestBody });
+          return jsonResult(res.data);
+        } catch (err) {
+          return errorText(formatGa4Error(toolName, err));
+        }
+      }
+    );
+  };
+  const streamFields: z.ZodRawShape = { property: propertyArg, dataStreamId: z.string().min(1).describe('Data stream ID (numeric) or "dataStreams/{id}".') };
+  singleton(
+    'ga4_update_enhanced_measurement',
+    "Update a WEB data stream's Enhanced Measurement: master streamEnabled plus per-signal toggles (scrolls, outbound clicks, site search + query params, video engagement, file downloads, form interactions, SPA page changes).",
+    {
+      ...streamFields,
+      streamEnabled: z.boolean().optional(),
+      scrollsEnabled: z.boolean().optional(),
+      outboundClicksEnabled: z.boolean().optional(),
+      siteSearchEnabled: z.boolean().optional(),
+      videoEngagementEnabled: z.boolean().optional(),
+      fileDownloadsEnabled: z.boolean().optional(),
+      formInteractionsEnabled: z.boolean().optional(),
+      pageChangesEnabled: z.boolean().optional(),
+      searchQueryParameter: z.string().optional().describe('Comma-separated site-search query params, e.g. "q,s,search".'),
+      uriQueryParameter: z.string().optional(),
+    },
+    ['streamEnabled', 'scrollsEnabled', 'outboundClicksEnabled', 'siteSearchEnabled', 'videoEngagementEnabled', 'fileDownloadsEnabled', 'formInteractionsEnabled', 'pageChangesEnabled', 'searchQueryParameter', 'uriQueryParameter'],
+    (a) => `${toDataStreamName(String(a.property), String(a.dataStreamId))}/enhancedMeasurementSettings`,
+    (p) => (getAlphaClient() as unknown as { properties: { dataStreams: { updateEnhancedMeasurementSettings: (x: typeof p) => Promise<{ data: unknown }> } } }).properties.dataStreams.updateEnhancedMeasurementSettings(p)
+  );
+  singleton(
+    'ga4_update_data_redaction',
+    "Update a WEB data stream's client-side data redaction: email redaction and URL query-parameter redaction (with the parameter key list).",
+    {
+      ...streamFields,
+      emailRedactionEnabled: z.boolean().optional(),
+      queryParameterRedactionEnabled: z.boolean().optional(),
+      queryParameterKeys: z.array(z.string()).optional().describe('Query params to redact, e.g. ["email", "phone"].'),
+    },
+    ['emailRedactionEnabled', 'queryParameterRedactionEnabled', 'queryParameterKeys'],
+    (a) => `${toDataStreamName(String(a.property), String(a.dataStreamId))}/dataRedactionSettings`,
+    (p) => (getAlphaClient() as unknown as { properties: { dataStreams: { updateDataRedactionSettings: (x: typeof p) => Promise<{ data: unknown }> } } }).properties.dataStreams.updateDataRedactionSettings(p)
+  );
+  singleton(
+    'ga4_update_attribution_settings',
+    "Update a property's attribution: reporting model, acquisition/other conversion lookback windows, and the Ads web-conversion export scope.",
+    {
+      property: propertyArg,
+      reportingAttributionModel: z.enum(['PAID_AND_ORGANIC_CHANNELS_DATA_DRIVEN', 'PAID_AND_ORGANIC_CHANNELS_LAST_CLICK', 'GOOGLE_PAID_CHANNELS_LAST_CLICK']).optional(),
+      acquisitionConversionEventLookbackWindow: z.enum(['ACQUISITION_CONVERSION_EVENT_LOOKBACK_WINDOW_7_DAYS', 'ACQUISITION_CONVERSION_EVENT_LOOKBACK_WINDOW_30_DAYS']).optional(),
+      otherConversionEventLookbackWindow: z.enum(['OTHER_CONVERSION_EVENT_LOOKBACK_WINDOW_30_DAYS', 'OTHER_CONVERSION_EVENT_LOOKBACK_WINDOW_60_DAYS', 'OTHER_CONVERSION_EVENT_LOOKBACK_WINDOW_90_DAYS']).optional(),
+      adsWebConversionDataExportScope: z.enum(['NOT_SELECTED_YET', 'PAID_AND_ORGANIC_CHANNELS', 'GOOGLE_PAID_CHANNELS']).optional(),
+    },
+    ['reportingAttributionModel', 'acquisitionConversionEventLookbackWindow', 'otherConversionEventLookbackWindow', 'adsWebConversionDataExportScope'],
+    (a) => `${toPropertyName(String(a.property))}/attributionSettings`,
+    (p) => (getAlphaClient() as unknown as { properties: { updateAttributionSettings: (x: typeof p) => Promise<{ data: unknown }> } }).properties.updateAttributionSettings(p)
+  );
+  singleton(
+    'ga4_update_google_signals',
+    'Turn Google Signals on or off for a property (cross-device + demographics collection - the user must confirm their privacy disclosures cover it).',
+    { property: propertyArg, state: z.enum(['GOOGLE_SIGNALS_ENABLED', 'GOOGLE_SIGNALS_DISABLED']) },
+    ['state'],
+    (a) => `${toPropertyName(String(a.property))}/googleSignalsSettings`,
+    (p) => (getAlphaClient() as unknown as { properties: { updateGoogleSignalsSettings: (x: typeof p) => Promise<{ data: unknown }> } }).properties.updateGoogleSignalsSettings(p)
   );
 
   // ga4_update_account (patch) + ga4_delete_account
