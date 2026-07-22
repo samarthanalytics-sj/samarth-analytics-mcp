@@ -265,11 +265,15 @@ export function antiLieFindings(baseline: Ga4Baseline | null, dqCounts: DataQual
       const spikeLink = spike
         ? ` This is likely the same root cause as the ${spike.channel} ${spike.periods === 2 ? `two-${spikePeriod}` : `single-${spikePeriod}`} concentration flagged above - untagged campaign bursts land in ${spike.channel}/organic buckets, producing both that spike and this revenue mismatch.`
         : '';
+      // Real Ads spend, when the cost query returned it - lets the finding state actual ROAS
+      // exposure instead of only the two revenue pictures.
+      const spend = campaigns.taggedCampaigns.reduce((sum, c) => sum + (c.adCost ?? 0), 0);
+      const spendTxt = spend > 0 ? ` Google Ads spend in this window: ${m(spend)}.` : '';
       out.push({
         severity: 'high',
         category: 'attribution_mismatch',
         area: 'Data quality',
-        message: `Campaign and channel revenue do not reconcile: ${paidCamps.length} paid-format campaign(s) with recorded revenue (${names}) claim ${m(campRev)}, but all paid channels combined show only ${m(paidChanRev)}.${landing} Either way this report contains two revenue pictures that cannot both be true as stated.${spikeLink}`,
+        message: `Campaign and channel revenue do not reconcile: ${paidCamps.length} paid-format campaign(s) with recorded revenue (${names}) claim ${m(campRev)}, but all paid channels combined show only ${m(paidChanRev)}.${landing} Either way this report contains two revenue pictures that cannot both be true as stated.${spendTxt}${spikeLink}`,
         recommendation: 'Verify Google Ads auto-tagging (gclid) and the GA4-Google Ads link, add utm_medium=cpc/paid to ad links so paid sessions leave the organic/direct buckets, and quote revenue from ONE attribution view until the two reconcile.',
         plain: `Your ads look ${ratioTxt} less profitable than they are: campaigns brought in about ${m(campRev)}, but only ${m(paidChanRev)} of it is credited to paid ads. The rest is filed as free traffic, so your ad reports understate what the ads actually earned.`,
         state: 'confirmed',

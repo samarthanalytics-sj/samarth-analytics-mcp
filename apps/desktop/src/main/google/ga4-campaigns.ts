@@ -18,6 +18,11 @@ export interface CampaignRow {
   /** Real purchase transactions (GA4 `transactions` metric). Optional so older callers/fixtures that
    *  never fetched it keep working; renderers show a dash rather than 0 when absent. */
   purchases?: number;
+  /** Google Ads spend attributed to this campaign (advertiserAdCost) - present only when the
+   *  property has a Google Ads link AND the cost query returned a nonzero row. Never fabricated. */
+  adCost?: number;
+  /** Google Ads clicks (advertiserAdClicks), same availability rule as adCost. */
+  adClicks?: number;
 }
 
 export interface Ga4CampaignInput {

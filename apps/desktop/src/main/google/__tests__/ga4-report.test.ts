@@ -1108,5 +1108,55 @@ test('product performance: item-scoped table only when items exist, with the man
   assert.ok(!buildGa4AuditReport(input()).includes('**Product performance**'));
 });
 
+
+// ── Ads economics (spend / ROAS / CAC from the Google Ads link) ──
+
+test('campaign table shows Spend/ROAS/CAC when real ad spend exists - and computes them honestly', () => {
+  const withCost = campaignReport({
+    taggedCampaigns: [
+      { campaign: 'Adv+shopping | May', sessions: 10000, keyEvents: 1200, revenue: 250000, engagementRate: 0.98, purchases: 100, adCost: 50000, adClicks: 8000 },
+      { campaign: 'organic-newsletter', sessions: 500, keyEvents: 60, revenue: 9000, engagementRate: 0.9, purchases: 3 },
+    ],
+  });
+  const sections = buildGa4Sections(input({ campaigns: withCost }));
+  const cp = sections.campaignPerformance!;
+  assert.equal(cp.hasCost, true);
+  assert.ok(cp.rows[0].spend.includes('50,000'));
+  assert.equal(cp.rows[0].roas, '5.0x', 'ROAS = revenue/spend');
+  assert.ok(cp.rows[0].cac.includes('500'), 'CAC = spend/purchases: ' + cp.rows[0].cac);
+  assert.equal(cp.rows[1].spend, '—', 'a campaign with no spend shows a dash, never 0');
+  assert.ok(/advertiserAdCost from the Google Ads link/.test(cp.caveat), 'caveat explains the source + formulas');
+  const md = buildGa4AuditReport(input({ campaigns: withCost }));
+  assert.ok(md.includes('| Spend | ROAS | CAC |'), 'markdown grows the columns');
+});
+
+test('no Google Ads link -> no Spend/ROAS/CAC columns anywhere (absent, never zeros)', () => {
+  const sections = buildGa4Sections(input());
+  const cp = sections.campaignPerformance;
+  if (cp) {
+    assert.equal(cp.hasCost, false);
+    assert.ok(!/advertiserAdCost/.test(cp.caveat));
+  }
+  const md = buildGa4AuditReport(input());
+  assert.ok(!md.includes('| Spend | ROAS | CAC |'), 'markdown keeps the original columns');
+});
+
+test('the revenue-reconciliation finding states real Ads spend when the cost query returned it', () => {
+  const b = baseline({
+    channelPerformance: [
+      { channel: 'Organic Shopping', sessions: 20000, keyEvents: 900, convRate: 0.6, revenue: 900000, engagementRate: 0.97 },
+      { channel: 'Paid Social', sessions: 1500, keyEvents: 100, convRate: 0.5, revenue: 40000, engagementRate: 0.98 },
+    ],
+  });
+  const withCost = campaignReport({
+    taggedCampaigns: [
+      { campaign: 'Adv+shopping | May', sessions: 10000, keyEvents: 1200, revenue: 800000, engagementRate: 0.98, purchases: 100, adCost: 120000, adClicks: 9000 },
+    ],
+  });
+  const md = buildGa4AuditReport(input({ baseline: b, growth: growthOf(b), campaigns: withCost }));
+  assert.ok(/Campaign and channel revenue do not reconcile/.test(md), 'mismatch fires');
+  assert.ok(/Google Ads spend in this window: INR 120,000/.test(md), 'real spend stated in the finding');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

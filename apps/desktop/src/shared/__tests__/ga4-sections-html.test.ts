@@ -88,11 +88,12 @@ const view = (over: Partial<Ga4SectionsView> = {}): Ga4SectionsView => ({
   ],
   campaignPerformance: {
     rows: [
-      { campaign: 'summer_sale', sessions: '5,000', conversions: '400', purchases: '12', revenue: 'INR 250,000', engagement: '62%' },
-      { campaign: 'spring_promo', sessions: '3,000', conversions: '150', purchases: '4', revenue: 'INR 90,000', engagement: '51%' },
+      { campaign: 'summer_sale', sessions: '5,000', conversions: '400', purchases: '12', revenue: 'INR 250,000', engagement: '62%', spend: 'INR 100,000', roas: '2.5x', cac: 'INR 8,333' },
+      { campaign: 'spring_promo', sessions: '3,000', conversions: '150', purchases: '4', revenue: 'INR 90,000', engagement: '51%', spend: '—', roas: '—', cac: '—' },
     ],
     best: 'summer_sale (400 key events, 12 purchases, INR 250,000)',
     untaggedShare: '60.0%',
+    hasCost: true,
     caveat: '"Key events" counts every configured key event (product views, add-to-carts, sign-ups, ...), NOT sales - Purchases is the real transaction count. Revenue here is campaign-attributed and will not match the channel table 1:1.',
   },
   productPerformance: null,

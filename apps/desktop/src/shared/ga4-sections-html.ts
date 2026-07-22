@@ -453,13 +453,13 @@ export function ga4SectionsHtml(x: Ga4SectionsView): string {
     const cpRows = cp.rows
       .map(
         (c) =>
-          `<tr><td ${TD}><span style="font-weight:600">${esc(c.campaign)}</span></td><td ${TDR}>${esc(c.sessions)}</td><td ${TDP}>${esc(c.conversions)}</td><td ${TDP}>${esc(c.purchases)}</td><td ${TDP}>${esc(c.revenue)}</td><td ${TDR}>${esc(c.engagement)}</td></tr>`,
+          `<tr><td ${TD}><span style="font-weight:600">${esc(c.campaign)}</span></td><td ${TDR}>${esc(c.sessions)}</td><td ${TDP}>${esc(c.conversions)}</td><td ${TDP}>${esc(c.purchases)}</td><td ${TDP}>${esc(c.revenue)}</td>${cp.hasCost ? `<td ${TDP}>${esc(c.spend)}</td><td ${TDP}>${esc(c.roas)}</td><td ${TDP}>${esc(c.cac)}</td>` : ''}<td ${TDR}>${esc(c.engagement)}</td></tr>`,
       )
       .join('');
     s6 +=
       tableCaption('Campaign performance', `(which marketing campaigns convert and earn${cp.best ? ` — top: ${esc(cp.best)}` : ''}; untagged traffic ${esc(cp.untaggedShare)})`) +
       `<div style="border:1px solid ${BORDER};border-radius:4px;background:${SURFACE};overflow-x:auto;margin:2px 0">` +
-      `<table style="border-collapse:collapse;width:100%;min-width:500px"><thead><tr><th ${TH}>Campaign</th><th ${THR}>Sessions</th><th ${THR}>Key events</th><th ${THR}>Purchases</th><th ${THR}>Revenue</th><th ${THR}>Engagement</th></tr></thead><tbody>${cpRows}</tbody></table></div>` +
+      `<table style="border-collapse:collapse;width:100%;min-width:${cp.hasCost ? 640 : 500}px"><thead><tr><th ${TH}>Campaign</th><th ${THR}>Sessions</th><th ${THR}>Key events</th><th ${THR}>Purchases</th><th ${THR}>Revenue</th>${cp.hasCost ? `<th ${THR}>Spend</th><th ${THR}>ROAS</th><th ${THR}>CAC</th>` : ''}<th ${THR}>Engagement</th></tr></thead><tbody>${cpRows}</tbody></table></div>` +
       `<div style="font-family:${MONO};font-size:11px;color:${FAINT};margin:4px 2px 8px;line-height:1.55">${esc(cp.caveat)}</div>` +
       provNote;
   }
