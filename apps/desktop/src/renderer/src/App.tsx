@@ -72,7 +72,7 @@ import { MEMORY_KINDS, type Memory, type MemoryKind } from '../../shared/chat-me
 import type { SeedCandidate } from '../../shared/memory-seed';
 import { resolveChatInput, slashMenuMatches, type SlashCommand } from '../../shared/chat-commands';
 import { extractReplyTables, shouldOfferExport } from '../../shared/chat-export';
-import { parseSuggestionEvidence, isProviderFormIdLabel } from '../../shared/suggestion-details';
+import { parseSuggestionEvidence, isProviderFormIdLabel, providerDisplayName } from '../../shared/suggestion-details';
 import { execSummaryHtml } from '../../shared/ga4-exec-html';
 import { stripDuplicateCharts } from '../../shared/ga4-visuals-html';
 import { ga4SectionsHtml } from '../../shared/ga4-sections-html';
@@ -4716,29 +4716,41 @@ function TagReviewPanel({
             )}
             {showLog && (
               <div style={{ marginTop: 10 }}>
-                {/* Forms detected (before dedup) */}
+                {/* Forms detected (before dedup) - everything the scan fetched per form: its heading,
+                    the provider's product name, the id a trigger can scope on, field count, modal state. */}
                 <div style={styles.h2}>Forms detected ({scanLog.inventory.forms.length})</div>
                 <table style={styles.invTable}>
                   <thead>
                     <tr>
-                      <th style={styles.invTh}>Page</th>
-                      <th style={styles.invTh}>Purpose</th>
+                      <th style={styles.invTh}>Form</th>
                       <th style={styles.invTh}>Provider</th>
+                      <th style={styles.invTh}>Form id</th>
+                      <th style={styles.invTh}>Purpose</th>
+                      <th style={styles.invTh}>Fields</th>
+                      <th style={styles.invTh}>Page</th>
                       <th style={styles.invTh}>Action</th>
                     </tr>
                   </thead>
                   <tbody>
                     {scanLog.inventory.forms.map((f, i) => (
                       <tr key={i}>
-                        <td style={styles.invTd}>{f.page}</td>
+                        <td style={styles.invTd}>
+                          {f.title || <span style={{ color: 'var(--text-faint)' }}>untitled</span>}
+                          {f.hidden && <span title="Not rendered at page load - opens in a modal/popup" style={{ marginLeft: 6, fontSize: 10, color: 'var(--c-amber)' }}>modal</span>}
+                        </td>
+                        <td style={styles.invTd}>{providerDisplayName(f.provider)}</td>
+                        <td style={{ ...styles.invTd, fontFamily: 'ui-monospace, monospace', fontSize: 11 }} title={f.providerFormId && f.formId ? `provider id ${f.providerFormId} · DOM id #${f.formId}` : undefined}>
+                          {f.providerFormId ?? (f.formId ? `#${f.formId}` : '-')}
+                        </td>
                         <td style={styles.invTd}>{f.purpose}</td>
-                        <td style={styles.invTd}>{f.provider}</td>
+                        <td style={styles.invTd}>{f.fieldCount ?? '-'}</td>
+                        <td style={styles.invTd}>{f.page}</td>
                         <td style={{ ...styles.invTd, wordBreak: 'break-all' }}>{f.action || '-'}</td>
                       </tr>
                     ))}
                     {scanLog.inventory.forms.length === 0 && (
                       <tr>
-                        <td style={styles.invTd} colSpan={4}>
+                        <td style={styles.invTd} colSpan={7}>
                           none
                         </td>
                       </tr>

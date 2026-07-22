@@ -517,7 +517,20 @@ export function assembleResult(
     // them into suggestions), so the user can see ALL trackable elements.
     inventory: {
       elements: input.elements.slice(0, 1000).map((e) => ({ page: e.page, kind: e.kind, text: e.text, href: e.href, region: e.region })),
-      forms: input.forms.map((f) => ({ page: f.page, purpose: f.purpose, action: f.action, provider: f.provider.vendor })),
+      // Everything the scan actually FETCHED about each form rides into the inventory - title,
+      // DOM id, the vendor's durable form id, field count, modal state - so "Forms detected" answers
+      // "which forms, exactly?" instead of only counting them.
+      forms: input.forms.map((f) => ({
+        page: f.page,
+        purpose: f.purpose,
+        action: f.action,
+        provider: f.provider.vendor,
+        ...(f.title ? { title: f.title } : {}),
+        ...(f.formId ? { formId: f.formId } : {}),
+        ...(f.providerFormId ? { providerFormId: f.providerFormId } : {}),
+        ...(f.fields ? { fieldCount: f.fields.filter((x) => !['hidden'].includes(x.type)).length } : {}),
+        ...(f.hidden ? { hidden: true } : {}),
+      })),
     },
     installed: detectInstalled(pageScans.flatMap((p) => p.signals.scriptSrcs)),
     notScanned,

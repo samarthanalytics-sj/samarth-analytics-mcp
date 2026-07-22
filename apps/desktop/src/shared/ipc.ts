@@ -580,6 +580,16 @@ export interface DetectedFormView {
   purpose: string;
   action: string;
   provider: string;
+  /** The form's own heading/title as scanned (what a human calls it), when one was found. */
+  title?: string;
+  /** The <form> element's DOM id. */
+  formId?: string;
+  /** The vendor's durable form id (HubSpot form GUID, data-wpcf7-id, …) when the provider exposes one. */
+  providerFormId?: string;
+  /** Non-hidden field count (what a user would see and fill). */
+  fieldCount?: number;
+  /** Not rendered at page load - opens in a modal/popup. */
+  hidden?: boolean;
 }
 
 /** Result of crawling a URL for tag suggestions (suggestions:scan). */
