@@ -19,7 +19,7 @@ import { createGatedExecutor, buildToolGroupPrompt } from '../tools/tool-groups'
 import { createProvider, runChat } from '../llm/gateway';
 import { ToolMemoryStore, formatToolMemory } from '../llm/tool-memory';
 import { changeJournal } from '../google/change-journal';
-import type { ChatMediaPart, ChatReply, ChatStreamEvent, ChatToolCall, ChatTurn, GoogleProduct, GtmContext } from '../../shared/ipc';
+import type { AdsContext, ChatMediaPart, ChatReply, ChatStreamEvent, ChatToolCall, ChatTurn, GoogleProduct, GtmContext } from '../../shared/ipc';
 import type { LlmTurn } from '../llm/types';
 // Shared GA4/GTM creation methodology — the SAME rules the tag-suggestion engine + AI scan follow,
 // so chat tag creation stays consistent with what the audit/suggestion surfaces propose. Re-exported
@@ -50,6 +50,39 @@ export const CORPUS_PROMPT =
 // on the audit tool RESULT, where the findings it governs actually are. Re-exported under the old
 // name so the prompt tests and any other consumer keep working.
 export const GTM_AUDIT_METHODOLOGY = AUDIT_POINTER;
+
+/** What each chat product calls itself, in the user's terms. */
+export const PRODUCT_LABEL: Record<GoogleProduct, string> = {
+  gtm: 'Google Tag Manager (GTM)',
+  ga4: 'Google Analytics 4 (GA4)',
+  ads: 'Google Ads',
+};
+
+/**
+ * Google Ads chat guidance. Written around the two things that make Ads different from GTM and GA4:
+ *
+ * 1. THE CUSTOMER ID IS NOT OPTIONAL. Every Ads call is against one customer, and a manager (MCC)
+ *    account serves no ads of its own, so "which account" is a real question the model must not guess
+ *    at. The selected customer arrives in the per-turn context block.
+ * 2. MONEY. Ads is the only product here where a mistake spends someone's budget, so the prompt is
+ *    explicit that reads are free and anything that could change delivery is not.
+ */
+export const GOOGLE_ADS_GUIDANCE =
+  'GOOGLE ADS: every call is scoped to ONE customer id (10 digits, no dashes). The active customer is ' +
+  'named in the CURRENT CONTEXT section at the end of this prompt - use THAT id and do not ask which ' +
+  'account or re-list accounts unless the user asks to switch. A MANAGER (MCC) account serves no ads ' +
+  'itself: it exists to reach the accounts under it, so when the active customer is a manager, say so ' +
+  'and offer to switch rather than reporting "no campaigns" as if the account were empty. ' +
+  'A TEST account can never serve real conversions, so an empty conversion list there means the account ' +
+  'type, not a misconfiguration - say which it is. ' +
+  'MONEY: reads (accounts, campaigns, conversion actions, performance) are safe and free. Anything that ' +
+  'creates or changes a conversion action, campaign, ad group or budget affects a live advertising ' +
+  'account and real spend, so state exactly what you are about to change BEFORE calling the tool, and ' +
+  'report exactly what changed after. Never invent a customer id, a campaign id or a conversion label. ' +
+  'CURRENCY: amounts come back in the account currency in MICROS (1,000,000 micros = 1 unit). Convert ' +
+  'before showing a figure, and name the currency. Never present micros as if they were the amount. ' +
+  'A conversion action\'s ID and LABEL come from its tag snippet and are the only two values a GTM ' +
+  'conversion tag needs; if the user is wiring one up, offer the GTM chat rather than guessing the tag. ';
 
 /** Naming convention for GA4 tags/triggers the chat creates. Exported for testing. */
 export const GA4_TAG_NAMING =
@@ -135,12 +168,14 @@ export function buildSituationalContext(input: {
   product: GoogleProduct;
   gtmContext?: GtmContext;
   ga4Context?: { property?: string; propertyName?: string; accountName?: string };
+  adsContext?: AdsContext;
   now: Date;
   memoryBlock: string;
   toolMemoryBlock: string;
 }): string {
   const gtm = input.product === 'gtm' ? input.gtmContext : undefined;
   const ga4 = input.product === 'ga4' ? input.ga4Context : undefined;
+  const ads = input.product === 'ads' ? input.adsContext : undefined;
   return (
     'CURRENT CONTEXT (this section changes between messages; the instructions above it are fixed). ' +
     `You are acting as the Google account ${input.email}. ` +
@@ -157,6 +192,16 @@ export function buildSituationalContext(input: {
         `("${ga4.propertyName ?? ''}"${ga4.accountName ? `, account "${ga4.accountName}"` : ''}). ` +
         'Use THIS property id for every GA4 tool call (audits, reports, data quality) - do not ask ' +
         'which property and do not re-list properties unless the user asks to switch. '
+      : '') +
+    (ads?.customerId
+      ? `The user is working in Google Ads customer ${ads.customerId}` +
+        (ads.customerName ? ` ("${ads.customerName}")` : '') +
+        (ads.loginCustomerId && ads.loginCustomerId !== ads.customerId ? `, reached through manager ${ads.loginCustomerId}` : '') +
+        '. Use THIS customer id for every Google Ads tool call' +
+        (ads.loginCustomerId && ads.loginCustomerId !== ads.customerId ? ', passing that manager as the login customer id' : '') +
+        ' - do not ask which account and do not re-list accounts unless the user asks to switch. ' +
+        (ads.manager ? 'NOTE: this is a MANAGER (MCC) account - it serves no ads of its own, so campaign and conversion questions need a client account under it. ' : '') +
+        (ads.testAccount ? 'NOTE: this is a TEST account - it cannot serve real conversions, so an empty conversion list is expected. ' : '')
       : '') +
     dateContextLine(input.now) +
     input.memoryBlock +
@@ -227,8 +272,10 @@ export class ChatService {
   /** Thread identity for the tool-result carry-over: the same account + product + working-client
    *  scoping the renderer uses to key a conversation, so one container's results never leak into
    *  another container's chat. */
-  private threadKey(active: { id: string; gtmContext?: GtmContext; ga4Context?: { property?: string } }, product: GoogleProduct): string {
-    const scope = product === 'gtm' ? active.gtmContext?.containerId : active.ga4Context?.property;
+  private threadKey(active: { id: string; gtmContext?: GtmContext; ga4Context?: { property?: string }; adsContext?: AdsContext }, product: GoogleProduct): string {
+    const scope = product === 'gtm' ? active.gtmContext?.containerId
+      : product === 'ga4' ? active.ga4Context?.property
+      : active.adsContext?.customerId;
     return `${active.id}|${product}|${scope ?? 'na'}`;
   }
 
@@ -237,13 +284,14 @@ export class ChatService {
    *  PRODUCT-GATED: a container-scoped memory only applies in a GTM turn and a property-scoped one only in a
    *  GA4 turn (gtmContext / ga4Context are independent per-account fields, so the inactive product's context
    *  can be stale and point at a DIFFERENT client — using it would leak one client's notes into another's chat). */
-  private memoryBlock(active: { id: string; gtmContext?: GtmContext; ga4Context?: { property?: string } }, product: GoogleProduct, message: string): { block: string; used: Memory[] } {
+  private memoryBlock(active: { id: string; gtmContext?: GtmContext; ga4Context?: { property?: string }; adsContext?: AdsContext }, product: GoogleProduct, message: string): { block: string; used: Memory[] } {
     if (!this.memory) return { block: '', used: [] };
     const all = this.memory.list(active.id);
     if (!all.length) return { block: '', used: [] };
     const ctx = {
       containerId: product === 'gtm' ? active.gtmContext?.containerId : undefined,
       property: product === 'ga4' ? active.ga4Context?.property : undefined,
+      customerId: product === 'ads' ? active.adsContext?.customerId : undefined,
     };
     const used = selectRelevantMemories(all, ctx, message);
     return { block: formatMemoriesForPrompt(used), used };
@@ -348,9 +396,10 @@ export class ChatService {
           accountId: active.id,
           // A THUNK, not a snapshot: set_gtm_container can switch the active container mid-turn, and a
           // frozen scope would then recall (and file new notes under) the previous client.
-          scope: (): { containerId?: string; property?: string } => ({
+          scope: (): { containerId?: string; property?: string; customerId?: string } => ({
             ...(product === 'gtm' && active.gtmContext?.containerId ? { containerId: active.gtmContext.containerId } : {}),
             ...(product === 'ga4' && active.ga4Context?.property ? { property: active.ga4Context.property } : {}),
+            ...(product === 'ads' && active.adsContext?.customerId ? { customerId: active.adsContext.customerId } : {}),
           }),
           // A mid-turn recall counts as provenance too: re-emit the FULL ledger (the renderer replaces
           // the list on each event) so "N memories used" covers injected + recalled.
@@ -417,15 +466,16 @@ export class ChatService {
     // that"), recorded in the usage log, and returned on the reply.
     const mem = this.memoryBlock(active, product, message);
 
-    const productLabel = product === 'gtm' ? 'Google Tag Manager (GTM)' : 'Google Analytics 4 (GA4)';
+    const productLabel = PRODUCT_LABEL[product];
     // The FIXED half: identical for every turn with the same product, permissions and container
     // kind, so it stays byte-identical across turns and can be served from the provider's cache.
     // Nothing account-specific belongs here - the email moved to the situational section below,
     // which also means two accounts on the same product share one cached prefix.
     const staticSystem =
       `You are a ${productLabel} assistant. ` +
-      `Only help with ${productLabel}; if asked about the other product, say to switch the ` +
-      'GTM/GA4 selector. ' +
+      `Only help with ${productLabel}; if asked about one of the others, say to switch the ` +
+      'GTM / GA4 / Google Ads selector. ' +
+      (product === 'ads' ? GOOGLE_ADS_GUIDANCE : '') +
       (product === 'gtm' && confirm
         ? 'You can read the GTM setup and create/edit tags, triggers, and variables in a DRAFT ' +
           'workspace (never published — the user publishes manually in GTM). Always work in a workspace. ' +
@@ -530,7 +580,7 @@ export class ChatService {
           'Be conservative: never remember secrets, API keys, personal data, or transient one-off values. Briefly confirm what you remembered or forgot. ' +
           'To look BEYOND the notes in that section (another client of this account, or something the user says was agreed earlier), call recall_memories with a short query instead of guessing. '
         : '') +
-      CORPUS_PROMPT +
+      (product === 'ads' ? '' : CORPUS_PROMPT) +
       // Built from the groups THIS chat can really reveal: a GA4 chat has no "pixels" group and a
       // read-only chat has no writes, so a fixed sentence would promise capabilities that do not exist.
       buildToolGroupPrompt(gatedTools.availableGroups()) +
@@ -547,6 +597,7 @@ export class ChatService {
       product,
       gtmContext: product === 'gtm' ? active.gtmContext : undefined,
       ga4Context: product === 'ga4' ? active.ga4Context : undefined,
+      adsContext: product === 'ads' ? active.adsContext : undefined,
       now: new Date(),
       memoryBlock: mem.block,
       toolMemoryBlock,

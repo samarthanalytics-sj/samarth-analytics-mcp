@@ -27,6 +27,7 @@ import type {
   GtmAccountView,
   GtmContainerView,
   Ga4Context,
+  AdsContext,
   GtmContext,
   GtmWorkspaceView,
   LlmProvider,
@@ -100,6 +101,9 @@ const api = {
       ipcRenderer.invoke('accounts:setGtmContext', id, ctx),
     setGa4Context: (id: string, ctx: Ga4Context): Promise<AccountView> =>
       ipcRenderer.invoke('accounts:setGa4Context', id, ctx),
+    /** Remember which Google Ads customer the Ads chat works against. */
+    setAdsContext: (id: string, ctx: AdsContext): Promise<AccountView> =>
+      ipcRenderer.invoke('accounts:setAdsContext', id, ctx),
     // Fired when the chat switches the active GTM context — re-fetch to update the bar.
     onChanged: (cb: () => void): (() => void) => {
       const listener = (): void => cb();

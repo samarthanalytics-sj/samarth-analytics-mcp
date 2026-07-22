@@ -16,6 +16,12 @@ let confirmSeq = 0;
 // In-flight streaming chats, keyed by requestId, so 'llm:chat:stop' can abort one.
 const activeChats = new Map<string, AbortController>();
 
+/** Coerce the renderer's product to one we actually serve. An unrecognised value must fall back to a
+ *  REAL product rather than being trusted: this is an IPC boundary, and the product picks the tool set
+ *  and the system prompt. GTM is the safe default (it is the app's home tab). */
+const PRODUCTS: readonly GoogleProduct[] = ['gtm', 'ga4', 'ads'];
+const asProduct = (v: unknown): GoogleProduct => (PRODUCTS.includes(v as GoogleProduct) ? (v as GoogleProduct) : 'gtm');
+
 export function registerChatIpc(service: ChatService): void {
   // Attach a document to the chat: OS file picker -> plain-text extraction in the MAIN process
   // (the renderer never touches the filesystem). Returns null when the user cancels; extraction
@@ -65,7 +71,7 @@ export function registerChatIpc(service: ChatService): void {
       if (typeof message !== 'string' || message.trim().length === 0) {
         throw new Error('Message cannot be empty.');
       }
-      return service.chat(Array.isArray(history) ? history : [], message, product === 'ga4' ? 'ga4' : 'gtm', Array.isArray(media) ? media : undefined);
+      return service.chat(Array.isArray(history) ? history : [], message, asProduct(product), Array.isArray(media) ? media : undefined);
     }
   );
 
@@ -77,7 +83,7 @@ export function registerChatIpc(service: ChatService): void {
       if (typeof message !== 'string' || message.trim().length === 0) {
         throw new Error('Message cannot be empty.');
       }
-      const scopedProduct: GoogleProduct = product === 'ga4' ? 'ga4' : 'gtm';
+      const scopedProduct: GoogleProduct = asProduct(product);
       const send = (payload: unknown): void => {
         if (!event.sender.isDestroyed()) event.sender.send('llm:chat:event', payload);
       };

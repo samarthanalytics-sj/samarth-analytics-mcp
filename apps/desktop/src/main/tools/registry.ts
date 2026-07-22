@@ -443,6 +443,69 @@ function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean): Too
         }),
     },
     {
+      name: 'list_google_ads_campaigns',
+      description:
+        'List a Google Ads account\'s campaigns with status, channel type, dates, bidding strategy and daily budget. ' +
+        'CONFIG ONLY - no spend or performance (use google_ads_campaign_performance for that). Read-only. Budgets are ' +
+        'returned in MICROS of the account currency (1,000,000 micros = 1 unit) and a SHARED budget backs several ' +
+        'campaigns, so its amount is not that campaign\'s alone. A manager (MCC) account runs no campaigns of its own, ' +
+        'so an empty list there means the account TYPE, not an empty advertiser.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          customerId: { type: 'string', description: 'Google Ads account id, bare digits (strip the dashes).' },
+          loginCustomerId: { type: 'string', description: 'Manager (MCC) id to act through, when reached via a manager.' },
+        },
+        required: ['customerId'],
+        additionalProperties: false,
+      },
+      handler: (a) =>
+        run(async () => {
+          const campaigns = await ads.listCampaigns(s(a.customerId), login(a));
+          return {
+            ok: true,
+            count: campaigns.length,
+            campaigns,
+            note:
+              'budget.amountMicros is MICROS of the account currency (divide by 1,000,000 before showing it, and name the currency). ' +
+              'budget.shared true means the budget is shared across campaigns. This is configuration only: it contains no spend, ' +
+              'clicks or conversions, so do not describe a campaign as performing well or badly from this result.',
+          };
+        }),
+    },
+    {
+      name: 'google_ads_campaign_performance',
+      description:
+        'Per-campaign performance over the last 7, 14 or 30 days: impressions, clicks, cost, conversions and conversion ' +
+        'value. Read-only. Cost is in MICROS of the account currency. The window EXCLUDES today (partial data), and rows ' +
+        'are already summed per campaign over the window - they are not daily rows.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          customerId: { type: 'string', description: 'Google Ads account id, bare digits (strip the dashes).' },
+          days: { type: 'number', description: 'Window length: 7, 14 or 30 (default 30). Other values snap to the nearest supported window.' },
+          loginCustomerId: { type: 'string', description: 'Manager (MCC) id to act through, when reached via a manager.' },
+        },
+        required: ['customerId'],
+        additionalProperties: false,
+      },
+      handler: (a) =>
+        run(async () => {
+          const days = typeof a.days === 'number' ? a.days : 30;
+          const r = await ads.campaignPerformance(s(a.customerId), days, login(a));
+          return {
+            ok: true,
+            window: `last ${r.window} days, excluding today`,
+            count: r.campaigns.length,
+            campaigns: r.campaigns,
+            note:
+              'costMicros is MICROS of the account currency (divide by 1,000,000; name the currency). "conversions" counts only ' +
+              'actions marked primary for goals; "allConversions" includes secondary ones, so the two legitimately differ and ' +
+              'neither is wrong. Report the window you were given - never imply the figures are all-time or include today.',
+          };
+        }),
+    },
+    {
       name: 'list_google_ads_conversion_actions',
       description:
         'List a Google Ads account\'s conversion actions WITH each one\'s Conversion ID (AW-xxxxxxxxx) and Conversion ' +
@@ -4461,17 +4524,34 @@ export function buildToolRegistry(
     },
   ];
 
-  // GOOGLE ADS belongs to the GTM toolset, NOT to a product of its own and NOT to the GA4 chat: its
-  // entire job here is to hand the GTM half a real Conversion ID + Label so a google_ads_conversion tag
-  // can be built without asking the user to paste them. So these go through the SAME product filter as
-  // everything else (productOf files them under 'gtm', since no Ads tool name contains "ga4"), and the
-  // create tool rides in the confirm-gated half exactly like every other write.
+  // GOOGLE ADS serves TWO products, which is why it cannot be filed by productOf like everything else:
+  //   'ads' - the Google Ads chat, where these ARE the toolset.
+  //   'gtm' - the GTM chat, where their job is to hand the tag builder a real Conversion ID + Label so
+  //           a google_ads_conversion tag can be built without asking the user to paste them.
+  // They never belong to the GA4 chat. The create tool rides in the confirm-gated half exactly like
+  // every other write.
   const adsTools: Tool[] = ads ? buildGoogleAdsTools(ads, Boolean(confirm)) : [];
+  const adsToolNames = new Set(adsTools.map((t) => t.name));
 
   // GA4 Admin write tools (product 'ga4') live in a separate catalog; included
   // only when a confirm function is provided, exactly like the GTM write tools.
   const all = [...readTools, ...(confirm ? [...writeTools, ...buildGa4WriteTools(data)] : []), ...contextTools, ...adsTools];
-  const tools = [...(product ? all.filter((t) => productOf(t.name) === product) : all), ...memoryTools, ...corpusTools];
+  const inProduct = (t: Tool): boolean => {
+    if (adsToolNames.has(t.name)) return product === 'ads' || product === 'gtm';
+    // An Ads chat gets NO GTM or GA4 tools. Its account scope is a customer id, not a container or a
+    // property, so a GTM tool reached from here would act on whatever container was last selected in
+    // another tab - a different client entirely.
+    if (product === 'ads') return false;
+    return productOf(t.name) === product;
+  };
+  const tools = [
+    ...(product ? all.filter(inProduct) : all),
+    ...memoryTools,
+    // The corpus is a library of past GTM CONTAINER patterns, so it has nothing to say about an Ads
+    // account. Offering it there would invite the model to cite container conventions as if they
+    // described the advertiser's campaigns.
+    ...(product === 'ads' ? [] : corpusTools),
+  ];
 
   return {
     // SENT list only. Tools that cannot act on the active container's kind are withheld to keep the
