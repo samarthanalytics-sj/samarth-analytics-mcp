@@ -1339,6 +1339,22 @@ export function buildToolRegistry(
         ),
     },
     {
+      name: 'spy_gtag_config',
+      description:
+        'Read the PUBLIC gtag.js tag configuration for ANY measurement id (yours or a competitor - no GA4 access needed): enhanced-measurement toggles, tag-level key events, user-provided data collection, email redaction, Google Signals region scope, linked destinations (GT-/AW-), server container URL (sGTM), session timeout, cross-domain linker domains. Config the tag does not carry (property settings, reporting data) is NOT included - say so instead of guessing.',
+      inputSchema: {
+        type: 'object',
+        properties: { measurementId: { type: 'string', description: 'e.g. "G-ABC123".' } },
+        required: ['measurementId'],
+        additionalProperties: false,
+      },
+      handler: async (a) => {
+        const { parseGtagSnapshot } = await import('../google/gtag-spy');
+        const id = s(a.measurementId).trim().toUpperCase();
+        return parseGtagSnapshot(id, await data.fetchGtagJs(id));
+      },
+    },
+    {
       name: 'audit_ga4_property',
       description:
         'Audit a GA4 property configuration and return findings with a severity summary: no data streams, 2-month (default) data retention, no key events/conversions, enhanced measurement off on a web stream, custom dimensions that may capture PII, no Google Ads links, and missing industry category. GA4 is READ-ONLY — findings are advisory (recommend changes for the user to make in the GA4 UI). Requires property like "properties/123456".',

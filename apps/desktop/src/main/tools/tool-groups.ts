@@ -74,6 +74,7 @@ const GROUP_MEMBERS: Record<ToolGroup, readonly string[]> = {
     // cannot even begin on "what pages does this site have", which carries no audit vocabulary. It is
     // 251 tokens, the cheapest way to stop a whole class of question failing silently.
     'discover_site_urls',
+    'spy_gtag_config',
     // GTM reads
     'list_gtm_accounts',
     'list_gtm_containers',

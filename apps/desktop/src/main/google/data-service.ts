@@ -3300,6 +3300,16 @@ export class GoogleDataService {
     };
   }
 
+  /** Fetch the PUBLIC gtag.js loader for a measurement id (what every visitor downloads - no auth).
+   *  Kept on the data service so tests/smoke can stub it instead of hitting the network. */
+  async fetchGtagJs(measurementId: string): Promise<string> {
+    const id = measurementId.trim().toUpperCase();
+    if (!/^(G|GT|AW|DC)-[A-Z0-9]+$/.test(id)) throw new Error(`"${measurementId}" is not a measurement/tag id (expected e.g. G-ABC123).`);
+    const res = await fetch(`https://www.googletagmanager.com/gtag/js?id=${id}`);
+    if (!res.ok) throw new Error(`gtag.js fetch failed for ${id}: HTTP ${res.status}`);
+    return res.text();
+  }
+
   async runGa4Report(input: {
     property: string;
     startDate: string;
