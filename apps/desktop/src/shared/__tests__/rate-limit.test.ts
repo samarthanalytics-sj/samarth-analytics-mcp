@@ -22,10 +22,13 @@ const QUOTA = 'You exceeded your current quota, please check your plan and billi
 {
   const i = parseRateLimit(TPM, 'OpenAI');
   check('TPM: recognised as per-minute', i.scope === 'per-minute' && i.unit === 'tokens');
-  check('TPM: retryable', i.retryable && isRetryableRateLimit(TPM));
+  // NOTE: this fixture is OpenAI's "Request too large" variant (Requested 30062 > Limit 30000, and the
+  // text says the tokens "must be reduced in order to run successfully"). Waiting can never fit it, so
+  // it must NOT be retried. An ordinary per-minute squeeze is covered by TPM_SQUEEZE below.
+  check('TPM (request too large): NOT retryable, waiting cannot shrink the request', !i.retryable && !isRetryableRateLimit(TPM));
   check('TPM: names the model, so a model switch is verifiable', i.model === 'gpt-4o' && i.summary.includes('gpt-4o'));
   check('TPM: carries the numbers', i.limit === 30000 && i.requested === 30062);
-  check('TPM: summary states the limit type', /per-minute tokens limit/i.test(i.summary), i.summary);
+  check('TPM (request too large): summary says the request exceeds the whole limit', /larger than the whole/i.test(i.summary), i.summary);
   check('TPM: numbers are readable in the summary', i.summary.includes('30,000') && i.summary.includes('30,062'), i.summary);
 }
 {
@@ -67,12 +70,49 @@ for (const [label, text] of [
 
 // ── Robustness ──────────────────────────────────────────────────────────────────
 check('parses comma-grouped numbers', parseRateLimit('on tokens per min (TPM): Limit 200,000, Used 199,000', 'OpenAI').limit === 200000);
-check('provider label is used, not hardcoded', parseRateLimit(TPM, 'Anthropic').summary.startsWith('Anthropic'));
+check('provider label is used, not hardcoded', parseRateLimit(RPM, 'Anthropic').summary.startsWith('Anthropic'));
 check('a model given as `model` is picked up', parseRateLimit('Rate limit reached for model `claude-opus-4-8` on tokens per min (TPM): Limit 40000', 'Anthropic').model === 'claude-opus-4-8');
 check('no em dashes in any user-facing string (house style)', (() => {
   const all = [TPM, RPM, TPD, QUOTA, ''].map((t) => parseRateLimit(t, 'OpenAI'));
   return !all.some((i) => /[—–]/.test(i.summary + i.advice));
 })());
+
+// -- Actionable vs self-healing -------------------------------------------------
+// The reported case: limit 30,000, used 19,183, this request needed 19,121. The request FITS the
+// ceiling; the window simply had not refilled. It clears itself, so a banner quoting the numbers
+// mid-answer is noise about something the user cannot act on.
+const TPM_SQUEEZE = 'Rate limit reached for gpt-4o in organization org-x on tokens per min (TPM): Limit 30000, Used 19183, Requested 19121. Please try again in 17s.';
+const squeeze = parseRateLimit(TPM_SQUEEZE, 'OpenAI');
+check('ordinary per-minute squeeze is NOT actionable (no banner)', squeeze.actionable === false);
+check('ordinary per-minute squeeze is still retried', squeeze.retryable === true && isRetryableRateLimit(TPM_SQUEEZE));
+check('ordinary per-minute squeeze is not oversized', squeeze.oversized === false);
+check('squeeze numbers are still parsed (for the log, not the banner)', squeeze.limit === 30000 && squeeze.used === 19183 && squeeze.requested === 19121);
+
+// Oversized purely by arithmetic, without OpenAI's "request too large" wording.
+const over = parseRateLimit('Rate limit reached for gpt-4o on tokens per min (TPM): Limit 30000, Used 0, Requested 35200.', 'OpenAI');
+check('a request larger than the ceiling is oversized on numbers alone', over.oversized === true && over.actionable === true && over.retryable === false);
+check('oversized summary contrasts the request against the limit', /larger than the whole/i.test(over.summary) && over.summary.includes('35,200') && over.summary.includes('30,000'));
+check('oversized advice says waiting will not help, and names real levers', /waiting cannot fix this/i.test(over.advice) && /tier/i.test(over.advice) && /new chat/i.test(over.advice));
+
+// Boundaries: equal-to-the-limit fits an empty window, and absent numbers must never be guessed.
+check('requested EQUAL to the limit is not oversized', parseRateLimit('on tokens per min (TPM): Limit 30000, Used 29000, Requested 30000', 'OpenAI').oversized === false);
+check('missing numbers never infer oversized', (() => {
+  const u = parseRateLimit('on tokens per min (TPM): slow down', 'OpenAI');
+  return u.oversized === false && u.actionable === false && u.retryable === true;
+})());
+check('the too-large WORDING alone is enough, even with no numbers', (() => {
+  const w = parseRateLimit('Request too large for gpt-4o on tokens per min (TPM): The input or output tokens must be reduced in order to run successfully.', 'OpenAI');
+  return w.oversized === true && w.retryable === false && !/undefined|NaN/.test(w.summary);
+})());
+
+// The non-recoverable kinds stay visible: each needs the user to do something.
+check('per-day is actionable', parseRateLimit(TPD, 'OpenAI').actionable === true);
+check('out of credit is actionable', parseRateLimit(QUOTA, 'OpenAI').actionable === true);
+check('an unknown 429 stays quiet but retried (old behaviour preserved)', (() => {
+  const u = parseRateLimit('some new phrasing nobody has seen', 'OpenAI');
+  return u.actionable === false && u.retryable === true;
+})());
+check('no em dashes in the new strings', !/[—–]/.test(over.summary + over.advice + squeeze.summary + squeeze.advice));
 
 console.log(`\nrate-limit: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }
