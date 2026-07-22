@@ -28,6 +28,46 @@ export interface MemoryExportNote {
   pinned?: boolean;
 }
 
+/**
+ * A note the sender has RETRACTED, so a re-import can remove it rather than only ever adding.
+ *
+ * The deleted text is NOT carried. Someone may have deleted a note precisely because it was wrong or
+ * sensitive, and shipping it to a colleague would defeat the deletion. Only a hash travels, which the
+ * importer recomputes over its OWN notes to find the match.
+ */
+export interface MemoryRetraction {
+  /** Hash of kind + client-vs-account + normalized text. See retractionKey. */
+  key: string;
+  kind: string;
+  clientScoped: boolean;
+}
+
+/**
+ * The matching key for a retraction.
+ *
+ * Deliberately does NOT include the container id: import re-scopes client notes to the importer's
+ * container, so a key tied to the sender's id would never match. Client-vs-account is included
+ * because an account-wide note and a client note with the same text are different notes.
+ *
+ * FNV-1a run four times with different offset bases and concatenated. Not cryptographic; it only has
+ * to make an accidental collision negligible, and a collision cannot delete anything on its own
+ * because the importer reviews the matched notes in cleartext before removing them.
+ */
+export function retractionKey(kind: string, text: string, clientScoped: boolean): string {
+  const input = `${String(kind ?? '')}|${clientScoped ? 'client' : 'account'}|${String(text ?? '').trim().toLowerCase()}`;
+  const bases = [0x811c9dc5, 0x01000193, 0x9e3779b9, 0x85ebca6b];
+  return bases
+    .map((base) => {
+      let h = base >>> 0;
+      for (let i = 0; i < input.length; i += 1) {
+        h ^= input.charCodeAt(i);
+        h = Math.imul(h, 0x01000193) >>> 0;
+      }
+      return h.toString(16).padStart(8, '0');
+    })
+    .join('');
+}
+
 export interface MemoryExportFile {
   format: 'samarth-memory';
   version: number;
@@ -36,6 +76,8 @@ export interface MemoryExportFile {
   /** Which client these notes describe, for the importer's confirmation. */
   client?: { containerId?: string; containerName?: string; publicId?: string };
   notes: MemoryExportNote[];
+  /** Notes the sender deleted, so a re-import can remove them too. Hashes only, never text. */
+  retracted?: MemoryRetraction[];
 }
 
 /** What a note must look like to be worth exporting. */
@@ -57,7 +99,7 @@ export interface ExportInput {
  */
 export function buildMemoryExport(
   notes: readonly ExportInput[],
-  meta: { exportedAt: string; client?: MemoryExportFile['client'] },
+  meta: { exportedAt: string; client?: MemoryExportFile['client']; retracted?: readonly MemoryRetraction[] },
 ): MemoryExportFile {
   const out: MemoryExportNote[] = [];
   for (const n of notes ?? []) {
@@ -78,11 +120,17 @@ export function buildMemoryExport(
     exportedAt: meta.exportedAt,
     ...(meta.client ? { client: meta.client } : {}),
     notes: out,
+    // Only well-formed retractions travel, and never any text.
+    ...(meta.retracted?.length
+      ? { retracted: meta.retracted.filter((r) => r && typeof r.key === 'string' && r.key.length >= 16).map((r) => ({ key: r.key, kind: String(r.kind ?? ''), clientScoped: !!r.clientScoped })) }
+      : {}),
   };
 }
 
 export interface ParseResult {
   notes: MemoryExportNote[];
+  /** Retractions the sender included, if any. */
+  retracted: MemoryRetraction[];
   client?: MemoryExportFile['client'];
   exportedAt?: string;
   /** Why the file, or parts of it, could not be read. Shown to the user, never swallowed. */
@@ -102,17 +150,17 @@ export function parseMemoryExport(raw: string): ParseResult {
   try {
     data = JSON.parse(String(raw ?? ''));
   } catch {
-    return { notes: [], problems: ['That file is not valid JSON, so nothing was read from it.'] };
+    return { notes: [], retracted: [], problems: ['That file is not valid JSON, so nothing was read from it.'] };
   }
   if (!data || typeof data !== 'object' || Array.isArray(data)) {
-    return { notes: [], problems: ['That file does not contain a memory export.'] };
+    return { notes: [], retracted: [], problems: ['That file does not contain a memory export.'] };
   }
   const f = data as Partial<MemoryExportFile>;
   if (f.format !== 'samarth-memory') {
-    return { notes: [], problems: ['That file is not a memory export from this app (its format marker is missing).'] };
+    return { notes: [], retracted: [], problems: ['That file is not a memory export from this app (its format marker is missing).'] };
   }
   if (typeof f.version !== 'number' || f.version > MEMORY_EXPORT_VERSION) {
-    return { notes: [], problems: [`That file was written by a newer version of the app (format ${String(f.version)}). Update, then import it.`] };
+    return { notes: [], retracted: [], problems: [`That file was written by a newer version of the app (format ${String(f.version)}). Update, then import it.`] };
   }
   const notes: MemoryExportNote[] = [];
   const list = Array.isArray(f.notes) ? f.notes : [];
@@ -130,7 +178,10 @@ export function parseMemoryExport(raw: string): ParseResult {
       ...((n as MemoryExportNote).pinned ? { pinned: true } : {}),
     });
   });
-  return { notes, ...(f.client ? { client: f.client } : {}), ...(typeof f.exportedAt === 'string' ? { exportedAt: f.exportedAt } : {}), problems };
+  const retracted = (Array.isArray(f.retracted) ? f.retracted : [])
+    .filter((r): r is MemoryRetraction => !!r && typeof (r as MemoryRetraction).key === 'string' && (r as MemoryRetraction).key.length >= 16)
+    .map((r) => ({ key: r.key, kind: String(r.kind ?? ''), clientScoped: !!r.clientScoped }));
+  return { notes, retracted, ...(f.client ? { client: f.client } : {}), ...(typeof f.exportedAt === 'string' ? { exportedAt: f.exportedAt } : {}), problems };
 }
 
 export interface ImportPlanItem extends MemoryExportNote {
@@ -143,6 +194,9 @@ export interface ImportPlan {
   add: ImportPlanItem[];
   /** Notes the account already has, so the user is not asked twice. */
   duplicates: MemoryExportNote[];
+  /** The importer's OWN notes that the sender has since retracted. Shown in cleartext (they are the
+   *  importer's own) and removed only on approval, so a hash collision can never delete silently. */
+  remove: Array<{ id: string; kind: string; text: string }>;
   problems: string[];
 }
 
@@ -159,7 +213,7 @@ const dedupeKey = (n: { kind: string; text: string; scope?: { containerId?: stri
  */
 export function planMemoryImport(
   parsed: ParseResult,
-  existing: readonly { kind: string; text: string; scope?: { containerId?: string; property?: string } }[],
+  existing: readonly { id?: string; kind: string; text: string; scope?: { containerId?: string; property?: string } }[],
   target?: { containerId?: string; label?: string },
 ): ImportPlan {
   const have = new Set((existing ?? []).map(dedupeKey));
@@ -181,7 +235,21 @@ export function planMemoryImport(
     add.push({ id: `imp-${i}`, ...candidate, ...(n.pinned ? { pinned: true } : {}) });
   });
 
-  return { add, duplicates, problems: parsed?.problems ?? [] };
+  // Retractions: match the sender's hashes against the importer's own notes. Nothing is removed here;
+  // this only says WHICH local notes the sender has since deleted, for the user to approve.
+  const retractKeys = new Set((parsed?.retracted ?? []).map((r) => r.key));
+  const remove: ImportPlan['remove'] = [];
+  if (retractKeys.size) {
+    for (const m of existing ?? []) {
+      if (!m?.id) continue;
+      const clientScoped = !!(m.scope?.containerId || m.scope?.property);
+      if (retractKeys.has(retractionKey(m.kind, m.text, clientScoped))) {
+        remove.push({ id: m.id, kind: m.kind, text: m.text });
+      }
+    }
+  }
+
+  return { add, duplicates, remove, problems: parsed?.problems ?? [] };
 }
 
 /** A filename a human can recognise a month later. */

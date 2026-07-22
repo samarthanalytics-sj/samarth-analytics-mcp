@@ -41,11 +41,16 @@ export function registerMemoryIpc(memory: MemoryStore, registry: RegistryService
     const applicable = memory.list(account.id)
       .filter((m) => memoryApplies(m, { containerId: ctx?.containerId, property: account.ga4Context?.property }));
     const exportedAt = new Date().toISOString().slice(0, 10); // date only: this file gets emailed around
+    // Retractions for THIS client (plus account-wide ones), so a re-import can also remove notes the
+    // sender has since deleted. Hashes only: the deleted text never leaves this machine.
+    const retracted = memory.tombstones(account.id)
+      .filter((t) => !t.clientScoped || !t.containerId || t.containerId === ctx?.containerId);
     const file = buildMemoryExport(applicable, {
       exportedAt,
       ...(ctx?.containerId ? { client: { containerId: ctx.containerId, containerName: ctx.containerName, publicId: ctx.containerPublicId } } : {}),
+      ...(retracted.length ? { retracted } : {}),
     });
-    if (file.notes.length === 0) return { saved: false, count: 0 };
+    if (file.notes.length === 0 && !retracted.length) return { saved: false, count: 0 };
     const win = BrowserWindow.fromWebContents(e.sender);
     const opts = { title: 'Export memory notes', defaultPath: memoryExportFilename(file.client, exportedAt), filters: [{ name: 'JSON', extensions: ['json'] }] };
     const { canceled, filePath } = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
@@ -60,7 +65,7 @@ export function registerMemoryIpc(memory: MemoryStore, registry: RegistryService
     const win = BrowserWindow.fromWebContents(e.sender);
     const opts = { title: 'Import memory notes', properties: ['openFile' as const], filters: [{ name: 'JSON', extensions: ['json'] }] };
     const { canceled, filePaths } = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts);
-    if (canceled || !filePaths?.length) return { add: [], duplicates: [], problems: [], cancelled: true };
+    if (canceled || !filePaths?.length) return { add: [], duplicates: [], remove: [], problems: [], cancelled: true };
     const raw = await readFile(filePaths[0], 'utf8').catch(() => '');
     const parsed = parseMemoryExport(raw);
     const ctx = account.gtmContext;

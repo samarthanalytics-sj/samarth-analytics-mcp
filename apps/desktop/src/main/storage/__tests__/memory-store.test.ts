@@ -81,6 +81,45 @@ test('remove + clear', () => {
   assert.equal(s.list('acct1').length, 0);
 });
 
+test('a deletion leaves a tombstone, so a handover can retract it too', () => {
+  const s = new MemoryStore(join(dir, 'tomb.json'), 500, clock);
+  const { memory } = s.add('acct1', { kind: 'rule', text: 'secret-ish note', scope: { containerId: 'GTM-A' } });
+  assert.equal(s.tombstones('acct1').length, 0, 'nothing recorded before a delete');
+  s.remove('acct1', memory.id);
+
+  const [t] = s.tombstones('acct1');
+  assert.ok(t, 'the delete was recorded');
+  assert.equal(t.kind, 'rule');
+  assert.equal(t.clientScoped, true);
+  assert.equal(t.containerId, 'GTM-A', 'kept for per-client export filtering');
+  // The whole point: a note is often deleted BECAUSE of what it said.
+  assert.ok(!JSON.stringify(t).includes('secret-ish'), 'the deleted text is not kept');
+  assert.match(t.key, /^[0-9a-f]{32,}$/, 'only a hash travels');
+});
+
+test('tombstones survive a reload and do not duplicate', () => {
+  const file = join(dir, 'tomb2.json');
+  const a = new MemoryStore(file, 500, clock);
+  const m1 = a.add('acct1', { kind: 'fact', text: 'gone' }).memory;
+  a.remove('acct1', m1.id);
+  // Re-adding then re-deleting the same note must not stack two identical tombstones.
+  const m2 = a.add('acct1', { kind: 'fact', text: 'gone' }).memory;
+  a.remove('acct1', m2.id);
+  assert.equal(a.tombstones('acct1').length, 1);
+
+  const b = new MemoryStore(file, 500, clock);
+  assert.equal(b.tombstones('acct1').length, 1, 'persisted across a reload');
+});
+
+test('clear records a tombstone per note, so a wipe propagates too', () => {
+  const s = new MemoryStore(join(dir, 'tomb3.json'), 500, clock);
+  s.add('acct1', { kind: 'fact', text: 'one' });
+  s.add('acct1', { kind: 'fact', text: 'two' });
+  s.clear('acct1');
+  assert.equal(s.tombstones('acct1').length, 2);
+  assert.equal(s.tombstones('acct2').length, 0, 'another account is untouched');
+});
+
 test('cap evicts oldest non-pinned first; pinned survive', () => {
   const s = new MemoryStore(join(dir, 'h.json'), 3, clock); // cap = 3
   const pin = s.add('acct1', { kind: 'fact', text: 'keep me', pinned: true }).memory;

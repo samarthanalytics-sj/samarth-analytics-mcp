@@ -1587,6 +1587,9 @@ export interface AdsPairingView {
 export interface MemoryImportPlanView {
   add: Array<{ id: string; kind: string; text: string; scope?: { containerId?: string; property?: string; label?: string }; pinned?: boolean }>;
   duplicates: Array<{ kind: string; text: string }>;
+  /** The importer's OWN notes that the sender has since deleted. Cleartext because they are the
+   *  importer's own; removed only on approval, so a hash collision can never delete silently. */
+  remove: Array<{ id: string; kind: string; text: string }>;
   problems: string[];
   cancelled?: boolean;
   client?: { containerId?: string; containerName?: string; publicId?: string };
