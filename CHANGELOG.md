@@ -1,3 +1,9 @@
+## [1.388.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.388.0...v1.388.1) (2026-07-22)
+
+### Bug Fixes
+
+* **desktop:** smoke read-tool inventory count 62 -> 63 (get_google_ads_tracking_setup) ([ea27d1f](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/ea27d1fcff86ad01deaac22ebf5198f097aa85ff)), closes [#664](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/664)
+
 ## [1.388.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.387.0...v1.388.0) (2026-07-22)
 
 ### Features
