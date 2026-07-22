@@ -119,6 +119,7 @@ const GROUP_MEMBERS: Record<ToolGroup, readonly string[]> = {
     'get_ga4_data_retention',
     'get_ga4_enhanced_measurement',
     'run_ga4_report',
+    'check_ga4_compatibility',
     'run_ga4_realtime_report',
     'rank_ga4_campaigns',
   ],
