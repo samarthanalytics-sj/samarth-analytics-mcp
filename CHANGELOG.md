@@ -1,3 +1,10 @@
+## [1.380.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.379.0...v1.380.0) (2026-07-22)
+
+### Features
+
+* **desktop:** Stop button for the tag-suggestion scan ([#654](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/654)) ([565c85d](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/565c85dcc6ae88dbf33de0a4ab13aa9a2d770389))
+* **ga4:** setup plan - audit findings become a one-click-applicable checklist ([#653](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/653)) ([90e4bed](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/90e4bed8b901890edac317fe67b638c0a163e6b7))
+
 ## [1.379.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.378.0...v1.379.0) (2026-07-22)
 
 ### Features
