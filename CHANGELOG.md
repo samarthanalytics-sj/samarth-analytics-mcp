@@ -1,3 +1,9 @@
+## [1.375.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.374.1...v1.375.0) (2026-07-22)
+
+### Features
+
+* **desktop:** walk the user through the Google Ads conversion flow in chat ([63f80b0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/63f80b0576ad9cd7c3178512cda79fe099580cfd))
+
 ## [1.374.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.374.0...v1.374.1) (2026-07-22)
 
 ### Performance Improvements
