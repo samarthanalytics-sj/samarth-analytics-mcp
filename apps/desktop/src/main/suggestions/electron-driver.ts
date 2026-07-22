@@ -20,6 +20,7 @@ import { BrowserWindow, session } from 'electron';
 import { collectPageInBrowser, type PageScanRaw } from '../../../../web-audit-mcp/src/agent/tag-suggest/collect.js';
 import { extractFormsInPage, type RawForm } from '../../../../web-audit-mcp/src/agent/forms.js';
 import { stableFormKey } from '../../../../web-audit-mcp/src/agent/tag-suggest/form-id-stability.js';
+import { countPendingEmbedsInPage } from '../../../../web-audit-mcp/src/agent/pending-embeds.js';
 import { requestAllowed } from './ssrf';
 import type { PageDriver, DrivenPage } from './scan-core';
 import type { ScanDebug, ScanDebugPage } from '../../shared/ipc';
@@ -202,6 +203,31 @@ export function createElectronDriver(opts: ElectronDriverOptions = {}): PageDriv
     }
   }
 
+  /**
+   * Poll while any provider form container is still empty, up to a cap. Best-effort in every sense:
+   * an eval failure, a container that never fills (a decorative wrapper), or the cap simply expiring
+   * all fall through to the read that follows, which is unchanged.
+   */
+  async function waitForPendingEmbeds(wc: Electron.WebContents, maxMs = 8_000): Promise<number> {
+    const started = Date.now();
+    let last = 0;
+    for (;;) {
+      let pending = 0;
+      try {
+        pending = Number(await wc.executeJavaScript(inPage(countPendingEmbedsInPage), true)) || 0;
+      } catch {
+        return last; // page navigated / frame died: let the caller read whatever is there
+      }
+      last = pending;
+      if (pending <= 0) return 0;
+      if (Date.now() - started >= maxMs) {
+        console.error(`[scan] ${pending} embedded form container(s) still empty after ${maxMs}ms - reading anyway`);
+        return pending;
+      }
+      await delay(400);
+    }
+  }
+
   let win: BrowserWindow | null = new BrowserWindow({
     show: false,
     width: 1366,
@@ -310,6 +336,13 @@ export function createElectronDriver(opts: ElectronDriverOptions = {}): PageDriv
         )) as RawForm[];
         if (autoSettle) await waitNetworkIdle(0, 700, 6_000); // give a just-triggered lazy chunk time to finish before the final read
         else await delay(Math.min(fixedSettleMs, 800));
+        // Network quiet is a PROXY for "the page is done"; an embed gated on IntersectionObserver or a
+        // timer renders AFTER quiet. The page says so directly though: the provider's container is in
+        // the DOM with no form inside it yet. Wait on THAT, and only that, so a page with nothing
+        // pending pays nothing. Measured on get.chownow.com, the HubSpot form is renderable at ~3.1s
+        // while network quiet lands at ~8.1s against a 9s ceiling: it fitted with under a second to
+        // spare, and only because network chatter happened to outlast the render.
+        await waitForPendingEmbeds(wc);
       } catch {
         /* scroll/collect failed or timed out — the form read below does a single fallback pass */
       }
