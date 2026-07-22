@@ -34,6 +34,7 @@ import type { MemoryStore } from '../storage/memory-store';
 import type { RegistryService } from '../services/registry-service';
 import { memoryApplies } from '../../shared/chat-memory';
 import { annotateFindings } from '../../shared/audit-annotations';
+import { deriveVerifyHints, applyVerifyHints, describeVerifySkip } from '../../shared/verify-hints';
 
 // A prior download of the same report may still be open in a PDF viewer, which locks the file
 // (EBUSY/EPERM/EACCES on Windows). Fall back to a suffixed name so a re-download always succeeds.
@@ -514,7 +515,29 @@ export function registerGtmAuditIpc(data: GoogleDataService, memory?: MemoryStor
     if (!a || !c || !w) throw new Error('Pick a GTM account, container and workspace first.');
     const snap = await withQuotaRetry(() => data.getGtmContainerSnapshot(a, c, w));
     const { snapshotToVerifyInputs } = await import('./container-verify');
-    return snapshotToVerifyInputs(snap);
+    const inputs = snapshotToVerifyInputs(snap);
+    // Cross-feature leverage: a saved note can say a tag cannot be driven (behind a login, production
+    // only). Those are held back rather than attempted-and-failed on every run. A skip is NOT a pass:
+    // it joins the SAME "not verifiable" list the UI already shows, carrying the note that caused it,
+    // so an unverifiable tag stays distinguishable from a broken one. Best-effort throughout.
+    try {
+      if (!memory || !registry) return inputs;
+      const active = registry.getActiveView();
+      if (!active) return inputs;
+      const notes = memory.list(active.id).filter((m) => memoryApplies(m, { containerId: active.gtmContext?.containerId, property: active.ga4Context?.property }));
+      const hints = deriveVerifyHints(notes);
+      if (!hints.length) return inputs;
+      const applied = applyVerifyHints(inputs.tags, hints);
+      if (!applied.skipped.length) return inputs;
+      return {
+        ...inputs,
+        tags: applied.tags,
+        skipped: [...(inputs.skipped ?? []), ...applied.skipped.map((k) => ({ id: k.id, reason: describeVerifySkip(k) }))],
+      };
+    } catch (e) {
+      console.error('[verify] saved-hint pass skipped:', e instanceof Error ? e.message : e);
+      return inputs;
+    }
   });
 
   // Repair a created tag's firing trigger to a corrected shape (the "Verify firing → auto-heal" fix):
