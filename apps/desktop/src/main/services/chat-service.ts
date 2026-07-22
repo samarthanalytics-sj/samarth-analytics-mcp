@@ -7,6 +7,8 @@ import type { ManifestStore } from '../storage/manifest-store';
 import type { MemoryStore } from '../storage/memory-store';
 import { selectRelevantMemories, formatMemoriesForPrompt, creditMemoryUse, type Memory, type MemoryProvenance } from '../../shared/chat-memory';
 import { containerKindFromUsageContext, type ContainerKind } from '../../shared/tool-scope';
+import type { CorpusSemanticIndex } from '../corpus/semantic-index';
+import { getPatternLibrary } from '../corpus/pattern-library';
 import { gtmPromptSections } from '../../shared/gtm-prompt-sections';
 import { boundChatHistory } from '../../shared/context-budget';
 import { AUDIT_POINTER } from '../../shared/jit-reference';
@@ -140,7 +142,9 @@ export class ChatService {
     private readonly memory?: MemoryStore,
     /** Google Ads. Optional: without it the GTM chat simply has no Ads tools, so it falls back to
      *  asking the user for a Conversion ID and Label instead of reading them. */
-    private readonly ads?: GoogleAdsService
+    private readonly ads?: GoogleAdsService,
+    /** Opt-in semantic corpus index. Absent means keyword-only corpus search, which is the default. */
+    private readonly semanticIndex?: CorpusSemanticIndex
   ) {}
 
   /** Bounded, in-memory carry-over of each thread's most recent READ tool results, so a follow-up
@@ -317,7 +321,21 @@ export class ChatService {
     const containerKind = product === 'gtm'
       ? await this.activeContainerKind(active.gtmContext?.accountId, active.gtmContext?.containerId)
       : undefined;
-    const tools = buildToolRegistry(this.data, confirm, product, this.history, ctxControl, this.manifests, memoryCtx, this.ads, containerKind);
+    // Opt-in semantic corpus search. Supplied ONLY when the user enabled it and the provider can
+    // embed; otherwise the corpus tool is exactly what it has always been. The index builds in the
+    // background on first use, so this never delays a turn.
+    const semanticProvider = active.llm?.provider;
+    const semanticIndex = this.semanticIndex;
+    const semantic = semanticIndex && semanticProvider && this.providerKeys.semanticCorpusEnabled()
+      ? async (query: string): Promise<string[] | null> => {
+        const lib = getPatternLibrary();
+        if (!lib) return null;
+        const key = this.providerKeys.getKey(semanticProvider);
+        if (!key) return null;
+        return semanticIndex.search(lib, semanticProvider, key, query);
+      }
+      : undefined;
+    const tools = buildToolRegistry(this.data, confirm, product, this.history, ctxControl, this.manifests, memoryCtx, this.ads, containerKind, semantic);
 
     // PROGRESSIVE TOOL DISCLOSURE, composed with the container-kind scoping above. The two filters
     // are DIFFERENT AXES and both apply, in this order:
