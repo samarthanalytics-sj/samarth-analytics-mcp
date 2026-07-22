@@ -1,3 +1,9 @@
+## [1.386.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.386.0...v1.386.1) (2026-07-22)
+
+### Bug Fixes
+
+* **desktop:** GA4 Monitoring - Slack channel bar moves to the top, Recent alerts gets the full row ([7c02c29](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/7c02c291cccbf289e222d184e62e8700aba5a1a0))
+
 ## [1.386.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.385.0...v1.386.0) (2026-07-22)
 
 ### Features
