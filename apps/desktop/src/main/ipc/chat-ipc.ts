@@ -2,6 +2,10 @@ import { ipcMain, dialog, BrowserWindow } from 'electron';
 import type { ChatService } from '../services/chat-service';
 import type { ChatMediaPart, ChatTurn, GoogleProduct } from '../../shared/ipc';
 import type { WriteProposal } from '../tools/registry';
+import { writeFile, unlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, basename } from 'node:path';
+import { randomUUID } from 'node:crypto';
 
 // Pending write-confirmations keyed by confirmId. A write tool registers a
 // resolver here and waits; the renderer answers via 'llm:confirm:respond' with
@@ -30,6 +34,28 @@ export function registerChatIpc(service: ChatService): void {
     if (canceled || !filePaths[0]) return null;
     const { extractAttachmentText } = await import('../services/attachments');
     return extractAttachmentText(filePaths[0]);
+  });
+
+  // Paste and drag-drop hand us BYTES, not a path. Rather than growing a second extraction path that
+  // could drift from the picker's, the bytes are written to a temp file and run through the SAME
+  // extractAttachmentText: one set of caps, one fallback wording, one behaviour however the file
+  // arrived. The temp file is always removed, including on failure.
+  ipcMain.handle('llm:attachBytes', async (_event, name: unknown, base64: unknown) => {
+    const fileName = String(name ?? '').trim();
+    const data = String(base64 ?? '');
+    if (!fileName || !data) throw new Error('Nothing to attach.');
+    // Keep only the basename: a crafted name must not steer the write outside the temp directory.
+    const safe = basename(fileName).replace(/[\/:*?"<>|]/g, '_') || 'attachment';
+    const tmp = join(tmpdir(), `samarth-attach-${randomUUID()}-${safe}`);
+    try {
+      await writeFile(tmp, Buffer.from(data, 'base64'));
+      const { extractAttachmentText } = await import('../services/attachments');
+      const out = await extractAttachmentText(tmp);
+      // The temp path must never surface: report the name the user actually dropped or pasted.
+      return { ...out, name: safe, ...(out.media ? { media: { ...out.media, name: safe } } : {}) };
+    } finally {
+      await unlink(tmp).catch(() => { /* best-effort cleanup */ });
+    }
   });
 
   // Non-streaming, read-only (no confirm → write tools unavailable).

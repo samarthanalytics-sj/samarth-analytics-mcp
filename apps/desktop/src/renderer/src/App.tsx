@@ -61,6 +61,7 @@ import { platformIdHints } from '../../shared/platform-id-hints';
 import { planAdsConversionActions } from '../../shared/ads-bulk-plan';
 import type { MemoryImportPlanView, SemanticCorpusStatus } from '../../shared/ipc';
 import { PROVIDER_PROFILES, CAPABILITY_IDS, providerProfile, providerLimitations } from '../../shared/provider-capabilities';
+import { checkPastedImage, checkDroppedFile, pastedImageName, multiDropNote } from '../../shared/pasted-attachment';
 import { annotationLabel } from '../../shared/audit-annotations';
 import { parseRateLimit } from '../../shared/rate-limit';
 import { autoHealConfirmMessage } from '../../shared/workspace-warnings';
@@ -1264,6 +1265,57 @@ function ChatView({
   const slashMatches = ready && !busy ? slashMenuMatches(input) : [];
   const slashActive = Math.min(slashIdx, Math.max(0, slashMatches.length - 1));
 
+  // Paste and drop share ONE path with the paperclip: same caps, same chip, same fallback wording.
+  // The renderer validates first so an oversized screenshot is refused instantly, rather than after
+  // shipping megabytes to the main process.
+  const [dragOver, setDragOver] = useState(false);
+  const pasteSeq = useRef(0);
+
+  const toBase64 = (blob: Blob): Promise<string> => new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onerror = () => reject(new Error('That file could not be read.'));
+    r.onload = () => resolve(String(r.result ?? '').split(',')[1] ?? '');
+    r.readAsDataURL(blob);
+  });
+
+  async function attachBlob(name: string, blob: Blob): Promise<void> {
+    setAttaching(true);
+    try {
+      setAttachment(await window.desktop.llm.attachBytes(name, await toBase64(blob)));
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAttaching(false);
+    }
+  }
+
+  async function onComposerPaste(e: React.ClipboardEvent): Promise<void> {
+    if (!ready || busy || attaching) return;
+    const item = [...(e.clipboardData?.items ?? [])].find((i) => i.kind === 'file' && i.type.startsWith('image/'));
+    if (!item) return; // plain text paste: leave the textarea alone
+    const file = item.getAsFile();
+    if (!file) return;
+    const check = checkPastedImage(file.type, file.size, new Date().toISOString());
+    if (!check.ok) { onError(check.error); return; }
+    e.preventDefault(); // only now, so a refused paste does not also swallow the keystroke silently
+    const seq = pasteSeq.current++;
+    await attachBlob(pastedImageName(file.type, new Date().toISOString(), seq), file);
+  }
+
+  async function onComposerDrop(e: React.DragEvent): Promise<void> {
+    e.preventDefault();
+    setDragOver(false);
+    if (!ready || busy || attaching) return;
+    const files = [...(e.dataTransfer?.files ?? [])];
+    if (!files.length) return;
+    const note = multiDropNote(files.length);
+    if (note) onError(note); // say what happened to the rest instead of dropping them silently
+    const first = files[0];
+    const check = checkDroppedFile(first.name, first.size);
+    if (!check.ok) { onError(check.error); return; }
+    await attachBlob(check.name, first);
+  }
+
   async function pickAttachment(): Promise<void> {
     if (attaching || busy) return;
     onError('');
@@ -1597,12 +1649,19 @@ function ChatView({
             <button style={styles.attachRemove} aria-label="Remove attachment" title="Remove attachment" onClick={() => setAttachment(null)}>×</button>
           </div>
         )}
-        <div className="composer-shell" style={styles.composerShell}>
+        <div
+          className="composer-shell"
+          style={{ ...styles.composerShell, ...(dragOver ? { borderColor: 'var(--c-blue)', boxShadow: '0 0 0 3px var(--ring)' } : {}) }}
+          onPaste={(e) => void onComposerPaste(e)}
+          onDrop={(e) => void onComposerDrop(e)}
+          onDragOver={(e) => { e.preventDefault(); if (!dragOver) setDragOver(true); }}
+          onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOver(false); }}
+        >
           <button
             style={styles.attachBtn}
             disabled={!ready || busy || attaching}
             onClick={() => void pickAttachment()}
-            title="Attach a file - pdf, docx, xlsx, csv, images… (Claude/Gemini read pages and images natively)"
+            title="Attach a file - pdf, docx, xlsx, csv, images… You can also paste a screenshot or drop a file here."
             aria-label="Attach a file"
           >
             {attaching ? (
