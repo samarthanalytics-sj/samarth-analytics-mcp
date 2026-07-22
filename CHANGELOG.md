@@ -1,3 +1,10 @@
+## [1.371.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.370.0...v1.371.0) (2026-07-22)
+
+### Features
+
+* **desktop:** export-report bar under chat replies (PDF/CSV/XLSX/MD) ([3d1f395](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/3d1f3959f933cf0d52ddbd6b9896b809280edb85))
+* **desktop:** Settings toggle for semantic corpus search ([#639](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/639)) ([0b97eb3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/0b97eb336bcb73e46f08de38d5eccf94564f6a99))
+
 ## [1.370.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.369.0...v1.370.0) (2026-07-22)
 
 ### Features
