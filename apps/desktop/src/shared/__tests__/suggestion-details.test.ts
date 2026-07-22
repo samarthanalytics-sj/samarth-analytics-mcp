@@ -17,6 +17,13 @@ check('gravityforms → Gravity Forms', providerDisplayName('gravityforms') === 
 check('unknown → Standard HTML form', providerDisplayName('unknown') === 'Standard HTML form');
 check('embed → Embedded form (iframe)', providerDisplayName('embed') === 'Embedded form (iframe)');
 check('unmapped slug passes through', providerDisplayName('futureforms') === 'futureforms');
+check('salesforce → Salesforce Web-to-Lead', providerDisplayName('salesforce') === 'Salesforce Web-to-Lead');
+
+// ── malformed field-name warning (seen live: name="industry” required=" curly-quote bug) ──
+const broken = parseSuggestionEvidence('form purpose=contact; provider=salesforce (action webto.salesforce.com Web-to-Lead); id=#salesforce; fields: first_name, last_name, industry" required=');
+check('broken markup: warning line follows the fields line', broken.some((l) => l.label === 'Warning' && l.value.includes('broken quoting')));
+check('broken markup: fields still shown verbatim', broken.some((l) => l.label === 'Fields' && l.value.includes('industry" required=')));
+check('clean fields: no warning', !parseSuggestionEvidence('fields: email, name, message').some((l) => l.label === 'Warning'));
 check('empty → Standard HTML form', providerDisplayName('') === 'Standard HTML form');
 
 // ── the real HubSpot form-evidence shape (engine: suggest.ts formSuggestion) ────

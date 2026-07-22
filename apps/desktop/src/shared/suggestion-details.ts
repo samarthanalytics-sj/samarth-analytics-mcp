@@ -17,6 +17,7 @@ const PROVIDER_NAMES: Readonly<Record<string, string>> = {
   elementor: 'Elementor Forms',
   marketo: 'Marketo Forms',
   pardot: 'Pardot (Account Engagement)',
+  salesforce: 'Salesforce Web-to-Lead',
   calendly: 'Calendly',
   jotform: 'Jotform',
   formstack: 'Formstack',
@@ -74,6 +75,16 @@ export function parseSuggestionEvidence(evidence: string): DetailLine[] {
       out.push({ label: 'Provider', value: m[2] ? `${name} (detected via ${m[2]})` : name });
     } else if ((m = /^fields:\s*(.+)$/.exec(seg))) {
       out.push({ label: 'Fields', value: m[1] });
+      // A quote character or a stray `required=` INSIDE a field name means the site's own attribute
+      // quoting is broken (seen live: name="industry” required=" with a typographer's quote) - the
+      // browser then treats the junk as part of the name, and the backend receives a field that no
+      // longer matches what it expects. Real finding, not a scan bug: say so.
+      if (/["“”]|required=/.test(m[1])) {
+        out.push({
+          label: 'Warning',
+          value: 'A field name contains quote characters or a stray attribute (broken quoting in the site\'s HTML). The browser submits it under that mangled name, so the backend may never receive that field - worth reporting to the site owner.',
+        });
+      }
     } else if ((m = /^id=#(.+)$/.exec(seg))) {
       out.push({ label: 'Form DOM id', value: `#${m[1]}` });
     } else if ((m = /^class=\.(.+)$/.exec(seg))) {

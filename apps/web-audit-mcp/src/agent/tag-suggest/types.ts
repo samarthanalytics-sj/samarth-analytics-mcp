@@ -27,7 +27,7 @@ export interface PageSignals {
 
 export type FormProvider =
   | 'hubspot' | 'typeform' | 'paperform' | 'mailchimp' | 'gravityforms' | 'contactform7'
-  | 'wpforms' | 'ninjaforms' | 'elementor' | 'marketo' | 'pardot'
+  | 'wpforms' | 'ninjaforms' | 'elementor' | 'marketo' | 'pardot' | 'salesforce'
   | 'calendly' | 'jotform' | 'formstack' | 'tally' | 'googleforms' | 'wufoo'
   | 'klaviyo' | 'activecampaign' | 'unbounce' | 'webflow'
   | 'embed' | 'unknown';
