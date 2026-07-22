@@ -146,6 +146,7 @@ function makeFakeData(): { data: GoogleDataService; calls: string[]; mutations: 
     listGa4Properties: () => r('listGa4Properties', []),
     listGa4DataStreams: () => r('listGa4DataStreams', []),
     runGa4Report: () => r('runGa4Report', { dimensionHeaders: [], metricHeaders: [], rows: [] }),
+    fetchGtagJs: () => Promise.resolve('// gtag\n(function(){\nvar data = {\"resource\":{\"tags\":[{\"function\":\"__gct\",\"vtp_trackingId\":\"G-SMOKE\",\"vtp_sessionDuration\":0}]},\"blob\":{\"1\":\"G-SMOKE\"}};\n})()'),
     ga4CheckCompatibility: () => r('ga4CheckCompatibility', { compatible: { dimensions: ['date'], metrics: ['sessions'] }, incompatible: { dimensions: [], metrics: [] } }),
     getGa4DataQuality: () => r('getGa4DataQuality', { totalSessions: 0, channelGroups: [], sourceMediums: [], windowDays: 28 }),
     listGa4Audiences: () => r('listGa4Audiences', []),
@@ -273,7 +274,7 @@ async function main(): Promise<void> {
     );
     // 56 GTM/GA4 read tools (55 plus discover_site_urls, the sitemap/crawl site lister) + the 2
     // read-only Google Ads tools (accounts, conversion actions).
-    record('read-only registry exposes the 59 read tools', readOnlyNames.size === 59, `${readOnlyNames.size} tools`);
+    record('read-only registry exposes the 60 read tools', readOnlyNames.size === 60, `${readOnlyNames.size} tools`);
   }
 
   // ── B. Approval is DELETE-ONLY: a declining confirm blocks every destructive
