@@ -1,3 +1,9 @@
+## [1.376.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.375.1...v1.376.0) (2026-07-22)
+
+### Features
+
+* **ga4:** open the API boundary - enhanced measurement, data redaction, attribution, Google Signals now writable ([#648](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/648)) ([fcde493](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/fcde4932c23b3cb47531dcd4af061c70eeb54869))
+
 ## [1.375.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.375.0...v1.375.1) (2026-07-22)
 
 ### Bug Fixes
