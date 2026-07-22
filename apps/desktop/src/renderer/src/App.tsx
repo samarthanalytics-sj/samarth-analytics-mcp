@@ -3380,6 +3380,9 @@ function TagReviewPanel({
   const [scanning, setScanning] = useState(false);
   // Crawl progress shown WHILE scanning (the list itself is rendered once, deduplicated, on completion).
   const [scanProgress, setScanProgress] = useState<{ scanned: number; found: number; queued: number } | null>(null);
+  // Stop pressed on the running scan. The scan does not abort instantly: pages already open finish, so
+  // the button reports "Stopping…" rather than pretending it ended the moment it was clicked.
+  const [stopping, setStopping] = useState(false);
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasteText, setPasteText] = useState('');
   const [suggestions, setSuggestions] = useState<SuggestedTagView[]>([]);
@@ -3600,12 +3603,22 @@ function TagReviewPanel({
     setScanProgress({ scanned: p.scanned, queued: p.queued, found: dedupeViewsByGtmName(p.suggestions).length });
   };
 
+  /** Stop the running scan. The main-process workers stop claiming pages at their next loop boundary and
+   *  the scan RESOLVES normally with the pages already read, so the tags found so far are kept and shown
+   *  (carrying a warning that the list is partial) rather than thrown away. */
+  function stopScan(): void {
+    if (!scanning || stopping) return;
+    setStopping(true);
+    void window.desktop.tags.cancelScan();
+  }
+
   async function doSinglePageScan(): Promise<void> {
     const target = url.trim();
     if (!target || scanning || discovering) return;
     lastScanRef.current = { kind: 'urls', urls: [target] };
     onError('');
     setScanning(true);
+    setStopping(false); // fresh run - a Stop from a previous scan must not disable this one's button
     setScanProgress(null);
     setDiscovered(null);
     loadSuggestions([]); // clear any prior scan's rows so streamed state is never stale
@@ -3650,6 +3663,7 @@ function TagReviewPanel({
     lastScanRef.current = { kind: 'urls', urls };
     onError('');
     setScanning(true);
+    setStopping(false); // fresh run - a Stop from a previous scan must not disable this one's button
     setScanProgress(null);
     loadSuggestions([]); // clear any prior scan's rows so streamed state is never stale
     try {
@@ -3669,6 +3683,7 @@ function TagReviewPanel({
     lastScanRef.current = { kind: 'crawl', target };
     onError('');
     setScanning(true);
+    setStopping(false); // fresh run - a Stop from a previous scan must not disable this one's button
     setScanProgress(null);
     loadSuggestions([]); // clear any prior scan's rows so streamed state is never stale
     try {
@@ -3719,6 +3734,7 @@ function TagReviewPanel({
     lastScanRef.current = { kind: 'urls', urls: capped };
     onError('');
     setScanning(true);
+    setStopping(false); // fresh run - a Stop from a previous scan must not disable this one's button
     setScanProgress(null);
     setDiscovered(null);
     loadSuggestions([]); // clear any prior scan's rows so streamed state is never stale
@@ -3740,6 +3756,7 @@ function TagReviewPanel({
     if (!last || scanning || discovering) return;
     onError('');
     setScanning(true);
+    setStopping(false); // fresh run - a Stop from a previous scan must not disable this one's button
     setScanProgress(null);
     loadSuggestions([]); // clear the stale rows so streamed state is never mixed with the old scan
     try {
@@ -4749,10 +4766,24 @@ function TagReviewPanel({
         {/* Crawl progress - the FULL de-duplicated list appears when the scan finishes (not streamed). */}
         {scanning && (
           <div style={styles.scanBanner}>
-            ⏳ Scanning all pages…{scanProgress ? ` ${scanProgress.scanned} read` : ' starting'}
-            {scanProgress && scanProgress.queued > 0 ? ` · ${scanProgress.queued} queued` : ''}
-            {scanProgress ? ` · ${scanProgress.found} unique tag(s) found` : ''}
-            {' '}- the full, de-duplicated list appears when the scan finishes.
+            <div>
+              ⏳ Scanning all pages…{scanProgress ? ` ${scanProgress.scanned} read` : ' starting'}
+              {scanProgress && scanProgress.queued > 0 ? ` · ${scanProgress.queued} queued` : ''}
+              {scanProgress ? ` · ${scanProgress.found} unique tag(s) found` : ''}
+              {' '}- the full, de-duplicated list appears when the scan finishes.
+            </div>
+            {/* Stop - the pages already in flight finish, then the scan resolves with what it read.
+                Whatever was found is KEPT and shown, carrying a warning that it is partial. */}
+            <div style={{ marginTop: 8 }}>
+              <button
+                onClick={stopScan}
+                disabled={stopping}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 600, padding: '6px 14px', borderRadius: 8, cursor: stopping ? 'not-allowed' : 'pointer', border: '1px solid var(--c-red)', background: 'var(--c-red-bg)', color: 'var(--c-red)', opacity: stopping ? 0.6 : 1 }}
+                title="Stop scanning - the pages in flight finish, then you keep the tags found so far"
+              >
+                {stopping ? 'Stopping…' : '■ Stop scanning'}
+              </button>
+            </div>
           </div>
         )}
 

@@ -68,6 +68,11 @@ function takeVerifyEls(url: string): { els: DetectedElementView[]; pagesCrawled:
 let verifyCancelled = false;
 const shouldStopVerify = (): boolean => verifyCancelled;
 
+// The same cooperative cancel for a tag-suggestion SCAN (its own Stop button). Kept separate from the
+// verify flag on purpose: the two run from different tabs, and stopping one must never halt the other.
+let scanCancelled = false;
+const shouldStopScan = (): boolean => scanCancelled;
+
 export function registerSuggestionsIpc(data: GoogleDataService, memory?: MemoryStore, registry?: RegistryService): void {
   /**
    * Apply the saved notes for the ACTIVE account/container to a finished scan.
@@ -102,6 +107,9 @@ export function registerSuggestionsIpc(data: GoogleDataService, memory?: MemoryS
   // Stop the in-flight verify scan/drive. Sets the flag the crawl + Tag-Assistant drive loops poll; they
   // finish the current page and resolve with a partial result. The renderer also stops the orchestration.
   ipcMain.handle('suggestions:cancelVerify', () => { verifyCancelled = true; });
+  // Stop a running scan. The crawl workers poll shouldStopScan() at their loop boundary and resolve
+  // with the pages already read, so the user keeps the partial result instead of losing the run.
+  ipcMain.handle('suggestions:cancelScan', () => { scanCancelled = true; });
   ipcMain.handle('suggestions:fromJson', (_e, json: unknown) => parseSuggestions(String(json ?? '')));
 
   // Read-only: the container's existing tag names + whether a GA4 base/config tag is
@@ -653,14 +661,16 @@ export function registerSuggestionsIpc(data: GoogleDataService, memory?: MemoryS
     if (!verdict.ok) throw new Error(`Cannot scan that URL: ${verdict.reason}`);
     const o = opts ?? {};
     const n = Math.min(scanConcurrency(o.scanConcurrency), o.maxPages ?? 25);
+    scanCancelled = false; // fresh run - clear any stale Stop from a previous scan
     const pool = await makeDrivers(n, o);
-    return honourSavedRules(await crawlAndSuggest(pool[0], target, { maxPages: o.maxPages, maxDepth: o.maxDepth, platforms: o.platforms ?? ['ga4'], drivers: pool.slice(1) }, streamSink(event, String(requestId ?? ''))));
+    return honourSavedRules(await crawlAndSuggest(pool[0], target, { maxPages: o.maxPages, maxDepth: o.maxDepth, platforms: o.platforms ?? ['ga4'], drivers: pool.slice(1), shouldStop: shouldStopScan }, streamSink(event, String(requestId ?? ''))));
   });
 
   ipcMain.handle('suggestions:scanUrlsStream', async (event, requestId: unknown, urls: unknown, opts?: TagScanOptions) => {
     const list = Array.isArray(urls) ? urls.map((u) => String(u)).filter(Boolean) : [];
     if (list.length === 0) throw new Error('No pages selected to scan.');
     const o = opts ?? {};
+    scanCancelled = false; // fresh run - clear any stale Stop from a previous scan
     const pool = await makeDrivers(Math.min(scanConcurrency(o.scanConcurrency), list.length), o);
     let siteHost: string | undefined;
     try {
@@ -668,7 +678,7 @@ export function registerSuggestionsIpc(data: GoogleDataService, memory?: MemoryS
     } catch {
       /* per-URL admission still applies */
     }
-    return scanUrls(pool[0], list, siteHost, streamSink(event, String(requestId ?? '')), { platforms: o.platforms ?? ['ga4'], drivers: pool.slice(1) });
+    return scanUrls(pool[0], list, siteHost, streamSink(event, String(requestId ?? '')), { platforms: o.platforms ?? ['ga4'], drivers: pool.slice(1), shouldStop: shouldStopScan });
   });
 
   ipcMain.handle(

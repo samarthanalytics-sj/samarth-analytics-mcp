@@ -188,6 +188,47 @@ async function run(): Promise<void> {
       () => { if (t.opened.length >= 2) stop = true; }, // flip the flag once 2 pages have opened
     );
     check('crawl/stop: shouldStop() halts the crawl before all pages are scanned', res.summary.pagesScanned >= 1 && res.summary.pagesScanned < links.length + 1);
+    // A stopped scan must never read as a finished one: the partial list has to SAY it is partial,
+    // or the pages never reached look like pages with nothing worth tracking.
+    check('crawl/stop: the result is labelled as stopped early', res.warnings.some((w) => /stopped early/i.test(w)), res.warnings.join(' | '));
+    check('crawl/stop: it keeps what it found rather than discarding the run', res.summary.pagesScanned >= 1);
+    // The page-budget warning is about a DIFFERENT thing (a full run that hit its cap). Emitting both
+    // would tell the user the crawl finished within budget and also that it did not.
+    check('crawl/stop: no page-budget warning on a stopped run', !res.warnings.some((w) => /page budget/i.test(w)), res.warnings.join(' | '));
+    // Pool teardown must still happen on the stop path - a leaked driver is a leaked browser.
+    check('crawl/stop: every driver closed', t.closes === pool.length, `closed=${t.closes} of ${pool.length}`);
+  }
+
+  // scanUrls/stop: the SAME cooperative flag on the fixed-list path (Scan selected / CSV / rescan).
+  {
+    const N = 'https://stoplist.com/';
+    const list = Array.from({ length: 10 }, (_, i) => `${N}p${i}`);
+    const pages: Record<string, DrivenPage> = {};
+    for (const u of list) pages[u] = page(u, []);
+    const t = newTracker();
+    const pool = poolOf(2, pages, t);
+    let stop = false;
+    const res = await scanUrls(pool[0], list, 'stoplist.com', () => { if (t.opened.length >= 2) stop = true; }, {
+      drivers: pool.slice(1),
+      shouldStop: () => stop,
+    });
+    check('scanUrls/stop: halts before the whole list is scanned', res.summary.pagesScanned >= 1 && res.summary.pagesScanned < list.length, `scanned=${res.summary.pagesScanned}`);
+    check('scanUrls/stop: the result is labelled as stopped early', res.warnings.some((w) => /stopped early/i.test(w)), res.warnings.join(' | '));
+    check('scanUrls/stop: the warning names how many of the selection were read', res.warnings.some((w) => new RegExp(`of ${list.length} selected`).test(w)), res.warnings.join(' | '));
+    check('scanUrls/stop: every driver closed', t.closes === pool.length, `closed=${t.closes} of ${pool.length}`);
+  }
+
+  // A scan that is never stopped must be completely unchanged - no stray warning, full coverage.
+  {
+    const N = 'https://nostop.com/';
+    const list = Array.from({ length: 4 }, (_, i) => `${N}p${i}`);
+    const pages: Record<string, DrivenPage> = {};
+    for (const u of list) pages[u] = page(u, []);
+    const t = newTracker();
+    const pool = poolOf(2, pages, t);
+    const res = await scanUrls(pool[0], list, 'nostop.com', undefined, { drivers: pool.slice(1), shouldStop: () => false });
+    check('scanUrls/no-stop: all pages scanned', res.summary.pagesScanned === list.length);
+    check('scanUrls/no-stop: no stopped-early warning', !res.warnings.some((w) => /stopped early/i.test(w)), res.warnings.join(' | '));
   }
 }
 

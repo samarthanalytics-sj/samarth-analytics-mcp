@@ -335,6 +335,9 @@ const api = {
     // Stop the in-flight verify scan/drive (the Stop button). The crawl + Tag-Assistant drive finish the
     // current page and resolve with a partial result; the renderer also stops the orchestration.
     cancelVerify: (): Promise<void> => ipcRenderer.invoke('suggestions:cancelVerify'),
+    /** Stop a running scan. The in-flight scanStream/scanUrlsStream promise still RESOLVES, with the
+     *  pages read so far and a warning saying it was stopped. */
+    cancelScan: (): Promise<void> => ipcRenderer.invoke('suggestions:cancelScan'),
     // Save the tag-verification RESULTS table to a user-chosen file — 'xlsx' (spreadsheet with embedded
     // proof images), 'pdf' or 'doc' (a styled report with each tag's proof screenshot). Returns path or null.
     exportVerifyResults: (format: 'xlsx' | 'pdf' | 'doc', defaultName: string, payload: VerifyExportPayload): Promise<string | null> =>
