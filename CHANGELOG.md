@@ -1,3 +1,9 @@
+## [1.366.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.365.0...v1.366.0) (2026-07-22)
+
+### Features
+
+* **desktop:** show the user's own notes alongside audit findings, without changing them ([#633](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/633)) ([2cc8859](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/2cc88594a0555c532c4041622143c578d4fec894))
+
 ## [1.365.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.364.0...v1.365.0) (2026-07-22)
 
 ### Features
