@@ -1,3 +1,9 @@
+## [1.378.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.377.0...v1.378.0) (2026-07-22)
+
+### Features
+
+* **ga4:** check_ga4_compatibility - validate dimension/metric combos before running a report ([#650](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/650)) ([cd6dc92](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/cd6dc925bd2ac91cf4af42a0ca67ad3ad81b9cb6))
+
 ## [1.377.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.376.0...v1.377.0) (2026-07-22)
 
 ### Features
