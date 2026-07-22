@@ -57,6 +57,7 @@ import { suggestionToGroup, suggestionsToTemplateCsv, suggestionsToInstallRunboo
 import { findMergeGroups, mergeGroup, mergeLabel, type MergeGroup } from '../../shared/tag-merge';
 import { parseCsvUrls, parseCsvUrlStats, CSV_URL_CAP } from '../../shared/csv-urls';
 import { platformIdHints } from '../../shared/platform-id-hints';
+import { planAdsConversionActions } from '../../shared/ads-bulk-plan';
 import { parseRateLimit } from '../../shared/rate-limit';
 import { autoHealConfirmMessage } from '../../shared/workspace-warnings';
 import { MEMORY_KINDS, type Memory, type MemoryKind } from '../../shared/chat-memory';
@@ -3945,6 +3946,73 @@ function TagReviewPanel({
     .map((s) => ({ s: effective(s), issue: adsIdentityIssue(effective(s)) }))
     .filter((r): r is { s: SuggestedTagView; issue: string } => r.issue !== null);
 
+  // ---- Bulk: create a Google Ads conversion action for every TICKED Ads row that still holds a
+  // placeholder. Creating one is an IMMEDIATELY LIVE write to the advertiser's account with no draft
+  // stage, so the whole batch is planned first (pure, see ads-bulk-plan) and confirmed as one list:
+  // what will be created, under what names, in which account. Nothing is sent before that.
+  const adsPlan = useMemo(
+    () => planAdsConversionActions(suggestions.filter((s) => selected[s.id] && !alreadyExists(s)).map(effective)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [suggestions, selected, edits],
+  );
+  const [adsBulkOpen, setAdsBulkOpen] = useState(false);
+  const [adsBulkAccounts, setAdsBulkAccounts] = useState<AdsAccountView[] | null>(null);
+  const [adsBulkAccountId, setAdsBulkAccountId] = useState('');
+  const [adsBulkBusy, setAdsBulkBusy] = useState('');
+  const [adsBulkNote, setAdsBulkNote] = useState('');
+
+  async function openAdsBulk(): Promise<void> {
+    setAdsBulkOpen(true);
+    setAdsBulkNote('');
+    if (adsBulkAccounts) return;
+    setAdsBulkBusy('Loading Google Ads accounts…');
+    try {
+      const list = await window.desktop.ads.listAccounts();
+      const usable = list.filter((a) => !a.manager);
+      setAdsBulkAccounts(usable);
+      if (usable.length === 1) setAdsBulkAccountId(usable[0].id);
+    } catch (e) {
+      setAdsBulkNote(e instanceof Error ? e.message : String(e));
+      setAdsBulkAccounts([]);
+    } finally { setAdsBulkBusy(''); }
+  }
+
+  async function runAdsBulk(): Promise<void> {
+    const account = (adsBulkAccounts ?? []).find((a) => a.id === adsBulkAccountId);
+    if (!account) return;
+    let made = 0;
+    const failures: string[] = [];
+    for (const item of adsPlan.create) {
+      setAdsBulkBusy(`Creating ${made + failures.length + 1} of ${adsPlan.create.length}: ${item.actionName}…`);
+      try {
+        const res = await window.desktop.ads.createConversionAction(
+          account.id, { name: item.actionName, category: item.category }, account.loginCustomerId,
+        );
+        const conversionId = res.conversionId ?? '';
+        const conversionLabel = res.conversionLabel ?? '';
+        if (conversionId && conversionLabel) {
+          // Written into the EDIT overlay, exactly like the single-row picker, so the fill is
+          // reversible and flows through the one path confirmCreate already reads.
+          setEdits((m) => ({ ...m, [item.rowId]: { ...m[item.rowId], measurementId: conversionId, conversionLabel } }));
+          made += 1;
+        } else {
+          // Created, but Google has not published its snippet yet: say so rather than leaving the row
+          // looking untouched, because the action DOES now exist in the account.
+          failures.push(`${item.actionName}: created, but Google has not returned its Conversion Label yet. Use the row's picker to select it in a moment.`);
+        }
+      } catch (e) {
+        failures.push(`${item.actionName}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+    setAdsBulkBusy('');
+    setAdsBulkOpen(false);
+    setAdsBulkNote(
+      failures.length === 0
+        ? `Created ${made} conversion action(s) in ${account.name} and filled them in.`
+        : `Created ${made} of ${adsPlan.create.length} in ${account.name}. ${failures.length} did not complete: ${failures.join(' | ')}`,
+    );
+  }
+
   return (
     <div style={styles.reviewWrap}>
       <div style={styles.chatHeader}>
@@ -4566,6 +4634,67 @@ function TagReviewPanel({
                   onShot={setSLightbox}
                   onFetchAds={setAdsPickerFor}
                 />
+                {adsBulkOpen && (
+                  <div style={styles.confirm}>
+                    <div style={styles.confirmHead}>
+                      Create {adsPlan.create.length} conversion action(s) in Google Ads?
+                    </div>
+                    <div style={{ ...styles.muted, margin: '6px 0', color: 'var(--c-amber)' }}>
+                      This writes to the live Google Ads account immediately. There is no draft stage, and
+                      each one becomes visible to everyone using that account.
+                    </div>
+                    {adsBulkAccounts === null ? (
+                      <div style={styles.muted}>{adsBulkBusy || 'Loading accounts…'}</div>
+                    ) : adsBulkAccounts.length === 0 ? (
+                      <div style={{ ...styles.muted, color: 'var(--c-amber)' }}>
+                        No Google Ads account is reachable from this Google login. {adsBulkNote}
+                      </div>
+                    ) : (
+                      <>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', margin: '8px 0', flexWrap: 'wrap' }}>
+                          <span style={styles.muted}>Create in:</span>
+                          <select
+                            style={styles.select}
+                            value={adsBulkAccountId}
+                            onChange={(e) => setAdsBulkAccountId(e.target.value)}
+                            aria-label="Google Ads account"
+                          >
+                            <option value="">Choose an account…</option>
+                            {adsBulkAccounts.map((a) => (
+                              <option key={a.id} value={a.id}>{a.name} ({a.id}){a.testAccount ? ' - test' : ''}</option>
+                            ))}
+                          </select>
+                        </div>
+                        {/* The exact plan: what is created, named how, as which category. */}
+                        <div style={{ maxHeight: 190, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 8, padding: '6px 10px' }}>
+                          {adsPlan.create.map((c) => (
+                            <div key={c.rowId} style={{ fontSize: 12.5, padding: '3px 0' }}>
+                              <b>{c.actionName}</b>
+                              <span style={styles.muted}> · {c.category.replace(/_/g, ' ').toLowerCase()} · for “{c.tagName}”</span>
+                            </div>
+                          ))}
+                        </div>
+                        {adsPlan.skipped.length > 0 && (
+                          <div style={{ ...styles.muted, marginTop: 6 }}>
+                            {adsPlan.skipped.length} ticked row(s) need nothing: {adsPlan.skipped.map((k) => `“${k.tagName}” (${k.reason})`).join('; ')}
+                          </div>
+                        )}
+                      </>
+                    )}
+                    <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                      <button
+                        style={styles.primaryBtn}
+                        disabled={!adsBulkAccountId || !!adsBulkBusy || adsPlan.create.length === 0}
+                        onClick={() => void runAdsBulk()}
+                      >
+                        {adsBulkBusy || `Create ${adsPlan.create.length} in Google Ads`}
+                      </button>
+                      <button style={styles.ghostBtn} disabled={!!adsBulkBusy} onClick={() => setAdsBulkOpen(false)}>
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
                 {adsPickerFor && (
                   <AdsPicker
                     // Keyed by row so opening the picker on a DIFFERENT tag re-seeds the suggested
@@ -4624,6 +4753,17 @@ function TagReviewPanel({
                   Approve &amp; create selected ({selectedIds.length})
                 </button>
                 {!targetReady && <span style={{ color: 'var(--c-amber)', fontSize: 13 }}>Pick a draft workspace first.</span>}
+                {adsPlan.create.length > 0 && (
+                  <button
+                    style={styles.ghostBtn}
+                    disabled={scanning || creating || !!adsBulkBusy}
+                    onClick={() => void openAdsBulk()}
+                    title="Create a Google Ads conversion action for each ticked Ads tag, then fill in its Conversion ID and Label"
+                  >
+                    ⚡ Create {adsPlan.create.length} conversion action(s) in Google Ads
+                  </button>
+                )}
+                {adsBulkNote && <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>{adsBulkNote}</span>}
                 {adsBlocked.length > 0 && (
                   <span style={{ color: 'var(--c-amber)', fontSize: 13 }}>
                     {adsBlocked.length === 1
