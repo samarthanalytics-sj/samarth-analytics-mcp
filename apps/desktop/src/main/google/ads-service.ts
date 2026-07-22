@@ -19,7 +19,8 @@ import {
   mutateConversionActionsUrl,
   normalizeCustomerId,
   searchStreamUrl,
-  clampWindow,
+  perfDateClause,
+  type PerfRange,
   type CreateConversionActionInput,
 } from './ads-rest';
 import {
@@ -217,13 +218,19 @@ export class GoogleAdsService {
     return rows.map(mapCampaign);
   }
 
-  /** Per-campaign performance over a window. The API returns one row per campaign-DAY, so the rows
-   *  are summed to one per campaign before they leave this method - handing campaign-days to a
-   *  caller that expects campaigns inflates every count by the length of the window. */
-  async campaignPerformance(customerId: string, days = 30, loginCustomerId?: string): Promise<{ window: number; campaigns: AdsCampaignPerformance[] }> {
-    const window = clampWindow(days);
-    const rows = await this.search(customerId, GAQL.campaignPerformance(window), loginCustomerId);
-    return { window, campaigns: sumCampaignPerformance(rows.map(mapCampaignPerformance)) };
+  /** Per-campaign performance over a window - a trailing `days` count OR an explicit custom date
+   *  range (perfDateClause decides, and its label is returned so the tool reports exactly what ran).
+   *  The API returns one row per campaign-DAY, so the rows are summed to one per campaign before
+   *  they leave this method - handing campaign-days to a caller that expects campaigns inflates
+   *  every count by the length of the window. */
+  async campaignPerformance(
+    customerId: string,
+    range: PerfRange = {},
+    loginCustomerId?: string,
+  ): Promise<{ windowLabel: string; custom: boolean; campaigns: AdsCampaignPerformance[] }> {
+    const { label, custom } = perfDateClause(range);
+    const rows = await this.search(customerId, GAQL.campaignPerformance(range), loginCustomerId);
+    return { windowLabel: label, custom, campaigns: sumCampaignPerformance(rows.map(mapCampaignPerformance)) };
   }
 
   /** Validate a create WITHOUT executing it, so the review UI can surface a name collision or a bad

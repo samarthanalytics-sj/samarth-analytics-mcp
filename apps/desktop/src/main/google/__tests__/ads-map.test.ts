@@ -11,6 +11,8 @@ import {
   mapConversionAction,
   buildAccountTree,
   resolveConversionCustomer,
+  conversionSetupWarnings,
+  type AdsConversionAction,
 } from '../ads-map';
 
 let passed = 0;
@@ -354,6 +356,69 @@ const remember = (note: string | undefined): void => { if (note) notes.push(note
   const offending = notes.filter((n) => BANNED_DASHES.test(n));
   check('no produced note contains an em dash or en dash', offending.length === 0, offending.join(' | '));
   check('notes were actually collected (the dash check is not vacuous)', notes.length >= 8, String(notes.length));
+}
+
+// ── Phase A: full config fields, auto-tagging, and the deterministic setup warnings ──
+{
+  const full = mapConversionAction({
+    conversionAction: {
+      resourceName: 'customers/1/conversionActions/9', name: 'Purchase', status: 'ENABLED', type: 'WEBPAGE',
+      category: 'PURCHASE', countingType: 'MANY_PER_CLICK',
+      attributionModelSettings: { attributionModel: 'GOOGLE_ADS_LAST_CLICK', dataDrivenModelStatus: 'AVAILABLE' },
+      clickThroughLookbackWindowDays: '30', viewThroughLookbackWindowDays: 1,
+      valueSettings: { defaultValue: 25.5, defaultCurrencyCode: 'usd', alwaysUseDefaultValue: false },
+      tagSnippets: [],
+    },
+  });
+  check('full config: counting + attribution + dd status', full.countingType === 'MANY_PER_CLICK' && full.attributionModel === 'GOOGLE_ADS_LAST_CLICK' && full.dataDrivenModelStatus === 'AVAILABLE');
+  check('full config: lookback windows accept int64-string AND number', full.clickLookbackDays === 30 && full.viewLookbackDays === 1);
+  check('full config: value settings mapped, currency upper-cased', full.defaultValue === 25.5 && full.defaultCurrencyCode === 'USD' && full.alwaysUseDefaultValue === false);
+  const snake = mapConversionAction({
+    conversion_action: {
+      resource_name: 'customers/1/conversionActions/10', name: 'Lead', status: 'ENABLED', type: 'WEBPAGE', category: 'SUBMIT_LEAD_FORM',
+      attribution_model_settings: { attribution_model: 'DATA_DRIVEN' }, click_through_lookback_window_days: '90',
+      value_settings: { default_value: '0', always_use_default_value: true }, tag_snippets: [],
+    },
+  });
+  check('full config: snake_case rows read the same fields', snake.attributionModel === 'DATA_DRIVEN' && snake.clickLookbackDays === 90 && snake.defaultValue === 0 && snake.alwaysUseDefaultValue === true);
+  const minimal = mapConversionAction({ conversionAction: { resourceName: 'customers/1/conversionActions/11', name: 'Old', status: 'ENABLED', type: 'WEBPAGE', category: 'CONTACT', tagSnippets: [] } });
+  check('full config: absent fields stay ABSENT, never 0/empty', !('attributionModel' in minimal) && !('clickLookbackDays' in minimal) && !('defaultValue' in minimal));
+
+  check('auto-tagging: true / false / absent all survive', (() => {
+    const on = resolveConversionCustomer({ customer: { autoTaggingEnabled: true, conversionTrackingSetting: {} } }, '1');
+    const off = resolveConversionCustomer({ customer: { auto_tagging_enabled: 'false', conversion_tracking_setting: {} } }, '1');
+    const unknown = resolveConversionCustomer({ customer: { conversionTrackingSetting: {} } }, '1');
+    return on.autoTaggingEnabled === true && off.autoTaggingEnabled === false && unknown.autoTaggingEnabled === undefined;
+  })());
+
+  const act = (over: Partial<AdsConversionAction>): AdsConversionAction => ({
+    resourceName: 'customers/1/conversionActions/1', id: '1', name: over.name ?? 'A', status: 'ENABLED', type: 'WEBPAGE',
+    category: 'SUBMIT_LEAD_FORM', conversionId: null, conversionLabel: null, taggable: false, ...over,
+  });
+  const dbl = conversionSetupWarnings([
+    act({ name: 'GA4 lead import', type: 'GOOGLE_ANALYTICS_4_CUSTOM' }),
+    act({ name: 'Website lead', type: 'WEBPAGE' }),
+  ]);
+  check('warnings: GA4 import + website action, same category, both primary → double-count warning', dbl.length === 1 && dbl[0].includes('double counting') && dbl[0].includes('GA4 lead import') && dbl[0].includes('Website lead'));
+  check('warnings: a SECONDARY GA4 import does not fire', conversionSetupWarnings([
+    act({ name: 'GA4 import', type: 'GOOGLE_ANALYTICS_4_CUSTOM', primaryForGoal: false }),
+    act({ name: 'Website lead' }),
+  ]).length === 0);
+  check('warnings: different categories do not fire', conversionSetupWarnings([
+    act({ name: 'GA4 purchase', type: 'GOOGLE_ANALYTICS_4_CUSTOM', category: 'PURCHASE' }),
+    act({ name: 'Website lead' }),
+  ]).length === 0);
+  check('warnings: paused actions do not fire', conversionSetupWarnings([
+    act({ name: 'GA4 import', type: 'GOOGLE_ANALYTICS_4_CUSTOM', status: 'PAUSED' }),
+    act({ name: 'Website lead' }),
+  ]).length === 0);
+  check('warnings: always-use-default with zero/no value → zero-value warning', (() => {
+    const w = conversionSetupWarnings([act({ name: 'Zeroed', alwaysUseDefaultValue: true, defaultValue: 0 })]);
+    return w.length === 1 && w[0].includes('value 0');
+  })());
+  check('warnings: always-use-default WITH a real value does not fire', conversionSetupWarnings([
+    act({ name: 'Valued', alwaysUseDefaultValue: true, defaultValue: 25 }),
+  ]).length === 0);
 }
 
 console.log(`\nads-map: ${passed} passed, ${failed} failed`);

@@ -13,6 +13,8 @@ import {
   createConversionActionBody,
   defaultCountingType,
   CONVERSION_CATEGORIES,
+  isYmdDate,
+  perfDateClause,
 } from '../ads-rest';
 
 let passed = 0;
@@ -252,6 +254,28 @@ const createOf = (body: Record<string, unknown>): Record<string, unknown> => {
     surface.filter((s) => s.includes(EM)).join(' | '));
   check('no exported string contains an en dash either', surface.every((s) => !s.includes(EN)),
     surface.filter((s) => s.includes(EN)).join(' | '));
+}
+
+// ── Phase A: full conversion-action config fields + auto-tagging + custom date ranges ──
+{
+  const q = GAQL.conversionActions;
+  check('conversionActions selects the attribution model', q.includes('conversion_action.attribution_model_settings.attribution_model'));
+  check('conversionActions selects the data-driven model status', q.includes('conversion_action.attribution_model_settings.data_driven_model_status'));
+  check('conversionActions selects BOTH lookback windows', q.includes('conversion_action.click_through_lookback_window_days') && q.includes('conversion_action.view_through_lookback_window_days'));
+  check('conversionActions selects the value settings', q.includes('conversion_action.value_settings.default_value') && q.includes('conversion_action.value_settings.default_currency_code') && q.includes('conversion_action.value_settings.always_use_default_value'));
+  check('conversionActions still does NOT select include_in_conversions_metric (it hides secondary actions)', !q.includes('include_in_conversions_metric'));
+  check('conversionTrackingSetting selects auto_tagging_enabled', GAQL.conversionTrackingSetting.includes('customer.auto_tagging_enabled'));
+
+  check('isYmdDate accepts YYYY-MM-DD only', isYmdDate('2026-07-01') && !isYmdDate('2026-7-1') && !isYmdDate('01-07-2026') && !isYmdDate('') && !isYmdDate(undefined));
+  const custom = perfDateClause({ startDate: '2026-04-01', endDate: '2026-06-30' });
+  check('perfDateClause: valid range → BETWEEN, custom-labelled', custom.custom && custom.clause === "segments.date BETWEEN '2026-04-01' AND '2026-06-30'" && custom.label === '2026-04-01 to 2026-06-30');
+  check('perfDateClause: single-day range is allowed (start == end)', perfDateClause({ startDate: '2026-07-21', endDate: '2026-07-21' }).custom);
+  check('perfDateClause: start AFTER end falls back to the trailing window', !perfDateClause({ startDate: '2026-06-30', endDate: '2026-04-01' }).custom);
+  check('perfDateClause: half a range falls back', !perfDateClause({ startDate: '2026-04-01' }).custom && !perfDateClause({ endDate: '2026-04-01' }).custom);
+  check('perfDateClause: malformed date falls back', !perfDateClause({ startDate: '2026/04/01', endDate: '2026-06-30' }).custom);
+  check('perfDateClause: no range → clamped trailing window with the honest label', perfDateClause({ days: 10 }).clause.includes('DURING LAST_7_DAYS') && perfDateClause({}).label === 'last 30 days, excluding today');
+  check('campaignPerformance embeds the BETWEEN clause for a custom range', GAQL.campaignPerformance({ startDate: '2026-04-01', endDate: '2026-06-30' }).includes("BETWEEN '2026-04-01' AND '2026-06-30'"));
+  check('campaignPerformance still uses DURING for a days window', GAQL.campaignPerformance({ days: 14 }).includes('DURING LAST_14_DAYS'));
 }
 
 console.log(`\ndesktop ads-rest: ${passed} passed, ${failed} failed`);
