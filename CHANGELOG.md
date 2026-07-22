@@ -1,3 +1,9 @@
+## [1.377.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.376.0...v1.377.0) (2026-07-22)
+
+### Features
+
+* **desktop:** Rescan button in Tag suggestions - re-run the exact scan behind the results ([c80dc2a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c80dc2a6f7f604c7a3be8849444bc90d0501c41d))
+
 ## [1.376.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.375.1...v1.376.0) (2026-07-22)
 
 ### Features
