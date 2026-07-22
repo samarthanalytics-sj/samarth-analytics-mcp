@@ -1,3 +1,9 @@
+## [1.367.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.366.0...v1.367.0) (2026-07-22)
+
+### Features
+
+* **desktop:** let a saved note hold back a tag verification cannot win ([#634](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/634)) ([05b473b](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/05b473bd26db50d8c34319b009b7b6db60f8d8a3))
+
 ## [1.366.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.365.0...v1.366.0) (2026-07-22)
 
 ### Features
