@@ -1581,3 +1581,13 @@ export interface AdsPairingView {
   message: string;
   containerIds: Array<{ conversionId: string; tagNames: string[] }>;
 }
+
+/** What an import WOULD add, for the review list. The accepted notes go in via memory:add, so the
+ *  store's redaction, dedupe, capping and eviction still apply: an import is never a direct write. */
+export interface MemoryImportPlanView {
+  add: Array<{ id: string; kind: string; text: string; scope?: { containerId?: string; property?: string; label?: string }; pinned?: boolean }>;
+  duplicates: Array<{ kind: string; text: string }>;
+  problems: string[];
+  cancelled?: boolean;
+  client?: { containerId?: string; containerName?: string; publicId?: string };
+}

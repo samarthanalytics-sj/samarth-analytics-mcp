@@ -58,6 +58,7 @@ import { findMergeGroups, mergeGroup, mergeLabel, type MergeGroup } from '../../
 import { parseCsvUrls, parseCsvUrlStats, CSV_URL_CAP } from '../../shared/csv-urls';
 import { platformIdHints } from '../../shared/platform-id-hints';
 import { planAdsConversionActions } from '../../shared/ads-bulk-plan';
+import type { MemoryImportPlanView } from '../../shared/ipc';
 import { annotationLabel } from '../../shared/audit-annotations';
 import { parseRateLimit } from '../../shared/rate-limit';
 import { autoHealConfirmMessage } from '../../shared/workspace-warnings';
@@ -9217,6 +9218,58 @@ function MemoryCard({ active, onError }: { active: AccountView | undefined; onEr
   // Phase 3 auto-seed: facts derived from the active container's own config, awaiting the user's OK.
   const [seeds, setSeeds] = useState<SeedCandidate[] | null>(null);
   const [seeding, setSeeding] = useState(false);
+  // Handing notes to a colleague. `xfer` is the in-flight side so both buttons disable together.
+  const [xfer, setXfer] = useState<'' | 'export' | 'import'>('');
+  const [imported, setImported] = useState<MemoryImportPlanView | null>(null);
+
+  async function runExport(): Promise<void> {
+    setXfer('export');
+    setNote('');
+    try {
+      const res = await window.desktop.memory.exportFile();
+      if (res.count === 0) setNote('There are no notes for this client to export yet.');
+      else if (!res.saved) setNote('');
+      else setNote(`Exported ${res.count} note(s). Send that file to a colleague and they can import it.`);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally { setXfer(''); }
+  }
+
+  async function runImport(): Promise<void> {
+    setXfer('import');
+    setNote('');
+    try {
+      const plan = await window.desktop.memory.importPlan();
+      if (plan.cancelled) return;
+      if (!plan.add.length && !plan.problems.length) {
+        setNote(plan.duplicates.length ? `Nothing new: all ${plan.duplicates.length} note(s) in that file are already saved.` : 'That file had no notes to import.');
+        return;
+      }
+      setImported(plan);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally { setXfer(''); }
+  }
+
+  /** Each kept note is saved through the NORMAL add path, so redaction and dedupe still apply. */
+  async function keepImported(c: MemoryImportPlanView['add'][number]): Promise<void> {
+    try {
+      await window.desktop.memory.add({ kind: c.kind as MemoryKind, text: c.text, scope: c.scope ?? {}, source: 'manual' });
+      dropImported(c.id);
+      load();
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  function dropImported(id: string): void {
+    setImported((p: MemoryImportPlanView | null) => {
+      if (!p) return p;
+      const add = p.add.filter((x: MemoryImportPlanView['add'][number]) => x.id !== id);
+      return add.length ? { ...p, add } : null;
+    });
+  }
+
 
   const gtm = active?.gtmContext;
   const ga4 = active?.ga4Context;
@@ -9329,9 +9382,58 @@ function MemoryCard({ active, onError }: { active: AccountView | undefined; onEr
                   {seeding ? 'Reading container…' : '🌱 Seed from container'}
                 </button>
               )}
+              {/* Handing this client's notes to a colleague. Export is scoped to the ACTIVE client, so
+                  the file cannot carry another client's notes; import only proposes, and each kept
+                  note is saved through the normal add path. */}
+              <button
+                style={{ ...styles.toggleOff, ...(xfer ? { opacity: 0.6, cursor: 'wait' } : {}) }}
+                disabled={!!xfer}
+                onClick={() => void runExport()}
+                title="Save this client's notes to a file a colleague can import"
+              >
+                {xfer === 'export' ? 'Saving…' : '⬆ Export notes'}
+              </button>
+              <button
+                style={{ ...styles.toggleOff, ...(xfer ? { opacity: 0.6, cursor: 'wait' } : {}) }}
+                disabled={!!xfer}
+                onClick={() => void runImport()}
+                title="Read a colleague's exported notes and choose which to keep"
+              >
+                {xfer === 'import' ? 'Reading…' : '⬇ Import notes'}
+              </button>
               {note && <span style={{ ...styles.muted, fontSize: 12 }}>{note}</span>}
             </div>
           </div>
+
+          {/* Import review: nothing is saved until each note is kept, exactly like the seed flow. */}
+          {imported && (
+            <div style={{ ...styles.card, marginTop: 8 }}>
+              <div style={{ fontWeight: 600, fontSize: 13 }}>
+                Import {imported.add.length} note(s){imported.client?.containerName ? ` from “${imported.client.containerName}”` : ''}
+              </div>
+              {imported.duplicates.length > 0 && (
+                <div style={{ ...styles.muted, fontSize: 12, marginTop: 2 }}>
+                  {imported.duplicates.length} were already saved and are not offered again.
+                </div>
+              )}
+              {imported.problems.map((p: string, i: number) => (
+                <div key={i} style={{ ...styles.muted, fontSize: 12, color: 'var(--c-amber)' }}>⚠ {p}</div>
+              ))}
+              {imported.add.map((c) => (
+                <div key={c.id} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginTop: 6 }}>
+                  <div style={{ flex: 1, fontSize: 12.5 }}>
+                    <span style={{ ...styles.muted, fontSize: 11 }}>{c.kind}{c.scope?.containerId ? ' · this client' : ' · account-wide'}</span>
+                    <div>{c.text}</div>
+                  </div>
+                  <button style={styles.toggleOff} onClick={() => void keepImported(c)}>Keep</button>
+                  <button style={{ ...styles.linkBtn, fontSize: 12 }} onClick={() => dropImported(c.id)}>Skip</button>
+                </div>
+              ))}
+              <div style={{ marginTop: 8 }}>
+                <button style={{ ...styles.linkBtn, fontSize: 12 }} onClick={() => setImported(null)}>Close</button>
+              </div>
+            </div>
+          )}
 
           {/* Auto-seed proposals: derived from the container's own config. Nothing is saved until you add it. */}
           {seeds !== null && (
