@@ -1,3 +1,9 @@
+## [1.365.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.364.0...v1.365.0) (2026-07-22)
+
+### Features
+
+* **desktop:** tag suggestions honour the rules saved in chat memory ([#632](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/632)) ([9644c98](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/9644c9870edeaa57572157efe4fd1c3852f927fb))
+
 ## [1.364.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.363.3...v1.364.0) (2026-07-22)
 
 ### Features
