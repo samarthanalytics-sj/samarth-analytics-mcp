@@ -242,24 +242,33 @@ function llmTrafficView(baseline: Ga4Baseline | null, currency: string): { rows:
 // property currency the engine echoed back.
 function campaignPerfView(
   campaigns: Ga4CampaignReport | null,
-): { rows: Array<{ campaign: string; sessions: string; conversions: string; purchases: string; revenue: string; engagement: string }>; best: string | null; untaggedShare: string; caveat: string } | null {
+): { rows: Array<{ campaign: string; sessions: string; conversions: string; purchases: string; revenue: string; engagement: string; spend: string; roas: string; cac: string }>; best: string | null; untaggedShare: string; caveat: string; hasCost: boolean } | null {
   if (!campaigns || campaigns.taggedCampaigns.length === 0) return null;
   const cur = campaigns.currencyCode ? `${campaigns.currencyCode} ` : '';
-  const rows = campaigns.taggedCampaigns.slice(0, 10).map((c) => ({
-    campaign: c.campaign || '(not set)',
-    sessions: num(c.sessions),
-    conversions: num(c.keyEvents),
-    purchases: typeof c.purchases === 'number' ? num(c.purchases) : '—',
-    revenue: c.revenue > 0 ? `${cur}${num(Math.round(c.revenue))}` : '—',
-    engagement: `${Math.round(c.engagementRate * 100)}%`,
-  }));
+  // Ads economics render ONLY when the Data API returned real spend (Google Ads link present).
+  const hasCost = campaigns.taggedCampaigns.some((c) => (c.adCost ?? 0) > 0);
+  const rows = campaigns.taggedCampaigns.slice(0, 10).map((c) => {
+    const cost = c.adCost ?? 0;
+    return {
+      campaign: c.campaign || '(not set)',
+      sessions: num(c.sessions),
+      conversions: num(c.keyEvents),
+      purchases: typeof c.purchases === 'number' ? num(c.purchases) : '—',
+      revenue: c.revenue > 0 ? `${cur}${num(Math.round(c.revenue))}` : '—',
+      engagement: `${Math.round(c.engagementRate * 100)}%`,
+      spend: cost > 0 ? `${cur}${num(Math.round(cost))}` : '—',
+      roas: cost > 0 && c.revenue > 0 ? `${(c.revenue / cost).toFixed(1)}x` : '—',
+      cac: cost > 0 && (c.purchases ?? 0) > 0 ? `${cur}${num(Math.round(cost / (c.purchases ?? 1)))}` : '—',
+    };
+  });
   const bc = campaigns.bestCampaign;
   const best = bc ? `${bc.campaign} (${num(bc.keyEvents)} key events${typeof bc.purchases === 'number' ? `, ${num(bc.purchases)} purchases` : ''}${bc.revenue > 0 ? `, ${cur}${num(Math.round(bc.revenue))}` : ''})` : null;
   // The guardrail the other tables already carry, worded for THIS table's two traps: key-event counts
   // read as sales, and campaign-attributed revenue read as reconcilable with the channel table.
   const caveat =
-    '"Key events" counts every configured key event (product views, add-to-carts, sign-ups, ...), NOT sales - Purchases is the real transaction count. Revenue here is campaign-attributed and will not match the channel table 1:1.';
-  return { rows, best, untaggedShare: `${campaigns.untaggedSharePct.toFixed(1)}%`, caveat };
+    '"Key events" counts every configured key event (product views, add-to-carts, sign-ups, ...), NOT sales - Purchases is the real transaction count. Revenue here is campaign-attributed and will not match the channel table 1:1.' +
+    (hasCost ? ' Spend is advertiserAdCost from the Google Ads link; ROAS = campaign-attributed revenue / spend; CAC = spend / purchases.' : '');
+  return { rows, best, untaggedShare: `${campaigns.untaggedSharePct.toFixed(1)}%`, caveat, hasCost };
 }
 
 const FUNNEL_LABELS: Record<string, string> = { view_item: 'View item', add_to_cart: 'Add to cart', begin_checkout: 'Begin checkout', purchase: 'Purchase' };
@@ -1133,9 +1142,15 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
     if (campaignPerf) {
       L.push(`**Campaign performance** (which marketing campaigns convert and earn — top campaign: ${campaignPerf.best ?? 'n/a'}; untagged traffic ${campaignPerf.untaggedShare})`);
       L.push('');
-      L.push('| Campaign | Sessions | Key events | Purchases | Revenue | Engagement |');
-      L.push('|---|--:|--:|--:|--:|--:|');
-      for (const c of campaignPerf.rows) L.push(`| ${cell(c.campaign)} | ${c.sessions} | ${c.conversions} | ${c.purchases} | ${c.revenue} | ${c.engagement} |`);
+      if (campaignPerf.hasCost) {
+        L.push('| Campaign | Sessions | Key events | Purchases | Revenue | Spend | ROAS | CAC | Engagement |');
+        L.push('|---|--:|--:|--:|--:|--:|--:|--:|--:|');
+        for (const c of campaignPerf.rows) L.push(`| ${cell(c.campaign)} | ${c.sessions} | ${c.conversions} | ${c.purchases} | ${c.revenue} | ${c.spend} | ${c.roas} | ${c.cac} | ${c.engagement} |`);
+      } else {
+        L.push('| Campaign | Sessions | Key events | Purchases | Revenue | Engagement |');
+        L.push('|---|--:|--:|--:|--:|--:|');
+        for (const c of campaignPerf.rows) L.push(`| ${cell(c.campaign)} | ${c.sessions} | ${c.conversions} | ${c.purchases} | ${c.revenue} | ${c.engagement} |`);
+      }
       L.push('');
       // The one table that used to ship without a guardrail: key-event counts must never read as sales,
       // and it carries the same provisional flag as the other performance tables when trust is unproven.

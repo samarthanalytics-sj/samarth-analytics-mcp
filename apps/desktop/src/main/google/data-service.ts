@@ -3616,7 +3616,7 @@ export class GoogleDataService {
     // The campaign query goes through data.properties.runReport DIRECTLY (not the runGa4Report helper, which
     // drops response metadata) so we can read the property's currencyCode from res.data.metadata and label
     // revenue correctly instead of hardcoding '$'.
-    const [campaignRes, totalReport] = await Promise.all([
+    const [campaignRes, totalReport, costRes] = await Promise.all([
       data.properties.runReport({
         property,
         requestBody: {
@@ -3632,7 +3632,27 @@ export class GoogleDataService {
       this.runGa4Report({ property, startDate, endDate, dimensions: [], metrics: ['sessions'], limit: '1' }).catch(
         () => null
       ),
+      // Ads SPEND per campaign (advertiserAdCost/advertiserAdClicks): only meaningful when the
+      // property has a Google Ads link - on an unlinked property every value is 0 and the rows are
+      // simply not attached. Its OWN best-effort query so a failure can never take down the table.
+      data.properties
+        .runReport({
+          property,
+          requestBody: {
+            dateRanges: [{ startDate, endDate }],
+            dimensions: [{ name: 'sessionCampaignName' }],
+            metrics: [{ name: 'advertiserAdCost' }, { name: 'advertiserAdClicks' }],
+            limit: '50',
+          },
+        })
+        .catch(() => null),
     ]);
+    const costByCampaign = new Map<string, { adCost: number; adClicks: number }>();
+    for (const r of costRes?.data.rows ?? []) {
+      const cost = Number(r.metricValues?.[0]?.value) || 0;
+      const clicks = Number(r.metricValues?.[1]?.value) || 0;
+      if (cost > 0 || clicks > 0) costByCampaign.set(r.dimensionValues?.[0]?.value ?? '', { adCost: cost, adClicks: clicks });
+    }
     const rows = (campaignRes.data.rows ?? []).map((r) => ({
       campaign: r.dimensionValues?.[0]?.value ?? '',
       sessions: Number(r.metricValues?.[0]?.value) || 0,
@@ -3640,6 +3660,7 @@ export class GoogleDataService {
       revenue: Number(r.metricValues?.[2]?.value) || 0,
       engagementRate: Number(r.metricValues?.[3]?.value) || 0,
       purchases: Number(r.metricValues?.[4]?.value) || 0,
+      ...(costByCampaign.get(r.dimensionValues?.[0]?.value ?? '') ?? {}),
     }));
     const currencyCode = campaignRes.data.metadata?.currencyCode || undefined;
     const totalSessions =
