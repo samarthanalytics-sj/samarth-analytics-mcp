@@ -35,6 +35,8 @@ import type {
   MonitorStatus,
   NetworkLocationView,
   NetworkTestResultView,
+  Ga4PlanView,
+  Ga4PlanApplyResultView,
   Ga4MonitorConfig,
   Ga4MonitorStatus,
   Ga4MonitorRun,
@@ -492,6 +494,10 @@ const api = {
   // data-quality audit on a chosen property/window.
   ga4: {
     listProperties: (): Promise<Ga4PropertyListItem[]> => ipcRenderer.invoke('ga4:listProperties'),
+    // Setup plan: audit-first checklist + selective apply (see ga4-plan.ts).
+    plan: (property: string): Promise<Ga4PlanView> => ipcRenderer.invoke('ga4:plan', property),
+    applyPlan: (property: string, selected: string[], values: Record<string, string>): Promise<Ga4PlanApplyResultView> =>
+      ipcRenderer.invoke('ga4:applyPlan', property, selected, values),
     // window: trailing-day count (number) OR an explicit { startDate, endDate } custom range.
     audit: (property: string, window: Ga4AuditWindow): Promise<Ga4PropertyAuditResult> =>
       ipcRenderer.invoke('ga4:audit', property, window),

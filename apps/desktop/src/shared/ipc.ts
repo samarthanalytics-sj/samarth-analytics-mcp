@@ -1088,6 +1088,29 @@ export interface ChatAttachmentView {
   media?: ChatMediaPart | null;
 }
 
+/** GA4 setup plan: audit findings as a selectable, one-click-applicable checklist. */
+export interface Ga4PlanItemView {
+  id: string;
+  category: 'critical' | 'high' | 'medium' | 'low' | 'info';
+  status: 'issue' | 'ok';
+  name: string;
+  description: string;
+  requires: string[];
+  defaultSelected: boolean;
+  executable: boolean;
+}
+export interface Ga4PlanView {
+  items: Ga4PlanItemView[];
+  detected: { property: string; displayName: string; retention: string | null; webStreams: number };
+}
+export interface Ga4PlanApplyResultView {
+  applied: string[];
+  skipped: Array<{ id: string; reason: string }>;
+  failed: Array<{ id: string; error: string }>;
+  /** The fresh plan re-built AFTER applying, so the UI shows proof instead of stale state. */
+  plan: Ga4PlanView;
+}
+
 export interface ServerDocView {
   meta: { containerName: string; publicId?: string; workspaceName?: string; generatedAt: string; liveVersionId: string | null };
   overview: { taggingServerUrls: string[]; counts: { clients: number; tags: number; triggers: number; variables: number; transformations: number }; configScore: number | null };
