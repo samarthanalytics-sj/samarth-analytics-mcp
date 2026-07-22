@@ -1,6 +1,6 @@
 // Pure tests for the chat-reply export builders (table extraction, CSV, exportability, sheet names).
 // Run: tsx src/shared/__tests__/chat-export.test.ts
-import { extractReplyTables, replyLooksExportable, replyCsv, sheetNameFor } from '../chat-export';
+import { extractReplyTables, replyLooksExportable, replyCsv, sheetNameFor, asksForExport, shouldOfferExport } from '../chat-export';
 
 let passed = 0;
 let failed = 0;
@@ -62,6 +62,48 @@ check('sheet name strips forbidden chars', sheetNameFor('A/B:C*D?E[F]', 0) === '
 check('sheet name capped at 31 chars', sheetNameFor('x'.repeat(50), 0).length <= 31);
 check('blank title falls back', sheetNameFor('   ', 4) === 'Table 5');
 check('sheet name plain-dashes', sheetNameFor('Alpha — Beta', 0) === 'Alpha - Beta');
+
+// ── asksForExport: the ask ──────────────────────────────────────────────────────
+check('asks: table', asksForExport('give me a table of all the tags'));
+check('asks: caps table', asksForExport('GIVE ME A TABLE OF THE TRIGGERS'));
+check('asks: in a table', asksForExport('list down the form ids in a table'));
+check('asks: tabular form', asksForExport('put it in tabular form'));
+check('asks: table format', asksForExport('table format please'));
+check('asks: export', asksForExport('export this'));
+check('asks: download', asksForExport('can I download this'));
+check('asks: csv', asksForExport('i want it as csv'));
+check('asks: excel', asksForExport('excel sheet please'));
+check('asks: pdf', asksForExport('send me the pdf'));
+check('asks: save as', asksForExport('save it as xlsx'));
+check('asks: report', asksForExport('can you make a report of the container'));
+check('asks: summary', asksForExport('i need a summary of the audit'));
+check('asks: breakdown', asksForExport('show me a breakdown by trigger type'));
+check('asks: as a document', asksForExport('write it up as a document'));
+
+// ── asksForExport: NOT an ask (the whole point of this change) ───────────────────
+check('not ask: plain question', !asksForExport('why is my ga4 tag not firing'));
+check('not ask: create a tag', !asksForExport('create a google ads conversion tag for the demo form'));
+check('not ask: mentions a report', !asksForExport('why does the report show 3 tags?'));
+check('not ask: verb AFTER the noun', !asksForExport('the summary says 12 - show the raw numbers'));
+check('not ask: statement about a table', !asksForExport('the table is wrong, fix the third row'));
+check('not ask: distant verb', !asksForExport('show me the firing tags and then tell me what changed in the container since the last report'));
+check('not ask: list without table', !asksForExport('list the triggers in this workspace'));
+check('not ask: empty', !asksForExport('') && !asksForExport('   '));
+
+// ── shouldOfferExport: content AND ask ──────────────────────────────────────────
+const TABLE = '| Tag | Type |\n|---|---|\n| A | ga4 |';
+const LONG = 'x'.repeat(600);
+check('bar: asked for a table, got one', shouldOfferExport(TABLE, 'give me a table of the tags', ''));
+check('bar: asked for a report, got prose', shouldOfferExport(LONG, 'prepare a report on this container', ''));
+check('NO bar: table nobody asked for', !shouldOfferExport(TABLE, 'why is my tag not firing', ''));
+check('NO bar: long answer nobody asked for', !shouldOfferExport(LONG, 'why is my tag not firing', ''));
+check('NO bar: asked, but the reply is one line', !shouldOfferExport('Done - no tables here.', 'give me a table', ''));
+check('NO bar: no neighbouring user turns', !shouldOfferExport(TABLE, '', ''));
+
+// A follow-up pointing back at the reply above it ("download that") lights THAT reply.
+check('bar: retro ask below', shouldOfferExport(TABLE, 'why is my tag not firing', 'download that as csv'));
+check('bar: retro ask via "the above"', shouldOfferExport(TABLE, 'anything wrong here?', 'export the above as pdf'));
+check('NO bar: forward ask is for the NEXT reply', !shouldOfferExport(TABLE, 'why is my tag not firing', 'now give me a table of the triggers'));
 
 if (failures.length) console.error(failures.join('\n'));
 console.log(`chat-export: ${passed}/${passed + failed} checks passed`);

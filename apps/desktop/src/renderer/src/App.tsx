@@ -68,7 +68,7 @@ import { autoHealConfirmMessage } from '../../shared/workspace-warnings';
 import { MEMORY_KINDS, type Memory, type MemoryKind } from '../../shared/chat-memory';
 import type { SeedCandidate } from '../../shared/memory-seed';
 import { resolveChatInput, slashMenuMatches, type SlashCommand } from '../../shared/chat-commands';
-import { extractReplyTables, replyLooksExportable } from '../../shared/chat-export';
+import { extractReplyTables, shouldOfferExport } from '../../shared/chat-export';
 import { execSummaryHtml } from '../../shared/ga4-exec-html';
 import { stripDuplicateCharts } from '../../shared/ga4-visuals-html';
 import { ga4SectionsHtml } from '../../shared/ga4-sections-html';
@@ -1572,8 +1572,14 @@ function ChatView({
                   </div>
                 </details>
               )}
-              {/* Export bar — only on finished, report-sized replies (tables or long-form), never while streaming. */}
-              {m.role === 'assistant' && !(busy && i === messages.length - 1) && replyLooksExportable(m.text) && (
+              {/* Export bar — only when the user ASKED for a table/report/file (in the request that
+                  produced this reply, or a follow-up pointing back at it), and never while streaming. */}
+              {m.role === 'assistant' && !(busy && i === messages.length - 1) &&
+                shouldOfferExport(
+                  m.text,
+                  messages[i - 1]?.role === 'user' ? messages[i - 1].text : '',
+                  messages[i + 1]?.role === 'user' ? messages[i + 1].text : '',
+                ) && (
                 <ExportReplyBar text={m.text} product={product} onError={onError} />
               )}
             </div>
