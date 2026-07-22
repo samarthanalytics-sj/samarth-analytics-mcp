@@ -4,7 +4,7 @@
 // Run: tsx src/shared/__tests__/memory-transfer.test.ts
 import {
   buildMemoryExport, parseMemoryExport, planMemoryImport, memoryExportFilename,
-  MEMORY_EXPORT_VERSION, type ExportInput,
+  MEMORY_EXPORT_VERSION, retractionKey, type ExportInput,
 } from '../memory-transfer';
 
 let passed = 0;
@@ -113,6 +113,67 @@ check('import: no target container leaves the original scope untouched', (() => 
 check('filename: names the client and the date', memoryExportFilename({ publicId: 'GTM-AAA' }, '2026-07-22') === 'samarth-memory-GTM-AAA-2026-07-22.json');
 check('filename: unsafe characters are stripped', !/[/\\:*?"<>|]/.test(memoryExportFilename({ containerName: 'acme.com / EU: staging' }, '2026-07-22')));
 check('filename: missing client still yields a sane name', memoryExportFilename(undefined, '2026-07-22').startsWith('samarth-memory-account-'));
+
+// -- Retractions: propagating a DELETE, without shipping the deleted text --------
+{
+  const key = retractionKey('rule', 'we use order_completed instead of purchase', true);
+  check('key: stable for the same input', key === retractionKey('rule', 'we use order_completed instead of purchase', true));
+  check('key: case and surrounding space do not matter', key === retractionKey('rule', '  WE USE Order_Completed Instead Of Purchase  ', true));
+  check('key: a different kind is a different note', key !== retractionKey('fact', 'we use order_completed instead of purchase', true));
+  check('key: account-wide and client-scoped are different notes', key !== retractionKey('rule', 'we use order_completed instead of purchase', false));
+  check('key: different text hashes differently', key !== retractionKey('rule', 'something else entirely', true));
+  check('key: long enough that an accidental collision is negligible', key.length >= 32);
+  check('key: the TEXT is not recoverable from it', !key.includes('order') && !/[^0-9a-f]/.test(key));
+}
+{
+  const t = [{ key: retractionKey('rule', 'retracted note', true), kind: 'rule', clientScoped: true }];
+  const f = buildMemoryExport([note({ text: 'kept note' })], { exportedAt: '2026-07-22', retracted: t });
+  check('export: retractions ride along', f.retracted?.length === 1);
+  check('export: no deleted TEXT is in the file', !JSON.stringify(f).includes('retracted note'));
+  const back = parseMemoryExport(JSON.stringify(f));
+  check('parse: retractions survive the round trip', back.retracted.length === 1 && back.retracted[0].key === t[0].key);
+}
+check('export: a file with no notes but a retraction is still worth writing', (() => {
+  const f = buildMemoryExport([], { exportedAt: '2026-07-22', retracted: [{ key: retractionKey('rule', 'x', true), kind: 'rule', clientScoped: true }] });
+  return f.notes.length === 0 && f.retracted?.length === 1;
+})());
+check('parse: a malformed retraction is dropped, not trusted', (() => {
+  const r = parseMemoryExport(JSON.stringify({ format: 'samarth-memory', version: 1, notes: [], retracted: [{ key: 'tooshort' }, { nonsense: true }] }));
+  return r.retracted.length === 0;
+})());
+check('parse: a file with no retracted field is fine', parseMemoryExport(JSON.stringify({ format: 'samarth-memory', version: 1, notes: [] })).retracted.length === 0);
+
+// The plan must MATCH the importer's own notes, and only those.
+{
+  const retracted = [{ key: retractionKey('rule', 'drop me', true), kind: 'rule', clientScoped: true }];
+  const parsed = parseMemoryExport(JSON.stringify(buildMemoryExport([], { exportedAt: '2026-07-22', retracted })));
+  const mine = [
+    { id: 'local-1', kind: 'rule', text: 'Drop Me', scope: { containerId: 'GTM-MINE' } },
+    { id: 'local-2', kind: 'rule', text: 'keep me', scope: { containerId: 'GTM-MINE' } },
+  ];
+  const plan = planMemoryImport(parsed, mine, { containerId: 'GTM-MINE' });
+  check('retract: the matching local note is offered for removal', plan.remove.length === 1 && plan.remove[0].id === 'local-1');
+  check('retract: it is shown in CLEARTEXT, because it is the importer own note', plan.remove[0].text === 'Drop Me');
+  check('retract: unrelated notes are untouched', !plan.remove.some((r) => r.id === 'local-2'));
+  check('retract: matching works across DIFFERENT container ids (import re-scopes)', plan.remove.length === 1);
+}
+check('retract: a note the importer does not have matches nothing', (() => {
+  const retracted = [{ key: retractionKey('rule', 'never had this', true), kind: 'rule', clientScoped: true }];
+  const parsed = parseMemoryExport(JSON.stringify(buildMemoryExport([], { exportedAt: '2026-07-22', retracted })));
+  return planMemoryImport(parsed, [{ id: 'x', kind: 'rule', text: 'something else', scope: { containerId: 'C' } }]).remove.length === 0;
+})());
+check('retract: an account-wide retraction does not remove a client-scoped note of the same text', (() => {
+  const retracted = [{ key: retractionKey('rule', 'shared text', false), kind: 'rule', clientScoped: false }];
+  const parsed = parseMemoryExport(JSON.stringify(buildMemoryExport([], { exportedAt: '2026-07-22', retracted })));
+  return planMemoryImport(parsed, [{ id: 'x', kind: 'rule', text: 'shared text', scope: { containerId: 'C' } }]).remove.length === 0;
+})());
+check('retract: a local note with no id is never proposed for removal', (() => {
+  const retracted = [{ key: retractionKey('rule', 'no id', true), kind: 'rule', clientScoped: true }];
+  const parsed = parseMemoryExport(JSON.stringify(buildMemoryExport([], { exportedAt: '2026-07-22', retracted })));
+  return planMemoryImport(parsed, [{ kind: 'rule', text: 'no id', scope: { containerId: 'C' } }]).remove.length === 0;
+})());
+check('retract: a file with no retractions proposes no removals',
+  planMemoryImport(parseMemoryExport(JSON.stringify(buildMemoryExport([note()], { exportedAt: '2026-07-22' }))), [{ id: 'a', kind: 'rule', text: 'x' }]).remove.length === 0);
 
 console.log(`\nmemory-transfer: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }

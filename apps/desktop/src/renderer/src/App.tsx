@@ -9241,7 +9241,7 @@ function MemoryCard({ active, onError }: { active: AccountView | undefined; onEr
     try {
       const plan = await window.desktop.memory.importPlan();
       if (plan.cancelled) return;
-      if (!plan.add.length && !plan.problems.length) {
+      if (!plan.add.length && !plan.remove.length && !plan.problems.length) {
         setNote(plan.duplicates.length ? `Nothing new: all ${plan.duplicates.length} note(s) in that file are already saved.` : 'That file had no notes to import.');
         return;
       }
@@ -9262,11 +9262,30 @@ function MemoryCard({ active, onError }: { active: AccountView | undefined; onEr
     }
   }
 
+  /** Remove one of MY notes because the sender retracted it. Explicit, never automatic. */
+  async function applyRetraction(id: string): Promise<void> {
+    try {
+      await window.desktop.memory.remove(id);
+      dropRetraction(id);
+      load();
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  function dropRetraction(id: string): void {
+    setImported((p: MemoryImportPlanView | null) => {
+      if (!p) return p;
+      const remove = p.remove.filter((x: { id: string }) => x.id !== id);
+      return p.add.length || remove.length ? { ...p, remove } : null;
+    });
+  }
+
   function dropImported(id: string): void {
     setImported((p: MemoryImportPlanView | null) => {
       if (!p) return p;
       const add = p.add.filter((x: MemoryImportPlanView['add'][number]) => x.id !== id);
-      return add.length ? { ...p, add } : null;
+      return add.length || p.remove.length ? { ...p, add } : null;
     });
   }
 
@@ -9429,6 +9448,26 @@ function MemoryCard({ active, onError }: { active: AccountView | undefined; onEr
                   <button style={{ ...styles.linkBtn, fontSize: 12 }} onClick={() => dropImported(c.id)}>Skip</button>
                 </div>
               ))}
+              {imported.remove.length > 0 && (
+                <div style={{ marginTop: 10, paddingTop: 8, borderTop: '1px solid var(--border)' }}>
+                  <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--c-amber)' }}>
+                    The sender has since deleted {imported.remove.length} note(s) you still have
+                  </div>
+                  <div style={{ ...styles.muted, fontSize: 12, marginTop: 2 }}>
+                    These are YOUR notes, shown in full. Nothing is removed unless you say so.
+                  </div>
+                  {imported.remove.map((r) => (
+                    <div key={r.id} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginTop: 6 }}>
+                      <div style={{ flex: 1, fontSize: 12.5 }}>
+                        <span style={{ ...styles.muted, fontSize: 11 }}>{r.kind}</span>
+                        <div>{r.text}</div>
+                      </div>
+                      <button style={styles.dangerGhost} onClick={() => void applyRetraction(r.id)}>Remove</button>
+                      <button style={{ ...styles.linkBtn, fontSize: 12 }} onClick={() => dropRetraction(r.id)}>Keep</button>
+                    </div>
+                  ))}
+                </div>
+              )}
               <div style={{ marginTop: 8 }}>
                 <button style={{ ...styles.linkBtn, fontSize: 12 }} onClick={() => setImported(null)}>Close</button>
               </div>

@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { readJsonFile, writeJsonFileAtomic } from './json-file';
+import { retractionKey } from '../../shared/memory-transfer';
 import { normalizeMemoryText, memoryDedupeKey, MEMORY_KINDS, type Memory, type MemoryInput, type MemoryKind, type MemoryScope, type AddMemoryResult, type MemoryPatch } from '../../shared/chat-memory';
 
 export type { AddMemoryResult } from '../../shared/chat-memory';
@@ -13,7 +14,25 @@ interface MemoryFile {
   version: 1;
   /** accountId -> that account's memories. */
   byAccount: Record<string, Memory[]>;
+  /** accountId -> notes deleted here, so an export can tell a colleague to drop them too. Hashes
+   *  only: the deleted TEXT is never kept, because a note is often deleted precisely because of what
+   *  it said. Capped, oldest dropped first. */
+  tombstonesByAccount?: Record<string, MemoryTombstone[]>;
 }
+
+/** A deletion, recorded so it can propagate. Carries no text. */
+export interface MemoryTombstone {
+  key: string;
+  kind: string;
+  clientScoped: boolean;
+  /** Which client it was scoped to, so a per-client export does not carry another client's
+   *  retractions. Not part of the hash: import re-scopes, so the key must be id-independent. */
+  containerId?: string;
+  deletedAt: number;
+}
+
+/** Plenty for a handover, bounded so the file cannot grow without limit. */
+const MAX_TOMBSTONES = 200;
 
 const EMPTY: MemoryFile = { version: 1, byAccount: {} };
 
@@ -139,17 +158,42 @@ export class MemoryStore {
   /** Delete one memory. Returns true if it existed. */
   remove(accountId: string, id: string): boolean {
     const list = this.bucket(accountId);
+    const gone = list.find((m) => m.id === id);
     const next = list.filter((m) => m.id !== id);
     if (next.length === list.length) return false;
     this.data.byAccount[accountId] = next;
+    if (gone) this.recordTombstone(accountId, gone);
     this.persist();
     return true;
   }
 
+  /** Note a deletion so a later export can retract it on a colleague's machine. Text is NOT kept. */
+  private recordTombstone(accountId: string, gone: Memory): void {
+    const clientScoped = !!(gone.scope?.containerId || gone.scope?.property);
+    const t: MemoryTombstone = {
+      key: retractionKey(gone.kind, gone.text, clientScoped),
+      kind: gone.kind,
+      clientScoped,
+      ...(gone.scope?.containerId ? { containerId: gone.scope.containerId } : {}),
+      deletedAt: this.clock(),
+    };
+    const all = this.data.tombstonesByAccount ?? (this.data.tombstonesByAccount = {});
+    const list = (all[accountId] ?? []).filter((x) => x.key !== t.key);
+    list.push(t);
+    all[accountId] = list.slice(-MAX_TOMBSTONES);
+  }
+
+  /** Deletions recorded for this account, newest last. */
+  tombstones(accountId: string): MemoryTombstone[] {
+    return [...(this.data.tombstonesByAccount?.[accountId] ?? [])];
+  }
+
   /** Delete every memory for an account. Returns how many were removed. */
   clear(accountId: string): number {
-    const n = this.bucket(accountId).length;
+    const list = this.bucket(accountId);
+    const n = list.length;
     if (n) {
+      for (const m of list) this.recordTombstone(accountId, m);
       delete this.data.byAccount[accountId];
       this.persist();
     }
