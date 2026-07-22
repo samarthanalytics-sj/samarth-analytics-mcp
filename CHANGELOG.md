@@ -1,3 +1,9 @@
+## [1.385.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.384.0...v1.385.0) (2026-07-22)
+
+### Features
+
+* **desktop:** Forms detected table shows what the scan fetched per form ([64ec0c5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/64ec0c57067b9fd0d8f302953a38f18d86789bb0)), closes [#id](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/id)
+
 ## [1.384.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.383.0...v1.384.0) (2026-07-22)
 
 ### Features
