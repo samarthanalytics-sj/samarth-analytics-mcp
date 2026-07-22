@@ -68,6 +68,7 @@ import type {
   SuggestionScreenshotResult,
 } from '../shared/ipc';
 import type { Memory, MemoryInput, MemoryPatch, AddMemoryResult } from '../shared/chat-memory';
+import type { MemoryImportPlanView } from '../shared/ipc';
 import type { MemoryCandidate } from '../shared/memory-extract';
 import type { SeedCandidate } from '../shared/memory-seed';
 
@@ -229,6 +230,8 @@ const api = {
     // Phase 3: derive durable facts from the active GTM container's own config (no LLM). Proposals only;
     // a candidate carrying supersedesId REPLACES that stale auto-seeded note when approved.
     seed: (): Promise<SeedCandidate[]> => ipcRenderer.invoke('memory:seed'),
+    exportFile: (): Promise<{ saved: boolean; path?: string; count: number }> => ipcRenderer.invoke('memory:export'),
+    importPlan: (): Promise<MemoryImportPlanView> => ipcRenderer.invoke('memory:importPlan'),
   },
 
   // Tag suggestions ("measurement plan from a URL"): scan a site (or paste a

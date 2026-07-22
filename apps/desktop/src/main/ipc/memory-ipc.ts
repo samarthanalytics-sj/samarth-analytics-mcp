@@ -1,4 +1,5 @@
-import { ipcMain } from 'electron';
+import { ipcMain, dialog, BrowserWindow } from 'electron';
+import { writeFile, readFile } from 'node:fs/promises';
 import type { MemoryStore } from '../storage/memory-store';
 import type { RegistryService } from '../services/registry-service';
 import type { ChatService } from '../services/chat-service';
@@ -7,6 +8,7 @@ import { memoryDedupeKey, memoryApplies, type Memory, type MemoryInput, type Mem
 import type { MemoryCandidate } from '../../shared/memory-extract';
 import type { SeedCandidate } from '../../shared/memory-seed';
 import type { ChatTurn } from '../../shared/ipc';
+import { buildMemoryExport, parseMemoryExport, planMemoryImport, memoryExportFilename, type ImportPlan } from '../../shared/memory-transfer';
 import { withQuotaRetry } from '../google/quota-retry';
 
 // IPC for the chat-memory panel — CRUD over the ACTIVE account's memories (the store keys by account, so
@@ -23,6 +25,48 @@ export function registerMemoryIpc(memory: MemoryStore, registry: RegistryService
   };
 
   ipcMain.handle('memory:list', (): Memory[] => memory.list(activeId()));
+
+  // ---- Handing a client's notes to a colleague -------------------------------------------------
+  // Memory is per person, per machine: a colleague opening the same container starts from zero. This
+  // is the step before real shared memory, and needs no backend, identity model or sync.
+  //
+  // EXPORT is SCOPED TO THE ACTIVE CLIENT (memoryApplies), so a handover file cannot carry another
+  // client's notes. IMPORT only PARSES and PLANS; the accepted notes are added by the renderer through
+  // memory:add, so redaction, dedupe, capping and eviction all still apply. Import is never a
+  // privileged write into the store.
+  ipcMain.handle('memory:export', async (e): Promise<{ saved: boolean; path?: string; count: number }> => {
+    const account = registry.getActiveView();
+    if (!account) throw new Error('No active account. Connect and activate a Google account first.');
+    const ctx = account.gtmContext;
+    const applicable = memory.list(account.id)
+      .filter((m) => memoryApplies(m, { containerId: ctx?.containerId, property: account.ga4Context?.property }));
+    const exportedAt = new Date().toISOString().slice(0, 10); // date only: this file gets emailed around
+    const file = buildMemoryExport(applicable, {
+      exportedAt,
+      ...(ctx?.containerId ? { client: { containerId: ctx.containerId, containerName: ctx.containerName, publicId: ctx.containerPublicId } } : {}),
+    });
+    if (file.notes.length === 0) return { saved: false, count: 0 };
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const opts = { title: 'Export memory notes', defaultPath: memoryExportFilename(file.client, exportedAt), filters: [{ name: 'JSON', extensions: ['json'] }] };
+    const { canceled, filePath } = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
+    if (canceled || !filePath) return { saved: false, count: file.notes.length };
+    await writeFile(filePath, JSON.stringify(file, null, 2), 'utf8');
+    return { saved: true, path: filePath, count: file.notes.length };
+  });
+
+  ipcMain.handle('memory:importPlan', async (e): Promise<ImportPlan & { cancelled?: boolean; client?: unknown }> => {
+    const account = registry.getActiveView();
+    if (!account) throw new Error('No active account. Connect and activate a Google account first.');
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const opts = { title: 'Import memory notes', properties: ['openFile' as const], filters: [{ name: 'JSON', extensions: ['json'] }] };
+    const { canceled, filePaths } = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts);
+    if (canceled || !filePaths?.length) return { add: [], duplicates: [], problems: [], cancelled: true };
+    const raw = await readFile(filePaths[0], 'utf8').catch(() => '');
+    const parsed = parseMemoryExport(raw);
+    const ctx = account.gtmContext;
+    const plan = planMemoryImport(parsed, memory.list(account.id), ctx?.containerId ? { containerId: ctx.containerId, label: ctx.containerName } : undefined);
+    return { ...plan, ...(parsed.client ? { client: parsed.client } : {}) };
+  });
   ipcMain.handle('memory:add', (_e, input: MemoryInput): AddMemoryResult => memory.add(activeId(), input));
   ipcMain.handle('memory:update', (_e, id: unknown, patch: MemoryPatch): Memory | null => memory.update(activeId(), String(id ?? ''), patch ?? {}));
   ipcMain.handle('memory:remove', (_e, id: unknown): boolean => memory.remove(activeId(), String(id ?? '')));
