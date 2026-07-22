@@ -206,6 +206,61 @@ export function registerGa4AuditIpc(data: GoogleDataService): void {
   // Run the audit: the CONFIG pass (auditGa4) is window-independent; the DATA-QUALITY pass runs
   // over the chosen window — either trailing N days (clamped to [1, 365], default 28) or an
   // explicit { startDate, endDate } custom range (YYYY-MM-DD, start <= end). Read-only.
+  // GA4 SETUP PLAN: the audit's config findings as a selectable checklist (read-only build).
+  ipcMain.handle('ga4:plan', async (_e, property: unknown) => {
+    const { buildGa4Plan } = await import('./ga4-plan');
+    return buildGa4Plan(await data.getGa4PropertySnapshot(String(property ?? '')));
+  });
+
+  // Apply ONLY the selected plan items via the GA4 Admin write methods; every outcome is reported
+  // (applied / skipped-with-reason / failed) and the plan is re-built afterwards as proof.
+  ipcMain.handle('ga4:applyPlan', async (_e, property: unknown, selected: unknown, values: unknown) => {
+    const prop = String(property ?? '');
+    const ids = (Array.isArray(selected) ? selected : []).map(String);
+    const vals = (values && typeof values === 'object' ? values : {}) as Record<string, string>;
+    const applied: string[] = [];
+    const skipped: Array<{ id: string; reason: string }> = [];
+    const failed: Array<{ id: string; error: string }> = [];
+    for (const id of ids) {
+      const [kind, sid] = id.split(':');
+      try {
+        if (kind === 'retention_14') {
+          await data.ga4UpdateDataRetention(`${prop}/dataRetentionSettings`, 'eventDataRetention', { eventDataRetention: 'FOURTEEN_MONTHS' });
+        } else if (kind === 'retention_reset') {
+          await data.ga4UpdateDataRetention(`${prop}/dataRetentionSettings`, 'resetUserDataOnNewActivity', { resetUserDataOnNewActivity: true });
+        } else if (kind === 'em_master') {
+          await data.ga4UpdateEnhancedMeasurement(`${prop}/dataStreams/${sid}/enhancedMeasurementSettings`, 'streamEnabled', { streamEnabled: true });
+        } else if (kind === 'em_site_search') {
+          const q = (vals.searchQueryParameter ?? '').trim();
+          await data.ga4UpdateEnhancedMeasurement(
+            `${prop}/dataStreams/${sid}/enhancedMeasurementSettings`,
+            q ? 'siteSearchEnabled,searchQueryParameter' : 'siteSearchEnabled',
+            { siteSearchEnabled: true, ...(q ? { searchQueryParameter: q } : {}) }
+          );
+        } else if (kind === 'em_page_changes') {
+          await data.ga4UpdateEnhancedMeasurement(`${prop}/dataStreams/${sid}/enhancedMeasurementSettings`, 'pageChangesEnabled', { pageChangesEnabled: true });
+        } else if (kind === 'em_form_interactions') {
+          await data.ga4UpdateEnhancedMeasurement(`${prop}/dataStreams/${sid}/enhancedMeasurementSettings`, 'formInteractionsEnabled', { formInteractionsEnabled: true });
+        } else if (kind === 'email_redaction') {
+          await data.ga4UpdateDataRedaction(`${prop}/dataStreams/${sid}/dataRedactionSettings`, 'emailRedactionEnabled', { emailRedactionEnabled: true });
+        } else if (kind === 'attribution_data_driven') {
+          await data.ga4UpdateAttribution(`${prop}/attributionSettings`, 'reportingAttributionModel', { reportingAttributionModel: 'PAID_AND_ORGANIC_CHANNELS_DATA_DRIVEN' });
+        } else if (kind === 'google_signals_on') {
+          await data.ga4UpdateGoogleSignals(`${prop}/googleSignalsSettings`, 'state', { state: 'GOOGLE_SIGNALS_ENABLED' });
+        } else {
+          skipped.push({ id, reason: 'not an applicable item' });
+          continue;
+        }
+        applied.push(id);
+      } catch (err) {
+        failed.push({ id, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    const { buildGa4Plan } = await import('./ga4-plan');
+    const plan = buildGa4Plan(await data.getGa4PropertySnapshot(prop));
+    return { applied, skipped, failed, plan };
+  });
+
   ipcMain.handle('ga4:audit', async (_e, property: unknown, window: unknown): Promise<Ga4PropertyAuditResult> => {
     const p = String(property ?? '');
     if (!p) throw new Error('Pick a GA4 property first.');

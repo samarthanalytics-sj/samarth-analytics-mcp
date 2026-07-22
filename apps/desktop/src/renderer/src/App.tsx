@@ -20,6 +20,8 @@ import type {
   Ga4MonitorRun,
   Ga4PropertyAuditResult,
   Ga4PropertyListItem,
+  Ga4PlanView,
+  Ga4PlanApplyResultView,
   GoogleClientStatus,
   GtmAccountView,
   GtmContainerView,
@@ -8894,6 +8896,131 @@ function ServerAuditSection({
 // and run the read-only config + data-quality audit (the same ga4-audit / data-quality
 // engines the chat tools use) - coverage + findings by severity. Mirrors ContainerAuditPanel,
 // but GA4 has no auto-fixes (every finding is advisory).
+/** GA4 SETUP PLAN card: audit-first checklist -> selective apply -> re-planned proof. The GA4
+ *  mirror of the server container's plan/select/apply flow (config-plane, honest verdicts). */
+function Ga4PlanCard({ property, onError }: { property: string; onError: (m: string) => void }): JSX.Element {
+  const [plan, setPlan] = useState<Ga4PlanView | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [sel, setSel] = useState<Record<string, boolean>>({});
+  const [searchParam, setSearchParam] = useState('');
+  const [applying, setApplying] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [summary, setSummary] = useState<Ga4PlanApplyResultView | null>(null);
+  useEffect(() => { setPlan(null); setSummary(null); setSel({}); setConfirming(false); }, [property]);
+  const CAT: Record<string, string> = { critical: 'var(--c-red)', high: 'var(--c-red)', medium: 'var(--c-amber)', low: 'var(--text-muted)', info: 'var(--text-faint)' };
+  async function load(): Promise<void> {
+    if (loading) return;
+    setLoading(true);
+    setSummary(null);
+    setConfirming(false);
+    onError('');
+    try {
+      const pl = await window.desktop.ga4.plan(property);
+      setPlan(pl);
+      const defaults: Record<string, boolean> = {};
+      for (const it of pl.items) if (it.status === 'issue' && it.executable) defaults[it.id] = it.defaultSelected;
+      setSel(defaults);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+  async function apply(): Promise<void> {
+    if (!plan || applying) return;
+    const selected = Object.keys(sel).filter((k) => sel[k]);
+    if (!selected.length) return;
+    setApplying(true);
+    setConfirming(false);
+    onError('');
+    try {
+      const r = await window.desktop.ga4.applyPlan(property, selected, { searchQueryParameter: searchParam.trim() });
+      setSummary(r);
+      setPlan(r.plan);
+      const defaults: Record<string, boolean> = {};
+      for (const it of r.plan.items) if (it.status === 'issue' && it.executable) defaults[it.id] = it.defaultSelected;
+      setSel(defaults);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setApplying(false);
+    }
+  }
+  const issues = (plan?.items ?? []).filter((i) => i.status === 'issue');
+  const oks = (plan?.items ?? []).filter((i) => i.status === 'ok');
+  const selectedCount = Object.values(sel).filter(Boolean).length;
+  const wantsSearchParam = issues.some((i) => i.requires.includes('searchQueryParameter') && sel[i.id]);
+  return (
+    <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: '12px 14px', marginTop: 10, display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <span style={{ fontWeight: 700, fontSize: 13.5 }}>Setup plan - fix the config from the audit</span>
+        <span style={{ flex: 1 }} />
+        <button style={{ ...styles.ghostBtn, color: 'var(--c-blue)' }} disabled={loading} onClick={() => void load()}>
+          {loading ? 'Planning…' : plan ? '↻ Re-plan' : '▶ Build plan'}
+        </button>
+      </div>
+      {!plan && !loading && (
+        <div style={{ fontSize: 12.5, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+          Turns the config audit into a checklist you can apply in one click: retention, enhanced-measurement toggles, email redaction, attribution, Google Signals. Changes apply directly to GA4 via the Admin API; privacy-weight decisions are never pre-selected.
+        </div>
+      )}
+      {plan && issues.length === 0 && (
+        <div style={{ fontSize: 13, color: 'var(--c-green)', fontWeight: 600 }}>✓ Nothing to fix - every plannable setting is already in shape.</div>
+      )}
+      {issues.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {issues.map((it) => (
+            <label key={it.id} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 12.5, cursor: it.executable ? 'pointer' : 'default', opacity: it.executable ? 1 : 0.75 }}>
+              <input type="checkbox" style={{ marginTop: 2 }} disabled={!it.executable} checked={Boolean(sel[it.id])} onChange={(e) => setSel((m) => ({ ...m, [it.id]: e.target.checked }))} />
+              <span style={{ lineHeight: 1.45 }}>
+                <span style={{ fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: CAT[it.category] }}>{it.category}</span>{' '}
+                <b>{it.name}</b>
+                {!it.executable && <span style={{ color: 'var(--text-faint)' }}> (advisory)</span>}
+                <br />
+                <span style={{ color: 'var(--text-muted)' }}>{it.description}</span>
+              </span>
+            </label>
+          ))}
+          {wantsSearchParam && (
+            <input style={{ ...styles.promptSearch, marginTop: 2, maxWidth: 340 }} placeholder="Site-search query params (optional, e.g. q,search)" value={searchParam} onChange={(e) => setSearchParam(e.target.value)} />
+          )}
+          {!confirming ? (
+            <button style={{ ...styles.primaryBtn, alignSelf: 'flex-start' }} disabled={applying || selectedCount === 0} onClick={() => setConfirming(true)}>
+              {applying ? 'Applying…' : `Apply ${selectedCount} selected fix(es)`}
+            </button>
+          ) : (
+            <div style={styles.confirm}>
+              <div style={{ ...styles.muted, marginBottom: 8, color: 'var(--c-amber)' }}>
+                Apply {selectedCount} change(s) directly to GA4 on {plan?.detected.displayName}? These take effect immediately (GA4 has no draft state).
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button style={styles.primaryBtn} disabled={applying} onClick={() => void apply()}>{applying ? 'Applying…' : 'Confirm & apply'}</button>
+                <button style={styles.ghostBtn} disabled={applying} onClick={() => setConfirming(false)}>Cancel</button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+      {oks.length > 0 && (
+        <div style={{ fontSize: 11.5, color: 'var(--text-faint)', lineHeight: 1.5 }}>
+          Verified in shape: {oks.map((i) => i.name).join(' · ')}
+        </div>
+      )}
+      {summary && (
+        <div style={{ border: '1px solid ' + (summary.failed.length ? 'var(--c-amber-border)' : 'var(--c-green-border)'), background: summary.failed.length ? 'var(--c-amber-bg)' : 'var(--c-green-bg)', borderRadius: 8, padding: '8px 12px', fontSize: 12.5 }}>
+          ✓ Applied {summary.applied.length}
+          {summary.skipped.length > 0 && <> · skipped {summary.skipped.length}</>}
+          {summary.failed.length > 0 && <> · failed {summary.failed.length}</>}
+          {' '}- the checklist above is the RE-PLANNED state (proof, not memory).
+          {summary.failed.map((f) => (
+            <div key={f.id} style={{ color: 'var(--c-red)', marginTop: 4 }}>Failed {f.id}: {f.error}</div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Ga4AuditPanel({
   active,
   onError,
@@ -9180,6 +9307,7 @@ function Ga4AuditPanel({
                     : 'Config checks ignore the window; it scopes the data-quality pass.'}
                 </span>
               </div>
+              {selected && <Ga4PlanCard key={selected.property} property={selected.property} onError={onError} />}
             </div>
 
             {/* Results */}
