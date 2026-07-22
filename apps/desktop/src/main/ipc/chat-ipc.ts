@@ -110,4 +110,72 @@ export function registerChatIpc(service: ChatService): void {
       }
     }
   );
+
+  // Save an assistant reply to a user-chosen file (the "Export report" bar under long/tabular replies):
+  //   md   → the raw Markdown text
+  //   csv  → the reply's GFM tables (title + header + rows per table)
+  //   xlsx → the same tables as a native workbook, one worksheet per table
+  //   pdf  → the reply as a styled document (shared markdown→HTML renderer + hidden-window printToPDF)
+  // A save dialog picks the path; returns the path written or null if cancelled. Text goes through
+  // writeReportFile (plain-dash boundary + locked-file "(n)" fallback), matching the audit exports.
+  ipcMain.handle('llm:exportReply', async (e, format: unknown, defaultName: unknown, markdown: unknown): Promise<string | null> => {
+    const fmt = format === 'pdf' ? 'pdf' : format === 'csv' ? 'csv' : format === 'xlsx' ? 'xlsx' : 'md';
+    const md = String(markdown ?? '');
+    if (!md.trim()) throw new Error('Nothing to export - the reply is empty.');
+    const base = String(defaultName ?? 'Chat report')
+      .replace(/[\\/:*?"<>|]/g, '_')
+      .replace(/\.(md|pdf|csv|xlsx)$/i, '')
+      .trim() || 'Chat report';
+
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const filterName = fmt === 'pdf' ? 'PDF' : fmt === 'csv' ? 'CSV' : fmt === 'xlsx' ? 'Excel workbook' : 'Markdown';
+    const opts = { title: 'Save chat report', defaultPath: `${base}.${fmt}`, filters: [{ name: filterName, extensions: [fmt] }] };
+    const { canceled, filePath } = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
+    if (canceled || !filePath) return null;
+
+    if (fmt === 'md') {
+      return writeReportFile(filePath, md);
+    } else if (fmt === 'csv') {
+      const { replyCsv } = await import('../../shared/chat-export');
+      return writeReportFile(filePath, replyCsv(md));
+    } else if (fmt === 'xlsx') {
+      const { chatReplyXlsx } = await import('../services/chat-export-xlsx');
+      return writeReportFile(filePath, await chatReplyXlsx(md));
+    } else {
+      const { reportHtmlDocument } = await import('../google/ga4-report-export');
+      const pdfWin = new BrowserWindow({
+        show: false,
+        webPreferences: { javascript: false, sandbox: true, contextIsolation: true, nodeIntegration: false },
+      });
+      try {
+        await pdfWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(reportHtmlDocument(base, md)));
+        const pdf = await pdfWin.webContents.printToPDF({ printBackground: true });
+        return writeReportFile(filePath, pdf);
+      } finally {
+        if (!pdfWin.isDestroyed()) pdfWin.destroy();
+      }
+    }
+  });
+}
+
+// Same locked-file fallback as the audit exports: a prior download often sits open in a PDF/Excel
+// viewer (EBUSY/EPERM/EACCES on overwrite), so retry with "name (1).ext", "name (2).ext", … Text
+// exports get the plain-dash house style here; binary buffers pass through untouched.
+const LOCK_CODES = new Set(['EBUSY', 'EPERM', 'EACCES']);
+async function writeReportFile(filePath: string, data: string | Uint8Array): Promise<string> {
+  const { writeFile } = await import('node:fs/promises');
+  const { dedupedReportPath } = await import('../google/ga4-report-export');
+  const { plainDashes } = await import('../google/gtm-builders');
+  for (let i = 0; i <= 50; i++) {
+    const target = dedupedReportPath(filePath, i);
+    try {
+      await writeFile(target, typeof data === 'string' ? plainDashes(data) : data);
+      return target;
+    } catch (err) {
+      const code = (err as { code?: string }).code ?? '';
+      if (!LOCK_CODES.has(code) || i === 50) throw err;
+      // locked → try the next suffixed name
+    }
+  }
+  throw new Error('unreachable');
 }

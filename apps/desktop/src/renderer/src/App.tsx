@@ -65,6 +65,7 @@ import { autoHealConfirmMessage } from '../../shared/workspace-warnings';
 import { MEMORY_KINDS, type Memory, type MemoryKind } from '../../shared/chat-memory';
 import type { SeedCandidate } from '../../shared/memory-seed';
 import { resolveChatInput, slashMenuMatches, type SlashCommand } from '../../shared/chat-commands';
+import { extractReplyTables, replyLooksExportable } from '../../shared/chat-export';
 import { execSummaryHtml } from '../../shared/ga4-exec-html';
 import { stripDuplicateCharts } from '../../shared/ga4-visuals-html';
 import { ga4SectionsHtml } from '../../shared/ga4-sections-html';
@@ -988,6 +989,64 @@ function formatMsgTime(ts: number): string {
     : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${time}`;
 }
 
+/** The "Export report" bar under long / tabular assistant replies — save the reply as PDF, CSV,
+ *  XLSX or Markdown via a main-process save dialog. CSV/XLSX export the reply's ACTUAL tables, so
+ *  they're disabled (with the reason on hover) when the reply has none — never an empty file. */
+function ExportReplyBar({ text, product, onError }: { text: string; product: 'gtm' | 'ga4'; onError: (m: string) => void }): JSX.Element {
+  const [exporting, setExporting] = useState<'' | 'pdf' | 'csv' | 'xlsx' | 'md'>('');
+  const [savedTo, setSavedTo] = useState('');
+  const tableCount = useMemo(() => extractReplyTables(text).length, [text]);
+
+  async function save(fmt: 'pdf' | 'csv' | 'xlsx' | 'md'): Promise<void> {
+    if (exporting) return;
+    setExporting(fmt);
+    setSavedTo('');
+    try {
+      const name = `${product.toUpperCase()} chat report ${new Date().toISOString().slice(0, 10)}`;
+      const path = await window.desktop.llm.exportReply(fmt, name, text);
+      if (path) {
+        setSavedTo(path.split(/[\\/]/).pop() ?? path);
+        setTimeout(() => setSavedTo(''), 4000);
+      }
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setExporting('');
+    }
+  }
+
+  const tablesHint = tableCount === 0 ? 'This reply has no tables' : `${tableCount} table${tableCount === 1 ? '' : 's'} in this reply`;
+  const dl = (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="M7 10l5 5 5-5" /><path d="M12 15V3" />
+    </svg>
+  );
+  const spin = <span className="spinner" style={{ fontSize: 10 }} aria-hidden />;
+  return (
+    <div style={styles.replyExportBar}>
+      <span style={styles.replyExportLabel}>
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" />
+        </svg>
+        Export report
+      </span>
+      <button style={styles.replyExportBtnPrimary} disabled={!!exporting} onClick={() => void save('pdf')} title="Save this reply as a styled PDF document">
+        {exporting === 'pdf' ? spin : dl} PDF
+      </button>
+      <button style={styles.replyExportBtn} disabled={!!exporting || tableCount === 0} onClick={() => void save('csv')} title={tableCount === 0 ? `${tablesHint} - CSV exports the tables` : `Save the reply's tables as CSV (${tablesHint})`}>
+        {exporting === 'csv' ? spin : dl} CSV
+      </button>
+      <button style={styles.replyExportBtn} disabled={!!exporting || tableCount === 0} onClick={() => void save('xlsx')} title={tableCount === 0 ? `${tablesHint} - XLSX exports the tables` : `Save the reply's tables as an Excel workbook, one sheet per table (${tablesHint})`}>
+        {exporting === 'xlsx' ? spin : dl} XLSX
+      </button>
+      <button style={styles.replyExportBtn} disabled={!!exporting} onClick={() => void save('md')} title="Save the reply's raw Markdown">
+        {exporting === 'md' ? spin : dl} MD
+      </button>
+      {savedTo && <span style={styles.replyExportSaved}>✓ Saved {savedTo}</span>}
+    </div>
+  );
+}
+
 // Per-account + per-container chat persistence (survives tab switches AND app restarts).
 const CHAT_THREADS_KEY = 'samarth.chatThreads.v1';
 /** Thread id: one conversation per account + product + (for GTM) container. */
@@ -1458,6 +1517,10 @@ function ChatView({
                     <div style={{ fontSize: 10.5, color: 'var(--text-faint)' }}>Manage these in Settings → Memory.</div>
                   </div>
                 </details>
+              )}
+              {/* Export bar — only on finished, report-sized replies (tables or long-form), never while streaming. */}
+              {m.role === 'assistant' && !(busy && i === messages.length - 1) && replyLooksExportable(m.text) && (
+                <ExportReplyBar text={m.text} product={product} onError={onError} />
               )}
             </div>
           ))}
@@ -10682,6 +10745,12 @@ const styles: Record<string, React.CSSProperties> = {
   msgTime: { fontSize: 10.5, color: 'var(--text-faint)', margin: '3px 4px 0', userSelect: 'none', fontFamily: 'ui-monospace, monospace', letterSpacing: 0.3 },
   toolErrors: { marginTop: 6, display: 'flex', flexDirection: 'column', gap: 4 },
   toolErrorLine: { background: 'var(--c-red-bg)', border: '1px solid var(--c-red-border)', color: 'var(--c-red)', borderRadius: 8, padding: '6px 9px', fontSize: 12, lineHeight: 1.4, wordBreak: 'break-word' },
+  // "Export report" bar under long / tabular assistant replies (PDF · CSV · XLSX · MD).
+  replyExportBar: { display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginTop: 6, padding: '8px 12px', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 10, maxWidth: '100%', boxSizing: 'border-box' },
+  replyExportLabel: { display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 10.5, fontWeight: 700, letterSpacing: 0.6, textTransform: 'uppercase', color: 'var(--text-faint)', marginRight: 2 },
+  replyExportBtn: { display: 'inline-flex', alignItems: 'center', gap: 5, background: 'var(--surface)', color: 'var(--text-dim)', border: '1px solid var(--border-2)', borderRadius: 8, padding: '5px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer' },
+  replyExportBtnPrimary: { display: 'inline-flex', alignItems: 'center', gap: 5, background: 'var(--primary)', color: 'var(--on-primary)', border: '1px solid transparent', borderRadius: 8, padding: '5px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer' },
+  replyExportSaved: { fontSize: 11.5, color: 'var(--c-green)', fontWeight: 600 },
   // Provider rate-limit / overload retry notice: a WAIT, not a failure, so it uses the amber tokens.
   retryLine: { marginTop: 6, background: 'var(--warning-bg)', border: '1px solid var(--warning-border)', color: 'var(--warning)', borderRadius: 8, padding: '6px 9px', fontSize: 12, lineHeight: 1.4, wordBreak: 'break-word' },
   composer: { display: 'flex', flexDirection: 'column', gap: 6, padding: '12px 16px 10px', borderTop: '1px solid var(--border)', position: 'relative' },
