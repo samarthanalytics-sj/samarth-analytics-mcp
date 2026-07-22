@@ -7,6 +7,7 @@ import type { AuditHistoryStore } from '../storage/audit-history';
 import { ManifestStore } from '../storage/manifest-store';
 import type { MemoryStore } from '../storage/memory-store';
 import { toolAllowedForContainer, type ContainerKind } from '../../shared/tool-scope';
+import { fuseRankings } from '../../shared/embeddings';
 import {
   MEMORY_KINDS,
   findMemoriesMatching,
@@ -604,7 +605,11 @@ export function buildToolRegistry(
   /** The ACTIVE container's kind. Tools that cannot act on that kind are left out of the list, which
    *  is the difference between a ~26k-token GTM request and one that fits a small TPM budget. Omit
    *  (or pass undefined) to send everything: unknown kind must never hide a tool. */
-  containerKind?: ContainerKind
+  containerKind?: ContainerKind,
+  /** Opt-in semantic search over the corpus vocabulary: query -> related terms. Omitted when the
+   *  feature is off, unsupported by the provider, or still building, in which case corpus lookup
+   *  behaves exactly as it always has. */
+  semantic?: (query: string) => Promise<string[] | null>
 ): ToolExecutor {
   const readTools: Tool[] = [
     {
@@ -4384,12 +4389,37 @@ export function buildToolRegistry(
             note: 'No pattern library is bundled with this build. Answer from the live container and general knowledge, and do not cite any frequency.',
           };
         }
-        return lookupCorpusPatterns(lib, {
+        const base = lookupCorpusPatterns(lib, {
           query: s(a.query),
           kind: (['all', 'tag', 'trigger', 'variable', 'vendor'].includes(s(a.kind)) ? s(a.kind) : 'all') as CorpusLookupKind,
           brand: s(a.brand),
           ...(a.limit != null ? { limit: Number(a.limit) } : {}),
         });
+        // SEMANTIC PASS (opt-in). Keyword search cannot connect "asking for a demo" to
+        // schedule_a_consultation_click, because the words genuinely differ. When enabled, terms that
+        // are semantically near the query run a SECOND keyword lookup, and the two orderings are
+        // fused, so an exact hit can never be displaced by something that merely feels similar.
+        // Anything unavailable (off, no key, still building, provider error) returns `base` unchanged.
+        if (!semantic || !s(a.query).trim()) return base;
+        try {
+          const terms = await semantic(s(a.query));
+          if (!terms?.length) return base;
+          const extra = terms
+            .flatMap((t) => lookupCorpusPatterns(lib, { query: t, kind: 'all', limit: 4 }).hits)
+            .filter((h) => !base.hits.some((b) => b.pattern === h.pattern));
+          if (!extra.length) return base;
+          const order = fuseRankings(base.hits.map((h) => h.pattern), extra.map((h) => h.pattern));
+          const byPattern = new Map([...base.hits, ...extra].map((h) => [h.pattern, h]));
+          const hits = order.map((k) => byPattern.get(k)).filter((h): h is NonNullable<typeof h> => !!h).slice(0, base.hits.length);
+          return {
+            ...base,
+            hits,
+            semantic: { used: true, relatedTerms: terms.slice(0, 8) },
+            note: `${base.note ? base.note + ' ' : ''}Semantic search also matched terms that share no words with the query (${terms.slice(0, 4).join(', ')}), so results include patterns keyword search alone would miss.`,
+          };
+        } catch {
+          return base; // semantic search is an enhancement, never a failure mode
+        }
       },
     },
   ];

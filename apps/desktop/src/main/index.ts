@@ -32,6 +32,8 @@ import { Ga4MonitoringService } from './services/ga4-monitoring-service';
 import { registerGa4MonitoringIpc } from './ipc/ga4-monitoring-ipc';
 import { registerNetworkIpc } from './network/network-ipc';
 import type { MonitorAlert, Ga4MonitorRun } from '../shared/ipc';
+import { EmbeddingStore } from './storage/embedding-store';
+import { CorpusSemanticIndex } from './corpus/semantic-index';
 
 // Phase 0 scaffold: boot a window, wire a minimal, secure IPC bridge, and prove
 // renderer <-> main messaging works. Later phases add the account registry,
@@ -192,7 +194,11 @@ app.whenReady().then(() => {
   };
   // adsService is threaded into the chat so the GTM assistant can read a real Conversion ID + Label
   // itself when it builds a Google Ads conversion tag, instead of asking the user to paste them.
-  const chatService = new ChatService(registry, dataService, providerKeys, auditHistory, broadcastAccountsChanged, manifests, memory, adsService);
+  // Opt-in semantic corpus search: the index and its vector cache exist regardless, but nothing is
+  // embedded (and nothing leaves the machine) unless the setting is on, which it is not by default.
+  const embeddings = new EmbeddingStore(join(dataDir, 'embeddings.json'));
+  const semanticIndex = new CorpusSemanticIndex(embeddings);
+  const chatService = new ChatService(registry, dataService, providerKeys, auditHistory, broadcastAccountsChanged, manifests, memory, adsService, semanticIndex);
 
   // Startup diagnostic — proves THIS running process loaded the current build. If the
   // GA4-edit tools are missing here, the main process is stale (electron-vite did not

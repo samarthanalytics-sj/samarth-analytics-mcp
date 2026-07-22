@@ -6,6 +6,9 @@ import type { LlmProvider, ProviderStatus } from '../../shared/ipc';
 interface AppSettingsFile {
   version: 1;
   providers: Partial<Record<LlmProvider, { apiKeyRef?: string }>>;
+  /** Opt-in semantic corpus search. OFF by default: it is the one feature that sends corpus
+   *  vocabulary to an embeddings endpoint, and everything else in this stack stays local. */
+  semanticCorpus?: boolean;
   /** Opaque SecretStore ref for the Google Ads API developer token (never the token itself). */
   adsDeveloperTokenRef?: string;
 }
@@ -27,6 +30,16 @@ export class ProviderKeyStore {
   ) {
     const loaded = readJsonFile<AppSettingsFile>(filePath, structuredClone(EMPTY));
     this.data = loaded && loaded.providers ? loaded : structuredClone(EMPTY);
+  }
+
+  /** Is opt-in semantic corpus search on? Off unless the user turned it on. */
+  semanticCorpusEnabled(): boolean {
+    return this.data.semanticCorpus === true;
+  }
+
+  setSemanticCorpus(on: boolean): void {
+    this.data.semanticCorpus = !!on;
+    this.persist();
   }
 
   private persist(): void {
