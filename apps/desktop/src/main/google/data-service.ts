@@ -4029,6 +4029,33 @@ export class GoogleDataService {
     const res = await admin.properties.updateDataRetentionSettings({ name, updateMask, requestBody: body });
     return res.data;
   }
+  /** v1alpha singleton settings - dedicated update methods, NOT collection patches. These are the
+   *  API-writable side of stream/property configuration; the Google tag settings themselves
+   *  (cross-domain, unwanted referrals, internal traffic, session timeout) have NO API. */
+  async ga4UpdateEnhancedMeasurement(name: string, updateMask: string, body: Record<string, unknown>): Promise<unknown> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof analyticsadmin>[0]['auth'];
+    const alpha = analyticsadmin({ version: 'v1alpha', auth });
+    const res = await alpha.properties.dataStreams.updateEnhancedMeasurementSettings({ name, updateMask, requestBody: body });
+    return res.data;
+  }
+  async ga4UpdateDataRedaction(name: string, updateMask: string, body: Record<string, unknown>): Promise<unknown> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof analyticsadmin>[0]['auth'];
+    const alpha = analyticsadmin({ version: 'v1alpha', auth });
+    const res = await alpha.properties.dataStreams.updateDataRedactionSettings({ name, updateMask, requestBody: body });
+    return res.data;
+  }
+  async ga4UpdateAttribution(name: string, updateMask: string, body: Record<string, unknown>): Promise<unknown> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof analyticsadmin>[0]['auth'];
+    const alpha = analyticsadmin({ version: 'v1alpha', auth });
+    const res = await alpha.properties.updateAttributionSettings({ name, updateMask, requestBody: body });
+    return res.data;
+  }
+  async ga4UpdateGoogleSignals(name: string, updateMask: string, body: Record<string, unknown>): Promise<unknown> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof analyticsadmin>[0]['auth'];
+    const alpha = analyticsadmin({ version: 'v1alpha', auth });
+    const res = await alpha.properties.updateGoogleSignalsSettings({ name, updateMask, requestBody: body });
+    return res.data;
+  }
   async ga4UpdateAccount(name: string, displayName: string): Promise<unknown> {
     const auth = this.activeAuth() as unknown as Parameters<typeof analyticsadmin>[0]['auth'];
     const admin = analyticsadmin({ version: 'v1beta', auth });

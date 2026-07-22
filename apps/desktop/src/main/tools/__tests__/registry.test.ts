@@ -596,7 +596,7 @@ async function main(): Promise<void> {
     // Pin the GA4 write count to a LITERAL (not derived from the fn under test), so a
     // dropped catalog entry or verb fails here instead of moving both sides together.
     const ga4Writes = buildGa4WriteTools(fakeData().data);
-    assert.equal(ga4Writes.length, 60, 'GA4 write catalog produces 60 tools (19 resources + 6 lifecycle specials)');
+    assert.equal(ga4Writes.length, 64, 'GA4 write catalog produces 64 tools (19 resources + 10 lifecycle/settings specials)');
     // 92 base + add_ga4_server_parameters + create_linkedin_capi_server_tag = 94, plus the three
     // user-identity pixel tools (create_hotjar_tag, create_pinterest_tag, create_snap_pixel_tag) = 97,
     // plus create_pinterest_capi_server_tag = 98, plus the read-only audit_install_drift = 99,
@@ -606,7 +606,7 @@ async function main(): Promise<void> {
     // plus the read-only rank_ga4_campaigns = 106, plus the read-only suggest_tags_from_url = 107,
     // plus the read-only get_form_tracking_recipe = 108, plus the read-only lookup_corpus_patterns = 109,
     // plus the read-only discover_site_urls = 110.
-    assert.equal(withWrites.list().length, 110 + 60, 'read + write registry has 110 GTM/GA4-read/context + 60 GA4-write tools');
+    assert.equal(withWrites.list().length, 110 + 64, 'read + write registry has 110 GTM/GA4-read/context + 64 GA4-write tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_pinterest_capi_server_tag'), true, 'create_pinterest_capi_server_tag present');
     assert.equal(withWrites.list().some((t) => t.name === 'create_reddit_capi_server_tag'), true, 'create_reddit_capi_server_tag present');
     assert.equal(withWrites.list().some((t) => t.name === 'create_amazon_capi_server_tag'), true, 'create_amazon_capi_server_tag present');

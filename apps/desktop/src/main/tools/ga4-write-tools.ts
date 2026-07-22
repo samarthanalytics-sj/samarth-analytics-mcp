@@ -320,6 +320,53 @@ export function buildGa4WriteTools(data: GoogleDataService): Tool[] {
       },
     },
     {
+      name: 'update_ga4_enhanced_measurement',
+      description: "[GA4] Update a WEB data stream's Enhanced Measurement: master streamEnabled plus per-signal toggles (scrolls, outbound clicks, site search + query params, video engagement, file downloads, form interactions, SPA page changes). Applies directly.",
+      inputSchema: { type: 'object', properties: { property: { type: 'string' }, dataStreamId: { type: 'string' }, streamEnabled: { type: 'boolean' }, scrollsEnabled: { type: 'boolean' }, outboundClicksEnabled: { type: 'boolean' }, siteSearchEnabled: { type: 'boolean' }, videoEngagementEnabled: { type: 'boolean' }, fileDownloadsEnabled: { type: 'boolean' }, formInteractionsEnabled: { type: 'boolean' }, pageChangesEnabled: { type: 'boolean' }, searchQueryParameter: { type: 'string', description: 'Comma-separated site-search query params, e.g. "q,s,search".' }, uriQueryParameter: { type: 'string', description: 'Extra URL query params to include in page paths.' } }, required: ['property', 'dataStreamId'], additionalProperties: false },
+      write: true,
+      summarize: (a) => `Update enhanced measurement on ${streamName(s(a.property), s(a.dataStreamId))}`,
+      handler: (a) => {
+        const body = pick(a, ['streamEnabled', 'scrollsEnabled', 'outboundClicksEnabled', 'siteSearchEnabled', 'videoEngagementEnabled', 'fileDownloadsEnabled', 'formInteractionsEnabled', 'pageChangesEnabled', 'searchQueryParameter', 'uriQueryParameter']);
+        const mask = Object.keys(body).join(',');
+        if (!mask) throw new Error('update_ga4_enhanced_measurement: supply at least one setting to change.');
+        return data.ga4UpdateEnhancedMeasurement(`${streamName(s(a.property), s(a.dataStreamId))}/enhancedMeasurementSettings`, mask, body);
+      },
+    },
+    {
+      name: 'update_ga4_data_redaction',
+      description: "[GA4] Update a WEB data stream's client-side data redaction: email redaction and URL query-parameter redaction (with the parameter key list). Applies directly.",
+      inputSchema: { type: 'object', properties: { property: { type: 'string' }, dataStreamId: { type: 'string' }, emailRedactionEnabled: { type: 'boolean' }, queryParameterRedactionEnabled: { type: 'boolean' }, queryParameterKeys: { type: 'array', items: { type: 'string' }, description: 'Query params to redact, e.g. ["email", "phone"].' } }, required: ['property', 'dataStreamId'], additionalProperties: false },
+      write: true,
+      summarize: (a) => `Update data redaction on ${streamName(s(a.property), s(a.dataStreamId))}`,
+      handler: (a) => {
+        const body = pick(a, ['emailRedactionEnabled', 'queryParameterRedactionEnabled', 'queryParameterKeys']);
+        const mask = Object.keys(body).join(',');
+        if (!mask) throw new Error('update_ga4_data_redaction: supply at least one setting to change.');
+        return data.ga4UpdateDataRedaction(`${streamName(s(a.property), s(a.dataStreamId))}/dataRedactionSettings`, mask, body);
+      },
+    },
+    {
+      name: 'update_ga4_attribution_settings',
+      description: "[GA4] Update a property's attribution: reporting model, acquisition/other conversion lookback windows, and the Ads web-conversion export scope. Applies directly.",
+      inputSchema: { type: 'object', properties: { property: { type: 'string' }, reportingAttributionModel: { type: 'string', enum: ['PAID_AND_ORGANIC_CHANNELS_DATA_DRIVEN', 'PAID_AND_ORGANIC_CHANNELS_LAST_CLICK', 'GOOGLE_PAID_CHANNELS_LAST_CLICK'] }, acquisitionConversionEventLookbackWindow: { type: 'string', enum: ['ACQUISITION_CONVERSION_EVENT_LOOKBACK_WINDOW_7_DAYS', 'ACQUISITION_CONVERSION_EVENT_LOOKBACK_WINDOW_30_DAYS'] }, otherConversionEventLookbackWindow: { type: 'string', enum: ['OTHER_CONVERSION_EVENT_LOOKBACK_WINDOW_30_DAYS', 'OTHER_CONVERSION_EVENT_LOOKBACK_WINDOW_60_DAYS', 'OTHER_CONVERSION_EVENT_LOOKBACK_WINDOW_90_DAYS'] }, adsWebConversionDataExportScope: { type: 'string', enum: ['NOT_SELECTED_YET', 'PAID_AND_ORGANIC_CHANNELS', 'GOOGLE_PAID_CHANNELS'] } }, required: ['property'], additionalProperties: false },
+      write: true,
+      summarize: (a) => `Update attribution settings on ${propy(s(a.property))}`,
+      handler: (a) => {
+        const body = pick(a, ['reportingAttributionModel', 'acquisitionConversionEventLookbackWindow', 'otherConversionEventLookbackWindow', 'adsWebConversionDataExportScope']);
+        const mask = Object.keys(body).join(',');
+        if (!mask) throw new Error('update_ga4_attribution_settings: supply at least one setting to change.');
+        return data.ga4UpdateAttribution(`${propy(s(a.property))}/attributionSettings`, mask, body);
+      },
+    },
+    {
+      name: 'update_ga4_google_signals',
+      description: '[GA4] Turn Google Signals on or off for a property. Enabling activates cross-device + demographics data collection - the user must confirm their privacy disclosures cover it. Applies directly.',
+      inputSchema: { type: 'object', properties: { property: { type: 'string' }, state: { type: 'string', enum: ['GOOGLE_SIGNALS_ENABLED', 'GOOGLE_SIGNALS_DISABLED'] } }, required: ['property', 'state'], additionalProperties: false },
+      write: true,
+      summarize: (a) => `Set Google Signals ${s(a.state) === 'GOOGLE_SIGNALS_ENABLED' ? 'ON' : 'OFF'} for ${propy(s(a.property))}`,
+      handler: (a) => data.ga4UpdateGoogleSignals(`${propy(s(a.property))}/googleSignalsSettings`, 'state', { state: s(a.state) }),
+    },
+    {
       name: 'update_ga4_account',
       description: '[GA4] Rename a GA4 account (displayName). Applies directly.',
       inputSchema: { type: 'object', properties: { accountId: { type: 'string' }, displayName: { type: 'string' } }, required: ['accountId', 'displayName'], additionalProperties: false },
