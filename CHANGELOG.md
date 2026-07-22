@@ -1,3 +1,9 @@
+## [1.363.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.363.1...v1.363.2) (2026-07-22)
+
+### Bug Fixes
+
+* **scan:** wait for an embedded form that is still rendering, not just for network quiet ([#629](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/629)) ([0dd3e06](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/0dd3e06235b90933db9bb362195bda4fc8792390))
+
 ## [1.363.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.363.0...v1.363.1) (2026-07-21)
 
 ### Bug Fixes
