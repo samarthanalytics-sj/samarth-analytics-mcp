@@ -71,6 +71,7 @@ import { MEMORY_KINDS, type Memory, type MemoryKind } from '../../shared/chat-me
 import type { SeedCandidate } from '../../shared/memory-seed';
 import { resolveChatInput, slashMenuMatches, type SlashCommand } from '../../shared/chat-commands';
 import { extractReplyTables, shouldOfferExport } from '../../shared/chat-export';
+import { parseSuggestionEvidence, isProviderFormIdLabel } from '../../shared/suggestion-details';
 import { execSummaryHtml } from '../../shared/ga4-exec-html';
 import { stripDuplicateCharts } from '../../shared/ga4-visuals-html';
 import { ga4SectionsHtml } from '../../shared/ga4-sections-html';
@@ -2645,6 +2646,9 @@ function SuggestionTemplateTable({
   // Which suggestions have their "How to install" panel expanded (keyed by id).
   const [installOpen, setInstallOpen] = useState<Record<string, boolean>>({});
   const toggleInstall = (id: string): void => setInstallOpen((o) => ({ ...o, [id]: !o[id] }));
+  // Which suggestions have their "Details" panel expanded (provider, form identity, trigger strategy).
+  const [detailsOpen, setDetailsOpen] = useState<Record<string, boolean>>({});
+  const toggleDetails = (id: string): void => setDetailsOpen((o) => ({ ...o, [id]: !o[id] }));
   // Per-suggestion "done" check-offs for its install requirements (keyed by suggestion id → requirement
   // index). Owned here (not in InstallPanel) so a mark survives the panel collapsing AND feeds the row's
   // status chip. Session-scoped - a manual acknowledgement that site-side work is done, not persisted.
@@ -2762,6 +2766,22 @@ function SuggestionTemplateTable({
                       {s.install && installPlanNeedsAction(s.install) && (
                         <div>
                           <InstallChip install={s.install} done={installDone[s.id] ?? {}} open={!!installOpen[s.id]} onClick={() => toggleInstall(s.id)} tagName={g.tagName} />
+                        </div>
+                      )}
+                      {/* Details: what the scan actually saw (form provider + its own form id + fields)
+                          and WHY the trigger is scoped the way it is. The engine records all of this in
+                          evidence/note; this chip is the only place it surfaces. */}
+                      {(s.evidence || s.note) && (
+                        <div>
+                          <button
+                            type="button"
+                            style={{ ...tplStyles.installChip, background: 'var(--surface-2)', borderColor: 'var(--border-2)', color: 'var(--text-muted)' }}
+                            onClick={() => toggleDetails(s.id)}
+                            aria-expanded={!!detailsOpen[s.id]}
+                            title="What was detected (provider, form id, fields) and why the trigger is scoped this way"
+                          >
+                            ⓘ Details {detailsOpen[s.id] ? '▾' : '▸'}
+                          </button>
                         </div>
                       )}
                       {/* Proof screenshot: the element/location this tag would track, ringed on its page. */}
@@ -2902,6 +2922,41 @@ function SuggestionTemplateTable({
                 <tr key={s.id + ':install'}>
                   <td colSpan={totalCols} style={tplStyles.installTd}>
                     <InstallPanel plan={s.install} gtmTarget={gtmTarget} done={installDone[s.id] ?? {}} onToggleDone={(index, value) => setReqDone(s.id, index, value)} />
+                  </td>
+                </tr>,
+              );
+            }
+            // Ditto for the Details panel: everything the scan recorded about this suggestion
+            // (provider, the vendor's own form id, fields, visibility) + the trigger-strategy note.
+            if ((s.evidence || s.note) && detailsOpen[s.id]) {
+              const lines = parseSuggestionEvidence(s.evidence ?? '');
+              groupRows.push(
+                <tr key={s.id + ':details'}>
+                  <td colSpan={totalCols} style={tplStyles.installTd}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '8px 10px', fontSize: 12.5, lineHeight: 1.5 }}>
+                      {lines.map((l, li) => (
+                        <div key={li} style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
+                          {l.label && (
+                            <span style={{ flexShrink: 0, minWidth: 130, fontWeight: 600, color: isProviderFormIdLabel(l.label) ? 'var(--c-blue)' : 'var(--text-muted)' }}>{l.label}</span>
+                          )}
+                          <span style={{ color: 'var(--text-dim)', wordBreak: 'break-word' }}>
+                            {isProviderFormIdLabel(l.label) ? <code style={mdStyles.code}>{l.value}</code> : l.value}
+                          </span>
+                        </div>
+                      ))}
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
+                        <span style={{ flexShrink: 0, minWidth: 130, fontWeight: 600, color: 'var(--text-muted)' }}>Trigger strategy</span>
+                        <span style={{ color: 'var(--text-dim)', wordBreak: 'break-word' }}>
+                          {(() => {
+                            const c = triggerCondition(s);
+                            return c === '-' ? 'Fires on this trigger with no extra conditions.'
+                              : c.startsWith('fires ') ? `${c.charAt(0).toUpperCase()}${c.slice(1)}.`
+                              : `Fires when ${c}.`;
+                          })()}
+                          {s.note ? ` ${s.note}` : ''}
+                        </span>
+                      </div>
+                    </div>
                   </td>
                 </tr>,
               );
