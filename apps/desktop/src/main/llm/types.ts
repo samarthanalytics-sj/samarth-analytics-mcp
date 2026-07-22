@@ -38,6 +38,11 @@ export type LlmTurn =
 
 export interface LlmChatInput {
   system: string;
+  /** The leading, FIXED part of `system` (must be a literal prefix of it). Marks where the stable
+   *  instructions end and the per-message context begins, so a provider that caches on request can
+   *  put a breakpoint there and keep the hit across turns. Omit and the whole prompt is treated as
+   *  one unit, which is what a caller with nothing stable to promise should do. */
+  systemStatic?: string;
   model: string;
   apiKey: string;
   tools: LlmToolDef[];

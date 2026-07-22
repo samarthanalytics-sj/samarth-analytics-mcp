@@ -116,6 +116,54 @@ export function dateContextLine(now: Date): string {
   );
 }
 
+/**
+ * Everything in the system prompt that CHANGES between messages, gathered into one block at the
+ * very end of it.
+ *
+ * Why the end: providers serve a cached prompt by matching the longest common PREFIX, so one
+ * volatile line high up makes every byte after it uncacheable. The selected memories used to sit
+ * mid-prompt, which stranded ~3,800 characters of fixed instruction behind them, and the account
+ * email sat in the opening sentence, which meant two Google accounts shared a 68-character prefix
+ * and nothing else. With both moved here, the fixed half stays byte-identical across turns AND
+ * across accounts on the same product.
+ *
+ * Ordered least to most volatile: identity, then today's date, then the per-message blocks.
+ * Pure + exported so the ordering is testable.
+ */
+export function buildSituationalContext(input: {
+  email: string;
+  product: GoogleProduct;
+  gtmContext?: GtmContext;
+  ga4Context?: { property?: string; propertyName?: string; accountName?: string };
+  now: Date;
+  memoryBlock: string;
+  toolMemoryBlock: string;
+}): string {
+  const gtm = input.product === 'gtm' ? input.gtmContext : undefined;
+  const ga4 = input.product === 'ga4' ? input.ga4Context : undefined;
+  return (
+    'CURRENT CONTEXT (this section changes between messages; the instructions above it are fixed). ' +
+    `You are acting as the Google account ${input.email}. ` +
+    (gtm?.containerId
+      ? `The user is working in GTM account ${gtm.accountId} ` +
+        `(${gtm.accountName ?? ''}), container ${gtm.containerId} ` +
+        `(${gtm.containerName ?? ''})` +
+        (gtm.workspaceId ? `, workspace ${gtm.workspaceId} (${gtm.workspaceName ?? ''})` : '') +
+        '. Use THESE ids for all GTM operations — do not ask which account/container/workspace and ' +
+        'do not re-list them unless the user asks to switch. '
+      : '') +
+    (ga4?.property
+      ? `The user is working in GA4 property ${ga4.property} ` +
+        `("${ga4.propertyName ?? ''}"${ga4.accountName ? `, account "${ga4.accountName}"` : ''}). ` +
+        'Use THIS property id for every GA4 tool call (audits, reports, data quality) - do not ask ' +
+        'which property and do not re-list properties unless the user asks to switch. '
+      : '') +
+    dateContextLine(input.now) +
+    input.memoryBlock +
+    input.toolMemoryBlock
+  );
+}
+
 // Ties the active account (provider + model + vaulted key) to the LLM gateway and
 // the read-only GTM/GA4 tool registry. The model can call tools, which run as the
 // active account against Google, to answer questions about that account's setup.
@@ -370,8 +418,12 @@ export class ChatService {
     const mem = this.memoryBlock(active, product, message);
 
     const productLabel = product === 'gtm' ? 'Google Tag Manager (GTM)' : 'Google Analytics 4 (GA4)';
-    const system =
-      `You are a ${productLabel} assistant for the Google account ${active.email}. ` +
+    // The FIXED half: identical for every turn with the same product, permissions and container
+    // kind, so it stays byte-identical across turns and can be served from the provider's cache.
+    // Nothing account-specific belongs here - the email moved to the situational section below,
+    // which also means two accounts on the same product share one cached prefix.
+    const staticSystem =
+      `You are a ${productLabel} assistant. ` +
       `Only help with ${productLabel}; if asked about the other product, say to switch the ` +
       'GTM/GA4 selector. ' +
       (product === 'gtm' && confirm
@@ -458,7 +510,8 @@ export class ChatService {
             'config); lead with the window it reports (its dateRange, e.g. "last 28 days (Jan 1 – Jan 28, ' +
             '2026)") and then present its findings the same way. ' +
             'For metrics over a time range, call run_ga4_report with GA4 relative dates ' +
-            '(today, yesterday, NdaysAgo) or explicit YYYY-MM-DD computed from the current date above — ' +
+            '(today, yesterday, NdaysAgo) or explicit YYYY-MM-DD computed from the CURRENT DATE given in the ' +
+            'CURRENT CONTEXT section at the end of this prompt — ' +
             'never assume the year. GA4 has NO data for dates after today, and the most recent 1–2 days ' +
             'may still be processing (partial); report dates resolve in the property\'s timezone. ' +
             GA4_DATA_FRESHNESS +
@@ -467,36 +520,17 @@ export class ChatService {
               : 'GA4 is READ-ONLY — you cannot apply fixes; give the user ' +
                 'the exact change to make in the GA4 Admin UI. ') +
             GA4_PROPERTY_AUDIT) +
-      (product === 'gtm' && active.gtmContext?.containerId
-        ? `The user is working in GTM account ${active.gtmContext.accountId} ` +
-          `(${active.gtmContext.accountName ?? ''}), container ${active.gtmContext.containerId} ` +
-          `(${active.gtmContext.containerName ?? ''})` +
-          (active.gtmContext.workspaceId
-            ? `, workspace ${active.gtmContext.workspaceId} (${active.gtmContext.workspaceName ?? ''})`
-            : '') +
-          '. Use THESE ids for all GTM operations — do not ask which account/container/workspace and ' +
-          'do not re-list them unless the user asks to switch. '
-        : '') +
-      (product === 'ga4' && active.ga4Context?.property
-        ? `The user is working in GA4 property ${active.ga4Context.property} ` +
-          `("${active.ga4Context.propertyName ?? ''}"${active.ga4Context.accountName ? `, account "${active.ga4Context.accountName}"` : ''}). ` +
-          'Use THIS property id for every GA4 tool call (audits, reports, data quality) - do not ask ' +
-          'which property and do not re-list properties unless the user asks to switch. '
-        : '') +
-      mem.block +
       (this.memory
-        ? 'MEMORY: you have a persistent, per-client memory (any saved notes appear above under REMEMBERED CONTEXT). ' +
+        ? 'MEMORY: you have a persistent, per-client memory (any saved notes appear in the CURRENT CONTEXT section at the end of this prompt, under REMEMBERED CONTEXT). ' +
           'When the user tells you to REMEMBER something, or states a durable preference, correction, or decision ' +
           '(e.g. "we use order_completed for purchase", "do not suggest scroll tracking again", "always name tags like X"), ' +
           'call remember_memory to save it (kind: rule for an instruction/correction, else preference / decision / fact / glossary). ' +
           'When the user says to FORGET something ("forget that", "stop applying X"), call forget_memory with a short description. ' +
           'Also save a brief memory when you make a NOTABLE persistent change the user would want on record (e.g. created or deleted a key tag/trigger, with what and when). ' +
           'Be conservative: never remember secrets, API keys, personal data, or transient one-off values. Briefly confirm what you remembered or forgot. ' +
-          'To look BEYOND the notes shown above (another client of this account, or something the user says was agreed earlier), call recall_memories with a short query instead of guessing. '
+          'To look BEYOND the notes in that section (another client of this account, or something the user says was agreed earlier), call recall_memories with a short query instead of guessing. '
         : '') +
       CORPUS_PROMPT +
-      toolMemoryBlock +
-      dateContextLine(new Date()) +
       // Built from the groups THIS chat can really reveal: a GA4 chat has no "pixels" group and a
       // read-only chat has no writes, so a fixed sentence would promise capabilities that do not exist.
       buildToolGroupPrompt(gatedTools.availableGroups()) +
@@ -507,6 +541,16 @@ export class ChatService {
       'Put any code, install snippet, or multi-line technical output in a fenced ``` code block so it renders as a copyable code box. ' +
       'Be concise and factual. ' +
       'Style: do NOT use em dashes (the "—" character) anywhere in your replies; use commas, colons, parentheses, or a hyphen "-" instead.';
+
+    const system = staticSystem + buildSituationalContext({
+      email: active.email,
+      product,
+      gtmContext: product === 'gtm' ? active.gtmContext : undefined,
+      ga4Context: product === 'ga4' ? active.ga4Context : undefined,
+      now: new Date(),
+      memoryBlock: mem.block,
+      toolMemoryBlock,
+    });
 
     // Replayed history is bounded: every prior turn used to be re-sent in full on EVERY request, and
     // the tool loop then re-sent that whole array on every step. Oldest turns go first, the newest
@@ -550,7 +594,7 @@ export class ChatService {
 
     let result;
     try {
-      result = await runChat(client, { system, model: active.llm.model, apiKey, messages, signal }, gatedTools, {
+      result = await runChat(client, { system, systemStatic: staticSystem, model: active.llm.model, apiKey, messages, signal }, gatedTools, {
         // House style: never surface an em OR en dash. Stripped from the live stream as a hard guarantee
         // on top of the system-prompt instruction. Safe per chunk because both are single UTF-16 code
         // units, so neither can be split across deltas. The final text is stripped the same way below;

@@ -11,6 +11,7 @@ import {
   geminiCacheUsage,
   addCacheUsage,
   formatCacheUsage,
+  type AnthropicTextBlock,
 } from '../prompt-cache';
 
 let passed = 0;
@@ -55,6 +56,41 @@ check('marked system keeps the text intact', Array.isArray(marked) && marked[0].
 // An ineligible request must be byte-identical to what shipped before this feature existed.
 check('unmarked system is the PLAIN STRING', anthropicSystem(BIG_SYSTEM, false) === BIG_SYSTEM);
 check('unmarked system is not an array', !Array.isArray(anthropicSystem('x', false)));
+
+// -- where the breakpoints go --------------------------------------------------
+// The prompt is [fixed instructions][per-message context]. Providers match the LONGEST COMMON
+// PREFIX, so a breakpoint at the very end survives only within a turn; one at the end of the fixed
+// half survives ACROSS turns, which is the whole point of the reordering.
+const STATIC = 'S'.repeat(40_000);
+const BIG_TAIL = 'v'.repeat(1_340); // a real situational block: context + date + a few memories
+const SMALL_TAIL = 'v'.repeat(200);
+
+const twoBlocks = anthropicSystem(STATIC + BIG_TAIL, true, STATIC) as AnthropicTextBlock[];
+check('split at the boundary gives two blocks', Array.isArray(twoBlocks) && twoBlocks.length === 2);
+check('block 1 is exactly the fixed half', twoBlocks[0].text === STATIC);
+check('block 2 is exactly the per-message half', twoBlocks[1].text === BIG_TAIL);
+check('the fixed half is marked (this is the cross-turn hit)', twoBlocks[0].cache_control?.type === 'ephemeral');
+check('a worthwhile tail is marked too (the within-turn hit)', twoBlocks[1].cache_control?.type === 'ephemeral');
+check('reassembling the blocks reproduces the prompt EXACTLY', twoBlocks.map((b) => b.text).join('') === STATIC + BIG_TAIL);
+
+const smallTail = anthropicSystem(STATIC + SMALL_TAIL, true, STATIC) as AnthropicTextBlock[];
+check('a trivial tail still splits', Array.isArray(smallTail) && smallTail.length === 2);
+check('a trivial tail is NOT given its own breakpoint', smallTail[1].cache_control === undefined);
+check('the fixed half is marked regardless of tail size', smallTail[0].cache_control?.type === 'ephemeral');
+
+// Guard: a caller that passes a staticPart which is not really a prefix must never produce a
+// breakpoint claiming a boundary the text does not have.
+const lying = anthropicSystem('AAAABBBB', true, 'XXXX') as AnthropicTextBlock[];
+check('a non-prefix staticPart falls back to one block', Array.isArray(lying) && lying.length === 1);
+check('the fallback still carries the whole prompt', lying[0].text === 'AAAABBBB');
+check('the fallback is still cached as one unit', lying[0].cache_control?.type === 'ephemeral');
+
+const whole = anthropicSystem(STATIC, true, STATIC) as AnthropicTextBlock[];
+check('staticPart covering everything gives one block, not an empty second', whole.length === 1);
+
+const noSplit = anthropicSystem(STATIC + BIG_TAIL, true) as AnthropicTextBlock[];
+check('no staticPart -> the old single-breakpoint shape', noSplit.length === 1 && noSplit[0].cache_control?.type === 'ephemeral');
+check('an uncacheable request ignores staticPart entirely', anthropicSystem(STATIC + BIG_TAIL, false, STATIC) === STATIC + BIG_TAIL);
 
 // -- Anthropic usage -------------------------------------------------------------
 const aStart = {
