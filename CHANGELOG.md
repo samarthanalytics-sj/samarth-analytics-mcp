@@ -1,3 +1,9 @@
+## [1.374.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.374.0...v1.374.1) (2026-07-22)
+
+### Performance Improvements
+
+* **desktop:** put the fixed instructions first so the cached prefix survives between turns ([#645](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/645)) ([13328b9](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/13328b9da2484bb209441f0f7aa26a2d906bc7c4))
+
 ## [1.374.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.373.1...v1.374.0) (2026-07-22)
 
 ### Features
