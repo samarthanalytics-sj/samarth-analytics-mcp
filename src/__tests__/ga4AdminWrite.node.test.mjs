@@ -267,5 +267,26 @@ await test('data retention update targets the settings child and derives the mas
   assert.strictEqual(call.params.updateMask, 'eventDataRetention');
 });
 
+await test('data stream update: typed defaultUri nests under webStreamData with a valid derived mask', async () => {
+  setEnv({ writes: true });
+  const { server, calls } = buildServer();
+  await callTool(server, 'ga4_update_data_stream', { name: 'properties/5/dataStreams/9', defaultUri: 'https://new.example', confirm: true });
+  const call = calls.find((c) => c.label === 'dataStreams' && c.verb === 'patch');
+  assert.ok(call, 'patch was called');
+  assert.deepStrictEqual(call.params.requestBody, { webStreamData: { defaultUri: 'https://new.example' } });
+  assert.strictEqual(call.params.updateMask, 'webStreamData', 'mask is a real field path');
+});
+
+await test('data stream update refuses Google-tag-settings fields with directions (no API call)', async () => {
+  setEnv({ writes: true });
+  const { server, calls } = buildServer();
+  const r = await callTool(server, 'ga4_update_data_stream', { name: 'properties/5/dataStreams/9', body: { webStreamData: { domains: ['a.com'], unwantedReferrals: ['b.com'] } }, confirm: true });
+  const text = JSON.stringify(r);
+  assert.ok(/Google tag settings/i.test(text), 'names the real home of the setting: ' + text);
+  assert.ok(/Configure tag settings/.test(text), 'gives the GA4 UI path');
+  assert.ok(text.includes('webStreamData.domains'), 'lists the offending fields');
+  assert.ok(!calls.some((c) => c.label === 'dataStreams' && c.verb === 'patch'), 'the invalid body never reached the API');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

@@ -74,8 +74,30 @@ interface VerbSpec {
   toBody?: (a: Record<string, unknown>) => Record<string, unknown>;
   /** Extra query params (e.g. calculatedMetricId on create). */
   query?: (a: Record<string, unknown>) => Record<string, string>;
+  /** Reject bodies the API has no fields for BEFORE the request (clear message, no Google 400). */
+  validate?: (body: Record<string, unknown>) => void;
   desc: string;
 }
+
+/** The GA4 Admin API's DataStream has very few writable fields. Everything people REACH for here
+ *  (cross-domain domains, unwanted referrals, internal traffic, session timeout) lives in the
+ *  GOOGLE TAG settings, which the Admin API does not expose at all - so reject those up front
+ *  with directions instead of letting Google return "Unknown name ... Cannot find field". */
+export function validateDataStreamBody(body: Record<string, unknown>, forCreate: boolean): void {
+  const allowedTop = new Set(forCreate ? ['type', 'displayName', 'webStreamData', 'androidAppStreamData', 'iosAppStreamData'] : ['displayName', 'webStreamData']);
+  const badTop = Object.keys(body).filter((k) => !allowedTop.has(k));
+  const web = body.webStreamData;
+  const badWeb = web && typeof web === 'object' ? Object.keys(web as Record<string, unknown>).filter((k) => k !== 'defaultUri') : [];
+  if (badTop.length === 0 && badWeb.length === 0) return;
+  const bad = [...badTop, ...badWeb.map((k) => `webStreamData.${k}`)].join(', ');
+  throw new Error(
+    `These are not GA4 Admin API data-stream fields: ${bad}. Cross-domain domains, unwanted referrals, ` +
+      'internal traffic and session settings are GOOGLE TAG settings - no API can change them; set them in ' +
+      'GA4: Admin > Data streams > (your stream) > Configure tag settings. ' +
+      `API-writable stream fields: displayName, webStreamData.defaultUri${forCreate ? ', type, packageName, bundleId' : ''}.`
+  );
+}
+
 
 interface ResourceDesc {
   /** Tool-name segment, singular snake_case, e.g. 'key_event'. */
@@ -147,6 +169,7 @@ function registerResource(
         try {
           const { dryRun } = checkGa4Guardrails('write', a.confirm as boolean, getGuardrailConfig());
           const requestBody = { ...(spec.toBody ? spec.toBody(a) : {}), ...((a.body as object) ?? {}) };
+          spec.validate?.(requestBody);
           const parent = parentPath(a);
           if (dryRun) return textResult(`[DRY RUN] Would create ${r.plural} under ${parent}: ${JSON.stringify(requestBody)}`);
           const fn = sub().create;
@@ -181,6 +204,7 @@ function registerResource(
         try {
           const { dryRun } = checkGa4Guardrails('write', a.confirm as boolean, getGuardrailConfig());
           const requestBody = { ...(spec.toBody ? spec.toBody(a) : {}), ...((a.body as object) ?? {}) };
+          spec.validate?.(requestBody);
           const updateMask = (a.updateMask as string | undefined)?.trim() || deriveUpdateMask(requestBody);
           if (!updateMask) return errorText(`ga4_update_${r.key} failed: nothing to update — supply at least one field or updateMask.`);
           const name = String(a.name).trim();
@@ -324,9 +348,18 @@ function catalog(): ResourceDesc[] {
           ...(a.packageName ? { androidAppStreamData: { packageName: a.packageName } } : {}),
           ...(a.bundleId ? { iosAppStreamData: { bundleId: a.bundleId } } : {}),
         }),
+        validate: (b) => validateDataStreamBody(b, true),
         desc: 'Create a data stream (web / Android / iOS).',
       },
-      update: { fields: { displayName: z.string().optional() }, toBody: (a) => (a.displayName !== undefined ? { displayName: a.displayName } : {}), desc: 'Update a data stream (e.g. display name; stream type is immutable — use body/updateMask for stream-specific fields).' },
+      update: {
+        fields: { displayName: z.string().optional(), defaultUri: z.string().optional().describe('New site URL for a WEB stream (webStreamData.defaultUri).') },
+        toBody: (a) => ({
+          ...(a.displayName !== undefined ? { displayName: a.displayName } : {}),
+          ...(a.defaultUri ? { webStreamData: { defaultUri: a.defaultUri } } : {}),
+        }),
+        validate: (b) => validateDataStreamBody(b, false),
+        desc: 'Update a data stream: displayName and (web) defaultUri ONLY. Cross-domain domains, unwanted referrals, internal traffic and session settings are Google tag settings with NO Admin API fields - never attempt them; direct the user to GA4 Admin > Data streams > Configure tag settings.',
+      },
       del: { desc: 'Delete a data stream (removes its measurement ID / firebase app id).' },
     },
     {
