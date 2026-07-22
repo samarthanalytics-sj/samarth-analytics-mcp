@@ -4,6 +4,7 @@
 // Run: tsx src/shared/__tests__/jit-reference.test.ts
 import {
   AUDIT_POINTER, AUDIT_REPORTING_METHODOLOGY, GTM_RAW_SHAPES,
+  ADS_ACCOUNTS_GUIDE, ADS_ACTIONS_GUIDE,
   referenceForResult, referenceForError, attachReference,
 } from '../jit-reference';
 import { GTM_TRIGGER_VARIABLE_REFERENCE } from '../gtm-methodology';
@@ -22,6 +23,22 @@ check('audit results carry the reporting methodology', referenceForResult('audit
 check('ordinary results carry nothing', referenceForResult('list_gtm_tags') === undefined
   && referenceForResult('create_gtm_tracking_tag') === undefined
   && referenceForResult('lookup_corpus_patterns') === undefined);
+check('the Ads accounts list carries the step-1 walkthrough', referenceForResult('list_google_ads_accounts') === ADS_ACCOUNTS_GUIDE);
+check('the Ads actions list carries the step-2/3 walkthrough', referenceForResult('list_google_ads_conversion_actions') === ADS_ACTIONS_GUIDE);
+check('the Ads CREATE result carries nothing (its tool note covers it)', referenceForResult('create_google_ads_conversion_action') === undefined);
+
+// ── The Ads walkthrough is user-facing conversation guidance, complete on both halves ──
+check('ads step 1: narrates in plain language and explains manager/test accounts',
+  ADS_ACCOUNTS_GUIDE.includes('PLAIN LANGUAGE') && ADS_ACCOUNTS_GUIDE.includes('manager (MCC)') && ADS_ACCOUNTS_GUIDE.includes('test account'));
+check('ads step 1: defines what a conversion action is before asking anything',
+  ADS_ACCOUNTS_GUIDE.includes('conversion action') && ADS_ACCOUNTS_GUIDE.includes('Conversion ID') && ADS_ACCOUNTS_GUIDE.includes('Conversion Label'));
+check('ads step 1: forwards the loginCustomerId to the next call', ADS_ACCOUNTS_GUIDE.includes('loginCustomerId'));
+check('ads step 2: recommends reuse and shows a table', ADS_ACTIONS_GUIDE.includes('reusing') && ADS_ACTIONS_GUIDE.includes('table'));
+check('ads step 2: explains the live-write vs draft difference and the type-delete wording',
+  ADS_ACTIONS_GUIDE.includes('LIVE Google Ads account') && ADS_ACTIONS_GUIDE.includes('type "delete"') && ADS_ACTIONS_GUIDE.includes('nothing is being deleted'));
+check('ads step 3: literals never variables, and the Conversion Linker offer',
+  ADS_ACTIONS_GUIDE.includes('LITERAL values') && ADS_ACTIONS_GUIDE.includes('never {{variables}}') && ADS_ACTIONS_GUIDE.includes('gclidw') && ADS_ACTIONS_GUIDE.includes('conversion_linker'));
+check('ads close: summarizes draft-vs-live honestly', ADS_ACTIONS_GUIDE.includes('draft workspace until published') && ADS_ACTIONS_GUIDE.includes('already live'));
 check('a failed RAW create carries the resource shapes', referenceForError('create_gtm_trigger') === GTM_RAW_SHAPES
   && referenceForError('create_gtm_variable') === GTM_RAW_SHAPES);
 check('a failed TYPED create does not (the builder shapes it)', referenceForError('create_gtm_variable_typed') === undefined

@@ -43,6 +43,24 @@ export const AUDIT_POINTER =
 export const GTM_RAW_SHAPES =
   'RAW SHAPES (GTM API v2, camelCase types — the create_gtm_variable / create_gtm_trigger resource): Lookup Table = {name, type:"smm", parameter:[{type:"template",key:"input",value:"{{Click Text}}"},{type:"list",key:"map",list:[{type:"map",map:[{type:"template",key:"key",value:"Art Select"},{type:"template",key:"value",value:"true"}]}, …one map per row… ]},{type:"boolean",key:"setDefaultValue",value:"true"},{type:"template",key:"defaultValue",value:"false"}]} — defaultValue is INERT unless the setDefaultValue boolean is true; omit BOTH when no default is wanted. (Simpler: create_gtm_variable_typed kind "lookup_table"/"regex_table" builds these correctly from input+rows+defaultValue.) RegEx Table = the same with type:"remm" (each row key is a regex; add {type:"boolean",key:"ignoreCase",value:"true"} / {type:"boolean",key:"fullMatch",value:"true"} as needed). DOM Element = {name, type:"d", parameter:[{type:"template",key:"selectorType",value:"CSS"} (or "ID"), then for CSS a {type:"template",key:"elementSelector",value:"<css selector>"} OR for ID a {type:"template",key:"elementId",value:"<element id>"}, plus optional {type:"template",key:"attributeName",value:"href"} to read an attribute instead of the element text]} (there is NO elementType param; the CSS selector goes under elementSelector, NOT elementId). Variable-driven click trigger = {name, type:"linkClick" (or "click"), filter:[{type:"equals",parameter:[{type:"template",key:"arg0",value:"{{Browse By Range Variable}}"},{type:"template",key:"arg1",value:"true"}]}]}. Element Visibility trigger = {name, type:"elementVisibility", parameter:[ selectorType + elementSelector + on-screen percent + firingFrequency (ONCE / ONCE_PER_ELEMENT / MANY_PER_ELEMENT) ]} — set the exact keys the API expects and fix on rejection. ';
 
+/** The Google Ads conversion-tag walkthrough, split across the two list results so each half
+ *  arrives WITH the data it governs. The Ads tools' own descriptions cover the mechanics (ids,
+ *  literals, gating); these govern the CONVERSATION - the flow runs in chat with a user who may
+ *  not know Ads jargon, so every step is narrated in plain language and nothing is silently
+ *  decided for them. */
+export const ADS_ACCOUNTS_GUIDE =
+  'GOOGLE ADS FLOW (step 1 of 3 - pick the account). You just fetched the Google Ads accounts; walk the user through this in PLAIN LANGUAGE, one step at a time, never assuming they know Ads jargon. ' +
+  'Present the accounts as a short list (name + customer id). Mark manager (MCC) accounts as "holds other accounts, not conversions - we need the advertising account itself" and test accounts as "test account, no real conversion data". If exactly ONE regular account exists, propose it and confirm rather than asking an empty question. ' +
+  'Say in one line where this is going: to build a Google Ads conversion tag we need that account\'s Conversion ID (the AW- number) and Conversion Label, and both live on a "conversion action" inside the account - the thing Google Ads actually counts (a lead, a purchase, a call). ' +
+  'Once the user picks, call list_google_ads_conversion_actions with that row\'s customerId AND its loginCustomerId. ';
+
+export const ADS_ACTIONS_GUIDE =
+  'GOOGLE ADS FLOW (step 2 of 3 - reuse or create a conversion action). Present what you just fetched so the user can decide, in plain language: ' +
+  'Show the taggable actions as a short table - Name | Category | Status | Conversion ID | Label - and RECOMMEND reusing one that matches what they want to track. Mention untaggable actions in one line each using their `note` (never invent a label for them). ' +
+  'If nothing fits, offer to create one, and BEFORE creating explain the difference they must understand: GTM edits land in a draft workspace and can be reverted, but a new conversion action is written to the LIVE Google Ads account immediately, and the approval card will ask them to type "delete" - that wording is the app\'s strongest confirmation gate, nothing is being deleted. Google assigns the Label on creation; it cannot be chosen. ' +
+  'STEP 3 - the GTM tag: create_gtm_tracking_tag platform google_ads_conversion with the chosen conversionId + conversionLabel as LITERAL values (never {{variables}}), on a trigger for the user\'s action. Also check list_gtm_tags for a Conversion Linker (type gclidw): if the container has none, explain in one line that it stores the ad-click id in a first-party cookie so conversions attribute to the click, and offer to add one (platform conversion_linker, All Pages trigger). ' +
+  'CLOSE with a plain-words summary: which conversion action (name + id/label pair), which GTM tag on which trigger, that the GTM side stays in the draft workspace until published, and - if an action was created - that the Ads side is already live. ';
+
 /** Audit tools whose RESULT should carry the reporting methodology. */
 const AUDIT_TOOLS = new Set(['audit_gtm_container', 'audit_server_container']);
 /** Raw creates whose FAILURE should carry the resource shapes (the typed builders never need them). */
@@ -50,7 +68,10 @@ const RAW_CREATE_TOOLS = new Set(['create_gtm_trigger', 'create_gtm_variable']);
 
 /** Reference to attach to a SUCCESSFUL result, or undefined. */
 export function referenceForResult(toolName: string): string | undefined {
-  return AUDIT_TOOLS.has(toolName) ? AUDIT_REPORTING_METHODOLOGY : undefined;
+  if (AUDIT_TOOLS.has(toolName)) return AUDIT_REPORTING_METHODOLOGY;
+  if (toolName === 'list_google_ads_accounts') return ADS_ACCOUNTS_GUIDE;
+  if (toolName === 'list_google_ads_conversion_actions') return ADS_ACTIONS_GUIDE;
+  return undefined;
 }
 
 /** Reference to attach to a FAILED call, or undefined. */
