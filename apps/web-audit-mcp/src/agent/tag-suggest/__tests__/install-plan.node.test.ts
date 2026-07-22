@@ -3,7 +3,7 @@
  * Run: tsx apps/web-audit-mcp/src/agent/tag-suggest/__tests__/install-plan.node.test.ts
  */
 import assert from 'node:assert';
-import { buildFormInstallPlan, buildTriggerInstallPlan, formListenerHtml, type InstallRequirement } from '../install-plan.js';
+import { buildFormInstallPlan, buildTriggerInstallPlan, formListenerHtml, LISTENER_DLV_KEY, type InstallRequirement } from '../install-plan.js';
 import { buildSuggestions } from '../suggest.js';
 import type { DetectedForm } from '../types.js';
 
@@ -240,6 +240,71 @@ assert.strictEqual(
   }, { full: true });
   const form = out.find((s) => s.platform === 'ga4_event' && s.trigger.kind === 'custom_event' && /hubspot/i.test(s.evidence));
   check('forms-unchanged: HubSpot form still carries a listener-tag install (buildFormInstallPlan), not a generic site-code', !!form && !!listener(form.install!.requires));
+}
+
+// -- LISTENER_DLV_KEY is a CONTRACT, not documentation -------------------------
+// A trigger conditions on the key this map declares. If a listener stops pushing that key, the
+// trigger silently stops matching, which is the exact failure mode this branch exists to remove.
+// So the declared key must literally appear in the script that ships with it.
+{
+  for (const [vendor, key] of Object.entries(LISTENER_DLV_KEY)) {
+    const html = formListenerHtml(vendor, 'evt') ?? '';
+    check(`dlv-key: the ${vendor} listener really pushes ${key}`, html.includes(`${key}:`), html.slice(0, 200));
+  }
+  // Declaring the key is only half the contract: the listener must also read the id from where the
+  // vendor really puts it, because a listener that pushes the key with `undefined` satisfies every
+  // string check above and still produces a trigger condition that can never match.
+  {
+    const nf = formListenerHtml('ninjaforms', 'evt') ?? '';
+    check('dlv-key: the Ninja Forms listener reads the id off the RESPONSE payload, not a 3rd handler argument',
+      /r\.id/.test(nf), nf);
+    check('dlv-key: and it still tolerates a build that passes the id as an argument', /formId\|\|/.test(nf), nf);
+    check('dlv-key: it never pushes a bare undefined argument as the form id', !/form_id:formId\}/.test(nf), nf);
+    const wp = formListenerHtml('wpforms', 'evt') ?? '';
+    // WPForms fires the event THROUGH jQuery, and a jQuery-triggered custom event never reaches a
+    // native addEventListener handler, so a DOM-only binding could not fire at all.
+    check('dlv-key: the WPForms listener binds through jQuery, which is how WPForms fires the event',
+      /jQuery\(document\)\.on\("wpformsAjaxSubmitSuccess"/.test(wp), wp);
+    check('dlv-key: and keeps the native binding as a fallback', /addEventListener\("wpformsAjaxSubmitSuccess"/.test(wp), wp);
+    check('dlv-key: with both bound, a single submit still pushes once', /fired/.test(wp), wp);
+    check('dlv-key: it reads data-formid, the attribute WPForms puts on the <form>', /data-formid/.test(wp), wp);
+    // Every listener stays a self-contained single <script> that is safe on All Pages.
+    for (const vendor of [...Object.keys(LISTENER_DLV_KEY), 'elementor', 'calendly', 'generic-submit']) {
+      const html = formListenerHtml(vendor, 'evt', '#f') ?? '';
+      check(`listener: ${vendor} is one self-contained script`,
+        html.startsWith('<script>') && html.endsWith('</script>') && html.split('<script>').length === 2);
+      check(`listener: ${vendor} guards window.dataLayer before pushing`, html.includes('window.dataLayer=window.dataLayer||[]'));
+    }
+  }
+  // The vendors deliberately absent: their listener carries no form identity, so no key may be claimed.
+  for (const vendor of ['elementor', 'calendly']) {
+    check(`dlv-key: ${vendor} declares NO key (its listener pushes no form id)`, !(vendor in LISTENER_DLV_KEY));
+    const html = formListenerHtml(vendor, 'evt') ?? '';
+    check(`dlv-key: and the ${vendor} listener indeed pushes only the event`, !/form_id|_id:/.test(html.replace(/event:/g, '')));
+  }
+
+  // A VENDOR listener now gets a dlvScope when the durable id is known, which is what lets an embed
+  // form be scoped to ONE form instead of firing page-wide.
+  const hs = buildFormInstallPlan({ provider: 'hubspot', mechanism: 'embed', dlEvent: 'hubspot-form-success', formId: 'abc-def', formHasNativeForm: false, providerFormId: '79c35ad9-5d43-407b-8c0e-0b62b2cc8de0' });
+  const hsListener = listener(hs.requires);
+  check('dlv-scope: a HubSpot listener with a known form GUID carries dlvScope hs_form_id',
+    hsListener?.dlvScope?.key === 'hs_form_id' && hsListener.dlvScope.value === '79c35ad9-5d43-407b-8c0e-0b62b2cc8de0', JSON.stringify(hsListener?.dlvScope));
+  check('dlv-scope: it never falls back to the DOM id, which the provider never pushes',
+    hsListener?.dlvScope?.value !== 'abc-def');
+  const hsNoId = buildFormInstallPlan({ provider: 'hubspot', mechanism: 'embed', dlEvent: 'hubspot-form-success', formId: 'abc-def', formHasNativeForm: false });
+  check('dlv-scope: with NO durable id, no scope is claimed (page-scoped beats a condition that cannot match)',
+    !listener(hsNoId.requires)?.dlvScope);
+  // The generic delegate is unchanged: it pushes the DOM id, so it scopes on the DOM id.
+  const generic = buildFormInstallPlan({ provider: 'unknown', mechanism: 'js', dlEvent: 'form_submit', formId: 'contact-form', formHasNativeForm: true });
+  check('dlv-scope: the generic submit delegate still scopes on form_id = the DOM id',
+    listener(generic.requires)?.dlvScope?.key === 'form_id' && listener(generic.requires)?.dlvScope?.value === 'contact-form');
+  // A durable id must NOT leak onto a listener that is not that vendor's own.
+  const mismatched = buildFormInstallPlan({ provider: 'unknown', mechanism: 'js', dlEvent: 'form_submit', formId: 'contact-form', formHasNativeForm: true, providerFormId: '1234' });
+  check('dlv-scope: a provider id never overrides the generic delegate\'s own form_id push',
+    listener(mismatched.requires)?.dlvScope?.value === 'contact-form');
+  // A vendor with no auto-listener gets an honest site-code TODO, not a fabricated scope.
+  const klaviyo = buildFormInstallPlan({ provider: 'klaviyo', mechanism: 'js', dlEvent: 'form_submit', formHasNativeForm: false, providerFormId: 'XyZ123' });
+  check('dlv-scope: Klaviyo has no modelled listener, so no listener-tag claims a scope', !listener(klaviyo.requires)?.dlvScope);
 }
 
 console.log(`\nInstall-plan: ${passed} passed, ${failed} failed`);

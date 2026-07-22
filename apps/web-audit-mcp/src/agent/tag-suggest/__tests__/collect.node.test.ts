@@ -2,8 +2,9 @@
  * Element collector — pure classifier + assembler tests (no browser).
  * Run: tsx apps/web-audit-mcp/src/agent/tag-suggest/__tests__/collect.node.test.ts
  */
-import { classifyElement, classifyPageElements, classifyCtaIntent, isStyledButton, buildSuggestInput, detectEcommerceSignals, type RawElement, type PageScan } from '../collect.js';
+import { classifyElement, classifyPageElements, classifyCtaIntent, isStyledButton, buildSuggestInput, detectEcommerceSignals, collectPageInBrowser, type RawElement, type PageScan } from '../collect.js';
 import { buildSuggestions } from '../suggest.js';
+import { PROVIDER_SELECTORS, PROVIDER_ID_PREFIXES } from '../providers.js';
 import type { PageSignals } from '../types.js';
 
 let passed = 0;
@@ -269,6 +270,98 @@ check('share: "Copy" alone (no "link") → NOT share (avoids copy-code buttons)'
     const r = detectEcommerceSignals([], [], [{ page: '/shop' }], []);
     return !r.isEcommerce && r.evidence.length === 0;
   })());
+}
+
+// -- the in-page selector probe must mirror providers.ts -----------------------
+// collectPageInBrowser is stringified and evaluated inside the scanned page, so it cannot reference
+// the shared lists and keeps its own copy. A copy that drifts is invisible: the vendor simply stops
+// being detected, and the page silently gets a native trigger that cannot fire.
+{
+  // Quote style is not stable through the TS transpile (esbuild rewrites '...' to "..."), so compare
+  // with every quote character stripped from both sides.
+  const src = collectPageInBrowser.toString().replace(/["']/g, '');
+  const bare = (s: string): string => s.replace(/["']/g, '');
+  const missingSel = PROVIDER_SELECTORS.filter((s) => !src.includes(bare(s)));
+  check('probe: every shared PROVIDER_SELECTOR is present in the inlined in-page copy', missingSel.length === 0, missingSel.join(', '));
+  const missingPrefix = PROVIDER_ID_PREFIXES.filter((p) => !src.includes(bare(p)));
+  check('probe: every shared PROVIDER_ID_PREFIX is present in the inlined in-page copy', missingPrefix.length === 0, missingPrefix.join(', '));
+  check('probe: the HubSpot hsfc renderer container is probed (the ChowNow markup)', PROVIDER_SELECTORS.includes('[data-hsfc-id]'));
+  check('probe: the inlined copy is self-contained (it declares its own list, not an outer reference)',
+    /const PROVIDER_SELECTORS\s*=\s*\[/.test(src) && src.includes('[data-hsfc-id]'));
+}
+
+// -- providerFormId survives the whole pipeline --------------------------------
+// It was captured by forms.ts and then dropped at every hand-off, which made the single-sample
+// rescue in form-id-stability unreachable in production. These assert the wiring, not the rescue.
+{
+  const HS_GUID = '79c35ad9-5d43-407b-8c0e-0b62b2cc8de0';
+  const hsPage: PageScan = {
+    page: '/demo',
+    elements: [],
+    signals: { scriptSrcs: [], classNames: ['hs-form-html'], selectorsPresent: ['[data-hsfc-id]'], iframeSrcs: [] },
+    forms: [{
+      purpose: 'contact',
+      action: 'https://forms-na2.hsforms.com/submissions/v3/public/submit',
+      method: 'post',
+      formId: `cf2be672-0e24-4813-8728-42d97847318c-${HS_GUID}`,
+      providerFormId: HS_GUID,
+      title: 'Get a Demo',
+      fields: [{ type: 'email', name: 'email', required: true }],
+    }],
+  };
+  const hsInput = buildSuggestInput([hsPage], 'get.chownow.com');
+  check('thread: buildSuggestInput carries providerFormId onto the DetectedForm', hsInput.forms[0]?.providerFormId === HS_GUID);
+  check('thread: the hsfc markup is detected as hubspot (not treated as a native form)', hsInput.forms[0]?.provider.vendor === 'hubspot');
+  check('thread: a readable HubSpot form suppresses the synthesized embed (one form, not two)', hsInput.forms.length === 1);
+
+  // THE ChowNow failure, end to end: one HubSpot form on seven pages. It used to emit a native Form
+  // Submission trigger scoped by a seven-path page regex, which can never fire because the submit
+  // happens inside a cross-origin iframe GTM's form listener never sees.
+  const pages = ['/a', '/b', '/c', '/d', '/e', '/f', '/g'].map((p, i): PageScan => ({
+    ...hsPage,
+    page: p,
+    forms: [{ ...hsPage.forms[0], formId: `0000000${i}-0e24-4813-8728-42d97847318c-${HS_GUID}` }],
+  }));
+  const chow = buildSuggestions(buildSuggestInput(pages, 'get.chownow.com')).filter((s) => /Get A Demo/i.test(s.tagName));
+  check('chownow: seven pages of one HubSpot form → exactly ONE tag', chow.length === 1, `got ${chow.length}`);
+  const ct = chow[0]?.trigger;
+  check('chownow: the trigger is a CUSTOM EVENT, never the Form Submission that cannot fire',
+    ct?.kind === 'custom_event' && ct?.eventName === 'hubspot-form-success', JSON.stringify(ct));
+  check('chownow: it is NOT scoped by a multi-page {{Page Path}} regex any more', !ct?.pagePathValue);
+  check('chownow: it scopes on the dataLayer key HubSpot\'s own listener pushes, hs_form_id = the form GUID',
+    ct?.dataLayerConditions?.length === 1 && ct.dataLayerConditions[0].key === 'hs_form_id'
+      && ct.dataLayerConditions[0].value === HS_GUID && ct.dataLayerConditions[0].operator === 'equals',
+    JSON.stringify(ct?.dataLayerConditions));
+  check('chownow: no per-render DOM id leaks into the trigger', !JSON.stringify(ct).includes('0e24-4813'));
+  const listener = chow[0]?.install?.requires.find((r) => r.kind === 'listener-tag');
+  check('chownow: the paired listener really pushes that key (the trigger and the install plan agree)',
+    !!listener && listener.kind === 'listener-tag' && listener.tag.html.includes('hs_form_id')
+      && listener.dlvScope?.key === 'hs_form_id' && listener.dlvScope?.value === HS_GUID);
+
+  // The SAME site without data-form-id, where the only identity left is inside the DOM id. HubSpot
+  // writes hsForm_<instanceGuid>-<formGuid> there, and the instance half is minted on every render:
+  // scoping on it produces the identical silent failure one layer down, a trigger GTM accepts and
+  // that never matches again. Checked on ONE page too, where there is no second sample to disagree.
+  {
+    const inst = (i: number) => `${'0000000' + i}-0e24-4813-8728-42d97847318c`;
+    const domIdOnly = (i: number): PageScan => ({
+      ...hsPage,
+      page: `/p${i}`,
+      forms: [{ ...hsPage.forms[0], providerFormId: undefined, formId: `hsForm_${inst(i)}-${HS_GUID}` }],
+    });
+    for (const pages of [[domIdOnly(1)], [domIdOnly(1), domIdOnly(2), domIdOnly(3)]]) {
+      const where = `${pages.length} page(s)`;
+      const got = buildSuggestions(buildSuggestInput(pages, 'get.chownow.com')).filter((s) => /Get A Demo/i.test(s.tagName));
+      const t = got[0]?.trigger;
+      check(`chownow (no data-form-id, ${where}): still ONE custom-event tag`,
+        got.length === 1 && t?.kind === 'custom_event' && t?.eventName === 'hubspot-form-success', JSON.stringify(t));
+      check(`chownow (no data-form-id, ${where}): scoped on the FORM guid`,
+        t?.dataLayerConditions?.[0]?.key === 'hs_form_id' && t.dataLayerConditions[0].value === HS_GUID,
+        JSON.stringify(t?.dataLayerConditions));
+      check(`chownow (no data-form-id, ${where}): the per-render instance guid is nowhere in the tag`,
+        !JSON.stringify(got[0] ?? {}).includes(inst(1)), JSON.stringify(t));
+    }
+  }
 }
 
 console.log(`\nTag-collect: ${passed} passed, ${failed} failed`);

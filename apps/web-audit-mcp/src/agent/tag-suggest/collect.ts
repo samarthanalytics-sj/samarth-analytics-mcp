@@ -51,7 +51,23 @@ export function collectPageInBrowser(): PageScanRaw {
   const iframeSrcs: string[] = [];
   const classNames = new Set<string>();
   const selectorsPresent = new Set<string>();
-  const PROVIDER_SELECTORS = ['.hs-form', '[data-tf-widget]', '[data-paperform-id]', '#mce-EMAIL', '#mc-embedded-subscribe', '.gform_wrapper', '.wpcf7', '.wpforms-form', '.wpforms-container'];
+  // MUST mirror PROVIDER_SELECTORS / PROVIDER_ID_PREFIXES in providers.ts. This function is
+  // stringified and evaluated inside the scanned page, so it may not reference anything outside
+  // itself; collect.node.test.ts asserts the two copies still match.
+  const PROVIDER_SELECTORS = [
+    '.hs-form', '.hs-form-html', '.hbspt-form', '[data-hsfc-id]',
+    '[data-tf-widget]', '[data-tf-live]', '[data-tf-popup]',
+    '[data-paperform-id]',
+    '#mce-EMAIL', '#mc-embedded-subscribe', '#mc_embed_signup',
+    '.gform_wrapper', '.wpcf7', '.wpforms-form', '.wpforms-container', '.nf-form-cont', '.elementor-form',
+    '.mktoForm', '.pardotForm',
+    '.fsForm', '.jotform-form', '[class^="klaviyo-form"]',
+    '.lp-pom-form', '.w-form', '[data-wf-page]',
+  ];
+  const PROVIDER_ID_PREFIXES = [
+    'mktoForm_', 'hsForm_', 'gform_', 'wpcf7-f', 'wpforms-form-', 'wpforms-', 'nf-form-',
+    'lp-pom-form', 'wf-form-', 'fsForm', 'JotFormIFrame-', '_form_', 'mc4wp-form-', 'mc_embed_signup',
+  ];
 
   const regionOf = (el: Element): RawElement['region'] => {
     // 1) Semantic landmark elements.
@@ -162,8 +178,17 @@ export function collectPageInBrowser(): PageScanRaw {
         /* invalid selector */
       }
     }
-    const mkto = doc.querySelector('[id^="mktoForm_"]') as HTMLElement | null;
-    if (mkto?.id) selectorsPresent.add('#' + mkto.id);
+    // Record the REAL id of any element whose id prefix names a provider. Two jobs: the shape
+    // identifies the vendor, and the id carries the vendor's durable form number (gform_12,
+    // mktoForm_521, wpcf7-f34-p9-o1) that provider-form-id.ts turns into a trigger scope.
+    for (const prefix of PROVIDER_ID_PREFIXES) {
+      try {
+        const el = doc.querySelector('[id^="' + prefix + '"]') as HTMLElement | null;
+        if (el && el.id) selectorsPresent.add('#' + el.id);
+      } catch {
+        /* invalid selector */
+      }
+    }
   };
 
   scanDoc(document);
@@ -371,6 +396,10 @@ export interface PageScan {
     action: string;
     method?: string;
     formId?: string;
+    /** The provider's own durable form id (data-form-id / data-formid / data-wpcf7-id). Carried all
+     *  the way from forms.ts so the suggestion engine can scope on an identity that survives a
+     *  re-render, instead of a per-render DOM id or a whole-page path. */
+    providerFormId?: string;
     formClasses?: string;
     title?: string;
     fields?: FormFieldSummary[];
@@ -499,6 +528,7 @@ export function buildSuggestInput(pages: PageScan[], siteHost: string): SuggestI
         provider: detectFormProvider(p.signals, f.action),
         method: f.method,
         formId: f.formId,
+        providerFormId: f.providerFormId,
         formClasses: f.formClasses,
         title: f.title,
         fields: f.fields,

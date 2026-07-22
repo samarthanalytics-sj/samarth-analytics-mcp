@@ -114,18 +114,27 @@ const LISTENERS: Partial<Record<string, ListenerFn>> = {
     `jQuery(document).on("gform_confirmation_loaded",function(e,formId){` +
     `window.dataLayer.push({event:${q(event)},form_id:formId});});})();</script>`,
 
-  // Ninja Forms fires the jQuery 'nfFormSubmitResponse' event on submit. Needs
-  // jQuery — guarded.
+  // Ninja Forms fires the jQuery 'nfFormSubmitResponse' event on submit. Needs jQuery, so it is guarded.
+  // The form id is a PROPERTY OF THE RESPONSE OBJECT, not a separate handler argument: Ninja Forms
+  // triggers the event with a single payload, [{ response: …, id: <formId> }]. Reading a third
+  // argument yielded undefined, so the listener pushed form_id: undefined and any trigger scoped on
+  // it could never match. Every shape is read, most specific first.
   ninjaforms: (event) =>
     `<script>(function(){${DL}if(!window.jQuery)return;` +
-    `jQuery(document).on("nfFormSubmitResponse",function(e,response,formId){` +
-    `window.dataLayer.push({event:${q(event)},form_id:formId});});})();</script>`,
+    `jQuery(document).on("nfFormSubmitResponse",function(e,response,formId){var r=response||{};` +
+    `var id=formId||r.id||(r.response&&r.response.data&&r.response.data.form_id)||(r.data&&r.data.form_id);` +
+    `window.dataLayer.push({event:${q(event)},form_id:id});});})();</script>`,
 
-  // WPForms (AJAX) dispatches the DOM event 'wpformsAjaxSubmitSuccess' on the
-  // form element on a successful submit.
+  // WPForms (AJAX) fires 'wpformsAjaxSubmitSuccess' on the form element on a successful submit.
+  // It is triggered THROUGH jQUERY, and a jQuery-triggered custom event never reaches a native
+  // addEventListener handler, so the DOM-only binding could not fire at all. jQuery is bound first
+  // (WPForms loads it), with the native listener kept as a fallback for any build that dispatches a
+  // real CustomEvent. `fired` stops a double push if both ever run.
   wpforms: (event) =>
-    `<script>(function(){${DL}document.addEventListener("wpformsAjaxSubmitSuccess",function(e){` +
-    `var f=e&&e.target;window.dataLayer.push({event:${q(event)},form_id:f&&f.dataset&&f.dataset.formid});},false);})();</script>`,
+    `<script>(function(){${DL}var fired=0;var push=function(f){if(fired)return;fired=1;setTimeout(function(){fired=0;},50);` +
+    `window.dataLayer.push({event:${q(event)},form_id:f&&f.getAttribute&&f.getAttribute("data-formid")});};` +
+    `if(window.jQuery){jQuery(document).on("wpformsAjaxSubmitSuccess",function(e){push(e&&e.target);});}` +
+    `document.addEventListener("wpformsAjaxSubmitSuccess",function(e){push(e&&e.target);},false);})();</script>`,
 
   // Elementor Pro forms fire the jQuery 'submit_success' event on the document.
   // Needs jQuery (Elementor ships it) — guarded.
@@ -143,6 +152,25 @@ const LISTENERS: Partial<Record<string, ListenerFn>> = {
   calendly: (event) =>
     `<script>(function(){${DL}window.addEventListener("message",function(e){` +
     `var d=e&&e.data;if(d&&d.event==="calendly.event_scheduled"){window.dataLayer.push({event:${q(event)}});}});})();</script>`,
+};
+
+/**
+ * The dataLayer KEY each vendor listener above actually pushes the form identity under.
+ *
+ * This is the contract that makes a custom_event trigger scopeable. Each entry MUST match the push
+ * in LISTENERS: hubspot pushes hs_form_id, marketo marketo_form_id, the WordPress plugins form_id,
+ * typeform typeform_id. A vendor whose listener pushes NO identity (elementor, calendly) is
+ * deliberately ABSENT rather than mapped to a guess, because a condition on a key that is never
+ * pushed produces a trigger that can never fire.
+ */
+export const LISTENER_DLV_KEY: Readonly<Partial<Record<string, string>>> = {
+  hubspot: 'hs_form_id',
+  marketo: 'marketo_form_id',
+  contactform7: 'form_id',
+  gravityforms: 'form_id',
+  ninjaforms: 'form_id',
+  wpforms: 'form_id',
+  typeform: 'typeform_id',
 };
 
 /**
@@ -195,6 +223,10 @@ export function formListenerHtml(provider: string, event: string, selector?: str
  *  vendor-specific messages we don't hardcode.) */
 const UNKNOWN_PAYLOAD_VENDORS = new Set<string>([
   'paperform', 'jotform', 'tally', 'pardot', 'formstack', 'googleforms', 'wufoo', 'mailchimp',
+  // Recognised by the detector but with no success payload we model with confidence: Klaviyo's
+  // onsite SDK, ActiveCampaign's embed, Unbounce and Webflow. Naming them here keeps the plan
+  // honest (a labelled site-code TODO) instead of shipping a listener that might never fire.
+  'klaviyo', 'activecampaign', 'unbounce', 'webflow',
 ]);
 
 /** Human-readable provider name for detail strings / tag names. */
@@ -205,9 +237,30 @@ function providerLabel(provider: string): string {
     elementor: 'Elementor', typeform: 'Typeform', calendly: 'Calendly',
     paperform: 'Paperform', jotform: 'JotForm', tally: 'Tally', pardot: 'Pardot',
     formstack: 'Formstack', googleforms: 'Google Forms', wufoo: 'Wufoo',
-    mailchimp: 'Mailchimp',
+    mailchimp: 'Mailchimp', klaviyo: 'Klaviyo', activecampaign: 'ActiveCampaign',
+    unbounce: 'Unbounce', webflow: 'Webflow',
   };
   return map[provider] ?? (provider ? provider[0].toUpperCase() + provider.slice(1) : provider);
+}
+
+/**
+ * The dlvScope a chosen listener MAKES POSSIBLE, or null when it pushes nothing we can match.
+ *
+ * `listenerProvider` is the template that was actually selected, which is NOT always the detected
+ * `provider` (an unknown vendor falls back to a generic delegate). Only the vendor's OWN listener
+ * can be scoped by that vendor's key, so the two must agree before a key is used.
+ */
+function dlvScopeFor(
+  listenerProvider: string,
+  provider: string,
+  formId: string | undefined,
+  providerFormId: string,
+): { dlvScope: { key: string; value: string } } | null {
+  if (listenerProvider === 'generic-submit' && formId) return { dlvScope: { key: 'form_id', value: formId } };
+  if (listenerProvider !== provider) return null;
+  const key = LISTENER_DLV_KEY[provider];
+  if (key && providerFormId) return { dlvScope: { key, value: providerFormId } };
+  return null;
 }
 
 /** The html-attribute requirement recommending a stable id for {{Form ID}} scoping. */
@@ -235,6 +288,12 @@ function stableIdRequirement(): InstallRequirement {
  * @param input.formHasNativeForm whether a real <form> element exists (a js form
  *                                may wrap one → generic submit delegate; else →
  *                                generic click delegate on the button).
+ * @param input.providerFormId    the vendor's DURABLE form identity (a HubSpot form GUID, a Marketo
+ *                                or WordPress form number), already normalized by
+ *                                provider-form-id.ts. When present AND that vendor's listener is
+ *                                the one being installed, it becomes the listener's dlvScope, so
+ *                                the custom_event trigger scopes to THIS form instead of firing on
+ *                                every form on the page.
  */
 export function buildFormInstallPlan(input: {
   provider: string;
@@ -243,8 +302,10 @@ export function buildFormInstallPlan(input: {
   formId?: string;
   selector?: string;
   formHasNativeForm: boolean;
+  providerFormId?: string;
 }): InstallPlan {
   const { provider, mechanism, dlEvent, formId, selector, formHasNativeForm } = input;
+  const providerFormId = (input.providerFormId ?? '').trim();
   const requires: InstallRequirement[] = [];
 
   // ── NATIVE: GTM's built-in Form Submission trigger fires as-is ──────────────
@@ -310,10 +371,14 @@ export function buildFormInstallPlan(input: {
             (provider === 'marketo'
               ? ' (If Marketo redirects on success, have onSuccess return false and navigate manually so the tag fires first.)'
               : ''),
-      // The generic SUBMIT delegate pushes `form_id: <the form's DOM id>` (guarded by the selector), so
-      // the trigger can scope `{{dlv - form_id}} equals <formId>` and match. Provider / generic-click
-      // listeners push a different key/value (or none), so they get NO dlvScope and stay page-scoped.
-      ...(listenerProvider === 'generic-submit' && formId ? { dlvScope: { key: 'form_id', value: formId } } : {}),
+      // What this listener lets the trigger scope on.
+      //   * the generic SUBMIT delegate pushes `form_id: <the form's DOM id>` (guarded by the
+      //     selector), so the trigger can AND `{{dlv - form_id}} equals <formId>`;
+      //   * a VENDOR listener pushes its own key (LISTENER_DLV_KEY) carrying the vendor's durable
+      //     form id, so `{{dlv - hs_form_id}} equals <GUID>` scopes a HubSpot embed to ONE form.
+      // Anything else (generic-click, a vendor whose listener pushes no identity) gets no dlvScope
+      // and stays page-scoped, because a condition on a key nobody pushes can never fire.
+      ...(dlvScopeFor(listenerProvider, provider, formId, providerFormId) ?? {}),
     });
   } else {
     // No confident recipe → a labelled site-code TODO (never a wrong listener).

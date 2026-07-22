@@ -5,6 +5,7 @@
 import { detectFormProvider, detectEmbeddedForm } from '../providers.js';
 import { buildSuggestions, eventFromLabel, flagOverlappingClickTexts, extractShareControls } from '../suggest.js';
 import { isYouTubeEmbed } from '../video.js';
+import { providerFormIdentity } from '../provider-form-id.js';
 import type { PageSignals, SuggestInput, DetectedForm, SuggestedTag, DetectedElement } from '../types.js';
 
 let passed = 0;
@@ -79,13 +80,15 @@ for (const { vendor, ev } of wpAjaxCases) {
     elements: [],
   });
   const t = cf7WithId[0]?.trigger;
-  // A PROVIDER form (CF7) must NOT get a {{dlv - form_id}} condition: CF7's own listener pushes CF7's
-  // internal numeric id, never the DOM id, so an equals-DOM-id condition could never match. It stays
-  // page-scoped (which still fires).
-  check('form: CF7 (AJAX, provider) → NO dataLayerConditions (page-scoped, no impossible {{dlv - form_id}} match)',
-    cf7WithId.length === 1 && t?.kind === 'custom_event' && !t?.formIdValue && !t?.dataLayerConditions);
-  check('form: CF7 note does NOT falsely claim a {{dlv - form_id}} scope',
-    !/Scoped to this form via \{\{dlv - form_id\}\}/.test(cf7WithId[0]?.note ?? ''));
+  // CF7's own listener pushes form_id = e.detail.contactFormId, which is CF7's internal POST id, not
+  // the DOM id. Scoping on the DOM id could never match, so the condition uses the post id read out
+  // of the wrapper id (wpcf7-f123-p1 → 123), which is exactly what the listener pushes.
+  check('form: CF7 (AJAX, provider) → {{dlv - form_id}} equals the CF7 POST id (what its listener really pushes), never the DOM id',
+    cf7WithId.length === 1 && t?.kind === 'custom_event' && !t?.formIdValue
+      && t?.dataLayerConditions?.length === 1 && t.dataLayerConditions[0].key === 'form_id'
+      && t.dataLayerConditions[0].value === '123', JSON.stringify(t?.dataLayerConditions));
+  check('form: CF7 note states the {{dlv - form_id}} scope it actually built, with the post id',
+    /Scoped to this form via \{\{dlv - form_id\}\} equals "123"/.test(cf7WithId[0]?.note ?? ''));
 
   // The COHERENT case: a generic JS form with a real <form> + id → the generic submit delegate pushes
   // form_id = the DOM id, so the trigger DOES scope by {{dlv - form_id}} equals that id.
@@ -1050,6 +1053,297 @@ check('meta: an "Add to Cart" CTA → Meta "AddToCart"; a generic outbound click
   const out = buildSuggestions({ siteHost: 'acme.com', forms: [], elements: els });
   const shareTag = out.find((s) => s.eventName === 'share');
   check('share: buildSuggestions emits one share tag for the widget', !!shareTag && shareTag.trigger.kind === 'all_clicks');
+}
+
+// -- PART 1: every vendor, from SEVERAL independent markers --------------------
+// One signal per vendor is how the detector went blind: a HubSpot form rendered with the newer hsfc
+// markup carried none of the three markers the old rule knew, so it was read as a plain native form
+// and handed a Form Submission trigger that can never fire. Each row below is markup that really
+// appears for that vendor, and EACH must be enough on its own.
+{
+  const VENDOR_MARKUP: Array<{ vendor: string; from: string; signals: Partial<PageSignals>; action?: string }> = [
+    // HubSpot, including the hsfc renderer markup that prompted all of this.
+    { vendor: 'hubspot', from: 'regional embed script', signals: { scriptSrcs: ['https://js-na2.hsforms.net/forms/embed/24051234.js'] } },
+    { vendor: 'hubspot', from: 'hsfc renderer attribute', signals: { selectorsPresent: ['[data-hsfc-id]'] } },
+    { vendor: 'hubspot', from: 'hs-form-html wrapper class', signals: { classNames: ['hs-form-html'] } },
+    { vendor: 'hubspot', from: 'hsfc-* field classes', signals: { classNames: ['hsfc-Form', 'hsfc-FieldLabel'] } },
+    { vendor: 'hubspot', from: 'classic hsForm_<guid> id', signals: { selectorsPresent: ['#hsForm_79c35ad9-5d43-407b-8c0e-0b62b2cc8de0'] } },
+    { vendor: 'hubspot', from: 'submissions endpoint action', signals: {}, action: 'https://forms-na2.hsforms.com/submissions/v3/public/submit' },
+    // Gravity Forms.
+    { vendor: 'gravityforms', from: 'gform_wrapper class', signals: { classNames: ['gform_wrapper'] } },
+    { vendor: 'gravityforms', from: 'gform_wrapper_<n> id', signals: { selectorsPresent: ['#gform_wrapper_12'] } },
+    { vendor: 'gravityforms', from: 'gform_footer class', signals: { classNames: ['gform_footer'] } },
+    // Contact Form 7.
+    { vendor: 'contactform7', from: 'wpcf7-form class', signals: { classNames: ['wpcf7-form'] } },
+    { vendor: 'contactform7', from: 'wpcf7-f<id>-p<page>-o<n> id', signals: { selectorsPresent: ['#wpcf7-f34-p9-o1'] } },
+    { vendor: 'contactform7', from: 'form action anchor', signals: {}, action: 'https://x.com/contact/#wpcf7-f34-p9-o1' },
+    // Ninja Forms.
+    { vendor: 'ninjaforms', from: 'nf-form-cont class', signals: { classNames: ['nf-form-cont'] } },
+    { vendor: 'ninjaforms', from: 'nf-form-<n>-cont id', signals: { selectorsPresent: ['#nf-form-3-cont'] } },
+    { vendor: 'ninjaforms', from: 'nf-form-wrap class', signals: { classNames: ['nf-form-wrap'] } },
+    // WPForms.
+    { vendor: 'wpforms', from: 'wpforms-container class', signals: { classNames: ['wpforms-container'] } },
+    { vendor: 'wpforms', from: 'wpforms-form-<n> id', signals: { selectorsPresent: ['#wpforms-form-1234'] } },
+    { vendor: 'wpforms', from: 'wpforms-validate class', signals: { classNames: ['wpforms-validate'] } },
+    // Elementor.
+    { vendor: 'elementor', from: 'elementor-form class', signals: { classNames: ['elementor-form'] } },
+    { vendor: 'elementor', from: 'elementor-widget-form class', signals: { classNames: ['elementor-widget-form'] } },
+    { vendor: 'elementor', from: 'elementor-field-group class', signals: { classNames: ['elementor-field-group'] } },
+    // Marketo.
+    { vendor: 'marketo', from: 'mktoForm_<n> id', signals: { selectorsPresent: ['#mktoForm_521'] } },
+    { vendor: 'marketo', from: 'mktoForm class', signals: { classNames: ['mktoForm'] } },
+    { vendor: 'marketo', from: 'forms2 loader script', signals: { scriptSrcs: ['//app-ab12.marketo.com/js/forms2/js/forms2.min.js'] } },
+    // Typeform.
+    { vendor: 'typeform', from: 'data-tf-live embed', signals: { selectorsPresent: ['[data-tf-live]'] } },
+    { vendor: 'typeform', from: 'embed SDK script', signals: { scriptSrcs: ['https://embed.typeform.com/next/embed.js'] } },
+    { vendor: 'typeform', from: 'form iframe', signals: { iframeSrcs: ['https://form.typeform.com/to/abc123'] } },
+    // JotForm.
+    { vendor: 'jotform', from: 'jsform embed script', signals: { scriptSrcs: ['https://form.jotform.com/jsform/240123456789'] } },
+    { vendor: 'jotform', from: 'jotform-form class', signals: { classNames: ['jotform-form'] } },
+    { vendor: 'jotform', from: 'JotFormIFrame-<id> id', signals: { selectorsPresent: ['#JotFormIFrame-240123456789'] } },
+    // Formstack.
+    { vendor: 'formstack', from: 'js.php embed script', signals: { scriptSrcs: ['https://acme.formstack.com/forms/js.php/contact_us'] } },
+    { vendor: 'formstack', from: 'fsBody class', signals: { classNames: ['fsBody'] } },
+    { vendor: 'formstack', from: 'fsForm<id> id', signals: { selectorsPresent: ['#fsForm3856325'] } },
+    // Klaviyo.
+    { vendor: 'klaviyo', from: 'klaviyo-form-<id> class', signals: { classNames: ['klaviyo-form-XyZ123'] } },
+    { vendor: 'klaviyo', from: 'onsite SDK script', signals: { scriptSrcs: ['https://static.klaviyo.com/onsite/js/klaviyo.js?company_id=ABC123'] } },
+    // Mailchimp.
+    { vendor: 'mailchimp', from: 'list-manage action', signals: {}, action: 'https://acme.us1.list-manage.com/subscribe/post' },
+    { vendor: 'mailchimp', from: 'mc_embed_signup id', signals: { selectorsPresent: ['#mc_embed_signup'] } },
+    { vendor: 'mailchimp', from: 'mc4wp-form class', signals: { classNames: ['mc4wp-form'] } },
+    // ActiveCampaign.
+    { vendor: 'activecampaign', from: 'embed.php script', signals: { scriptSrcs: ['https://acme.activehosted.com/f/embed.php?id=1'] } },
+    { vendor: 'activecampaign', from: '_form_<n> class', signals: { classNames: ['_form_1'] } },
+    { vendor: 'activecampaign', from: 'proc.php action', signals: {}, action: 'https://acme.activehosted.com/proc.php' },
+    // Pardot / Account Engagement.
+    { vendor: 'pardot', from: 'pi.pardot.com tracker', signals: { scriptSrcs: ['https://pi.pardot.com/pd.js'] } },
+    { vendor: 'pardot', from: 'go.pardot.com iframe', signals: { iframeSrcs: ['https://go.pardot.com/l/12345/2024/abcdef'] } },
+    { vendor: 'pardot', from: 'pardotForm class', signals: { classNames: ['pardotForm'] } },
+    // Unbounce.
+    { vendor: 'unbounce', from: 'lp-pom-form class', signals: { classNames: ['lp-pom-form'] } },
+    { vendor: 'unbounce', from: 'lp-pom-form-<n> id', signals: { selectorsPresent: ['#lp-pom-form-58'] } },
+    { vendor: 'unbounce', from: 'ubembed script', signals: { scriptSrcs: ['https://ubembed.com/abc/def/lp.js'] } },
+    // Webflow.
+    { vendor: 'webflow', from: 'w-form wrapper class', signals: { classNames: ['w-form'] } },
+    { vendor: 'webflow', from: 'wf-form-<Name> id', signals: { selectorsPresent: ['#wf-form-Contact-Form'] } },
+    { vendor: 'webflow', from: 'data-wf-page attribute', signals: { selectorsPresent: ['[data-wf-page]'] } },
+  ];
+  for (const row of VENDOR_MARKUP) {
+    const got = detectFormProvider(sig(row.signals), row.action ?? '');
+    check(`vendor: ${row.vendor} from its ${row.from}`, got.vendor === row.vendor, `got ${got.vendor} (${got.evidence})`);
+  }
+  const covered = new Set(VENDOR_MARKUP.map((r) => r.vendor));
+  for (const v of ['hubspot', 'gravityforms', 'contactform7', 'ninjaforms', 'wpforms', 'elementor', 'marketo', 'typeform', 'jotform', 'formstack', 'klaviyo', 'mailchimp', 'activecampaign', 'pardot', 'unbounce', 'webflow']) {
+    check(`vendor: ${v} has markup coverage`, covered.has(v));
+  }
+  // Every vendor is proven by MORE THAN ONE marker, so one markup change cannot blind the detector.
+  for (const v of covered) {
+    check(`vendor: ${v} is detected by 2+ independent markers`, VENDOR_MARKUP.filter((r) => r.vendor === v).length >= 2);
+  }
+  // A dedicated form vendor embedded into a site-builder page must win over the builder's own form
+  // markup, which is on every page of that site.
+  check('vendor: a HubSpot embed on an Unbounce page → hubspot, not unbounce',
+    detectFormProvider(sig({ classNames: ['lp-pom-form', 'hs-form-html'] })).vendor === 'hubspot');
+  check('vendor: a Klaviyo form on a Webflow site → klaviyo, not webflow',
+    detectFormProvider(sig({ classNames: ['w-form', 'klaviyo-form-ABC123'] })).vendor === 'klaviyo');
+  check('vendor: CF7 inside an Elementor page → contactform7, not elementor',
+    detectFormProvider(sig({ classNames: ['elementor-form', 'wpcf7-form'] })).vendor === 'contactform7');
+  // Still nothing invented: a page with ordinary layout classes has no provider.
+  check('vendor: no provider markup → unknown', detectFormProvider(sig({ classNames: ['container', 'row', 'form-group'], scriptSrcs: ['https://cdn.acme.com/app.js'] })).vendor === 'unknown');
+  // The Marketo guard survives the widening: munchkin.js is site-wide tracking, never a form.
+  check('vendor: munchkin.js alone is NOT a Marketo form', detectFormProvider(sig({ scriptSrcs: ['//munchkin.marketo.net/munchkin.js'] })).vendor === 'unknown');
+  // And the embed detector still refuses to synthesize a form from site-wide tracking alone.
+  check('vendor: klaviyo.js onsite tracking alone does NOT synthesize an embedded form',
+    detectEmbeddedForm(sig({ scriptSrcs: ['https://static.klaviyo.com/onsite/js/klaviyo.js?company_id=ABC123'] })) === null);
+  check('vendor: the hsfc container DOES synthesize a HubSpot embed (a form really is mounting there)',
+    detectEmbeddedForm(sig({ selectorsPresent: ['[data-hsfc-id]'] }))?.vendor === 'hubspot');
+
+  // -- A LOADED PLUGIN IS NOT A FORM -------------------------------------------
+  // The verdict is page-level and lands on every form on the page, and for these vendors it also
+  // changes the trigger MECHANISM (native Form Submission → a Custom Event fired by that vendor's
+  // listener). So a marker that only proves the vendor's CODE is loaded turns an ordinary
+  // hand-written <form> into a tag waiting on an event that form never pushes: the same silent dead
+  // tag as the HubSpot case, in the opposite direction. Elementor's asset bundle and Contact Form 7's
+  // script are on EVERY page of the sites that use them, so neither may decide a form's vendor.
+  const LOADED_NOT_A_FORM: Array<{ what: string; signals: Partial<PageSignals> }> = [
+    { what: 'the Elementor asset bundle (on every page of an Elementor site)', signals: { scriptSrcs: ['https://x.com/wp-content/plugins/elementor/assets/js/frontend.min.js'] } },
+    { what: 'the Elementor Pro asset bundle', signals: { scriptSrcs: ['https://x.com/wp-content/plugins/elementor-pro/assets/js/frontend.min.js'] } },
+    { what: 'the Contact Form 7 script (enqueued site-wide)', signals: { scriptSrcs: ['https://x.com/wp-content/plugins/contact-form-7/includes/swv/js/index.js'] } },
+    { what: 'the Gravity Forms plugin script', signals: { scriptSrcs: ['https://x.com/wp-content/plugins/gravityforms/js/jquery.json.min.js'] } },
+    { what: 'the WPForms plugin script', signals: { scriptSrcs: ['https://x.com/wp-content/plugins/wpforms-lite/assets/js/wpforms.min.js'] } },
+    { what: 'the Ninja Forms plugin script', signals: { scriptSrcs: ['https://x.com/wp-content/plugins/ninja-forms/assets/js/front-end.js'] } },
+    { what: 'the HubSpot site-wide tracking code (no form loader)', signals: { scriptSrcs: ['https://js.hs-scripts.com/1234567.js'] } },
+    { what: 'the HubSpot analytics script', signals: { scriptSrcs: ['https://js.hs-analytics.net/analytics/1700000000000/1234567.js'] } },
+  ];
+  for (const row of LOADED_NOT_A_FORM) {
+    const got = detectFormProvider(sig(row.signals), '');
+    check(`vendor: ${row.what} alone does NOT decide a form's vendor`, got.vendor === 'unknown', `got ${got.vendor} (${got.evidence})`);
+  }
+  // End to end, which is where it actually hurts: an ordinary native form on such a page keeps the
+  // native Form Submission trigger that fires today, instead of being handed a Custom Event one.
+  for (const row of LOADED_NOT_A_FORM) {
+    // Exactly what buildSuggestInput does: the page's signals decide the vendor of every form on it.
+    const out = buildSuggestions({
+      siteHost: 'x.com',
+      forms: [{
+        page: '/contact', purpose: 'contact', action: '/submit', method: 'post', formId: 'my-contact-form',
+        title: 'Contact Us', provider: detectFormProvider(sig(row.signals), '/submit'),
+        fields: [{ type: 'email', name: 'email', required: true }],
+      }],
+      elements: [],
+    }).filter((s) => /Contact Us/i.test(s.tagName));
+    check(`native form on a page with ${row.what}: keeps its Form Submission trigger`,
+      out.length === 1 && out[0].trigger.kind === 'form_submit' && out[0].trigger.formIdValue === 'my-contact-form',
+      JSON.stringify(out[0]?.trigger));
+  }
+  // The real form still detects, because its OWN markup is what names it.
+  check('vendor: an Elementor page that really has the form widget is still elementor',
+    detectFormProvider(sig({ scriptSrcs: ['https://x.com/wp-content/plugins/elementor/assets/js/frontend.min.js'], classNames: ['elementor-form'] })).vendor === 'elementor');
+  check('vendor: a CF7 page that really has the form is still contactform7',
+    detectFormProvider(sig({ scriptSrcs: ['https://x.com/wp-content/plugins/contact-form-7/includes/swv/js/index.js'], classNames: ['wpcf7-form'] })).vendor === 'contactform7');
+  check('vendor: a HubSpot-tracked page that really embeds a form is still hubspot',
+    detectFormProvider(sig({ scriptSrcs: ['https://js.hs-scripts.com/1234567.js', 'https://js-na2.hsforms.net/forms/embed/24051234.js'] })).vendor === 'hubspot');
+}
+
+// -- PART 4a: the id ladder DEGRADES, it does not collapse ---------------------
+{
+  // One instance of the group has no id. The group can no longer be scoped by {{Form ID}} (that
+  // would split one form into two same-named tags), but the vendor's durable identity still pins it.
+  const gap = buildSuggestions({
+    siteHost: 'wp.com',
+    forms: [
+      { page: '/contact', purpose: 'other', action: '', method: 'post', title: 'Talk To Us', provider: { vendor: 'gravityforms', confidence: 'high', evidence: 'class .gform_wrapper' }, formId: 'gform_7', fields: [{ type: 'email', name: 'email', required: true }] },
+      { page: '/pricing', purpose: 'other', action: '', method: 'post', title: 'Talk To Us', provider: { vendor: 'gravityforms', confidence: 'high', evidence: 'class .gform_wrapper' }, formClasses: 'gform_wrapper gform_7', fields: [{ type: 'email', name: 'email', required: true }] },
+    ],
+    elements: [],
+  }).filter((s) => /Talk To Us/i.test(s.tagName));
+  check('degrade: an id gap still yields exactly ONE tag for the group', gap.length === 1, `got ${gap.length}`);
+  // Gravity Forms is an AJAX plugin, so the tag fires on its Custom Event and scopes on the numeric
+  // form id its own listener pushes, NOT on a page path.
+  const gt = gap[0]?.trigger;
+  check('degrade: the group is scoped by the vendor durable id, not widened to a page path',
+    !!gt && !gt.pagePathValue && gt.dataLayerConditions?.length === 1 && gt.dataLayerConditions[0].key === 'form_id' && gt.dataLayerConditions[0].value === '7',
+    JSON.stringify(gt));
+
+  // A NATIVE form of a vendor whose identity IS the <form> id, where ONE instance was rendered
+  // without that id. On the native route the condition really ships and GTM reads {{Form ID}} from
+  // the <form> element alone, so scoping on it would track /contact and silently record nothing on
+  // /venues: a partial dead tag, which looks exactly like success. It degrades to the page scope,
+  // which fires on both (and says so), because a scope that over-fires can be tightened later and
+  // one that never fires cannot.
+  const nativeGap = buildSuggestions({
+    siteHost: 'acme.com',
+    forms: [
+      { page: '/contact', purpose: 'other', action: '', method: 'post', title: 'Book A Table', provider: { vendor: 'webflow', confidence: 'high', evidence: 'class .w-form' }, formId: 'wf-form-Book-A-Table', fields: [{ type: 'email', name: 'email', required: true }] },
+      { page: '/venues', purpose: 'other', action: '', method: 'post', title: 'Book A Table', provider: { vendor: 'webflow', confidence: 'high', evidence: 'class .w-form' }, formClasses: 'w-form', fields: [{ type: 'email', name: 'email', required: true }] },
+    ],
+    elements: [],
+  }).filter((s) => /Book A Table/i.test(s.tagName));
+  check('degrade: a native form with an id gap → ONE tag', nativeGap.length === 1, `got ${nativeGap.length}`);
+  check('degrade: a {{Form ID}} scope the instance without an id could never match is NOT shipped',
+    !nativeGap[0]?.trigger.formIdValue && nativeGap[0]?.trigger.pagePathOperator === 'matchRegex',
+    JSON.stringify(nativeGap[0]?.trigger));
+  // The SAME vendor on the pushed-event route keeps the durable scope: there the {{Form ID}}
+  // condition is dropped before it ships and the vendor id becomes the dataLayer scope instead, so
+  // the id gap costs nothing (see the Gravity Forms group above, which keeps form_id = 7).
+  {
+    const bothHaveId = buildSuggestions({
+      siteHost: 'acme.com',
+      forms: [
+        { page: '/contact', purpose: 'other', action: '', method: 'post', title: 'Book A Table', provider: { vendor: 'webflow', confidence: 'high', evidence: 'class .w-form' }, formId: 'wf-form-Book-A-Table', fields: [{ type: 'email', name: 'email', required: true }] },
+        { page: '/venues', purpose: 'other', action: '', method: 'post', title: 'Book A Table', provider: { vendor: 'webflow', confidence: 'high', evidence: 'class .w-form' }, formId: 'wf-form-Book-A-Table', fields: [{ type: 'email', name: 'email', required: true }] },
+      ],
+      elements: [],
+    }).filter((s) => /Book A Table/i.test(s.tagName));
+    check('degrade: when EVERY instance really carries the id, it is scoped by {{Form ID}}, not by page',
+      bothHaveId.length === 1 && bothHaveId[0].trigger.formIdValue === 'wf-form-Book-A-Table' && !bothHaveId[0].trigger.pagePathValue,
+      JSON.stringify(bothHaveId[0]?.trigger));
+  }
+  // PART 4b: the reason is never silent.
+  check('degrade: the note says an instance had no id, so the ids were not used',
+    /instance of this form in the group had no id/i.test(nativeGap[0]?.note ?? ''), nativeGap[0]?.note);
+
+  // A vendor identity read from somewhere OTHER than the <form> element's own id must never become a
+  // {{Form ID}} condition. Unbounce numbers the WRAPPER (lp-pom-form-263) and names the inner <form>
+  // generically, and GTM's {{Form ID}} is the <form> element's id alone, so that condition is one
+  // GTM accepts and never matches. The scope falls to the class, which is on the element and fires.
+  {
+    const wrapper = buildSuggestions({
+      siteHost: 'lp.com',
+      forms: [{
+        page: '/offer', purpose: 'other', action: '', method: 'post', title: 'Get The Guide',
+        provider: { vendor: 'unbounce', confidence: 'high', evidence: 'class .lp-pom-form' },
+        formClasses: 'lp-pom-form lp-pom-form-263', fields: [{ type: 'email', name: 'email', required: true }],
+      }],
+      elements: [],
+    }).filter((s) => /Get The Guide/i.test(s.tagName));
+    check('container id: a wrapper-only vendor id is NOT shipped as a {{Form ID}} condition',
+      wrapper.length === 1 && !wrapper[0].trigger.formIdValue, JSON.stringify(wrapper[0]?.trigger));
+    check('container id: the scope degrades to something on the element itself, which can fire',
+      wrapper[0]?.trigger.formClassesValue === 'lp-pom-form-263', JSON.stringify(wrapper[0]?.trigger));
+  }
+
+  // When nothing durable exists either, it still degrades honestly to a page scope AND says why.
+  const noneDurable = buildSuggestions({
+    siteHost: 'acme.com',
+    forms: [
+      { page: '/a', purpose: 'other', action: '', method: 'post', title: 'Ask Us', provider: { vendor: 'unknown', confidence: 'low', evidence: '' }, formId: 'ask-1', fields: [{ type: 'email', name: 'email', required: true }] },
+      { page: '/b', purpose: 'other', action: '', method: 'post', title: 'Ask Us', provider: { vendor: 'unknown', confidence: 'low', evidence: '' }, fields: [{ type: 'email', name: 'email', required: true }] },
+    ],
+    elements: [],
+  }).filter((s) => /Ask Us/i.test(s.tagName));
+  check('degrade: with no durable identity it falls back to the page scope (which still fires)',
+    noneDurable.length === 1 && noneDurable[0].trigger.pagePathOperator === 'matchRegex' && !noneDurable[0].trigger.formIdValue);
+  check('degrade: and still explains that the id gap is why', /instance of this form in the group had no id/i.test(noneDurable[0]?.note ?? ''));
+}
+
+// -- PART 4b: an ephemeral id is explained even when the ladder collapsed ------
+{
+  // A single scan of a HubSpot form with NO data-form-id: the id carries a per-render UUID, so it is
+  // refused. Before, the explanation was gated behind the very condition that suppressed the id, so
+  // the operator saw a page-scoped trigger with no reason given.
+  const ephemeral = buildSuggestions({
+    siteHost: 'acme.com',
+    forms: [{ page: '/demo', purpose: 'contact', action: '', method: 'post', provider: { vendor: 'unknown', confidence: 'low', evidence: '' }, formId: '90c40916-c9d8-4b32-b5fa-07cb0779ce19', fields: [{ type: 'email', name: 'email', required: true }] }],
+    elements: [],
+  });
+  check('ephemeral: a per-render id is refused, not matched exactly', !ephemeral[0]?.trigger.formIdValue);
+  check('ephemeral: and the refusal IS explained on the suggestion',
+    /generated per page load/i.test(ephemeral[0]?.note ?? '') && /never fire/i.test(ephemeral[0]?.note ?? ''), ephemeral[0]?.note);
+}
+
+// -- PART 3/4: Contact Form 7 never scopes on the placement ordinal ------------
+{
+  // wpcf7-f34-p9-o1: -o1 is the form's position among the CF7 forms on that page, so it changes the
+  // moment another CF7 form is added above it. An `equals` on the whole id silently stops matching.
+  const cf7 = buildSuggestions({
+    siteHost: 'wp.com',
+    forms: [
+      { page: '/contact', purpose: 'other', action: '/contact/#wpcf7-f34-p9-o1', method: 'post', title: 'Say Hello', provider: { vendor: 'contactform7', confidence: 'high', evidence: 'class .wpcf7' }, formId: 'wpcf7-f34-p9-o1', fields: [{ type: 'email', name: 'email', required: true }] },
+      { page: '/support', purpose: 'other', action: '/support/#wpcf7-f34-p12-o2', method: 'post', title: 'Say Hello', provider: { vendor: 'contactform7', confidence: 'high', evidence: 'class .wpcf7' }, formId: 'wpcf7-f34-p12-o2', fields: [{ type: 'email', name: 'email', required: true }] },
+    ],
+    elements: [],
+  }).filter((s) => /Say Hello/i.test(s.tagName));
+  check('cf7: the same form on two pages → ONE tag', cf7.length === 1, `got ${cf7.length}`);
+  const c = cf7[0]?.trigger;
+  check('cf7: it scopes on the post id its listener pushes, not on either DOM id',
+    c?.dataLayerConditions?.length === 1 && c.dataLayerConditions[0].key === 'form_id' && c.dataLayerConditions[0].value === '34', JSON.stringify(c));
+  check('cf7: no placement ordinal anywhere in the trigger', !/-o\d/.test(JSON.stringify(c)), JSON.stringify(c));
+  // The NOTE is a second way the same dead trigger can ship: it offers a native Form Submission
+  // fallback, and naming the raw DOM id there is an equals on the ordinal, handed to the operator as
+  // advice. It must quote the vendor's durable condition instead.
+  check('cf7: the ordinal never reaches the operator-facing note either',
+    !/-o\d/.test(cf7[0]?.note ?? ''), cf7[0]?.note);
+  check('cf7: the non-AJAX fallback is stated as contains "wpcf7-f34", the condition that keeps matching',
+    /Form Submission trigger on \{\{Form ID\}\} contains "wpcf7-f34"/.test(cf7[0]?.note ?? ''), cf7[0]?.note);
+  check('cf7: and nothing in the whole suggestion carries an ordinal',
+    !/-o\d/.test(JSON.stringify({ ...cf7[0], evidence: '', install: null })), JSON.stringify(cf7[0]?.note));
+  // And directly at the identity layer: a {{Form ID}} route must be `contains wpcf7-f<id>`, never equals.
+  const ident = providerFormIdentity({ vendor: 'contactform7', formId: 'wpcf7-f34-p9-o1' });
+  check('cf7: the {{Form ID}} condition is contains "wpcf7-f34", never equals the whole id',
+    ident.formIdCondition?.operator === 'contains' && ident.formIdCondition.value === 'wpcf7-f34');
+  check('cf7: the ordinal is explained rather than silently trimmed', /ordinal/i.test(ident.note ?? ''));
 }
 
 console.log(`\nTag-suggest: ${passed} passed, ${failed} failed`);

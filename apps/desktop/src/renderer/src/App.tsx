@@ -55,6 +55,7 @@ import type {
 } from '../../shared/ipc';
 import { suggestionToGroup, suggestionsToTemplateCsv, suggestionsToInstallRunbookMarkdown, installPlanNeedsAction, installPlanProgress, dedupeViewsByGtmName, conversionActionNameFromTag, TEMPLATE_HEADERS, applyTagEdit, adsIdentityIssue, TAG_TYPE_OPTIONS, STANDARD_TRIGGER_VARIABLES, CONDITION_LABELS, type TagEdit, type TemplateGroup, type TriggerWhen, type InstallProgress } from '../../shared/tag-template';
 import { findMergeGroups, mergeGroup, mergeLabel, type MergeGroup } from '../../shared/tag-merge';
+import { splittableFormPages, splitFormByPage } from '../../shared/tag-split';
 import { parseCsvUrls, parseCsvUrlStats, CSV_URL_CAP } from '../../shared/csv-urls';
 import { platformIdHints } from '../../shared/platform-id-hints';
 import { planAdsConversionActions } from '../../shared/ads-bulk-plan';
@@ -2547,6 +2548,7 @@ function SuggestionTemplateTable({
   screenshots,
   onShot,
   onFetchAds,
+  onSplit,
 }: {
   suggestions: SuggestedTagView[];
   /** Raw inline-edit overlay (keyed by suggestion id). The editable Parameter/When ROWS render from these
@@ -2569,6 +2571,9 @@ function SuggestionTemplateTable({
   onShot?: (shot: { src: string; name: string }) => void;
   /** Open the Google Ads picker for this row, to fill its Conversion ID + Label from the real account. */
   onFetchAds?: (suggestionId: string) => void;
+  /** Replace this row with one tag PER page (the inverse of the "Merge into one tag" banner). Offered
+   *  only on a row whose trigger covers several pages through a {{Page Path}} RegEx. */
+  onSplit?: (suggestionId: string) => void;
 }): JSX.Element {
   // Which suggestions have their "How to install" panel expanded (keyed by id).
   const [installOpen, setInstallOpen] = useState<Record<string, boolean>>({});
@@ -2615,6 +2620,9 @@ function SuggestionTemplateTable({
             const hasIdentity = g.params.some((p) => p.field);
             const paramRows: TemplateGroup['params'] = hasIdentity ? g.params : (ed?.params ?? g.params);
             const adsIssue = adsIdentityIssue(s);
+            // The pages this row's trigger covers through a {{Page Path}} RegEx alternation. 2+ means
+            // the row is one COMMON tag for several pages and can be separated into one tag per page.
+            const splitPages = onSplit && !exists && editable ? splittableFormPages(s) : [];
             const whenRows = ed?.whens ?? g.whens;
             const rowCount = Math.max(paramRows.length, whenRows.length, 1);
             const editParam = (idx: number, patch: Partial<{ name: string; variable: string }>): void =>
@@ -2760,6 +2768,23 @@ function SuggestionTemplateTable({
                   {first && (
                     <td rowSpan={rowCount} style={tplStyles.td}>
                       {editable ? <GrowCell value={g.triggerName} disabled={creating} onChange={(v) => onEdit(s.id, { triggerName: v })} ariaLabel="Trigger name" /> : g.triggerName}
+                      {/* Common versus separate tracking: this ONE tag covers several pages through a
+                          {{Page Path}} RegEx. Splitting replaces the row with one tag per page, each
+                          named after its page and scoped to it alone. Reversible before create: nothing
+                          is written to GTM until the rows are ticked and created. */}
+                      {splitPages.length >= 2 && (
+                        <div>
+                          <button
+                            type="button"
+                            onClick={() => onSplit?.(s.id)}
+                            disabled={creating}
+                            title={`This tag covers ${splitPages.length} pages (${splitPages.join(', ')}). Split it into one tag per page, each scoped to that page alone.`}
+                            style={{ marginTop: 4, padding: '1px 7px', fontSize: 11, lineHeight: 1.6, color: 'var(--c-blue)', background: 'none', border: '1px dashed var(--border-2)', borderRadius: 5, cursor: 'pointer', whiteSpace: 'nowrap' }}
+                          >
+                            Split into {splitPages.length} per-page tags
+                          </button>
+                        </div>
+                      )}
                     </td>
                   )}
                   {/* Trigger Type (the trigger KIND) is read-only: changing the kind strands the old
@@ -3687,6 +3712,39 @@ function TagReviewPanel({
     setEdits((e) => {
       const n = { ...e };
       for (const id of ids) delete n[id];
+      return n;
+    });
+  }
+
+  // The exact INVERSE of doMergeGroup: ONE form tag whose {{Page Path}} RegEx covers several pages
+  // becomes one tag PER page (common versus separate tracking, decided per form after the scan, since
+  // a footer newsletter on 40 pages should stay common while a demo form on 7 landing pages usually
+  // should not). Runs on the EFFECTIVE row, so inline edits are baked into every split row rather than
+  // being silently reverted; same setSuggestions path, so selection migrates and stale edits drop.
+  function doSplitRow(id: string): void {
+    const row = suggestions.find((s) => s.id === id);
+    if (!row) return;
+    const src = effective(row);
+    const pages = splittableFormPages(src);
+    if (pages.length < 2) return;
+    const rows = splitFormByPage(src, pages);
+    if (rows.length < 2) return;
+    const wasSelected = !!selected[id];
+    // The split rows take the original's slot so the list doesn't jump.
+    setSuggestions((list) => {
+      const at = Math.max(0, list.findIndex((s) => s.id === id));
+      const rest = list.filter((s) => s.id !== id);
+      return [...rest.slice(0, Math.min(at, rest.length)), ...rows, ...rest.slice(Math.min(at, rest.length))];
+    });
+    setSelected((sel) => {
+      const n = { ...sel };
+      delete n[id];
+      for (const r of rows) n[r.id] = wasSelected;
+      return n;
+    });
+    setEdits((e) => {
+      const n = { ...e };
+      delete n[id];
       return n;
     });
   }
@@ -4699,6 +4757,9 @@ function TagReviewPanel({
                   screenshots={sShots}
                   onShot={setSLightbox}
                   onFetchAds={setAdsPickerFor}
+                  // Hidden while a scan streams, for the same reason the merge banner is: each progress
+                  // tick replaces the whole list, which would silently undo a split.
+                  onSplit={scanning ? undefined : doSplitRow}
                 />
                 {adsBulkOpen && (
                   <div style={styles.confirm}>

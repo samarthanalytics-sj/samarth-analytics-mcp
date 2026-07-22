@@ -206,6 +206,31 @@ export function extractFormsInPage(): RawForm[] {
     return '';
   };
 
+  // The PROVIDER's own durable form id, as distinct from the DOM id (which an embedded provider
+  // often mints per render). Read from the element itself, then its provider wrapper, then a
+  // descendant. Vendors disagree on the attribute NAME: HubSpot puts data-form-id on both the
+  // wrapper and the <form>, WPForms uses data-formid (no dash, which the earlier data-form-id-only
+  // read missed entirely), Contact Form 7 exposes data-wpcf7-id on its wrapper. Capture is
+  // deliberately vendor-agnostic; provider-form-id.ts decides per vendor whether the value is
+  // usable and what shape it must have.
+  const PROVIDER_ID_ATTRS = ['data-form-id', 'data-formid', 'data-wpcf7-id'];
+  const PROVIDER_ID_SEL = '[data-form-id],[data-formid],[data-wpcf7-id]';
+  const readProviderId = (n: Element | null): string => {
+    if (!n) return '';
+    for (const a of PROVIDER_ID_ATTRS) {
+      const v = n.getAttribute(a) || '';
+      if (v) return v.trim();
+    }
+    return '';
+  };
+  const providerIdOf = (el: Element): string => {
+    try {
+      return readProviderId(el.closest(PROVIDER_ID_SEL)) || readProviderId(el.querySelector(PROVIDER_ID_SEL));
+    } catch {
+      return readProviderId(el);
+    }
+  };
+
   const scanDoc = (doc: Document): void => {
     // 1. Real <form> elements.
     for (const form of Array.from(doc.querySelectorAll('form')).slice(0, MAX_FORMS)) {
@@ -222,7 +247,7 @@ export function extractFormsInPage(): RawForm[] {
         action,
         method: (form.getAttribute('method') || 'get').toLowerCase(),
         formId: form.getAttribute('id') || '',
-        providerFormId: form.getAttribute('data-form-id') || '',
+        providerFormId: providerIdOf(form),
         formName: form.getAttribute('name') || '',
         formClasses: form.getAttribute('class') || '',
         title: titleOf(form),
@@ -270,7 +295,7 @@ export function extractFormsInPage(): RawForm[] {
         action: '', // div/JS forms submit via JS — no element action to read
         method: 'js',
         formId: host.getAttribute('id') || '',
-        providerFormId: host.getAttribute('data-form-id') || host.querySelector('[data-form-id]')?.getAttribute('data-form-id') || '',
+        providerFormId: providerIdOf(host),
         formName: '',
         formClasses: host.getAttribute('class') || '',
         title: titleOf(host),
@@ -312,7 +337,7 @@ export function extractFormsInPage(): RawForm[] {
         action: '',
         method: 'js',
         formId: host.getAttribute('id') || '',
-        providerFormId: host.getAttribute('data-form-id') || host.querySelector('[data-form-id]')?.getAttribute('data-form-id') || '',
+        providerFormId: providerIdOf(host),
         formName: '',
         formClasses: host.getAttribute('class') || '',
         title: titleOf(host),
@@ -399,6 +424,10 @@ export interface FormAnalysis {
   action: string;
   method: string;
   formId: string;
+  /** The PROVIDER's own durable form id (data-form-id / data-formid / data-wpcf7-id), when the page
+   *  exposes one. An embedded form's DOM `id` is often minted per render, so this is the identity a
+   *  GTM trigger can be scoped on. Optional: absent when the page exposes none. */
+  providerFormId?: string;
   formClasses: string;
   title: string;
   purpose: FormPurpose;

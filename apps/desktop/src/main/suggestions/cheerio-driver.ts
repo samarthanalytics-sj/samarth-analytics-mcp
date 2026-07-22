@@ -13,8 +13,9 @@ import type { PageScanRaw, RawElement } from '../../../../web-audit-mcp/src/agen
 import type { RawForm, RawFormField } from '../../../../web-audit-mcp/src/agent/forms.js';
 import type { PageDriver, DrivenPage } from './scan-core';
 import { safeFetch } from './ssrf';
-
-const PROVIDER_SELECTORS = ['.hs-form', '[data-tf-widget]', '[data-paperform-id]', '#mce-EMAIL', '#mc-embedded-subscribe', '.gform_wrapper', '.wpcf7', '.wpforms-form', '.wpforms-container'];
+// Shared with the browser collectors so the no-browser path detects the SAME vendors. Importing
+// them (rather than keeping a third copy) is why this driver cannot drift from providers.ts.
+import { PROVIDER_SELECTORS, PROVIDER_ID_PREFIXES } from '../../../../web-audit-mcp/src/agent/tag-suggest/providers.js';
 const SUBMIT_RE = /\b(submit|send|subscribe|sign\s*up|sign\s*me\s*up|get\s+started|register|join\b|request\s+(a\s+)?(quote|demo|info|callback)|contact\s+us|book\s+(a\s+)?(demo|call|meeting)|get\s+(a\s+)?quote)\b/i;
 const TEXTISH = new Set(['text', 'email', 'tel', 'url', 'search', 'password', 'number', 'textarea']);
 
@@ -87,8 +88,16 @@ export function extractWithCheerio(html: string, baseUrl: string): { raw: PageSc
       /* invalid selector */
     }
   }
-  const mkto = $('[id^="mktoForm_"]').first().attr('id');
-  if (mkto) selectorsPresent.push('#' + mkto);
+  // The REAL id of any element whose id prefix names a provider: the shape identifies the vendor,
+  // and the id carries that vendor's durable form number (gform_12, mktoForm_521, wpcf7-f34-p9-o1).
+  for (const prefix of PROVIDER_ID_PREFIXES) {
+    try {
+      const id = $(`[id^="${prefix}"]`).first().attr('id');
+      if (id) selectorsPresent.push('#' + id);
+    } catch {
+      /* invalid selector */
+    }
+  }
 
   const rawForms = extractFormsCheerio($, abs);
   return {
@@ -163,6 +172,20 @@ function privacyIn(root: Cheerio<AnyNode>): boolean {
 
 function extractFormsCheerio($: CheerioAPI, abs: (href: string) => string): RawForm[] {
   const out: RawForm[] = [];
+  // The PROVIDER's own durable form id, mirroring forms.ts providerIdOf: the element itself, then
+  // its provider wrapper, then a descendant. Vendors disagree on the attribute NAME (HubSpot
+  // data-form-id, WPForms data-formid, Contact Form 7 data-wpcf7-id), so all three are read.
+  const PROVIDER_ID_SEL = '[data-form-id],[data-formid],[data-wpcf7-id]';
+  const readProviderId = ($n: Cheerio<AnyNode>): string => {
+    if (!$n.length) return '';
+    for (const a of ['data-form-id', 'data-formid', 'data-wpcf7-id']) {
+      const v = ($n.first().attr(a) || '').trim();
+      if (v) return v;
+    }
+    return '';
+  };
+  const providerIdOf = ($el: Cheerio<AnyNode>): string =>
+    readProviderId($el.closest(PROVIDER_ID_SEL)) || readProviderId($el.find(PROVIDER_ID_SEL).first());
   // The form's visible heading/label (mirrors forms.ts titleOf): aria-label →
   // aria-labelledby → a legend/heading inside → the nearest heading in its card.
   const headingIn = ($root: Cheerio<AnyNode>): string => {
@@ -196,6 +219,7 @@ function extractFormsCheerio($: CheerioAPI, abs: (href: string) => string): RawF
       action: abs(form.attr('action') || ''),
       method: (form.attr('method') || 'get').toLowerCase(),
       formId: form.attr('id') || '',
+      providerFormId: providerIdOf(form),
       formName: form.attr('name') || '',
       formClasses: form.attr('class') || '',
       title: titleOf(form),
@@ -234,6 +258,7 @@ function extractFormsCheerio($: CheerioAPI, abs: (href: string) => string): RawF
       action: '',
       method: 'js',
       formId: host.attr('id') || '',
+      providerFormId: providerIdOf(host),
       formName: '',
       formClasses: host.attr('class') || '',
       title: titleOf(host),
