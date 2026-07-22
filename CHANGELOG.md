@@ -1,3 +1,9 @@
+## [1.374.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.373.1...v1.374.0) (2026-07-22)
+
+### Features
+
+* **desktop:** cache the chat request prefix instead of re-sending it every step ([#644](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/644)) ([8c2820e](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/8c2820e4de42767c97cf8a7f302aea7815588b1b))
+
 ## [1.373.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.373.0...v1.373.1) (2026-07-22)
 
 ### Bug Fixes
