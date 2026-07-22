@@ -295,6 +295,7 @@ const GROUP_MEMBERS: Record<ToolGroup, readonly string[]> = {
   // when Google Ads is in play, so the product travels as one group.
   'google-ads': [
     'list_google_ads_accounts',
+    'get_google_ads_tracking_setup',
     'list_google_ads_conversion_actions',
     'create_google_ads_conversion_action',
     'list_google_ads_campaigns',
