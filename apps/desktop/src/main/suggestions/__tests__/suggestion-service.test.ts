@@ -5,7 +5,7 @@
 //   • createSuggestedTags() — the approved-create loop (outcome mapping).
 // Run: tsx apps/desktop/src/main/suggestions/__tests__/suggestion-service.test.ts
 
-import { crawlAndSuggest, scanUrls, assembleResult, dedupSuggestions, detectInstalled, urlPriority, prioritizeUrls, contentLikely, crawlRank, SCAN_URLS_CAP, type PageDriver, type DrivenPage, type ScanProgress } from '../scan-core';
+import { crawlAndSuggest, scanUrls, assembleResult, dedupSuggestions, detectInstalled, urlPriority, prioritizeUrls, contentLikely, crawlRank, distinctFormCount, SCAN_URLS_CAP, type PageDriver, type DrivenPage, type ScanProgress } from '../scan-core';
 import type { SuggestedTag } from '../../../../../web-audit-mcp/src/agent/tag-suggest/types.js';
 import { mergeDriven } from '../multi-driver';
 import { parseSitemapLocs, extractCrawlLinks } from '../discover';
@@ -93,6 +93,23 @@ const oneTag = {
 // The desktop package is CommonJS, so top-level await is unavailable — run the
 // awaited checks inside an async IIFE.
 async function main(): Promise<void> {
+  // ── distinctFormCount: the review toolbar's forms funnel (instances → distinct) ──
+  {
+    const news = (page: string) => ({ provider: { vendor: 'marketo' }, providerFormId: '2530', title: 'Subscribe to our newsletter', purpose: 'newsletter', page });
+    const many = [news('/blog/a'), news('/blog/b'), news('/blog/c'), { provider: { vendor: 'marketo' }, providerFormId: '2593', title: 'Talk to an expert', purpose: 'contact' }, { provider: { vendor: 'unknown' }, formId: 'salesforce', title: 'Become an affiliate', purpose: 'contact' }];
+    check('distinctFormCount: same form on many pages counts ONCE', distinctFormCount(many) === 3, String(distinctFormCount(many)));
+    check('distinctFormCount: same vendor form under a DIFFERENT heading stays distinct',
+      distinctFormCount([
+        { provider: { vendor: 'marketo' }, providerFormId: '2593', title: 'Book a Demo', purpose: 'other' },
+        { provider: { vendor: 'marketo' }, providerFormId: '2593', title: 'Your Best Combo Yet', purpose: 'other' },
+      ]) === 2);
+    check('distinctFormCount: title casing does not split', distinctFormCount([
+      { provider: { vendor: 'marketo' }, providerFormId: '2593', title: 'Your Best Combo Yet', purpose: 'other' },
+      { provider: { vendor: 'marketo' }, providerFormId: '2593', title: 'Your best combo yet', purpose: 'other' },
+    ]) === 1);
+    check('distinctFormCount: empty list is 0', distinctFormCount([]) === 0);
+  }
+
   // ── crawlAndSuggest: two-page site, full classification ────────────────────
   {
     const home: DrivenPage = {

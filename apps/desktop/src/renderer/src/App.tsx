@@ -4571,7 +4571,7 @@ function TagReviewPanel({
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
               <div style={styles.muted}>
                 {meta
-                  ? `Scanned ${meta.pagesScanned} of ${meta.pagesCrawled} page(s) · found ${meta.formsFound} form(s), ${meta.trackableElements} trackable element(s) → ${meta.suggestions} suggestion(s)`
+                  ? `Scanned ${meta.pagesScanned} of ${meta.pagesCrawled} page(s) · found ${meta.formsFound} form instance(s)${meta.distinctForms != null ? ` (${meta.distinctForms} distinct)` : ''}, ${meta.trackableElements} trackable element(s) → ${meta.suggestions} suggestion(s)`
                   : ''}
               </div>
               <button style={styles.linkBtn} onClick={() => setShowLog((o) => !o)}>
@@ -4804,6 +4804,13 @@ function TagReviewPanel({
             <div style={styles.reviewToolbar}>
               <div style={styles.muted}>
                 {meta ? `${meta.pagesScanned} page(s) scanned · ` : ''}
+                {/* The forms FUNNEL, so "250 pages → 3 form tags" reads as intended dedup, not lost
+                    forms: the same form on many pages (a blog template's newsletter box) is ONE tag. */}
+                {meta && meta.formsFound > 0 && meta.distinctForms != null && meta.formsFound > meta.distinctForms && (
+                  <span title="Copies of the same form found across pages are merged into one tag each - the same form on 200 blog posts becomes a single site-wide tag, not 200 duplicates.">
+                    {meta.formsFound} form instance(s) → {meta.distinctForms} distinct form(s) ·{' '}
+                  </span>
+                )}
                 {suggestions.length} suggestion(s) · {newCount} new, {emCount} already auto-tracked · {selectedIds.length}{' '}
                 selected
                 {meta?.websiteType === 'ecommerce' && (
