@@ -1,3 +1,9 @@
+## [1.368.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.367.0...v1.368.0) (2026-07-22)
+
+### Features
+
+* **desktop:** export and import a client's memory notes ([#635](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/635)) ([969767a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/969767a1c22626eef0e5d5e22adf4abd6a347080))
+
 ## [1.367.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.366.0...v1.367.0) (2026-07-22)
 
 ### Features
