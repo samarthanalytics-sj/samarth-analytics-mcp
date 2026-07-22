@@ -159,6 +159,12 @@ async function main(): Promise<void> {
     check('crawl: inventory lists ALL detected elements (5) + forms (1), pre-dedup', res.inventory.elements.length === 5 && res.inventory.forms.length === 1,
       `${res.inventory.elements.length} els, ${res.inventory.forms.length} forms`);
     check('crawl: inventory element carries page/kind/text/href', res.inventory.elements.every((e) => typeof e.page === 'string' && typeof e.kind === 'string'));
+    // The form inventory carries what the scan FETCHED about the form, not just counts - the
+    // "Forms detected" table renders these directly (title, DOM id, field count).
+    check('crawl: form inventory carries title + formId + fieldCount', (() => {
+      const f = res.inventory.forms[0];
+      return f?.title === 'Get a Free Consultation' && f?.formId === 'contact-form' && (f?.fieldCount ?? 0) >= 2;
+    })(), JSON.stringify(res.inventory.forms[0]));
 
     // Part 3 — onProgress streams the RUNNING list after each page.
     const fd2 = fakeDriver({ 'https://acme.com/': home, 'https://acme.com/contact': contact });
