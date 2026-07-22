@@ -647,7 +647,15 @@ export async function crawlAndSuggest(
     await Promise.all(pool.map((d) => d.close().catch(() => undefined)));
   }
 
-  if (queue.length > 0) {
+  // A stopped crawl returns what it has, so say so FIRST: a partial list that reads as a finished one
+  // would have the user believe the pages never reached hold nothing worth tracking.
+  if (opts.shouldStop?.()) {
+    warnings.push(
+      `Scan stopped early: ${pageScans.length} page(s) scanned` +
+        (queue.length > 0 ? `, ${queue.length} still queued` : '') +
+        '. These suggestions cover only the pages read before you stopped.',
+    );
+  } else if (queue.length > 0) {
     warnings.push(`${queue.length} more same-site page(s) were discovered but not scanned (page budget ${maxPages}).`);
   }
   return assembleResult(start, siteHost, pageScans, notScanned, warnings, opened, [], platforms, mergePoolDiagnostics(pool));
@@ -666,7 +674,7 @@ export async function scanUrls(
   urls: string[],
   siteHostHint?: string,
   onProgress?: OnScanProgress,
-  opts: { platforms?: SuggestPlatform[]; drivers?: PageDriver[] } = {},
+  opts: { platforms?: SuggestPlatform[]; drivers?: PageDriver[]; shouldStop?: () => boolean } = {},
 ): Promise<TagScanResult> {
   const platforms = opts.platforms ?? ['ga4'];
   const list = urls.filter(Boolean);
@@ -717,6 +725,7 @@ export async function scanUrls(
   };
   const worker = async (d: PageDriver): Promise<void> => {
     for (;;) {
+      if (opts.shouldStop?.()) return; // Stop pressed -> drain workers; resolve with what we have
       const url = claimNext();
       if (!url) return;
       const r = await scanTarget(d, url, siteHost, url);
@@ -739,6 +748,12 @@ export async function scanUrls(
     await Promise.all(pool.map((d) => worker(d)));
   } finally {
     await Promise.all(pool.map((d) => d.close().catch(() => undefined)));
+  }
+  if (opts.shouldStop?.()) {
+    warnings.push(
+      `Scan stopped early: ${pageScans.length} of ${targets.length} selected page(s) scanned. ` +
+        'These suggestions cover only the pages read before you stopped.',
+    );
   }
   return assembleResult(start ?? list[0] ?? '', siteHost, pageScans, notScanned, warnings, opened, [], platforms, mergePoolDiagnostics(pool));
 }
