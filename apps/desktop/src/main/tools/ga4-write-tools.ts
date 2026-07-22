@@ -35,8 +35,8 @@ interface Desc {
   // toBody, when present, REPLACES the flat pick(bodyKeys) mapping — use it when
   // the request body needs nesting the flat args can't express (e.g. a WEB data
   // stream's defaultUri lives under webStreamData, not at the top level).
-  create?: { props: Record<string, JsonProp>; required?: string[]; bodyKeys: string[]; toBody?: (a: Record<string, unknown>) => Record<string, unknown>; queryKeys?: string[]; desc: string };
-  update?: { props: Record<string, JsonProp>; bodyKeys: string[]; toBody?: (a: Record<string, unknown>) => Record<string, unknown>; desc: string };
+  create?: { props: Record<string, JsonProp>; required?: string[]; bodyKeys: string[]; toBody?: (a: Record<string, unknown>) => Record<string, unknown>; queryKeys?: string[]; validate?: (body: Record<string, unknown>) => void; desc: string };
+  update?: { props: Record<string, JsonProp>; bodyKeys: string[]; toBody?: (a: Record<string, unknown>) => Record<string, unknown>; validate?: (body: Record<string, unknown>) => void; desc: string };
   del?: { desc: string };
   archive?: { desc: string };
 }
@@ -54,6 +54,26 @@ const pick = (a: Record<string, unknown>, keys: string[]): Record<string, unknow
 };
 
 const bodyArgProp: JsonProp = { type: 'object', description: 'Raw request-body object merged OVER the typed fields — for nested/advanced GA4 fields.' };
+
+/** The GA4 Admin API's DataStream has very few writable fields. Everything people REACH for here
+ *  (cross-domain domains, unwanted referrals, internal traffic, session timeout) lives in the
+ *  GOOGLE TAG settings, which the Admin API does not expose at all - so reject those up front
+ *  with directions instead of letting Google return "Unknown name ... Cannot find field". */
+export function validateDataStreamBody(body: Record<string, unknown>, forCreate: boolean): void {
+  const allowedTop = new Set(forCreate ? ['type', 'displayName', 'webStreamData', 'androidAppStreamData', 'iosAppStreamData'] : ['displayName', 'webStreamData']);
+  const badTop = Object.keys(body).filter((k) => !allowedTop.has(k));
+  const web = body.webStreamData;
+  const badWeb = web && typeof web === 'object' ? Object.keys(web as Record<string, unknown>).filter((k) => k !== 'defaultUri') : [];
+  if (badTop.length === 0 && badWeb.length === 0) return;
+  const bad = [...badTop, ...badWeb.map((k) => `webStreamData.${k}`)].join(', ');
+  throw new Error(
+    `These are not GA4 Admin API data-stream fields: ${bad}. Cross-domain domains, unwanted referrals, ` +
+      'internal traffic and session settings are GOOGLE TAG settings - no API can change them; set them in ' +
+      'GA4: Admin > Data streams > (your stream) > Configure tag settings. ' +
+      `API-writable stream fields: displayName, webStreamData.defaultUri${forCreate ? ', type, packageName, bundleId' : ''}.`
+  );
+}
+
 
 const CATALOG: Desc[] = [
   {
@@ -86,9 +106,19 @@ const CATALOG: Desc[] = [
         ...(a.packageName ? { androidAppStreamData: { packageName: a.packageName } } : {}),
         ...(a.bundleId ? { iosAppStreamData: { bundleId: a.bundleId } } : {}),
       }),
+      validate: (b) => validateDataStreamBody(b, true),
       desc: 'Create a data stream (web / Android / iOS).',
     },
-    update: { props: { displayName: { type: 'string' } }, bodyKeys: ['displayName'], desc: 'Update a data stream.' },
+    update: {
+      props: { displayName: { type: 'string' }, defaultUri: { type: 'string', description: 'New site URL for a WEB stream (webStreamData.defaultUri).' } },
+      bodyKeys: ['displayName'],
+      toBody: (a) => ({
+        ...(a.displayName !== undefined ? { displayName: a.displayName } : {}),
+        ...(a.defaultUri ? { webStreamData: { defaultUri: a.defaultUri } } : {}),
+      }),
+      validate: (b) => validateDataStreamBody(b, false),
+      desc: 'Update a data stream: displayName and (web) defaultUri ONLY. Cross-domain domains, unwanted referrals, internal traffic and session settings are Google tag settings with NO Admin API fields - never attempt them; tell the user to change them in GA4 Admin > Data streams > Configure tag settings.',
+    },
     del: { desc: 'Delete a data stream.' },
   },
   {
@@ -198,6 +228,7 @@ export function buildGa4WriteTools(data: GoogleDataService): Tool[] {
         summarize: (a) => `Create ${d.plural} under ${P.build(a)}`,
         handler: (a) => {
           const body = { ...(c.toBody ? c.toBody(a) : pick(a, c.bodyKeys)), ...obj(a.body) };
+          c.validate?.(body);
           const query = c.queryKeys ? (pick(a, c.queryKeys) as Record<string, string>) : undefined;
           return data.ga4AdminCreate(d.version, d.accessor, P.build(a), body, query && Object.keys(query).length ? query : undefined);
         },
@@ -213,6 +244,7 @@ export function buildGa4WriteTools(data: GoogleDataService): Tool[] {
         summarize: (a) => `Update ${d.plural} ${s(a.name)}`,
         handler: (a) => {
           const body = { ...(u.toBody ? u.toBody(a) : pick(a, u.bodyKeys)), ...obj(a.body) };
+          u.validate?.(body);
           const mask = s(a.updateMask).trim() || Object.keys(body).join(',');
           if (!mask) throw new Error(`update_ga4_${d.key}: supply at least one field or updateMask.`);
           return data.ga4AdminPatch(d.version, d.accessor, s(a.name), mask, body);
