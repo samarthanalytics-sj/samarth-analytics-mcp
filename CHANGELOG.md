@@ -1,3 +1,9 @@
+## [1.373.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.372.1...v1.373.0) (2026-07-22)
+
+### Features
+
+* **desktop:** paste a screenshot or drop a file straight into the chat ([#642](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/642)) ([95d0cdd](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/95d0cdd4a3a210c350c4eeab158bc5b8132ec1ad))
+
 ## [1.372.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.372.0...v1.372.1) (2026-07-22)
 
 ### Bug Fixes
