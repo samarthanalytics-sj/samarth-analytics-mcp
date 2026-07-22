@@ -12,26 +12,35 @@ import type { AccountView, Ga4MonitorStatus, Ga4MonitorRun, Ga4MonitorTargetStat
 // no derived "confidence" scores or metrics the engine does not actually produce.
 
 const SEV_COLOR: Record<string, string> = {
-  critical: 'var(--c-red)', high: 'var(--c-red)', medium: 'var(--c-amber, #b8860b)', low: 'var(--c-amber, #b8860b)', info: 'var(--text-muted)',
+  critical: 'var(--error)', high: 'var(--error)', medium: 'var(--warning)', low: 'var(--warning)', info: 'var(--text-muted)',
 };
 const SEV_RANK: Record<string, number> = { critical: 5, high: 4, medium: 3, low: 2, info: 1 };
-// Solid accent colours for white-text surfaces (primary buttons + the hero severity badge). The theme
-// --c-* accents INVERT to light pastels in dark mode (see memory: never put white on var(--c-*)), so
-// these fixed mid-dark solids are used wherever white text sits on a filled accent - readable in BOTH modes.
-const SOLID_BLUE = '#2563eb';
-// Solid severity fills: every value carries WHITE text at >= 4.5:1 (AA) in both themes.
-const SEV_SOLID: Record<string, string> = { critical: 'var(--danger)', high: 'var(--danger)', medium: '#b45309', low: '#b45309', info: '#475569' };
-const HEALTH: Record<string, { color: string; bg: string; label: string; icon: string }> = {
-  critical: { color: 'var(--c-red)', bg: 'var(--c-red-bg, rgba(239,68,68,.12))', label: 'Critical', icon: '🔴' },
-  warning: { color: 'var(--c-amber, #b8860b)', bg: 'var(--c-amber-bg, rgba(245,158,11,.14))', label: 'Warning', icon: '🟠' },
-  healthy: { color: 'var(--c-green)', bg: 'var(--c-green-bg, rgba(34,197,94,.12))', label: 'Healthy', icon: '🟢' },
+// Status is carried by a small coloured DOT + coloured text, never a filled badge - so colour appears
+// only where it means something. Semantic tokens only (WCAG-verified in both themes).
+const HEALTH: Record<string, { color: string; bg: string; label: string }> = {
+  critical: { color: 'var(--error)', bg: 'var(--error-bg)', label: 'Critical' },
+  warning: { color: 'var(--warning)', bg: 'var(--warning-bg)', label: 'Warning' },
+  healthy: { color: 'var(--success)', bg: 'var(--success-bg)', label: 'Healthy' },
 };
 const CHECK_PILL: Record<string, { label: string; color: string }> = {
-  pass: { label: 'Pass', color: 'var(--c-green)' },
-  warn: { label: 'Warning', color: 'var(--c-amber, #b8860b)' },
-  fail: { label: 'Issue', color: 'var(--c-red)' },
+  pass: { label: 'Pass', color: 'var(--success)' },
+  warn: { label: 'Warning', color: 'var(--warning)' },
+  fail: { label: 'Issue', color: 'var(--error)' },
   skip: { label: 'Not run', color: 'var(--text-muted)' },
 };
+
+/** A status dot. The only decoration in the panel: it replaces every emoji + filled status badge. */
+function Dot({ color, size = 7 }: { color: string; size?: number }): JSX.Element {
+  return <span aria-hidden="true" style={{ width: size, height: size, borderRadius: '50%', background: color, display: 'inline-block', flexShrink: 0 }} />;
+}
+/** Status as dot + word, with no pill or fill. Used for health everywhere it used to be an emoji chip. */
+function StatusText({ color, label: text, size = 12.5 }: { color: string; label: string; size?: number }): JSX.Element {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: size, fontWeight: 500, color }}>
+      <Dot color={color} />{text}
+    </span>
+  );
+}
 
 /** The Slack mark (official four-colour logo), inlined as SVG so it renders crisply at any size and
  *  needs no external asset. Decorative - the adjacent text labels it. */
@@ -75,13 +84,18 @@ function CheckTypeIcon({ id, size = 18 }: { id: string; size?: number }): JSX.El
   );
 }
 
-const box: React.CSSProperties = { background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 12, padding: 16 };
-const card: React.CSSProperties = { background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 14, padding: 18 };
-const sectionTitle: React.CSSProperties = { fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--text-faint)', margin: '0 0 10px' };
-const label: React.CSSProperties = { fontSize: 12, color: 'var(--text-muted)', fontWeight: 600 };
-const btn: React.CSSProperties = { background: 'var(--surface-3)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 8, padding: '7px 14px', cursor: 'pointer', fontSize: 13 };
-const ghostBtn: React.CSSProperties = { background: 'transparent', color: 'var(--text-muted)', border: '1px solid var(--border)', borderRadius: 7, padding: '5px 12px', cursor: 'pointer', fontSize: 12, fontWeight: 600 };
-const primaryBtn: React.CSSProperties = { ...btn, background: SOLID_BLUE, color: '#fff', borderColor: 'transparent', fontWeight: 600 };
+// Minimal surface system: content sits on the page and is separated by whitespace and hairlines, not by
+// stacked filled cards. `card` is the ONE container treatment (quiet, unfilled); nothing nests inside it.
+const box: React.CSSProperties = { background: 'transparent', border: '1px solid var(--border)', borderRadius: 'var(--radius-m)', padding: 18 };
+const card: React.CSSProperties = { background: 'transparent', border: '1px solid var(--border)', borderRadius: 'var(--radius-m)', padding: 18 };
+// Section headings are sentence case at body weight - no uppercase, no letter-spacing, no 700/800.
+const sectionTitle: React.CSSProperties = { fontSize: 13.5, fontWeight: 600, color: 'var(--text)', margin: '0 0 10px' };
+const label: React.CSSProperties = { fontSize: 12, color: 'var(--text-muted)', fontWeight: 500 };
+/** Small secondary/meta text - replaces every uppercase 700-weight micro-label. */
+const meta: React.CSSProperties = { fontSize: 11.5, color: 'var(--text-faint)', fontWeight: 400 };
+const btn: React.CSSProperties = { background: 'transparent', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 'var(--radius-s)', padding: '7px 14px', cursor: 'pointer', fontSize: 13 };
+const ghostBtn: React.CSSProperties = { background: 'transparent', color: 'var(--text-dim)', border: '1px solid var(--border)', borderRadius: 'var(--radius-s)', padding: '5px 11px', cursor: 'pointer', fontSize: 12.5, fontWeight: 500 };
+const primaryBtn: React.CSSProperties = { ...btn, background: 'var(--primary)', color: 'var(--on-primary)', borderColor: 'transparent', fontWeight: 600 };
 const input: React.CSSProperties = { background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, padding: '6px 9px', fontSize: 13, fontFamily: 'inherit' };
 const MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
 
@@ -119,7 +133,7 @@ type NotifyPrefs = { alerts: boolean; digest: boolean; audit: boolean; monthly: 
 function NotifyPicker({ value, onChange, disabled }: { value: NotifyPrefs; onChange: (v: NotifyPrefs) => void; disabled: boolean }): JSX.Element {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-faint)' }}>What should this channel receive?</span>
+      <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-muted)' }}>What should this channel receive?</span>
       {NOTIFY_OPTS.map((o) => (
         <label key={o.key} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', cursor: 'pointer', fontSize: 12.5 }}>
           <input type="checkbox" style={{ marginTop: 2 }} checked={value[o.key]} disabled={disabled} onChange={(e) => onChange({ ...value, [o.key]: e.target.checked })} />
@@ -180,51 +194,51 @@ function HeroCard({ run, isRunning, disabled, onRun }: { run: Ga4MonitorRun; isR
 
   if (!top) {
     return (
-      <div style={{ ...card, borderColor: 'var(--c-green)', background: 'var(--c-green-bg, rgba(34,197,94,.08))', display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
-        <div style={{ fontSize: 26, lineHeight: 1 }}>🟢</div>
+      <div style={{ ...card, display: 'flex', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap' }}>
         <div style={{ flex: 1, minWidth: 220 }}>
-          <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--c-green)' }}>All clear - no issues detected</div>
-          <div style={{ fontSize: 13.5, color: 'var(--text-dim)', marginTop: 4, lineHeight: 1.5 }}>{run.summary}</div>
+          <StatusText color="var(--success)" label="All clear" size={13} />
+          <div style={{ fontSize: 15, fontWeight: 600, marginTop: 6, lineHeight: 1.35 }}>No issues detected</div>
+          <div style={{ fontSize: 13, color: 'var(--text-dim)', marginTop: 6, lineHeight: 1.55 }}>{run.summary}</div>
         </div>
-        <button style={{ ...ghostBtn, color: 'var(--c-blue)', alignSelf: 'flex-start' }} disabled={disabled} onClick={onRun}>{isRunning ? 'Checking…' : '↻ Run check again'}</button>
+        <button style={ghostBtn} disabled={disabled} onClick={onRun}>{isRunning ? 'Checking…' : 'Run check again'}</button>
       </div>
     );
   }
 
-  const solid = SEV_SOLID[top.severity] ?? 'var(--danger)';
+  const sev = SEV_COLOR[top.severity] ?? 'var(--error)';
   // Real supporting lines only: the engine's structured metric lines as "evidence", its impact line
   // when it exists, and the recommended actions. Nothing here is fabricated for the layout.
   const evidence = (top.summaryLines ?? []).slice(0, 3);
   const actions = top.actions?.length ? top.actions : top.recommendation ? [top.recommendation] : [];
   return (
-    <div style={{ ...card, padding: 18, borderLeft: `4px solid ${solid}` }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.6, textTransform: 'uppercase', color: '#fff', background: solid, borderRadius: 6, padding: '3px 10px' }}>{top.severity}</span>
-        <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-faint)' }}>Most urgent finding</span>
-        <span style={{ fontSize: 11, fontFamily: MONO, color: 'var(--text-faint)' }}>· {fmtAgo(run.at)}</span>
-        {isNew && <span style={{ fontSize: 10, fontWeight: 800, color: 'var(--c-blue)', background: 'var(--c-blue-bg, rgba(59,130,246,.15))', borderRadius: 999, padding: '1px 8px' }}>NEW</span>}
+    <div style={{ ...card, borderLeft: `2px solid ${sev}` }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <StatusText color={sev} label={top.severity} size={12.5} />
+        <span style={meta}>Most urgent finding</span>
+        <span style={{ ...meta, fontFamily: MONO }}>{fmtAgo(run.at)}</span>
+        {isNew && <span style={{ ...meta, color: 'var(--info)' }}>new</span>}
       </div>
-      <div style={{ fontSize: 16, fontWeight: 700, marginTop: 10, lineHeight: 1.3 }}>{top.title}</div>
-      <div style={{ fontSize: 14, color: 'var(--text-dim)', marginTop: 8, lineHeight: 1.55 }}>{emphasize(top.detail)}</div>
+      <div style={{ fontSize: 15, fontWeight: 600, marginTop: 10, lineHeight: 1.35 }}>{top.title}</div>
+      <div style={{ fontSize: 13.5, color: 'var(--text-dim)', marginTop: 8, lineHeight: 1.6 }}>{emphasize(top.detail)}</div>
       {(evidence.length > 0 || top.impact) && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 3, marginTop: 10 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 12 }}>
           {evidence.map((l, i) => (
-            <div key={i} style={{ fontSize: 12.5, color: 'var(--text-dim)', lineHeight: 1.5 }}>{emphasize(l)}</div>
+            <div key={i} style={{ fontSize: 12.5, color: 'var(--text-muted)', lineHeight: 1.55 }}>{emphasize(l)}</div>
           ))}
-          {top.impact && <div style={{ fontSize: 12.5, color: SEV_COLOR[top.severity] ?? 'var(--c-red)', fontWeight: 600, lineHeight: 1.5 }}>⚠ Impact: {emphasize(top.impact)}</div>}
+          {top.impact && <div style={{ fontSize: 12.5, color: sev, lineHeight: 1.55 }}>Impact: {emphasize(top.impact)}</div>}
         </div>
       )}
       {actions.length > 0 && (
-        <div style={{ marginTop: 12, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: '10px 14px' }}>
-          <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-faint)', marginBottom: 3 }}>Recommended action</div>
+        <div style={{ marginTop: 14, paddingLeft: 12, borderLeft: '1px solid var(--border)' }}>
+          <div style={{ ...meta, marginBottom: 4 }}>Recommended action</div>
           {actions.slice(0, 3).map((a, i) => (
-            <div key={i} style={{ fontSize: 13.5, color: 'var(--text)', lineHeight: 1.55 }}>{actions.length > 1 ? '· ' : ''}{a}</div>
+            <div key={i} style={{ fontSize: 13, color: 'var(--text)', lineHeight: 1.6 }}>{a}</div>
           ))}
         </div>
       )}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginTop: 14 }}>
-        <button style={{ ...primaryBtn, background: solid }} disabled={disabled} onClick={onRun}>{isRunning ? 'Checking…' : '↻ Run check again'}</button>
-        {run.alerts.length > 1 && <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>+{run.alerts.length - 1} more {run.alerts.length - 1 === 1 ? 'alert' : 'alerts'} below</span>}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginTop: 16 }}>
+        <button style={ghostBtn} disabled={disabled} onClick={onRun}>{isRunning ? 'Checking…' : 'Run check again'}</button>
+        {run.alerts.length > 1 && <span style={meta}>{run.alerts.length - 1} more {run.alerts.length - 1 === 1 ? 'alert' : 'alerts'} below</span>}
       </div>
     </div>
   );
@@ -237,19 +251,15 @@ function AiSummary({ run }: { run: Ga4MonitorRun }): JSX.Element {
   const nextStep = top?.recommendation || (top ? `Investigate: ${top.title}.` : 'No action needed - keep the background monitor running so a new issue pages you the moment it appears.');
   const h = HEALTH[run.health] ?? HEALTH.healthy;
   return (
-    <div style={{ ...card, padding: 20 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-        <span style={{ display: 'inline-flex', color: 'var(--c-blue, #2563eb)', fontSize: 16 }}>✨</span>
-        <span style={{ fontSize: 13, fontWeight: 700, letterSpacing: 0.3 }}>AI summary</span>
-        <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: h.color, background: h.bg, borderRadius: 999, padding: '2px 10px' }}>{h.icon} {h.label}</span>
+    <div style={card}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+        <span style={{ ...sectionTitle, margin: 0 }}>Summary</span>
+        <span style={{ marginLeft: 'auto' }}><StatusText color={h.color} label={h.label} /></span>
       </div>
-      <div style={{ fontSize: 14, color: 'var(--text)', lineHeight: 1.6 }}>{run.summary}</div>
-      <div style={{ marginTop: 12, display: 'flex', gap: 10, alignItems: 'flex-start' }}>
-        <span style={{ width: 22, height: 22, borderRadius: '50%', background: 'var(--c-blue-bg, rgba(37,99,235,.15))', color: 'var(--c-blue, #2563eb)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, fontWeight: 800, flexShrink: 0, marginTop: 1 }}>→</span>
-        <div>
-          <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-faint)' }}>Recommended next step</div>
-          <div style={{ fontSize: 13.5, color: 'var(--text)', marginTop: 2, lineHeight: 1.5 }}>{nextStep}</div>
-        </div>
+      <div style={{ fontSize: 13.5, color: 'var(--text)', lineHeight: 1.65 }}>{run.summary}</div>
+      <div style={{ marginTop: 14, paddingLeft: 12, borderLeft: '1px solid var(--border)' }}>
+        <div style={meta}>Recommended next step</div>
+        <div style={{ fontSize: 13, color: 'var(--text)', marginTop: 3, lineHeight: 1.6 }}>{nextStep}</div>
       </div>
     </div>
   );
@@ -297,42 +307,34 @@ function HealthScoreCard({ score, history }: { score: number; history: Ga4Monito
   const prev = history.length >= 2 ? history[history.length - 2] : null;
   const delta = prev ? score - prev.score : null;
   // Theme tokens only (WCAG-verified in both themes) — never raw hexes for colored text/graphics here.
-  const color = score >= 85 ? 'var(--c-green)' : score >= 60 ? 'var(--c-amber, #b8860b)' : 'var(--c-red)';
-  // SVG arc: a 3/4 circle from 135° to 405°, filled proportionally to the score.
-  const R = 34;
-  const C = 2 * Math.PI * R;
-  const arc = C * 0.75;
+  const color = score >= 85 ? 'var(--success)' : score >= 60 ? 'var(--warning)' : 'var(--error)';
   return (
-    <div style={{ ...card, display: 'flex', alignItems: 'center', gap: 14, padding: 16 }}>
-      <svg width="88" height="88" viewBox="0 0 88 88" role="img" aria-label={`Health score ${score} of 100`}>
-        <g transform="rotate(135 44 44)">
-          <circle cx="44" cy="44" r={R} fill="none" stroke="var(--border)" strokeWidth="8" strokeDasharray={`${arc} ${C}`} strokeLinecap="round" />
-          {/* score 0 renders NO progress arc — a zero-length round-capped dash would still paint a dot. */}
-          {score > 0 && <circle cx="44" cy="44" r={R} fill="none" stroke={color} strokeWidth="8" strokeDasharray={`${arc * (score / 100)} ${C}`} strokeLinecap="round" />}
-        </g>
-        <text x="44" y="42" textAnchor="middle" style={{ fontSize: 20, fontWeight: 800, fill: 'var(--text)', fontFamily: 'inherit' }}>{score}</text>
-        <text x="44" y="56" textAnchor="middle" style={{ fontSize: 9, fill: 'var(--text-faint)', fontFamily: 'inherit' }}>/100</text>
-      </svg>
-      <div style={{ minWidth: 0 }}>
-        <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--text-faint)' }}>Health score</div>
-        {delta !== null && delta !== 0 && (
-          <div style={{ fontSize: 12, fontWeight: 700, marginTop: 3, color: delta < 0 ? 'var(--c-red)' : 'var(--c-green)' }}>
-            {delta < 0 ? '↓' : '↑'} {Math.abs(delta)} pts vs previous check
-          </div>
-        )}
-        {(delta === null || delta === 0) && <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 3 }}>{delta === 0 ? 'unchanged vs previous check' : 'first recorded check'}</div>}
-        <div style={{ fontSize: 10.5, color: 'var(--text-faint)', marginTop: 4, lineHeight: 1.4 }}>Derived from this run&apos;s alerts</div>
+    <div style={card}>
+      <div style={meta}>Health score</div>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 4, marginTop: 4 }}>
+        <span style={{ fontSize: 30, fontWeight: 600, lineHeight: 1.05, color }}>{score}</span>
+        <span style={{ fontSize: 13, color: 'var(--text-faint)' }}>/100</span>
+      </div>
+      {/* A single hairline bar instead of a gauge - the same information, none of the chrome. */}
+      <div style={{ height: 2, background: 'var(--border)', borderRadius: 2, marginTop: 10, overflow: 'hidden' }}>
+        <div style={{ height: '100%', width: `${Math.max(0, Math.min(100, score))}%`, background: color }} />
+      </div>
+      <div style={{ ...meta, marginTop: 8, lineHeight: 1.5 }}>
+        {delta !== null && delta !== 0
+          ? `${delta < 0 ? 'Down' : 'Up'} ${Math.abs(delta)} pts vs previous check`
+          : delta === 0 ? 'Unchanged vs previous check' : 'First recorded check'}
+        <br />Derived from this run&apos;s alerts
       </div>
     </div>
   );
 }
 
-/** One big-number stat tile (the CRITICAL / WARNINGS / LAST SCAN column of the hero row). */
+/** One stat: a number and its label, with no box. Separated from its neighbours by whitespace only. */
 function StatTile({ value, label: lbl, color }: { value: React.ReactNode; label: string; color?: string }): JSX.Element {
   return (
-    <div style={{ ...card, flex: 1, minWidth: 88, padding: '12px 14px', textAlign: 'center' }}>
-      <div style={{ fontSize: 22, fontWeight: 800, lineHeight: 1.1, color: color ?? 'var(--text)' }}>{value}</div>
-      <div style={{ fontSize: 9.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.6, color: 'var(--text-faint)', marginTop: 4 }}>{lbl}</div>
+    <div style={{ flex: 1, minWidth: 80 }}>
+      <div style={{ fontSize: 20, fontWeight: 600, lineHeight: 1.15, color: color ?? 'var(--text)' }}>{value}</div>
+      <div style={{ ...meta, marginTop: 3 }}>{lbl}</div>
     </div>
   );
 }
@@ -345,25 +347,24 @@ function CheckCard({ c }: { c: Ga4MonitorCheckView }): JSX.Element {
   const explain = CHECK_EXPLAIN[c.id] ?? 'An additional health signal for this property.';
   const clamp: React.CSSProperties = open ? {} : { display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' };
   return (
-    <div style={{ ...card, padding: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '14px 0', borderTop: '1px solid var(--border)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span style={{ color: 'var(--text-muted)', display: 'inline-flex', flexShrink: 0 }}><CheckTypeIcon id={c.id} size={16} /></span>
-        <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--text)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.label}</span>
-        <span style={{ fontSize: 10.5, fontWeight: 700, color: p.color, background: 'var(--surface-2)', border: `1px solid ${p.color}`, borderRadius: 999, padding: '2px 9px', flexShrink: 0 }}>{p.label}</span>
+        <span style={{ color: 'var(--text-faint)', display: 'inline-flex', flexShrink: 0 }}><CheckTypeIcon id={c.id} size={15} /></span>
+        <span style={{ fontWeight: 500, fontSize: 13, color: 'var(--text)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.label}</span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: p.color, flexShrink: 0 }}><Dot color={p.color} size={6} />{p.label}</span>
       </div>
-      <div style={{ fontSize: 12.5, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+      <div style={{ fontSize: 12.5, color: 'var(--text-muted)', lineHeight: 1.55 }}>
         <div style={{ ...clamp }}>{emphasize(c.detail)}</div>
       </div>
       <button
         type="button"
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
-        style={{ alignSelf: 'flex-start', display: 'inline-flex', alignItems: 'center', gap: 5, padding: 0, background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: 11.5, fontWeight: 600, color: 'var(--c-blue)' }}
+        style={{ alignSelf: 'flex-start', padding: 0, background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: 11.5, fontWeight: 500, color: 'var(--text-muted)', textDecoration: 'underline', textUnderlineOffset: 3 }}
       >
-        <span aria-hidden="true" style={{ display: 'inline-block', transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .12s ease' }}>▸</span>
         {open ? 'Hide details' : 'Details'}
       </button>
-      {open && <div style={{ paddingTop: 6, borderTop: '1px dashed var(--border)', fontSize: 12, color: 'var(--text-dim)', lineHeight: 1.5 }}>{explain}</div>}
+      {open && <div style={{ fontSize: 12, color: 'var(--text-dim)', lineHeight: 1.55 }}>{explain}</div>}
     </div>
   );
 }
@@ -376,12 +377,10 @@ function RecentAlerts({ run, issueLog }: { run: Ga4MonitorRun; issueLog: Array<{
   const openedAt = new Map(issueLog.map((e) => [e.id, e.openedAt] as const));
   const alerts = [...run.alerts].sort((a, b) => (SEV_RANK[b.severity] ?? 0) - (SEV_RANK[a.severity] ?? 0));
   return (
-    <div style={{ ...card, padding: 16, flex: 1, minWidth: 0 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-        <span style={{ fontSize: 13, fontWeight: 700 }}>Recent alerts</span>
-        {alerts.length > 0 && (
-          <span style={{ fontSize: 10.5, fontWeight: 800, color: '#fff', background: 'var(--danger)', borderRadius: 999, padding: '1px 8px' }}>{alerts.length} active</span>
-        )}
+    <div style={{ ...card, flex: 1, minWidth: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+        <span style={{ ...sectionTitle, margin: 0 }}>Recent alerts</span>
+        {alerts.length > 0 && <span style={meta}>{alerts.length} active</span>}
       </div>
       {alerts.length === 0 ? (
         <div style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>No open alerts - everything this monitor checks looks normal.</div>
@@ -391,14 +390,14 @@ function RecentAlerts({ run, issueLog }: { run: Ga4MonitorRun; issueLog: Array<{
             const opened = openedAt.get(a.id);
             return (
               <div key={a.id} style={{ padding: '10px 2px', borderTop: i === 0 ? 'none' : '1px solid var(--border)' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: 10, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.4, color: SEV_COLOR[a.severity] ?? 'var(--text)', border: `1px solid ${SEV_COLOR[a.severity] ?? 'var(--border)'}`, borderRadius: 999, padding: '1px 8px' }}>{a.severity}</span>
-                  {opened != null && <span style={{ fontSize: 11, fontFamily: MONO, color: 'var(--text-faint)' }}>{fmtAgo(opened)}</span>}
-                  {newIds.has(a.id) && <span style={{ fontSize: 10, background: 'var(--c-blue-bg, rgba(59,130,246,.15))', color: 'var(--c-blue)', borderRadius: 999, padding: '1px 7px', fontWeight: 800 }}>NEW</span>}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                  <StatusText color={SEV_COLOR[a.severity] ?? 'var(--text-muted)'} label={a.severity} size={12} />
+                  {opened != null && <span style={{ ...meta, fontFamily: MONO }}>{fmtAgo(opened)}</span>}
+                  {newIds.has(a.id) && <span style={{ ...meta, color: 'var(--info)' }}>new</span>}
                 </div>
-                <div style={{ fontWeight: 700, fontSize: 13, marginTop: 4 }}>{a.title}</div>
-                <div style={{ fontSize: 12.5, color: 'var(--text-dim)', marginTop: 3, lineHeight: 1.5 }}>{emphasize(a.detail)}</div>
-                {a.recommendation && <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 3 }}><b>Fix:</b> {a.recommendation}</div>}
+                <div style={{ fontWeight: 500, fontSize: 13, marginTop: 5 }}>{a.title}</div>
+                <div style={{ fontSize: 12.5, color: 'var(--text-dim)', marginTop: 4, lineHeight: 1.55 }}>{emphasize(a.detail)}</div>
+                {a.recommendation && <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4, lineHeight: 1.55 }}>Fix: {a.recommendation}</div>}
               </div>
             );
           })}
@@ -416,7 +415,7 @@ function HistoryTable({ history }: { history: Ga4MonitorHistoryEntry[] }): JSX.E
   const [filter, setFilter] = useState<'all' | 'healthy' | 'warning' | 'critical'>('all');
   if (!history.length) return null;
   const rows = [...history].reverse().filter((e) => filter === 'all' || e.health === filter);
-  const th: React.CSSProperties = { textAlign: 'left', padding: '9px 14px', fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--text-faint)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' };
+  const th: React.CSSProperties = { textAlign: 'left', padding: '9px 14px', fontSize: 11.5, fontWeight: 500, color: 'var(--text-faint)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' };
   const td: React.CSSProperties = { padding: '9px 14px', borderBottom: '1px solid var(--border)', fontSize: 12.5, whiteSpace: 'nowrap' };
   return (
     <div>
@@ -441,29 +440,17 @@ function HistoryTable({ history }: { history: Ga4MonitorHistoryEntry[] }): JSX.E
           <tbody>
             {rows.map((e, i) => {
               const h = HEALTH[e.health] ?? HEALTH.healthy;
-              const barColor = e.score >= 85 ? 'var(--c-green)' : e.score >= 60 ? 'var(--c-amber, #b8860b)' : 'var(--c-red)';
               const last = i === rows.length - 1;
               const cell = last ? { ...td, borderBottom: 'none' } : td;
               return (
                 <tr key={e.at}>
                   <td style={{ ...cell, fontFamily: MONO, fontSize: 11.5, color: 'var(--text-muted)' }} title={fmtTime(e.at)}>{fmtTime(e.at)}</td>
-                  <td style={cell}>
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 700, color: h.color, background: h.bg, borderRadius: 999, padding: '2px 9px' }}>{h.icon} {h.label}</span>
-                  </td>
-                  <td style={cell}>
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-                      <span style={{ width: 56, height: 5, borderRadius: 999, background: 'var(--surface-3)', overflow: 'hidden', display: 'inline-block' }}>
-                        <span style={{ display: 'block', height: '100%', width: `${e.score}%`, background: barColor, borderRadius: 999 }} />
-                      </span>
-                      <span style={{ fontWeight: 700, fontSize: 12 }}>{e.score}</span>
-                    </span>
-                  </td>
-                  <td style={{ ...cell, fontWeight: 700, color: e.critical ? 'var(--c-red)' : 'var(--text-faint)' }}>{e.critical || '–'}</td>
-                  <td style={{ ...cell, fontWeight: 700, color: e.warnings ? 'var(--c-amber, #b8860b)' : 'var(--text-faint)' }}>{e.warnings || '–'}</td>
+                  <td style={cell}><StatusText color={h.color} label={h.label} size={12} /></td>
+                  <td style={{ ...cell, fontWeight: 500 }}>{e.score}</td>
+                  <td style={{ ...cell, color: e.critical ? 'var(--error)' : 'var(--text-faint)' }}>{e.critical || '-'}</td>
+                  <td style={{ ...cell, color: e.warnings ? 'var(--warning)' : 'var(--text-faint)' }}>{e.warnings || '-'}</td>
                   <td style={{ ...cell, fontFamily: MONO, fontSize: 11.5, color: 'var(--text-muted)' }}>{fmtDuration(e.durationMs)}</td>
-                  <td style={cell}>
-                    <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-muted)', background: 'var(--surface-3)', borderRadius: 6, padding: '2px 8px', textTransform: 'capitalize' }}>{e.trigger}</span>
-                  </td>
+                  <td style={{ ...cell, color: 'var(--text-muted)', textTransform: 'capitalize' }}>{e.trigger}</td>
                 </tr>
               );
             })}
@@ -507,13 +494,10 @@ function PropertyPanel({ t, runningId, busy, onRun, onTogglePause, onRemove, onS
   const slackCard = (
     <div style={{ ...card, display: 'flex', flexDirection: 'column', gap: 10, flex: '1 1 300px', minWidth: 280, alignSelf: 'flex-start' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-faint)' }}><SlackMark size={14} /> Slack channel</span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 13.5, fontWeight: 600, color: 'var(--text)' }}><SlackMark size={14} /> Slack channel</span>
           {t.hasWebhook ? (
             <>
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, background: 'var(--c-green-bg, rgba(34,197,94,.12))', color: 'var(--c-green)', borderRadius: 999, padding: '3px 12px', fontWeight: 600 }}>
-                <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--c-green)', display: 'inline-block' }} />
-                {t.slackLabel || 'own channel connected'}
-              </span>
+              <StatusText color="var(--success)" label={t.slackLabel || 'connected'} />
               <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>
                 sends: {NOTIFY_OPTS.filter((o) => (o.key === 'alerts' || o.key === 'monthly' ? t.notify?.[o.key] !== false : Boolean(t.notify?.[o.key]))).map((o) => o.label.toLowerCase()).join(' · ') || 'nothing selected'}
                 {t.lastSlackAt ? ` · last posted ${fmtAgo(t.lastSlackAt)}` : ''}
@@ -527,11 +511,11 @@ function PropertyPanel({ t, runningId, busy, onRun, onTogglePause, onRemove, onS
           <span style={{ flex: 1 }} />
           {t.hasWebhook && <button style={ghostBtn} disabled={busy} onClick={onTestChannel}>Send test</button>}
           <button
-            style={{ ...ghostBtn, color: 'var(--c-blue)' }}
+            style={ghostBtn}
             disabled={busy}
             onClick={() => { setEditingChan((v) => !v); setChanUrl(''); setChanLbl(t.slackLabel ?? ''); setChanNotify({ alerts: t.notify?.alerts !== false, digest: Boolean(t.notify?.digest), audit: Boolean(t.notify?.audit), monthly: t.notify?.monthly !== false }); }}
           >
-            {editingChan ? 'Close' : t.hasWebhook ? '✎ Edit channel' : '＋ Connect channel'}
+            {editingChan ? 'Close' : t.hasWebhook ? 'Edit channel' : 'Connect channel'}
           </button>
         </div>
         {editingChan && (
@@ -559,7 +543,7 @@ function PropertyPanel({ t, runningId, busy, onRun, onTogglePause, onRemove, onS
                 Save
               </button>
               {t.hasWebhook && (
-                <button style={{ ...ghostBtn, color: 'var(--c-red)', alignSelf: 'center' }} disabled={busy} onClick={() => { onRemoveChannel(); setEditingChan(false); setChanUrl(''); setChanLbl(''); }}>
+                <button style={{ ...ghostBtn, color: 'var(--error)', alignSelf: 'center' }} disabled={busy} onClick={() => { onRemoveChannel(); setEditingChan(false); setChanUrl(''); setChanLbl(''); }}>
                   Remove channel
                 </button>
               )}
@@ -581,30 +565,24 @@ function PropertyPanel({ t, runningId, busy, onRun, onTogglePause, onRemove, onS
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
         <div style={{ minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-            <span style={{ fontWeight: 700, fontSize: 18 }}>{t.propertyLabel || t.propertyId}</span>
-            {h ? (
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: h.color, background: h.bg, borderRadius: 999, padding: '2px 10px' }}>
-                {h.icon} {h.label}
-              </span>
-            ) : (
-              <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)', background: 'var(--surface-3)', borderRadius: 999, padding: '2px 10px' }}>⚪ No check yet</span>
-            )}
-            {!t.enabled && <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', background: 'var(--surface-3)', borderRadius: 999, padding: '2px 8px' }}>PAUSED</span>}
+            <span style={{ fontWeight: 600, fontSize: 17 }}>{t.propertyLabel || t.propertyId}</span>
+            {h ? <StatusText color={h.color} label={h.label} /> : <span style={meta}>No check yet</span>}
+            {!t.enabled && <span style={meta}>Paused</span>}
           </div>
-          <div style={{ fontFamily: MONO, fontSize: 11, color: 'var(--text-faint)', marginTop: 4, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          <div style={{ fontFamily: MONO, fontSize: 11, color: 'var(--text-faint)', marginTop: 5, display: 'flex', gap: 14, flexWrap: 'wrap' }}>
             <span>{t.propertyId.replace('properties/', '')}</span>
-            <span title={t.lastRunAt ? `Last check: ${fmtTime(t.lastRunAt)}` : undefined}>checked: {fmtAgo(t.lastRunAt)}</span>
-            <span title={t.lastSlackAt ? `Last Slack alert: ${fmtTime(t.lastSlackAt)}` : 'No alert has been posted for this property yet'}>📣 last alert: {t.lastSlackAt ? fmtAgo(t.lastSlackAt) : 'none yet'}</span>
-            {t.lastError && <span style={{ color: 'var(--c-red)', fontFamily: 'inherit' }} title={t.lastError}>last check failed</span>}
+            <span title={t.lastRunAt ? `Last check: ${fmtTime(t.lastRunAt)}` : undefined}>checked {fmtAgo(t.lastRunAt)}</span>
+            <span title={t.lastSlackAt ? `Last Slack alert: ${fmtTime(t.lastSlackAt)}` : 'No alert has been posted for this property yet'}>last alert {t.lastSlackAt ? fmtAgo(t.lastSlackAt) : 'none yet'}</span>
+            {t.lastError && <span style={{ color: 'var(--error)', fontFamily: 'inherit' }} title={t.lastError}>last check failed</span>}
           </div>
         </div>
         <span style={{ flex: 1 }} />
-        <div style={{ display: 'flex', gap: 6 }}>
-          <button style={{ ...ghostBtn, color: 'var(--c-blue)' }} disabled={runDisabled} onClick={onRun}>{isRunning ? 'Checking…' : '▶ Run check'}</button>
-          <button style={ghostBtn} disabled={busy || !run} title={run ? 'Download this report as a PDF' : 'Run a check first'} onClick={() => onExport('pdf')}>⬇ PDF</button>
-          <button style={ghostBtn} disabled={busy || !run} title={run ? 'Download this report as a CSV' : 'Run a check first'} onClick={() => onExport('csv')}>⬇ CSV</button>
-          <button style={ghostBtn} disabled={busy} title={t.enabled ? 'Pause background checks for this property' : 'Resume background checks'} onClick={onTogglePause}>{t.enabled ? '⏸ Pause' : '⏵ Resume'}</button>
-          <button style={{ ...ghostBtn, color: 'var(--c-red)' }} disabled={busy} title="Stop monitoring this property" onClick={onRemove}>Remove</button>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          <button style={ghostBtn} disabled={runDisabled} onClick={onRun}>{isRunning ? 'Checking…' : 'Run check'}</button>
+          <button style={ghostBtn} disabled={busy || !run} title={run ? 'Download this report as a PDF' : 'Run a check first'} onClick={() => onExport('pdf')}>PDF</button>
+          <button style={ghostBtn} disabled={busy || !run} title={run ? 'Download this report as a CSV' : 'Run a check first'} onClick={() => onExport('csv')}>CSV</button>
+          <button style={ghostBtn} disabled={busy} title={t.enabled ? 'Pause background checks for this property' : 'Resume background checks'} onClick={onTogglePause}>{t.enabled ? 'Pause' : 'Resume'}</button>
+          <button style={{ ...ghostBtn, color: 'var(--error)' }} disabled={busy} title="Stop monitoring this property" onClick={onRemove}>Remove</button>
         </div>
       </div>
 
@@ -617,9 +595,9 @@ function PropertyPanel({ t, runningId, busy, onRun, onTogglePause, onRemove, onS
             </div>
             <div style={{ flex: '1 1 260px', maxWidth: 380, display: 'flex', flexDirection: 'column', gap: 10 }}>
               {typeof run.score === 'number' && <HealthScoreCard score={run.score} history={t.history ?? []} />}
-              <div style={{ display: 'flex', gap: 10 }}>
-                <StatTile value={criticalCount} label="Critical / high" color={criticalCount ? 'var(--c-red)' : 'var(--text-faint)'} />
-                <StatTile value={warningCount} label="Warnings" color={warningCount ? 'var(--c-amber, #b8860b)' : 'var(--text-faint)'} />
+              <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', padding: '2px 2px 0' }}>
+                <StatTile value={criticalCount} label="Critical / high" color={criticalCount ? 'var(--error)' : 'var(--text-faint)'} />
+                <StatTile value={warningCount} label="Warnings" color={warningCount ? 'var(--warning)' : 'var(--text-faint)'} />
                 <StatTile value={fmtAgo(run.at)} label="Last scan" />
               </div>
             </div>
@@ -639,7 +617,8 @@ function PropertyPanel({ t, runningId, busy, onRun, onTogglePause, onRemove, onS
             <div style={{ fontSize: 11.5, color: 'var(--text-muted)', margin: '2px 0 10px', lineHeight: 1.5 }}>
               Realtime figures are live. Daily figures cover complete days in the property&apos;s reporting timezone{run.timeZone ? <> (<b>{run.timeZone}</b>)</> : null}; today is excluded until it completes.
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 10 }}>
+            {/* Hairline-separated rows flowing into columns: no card per check, just rules + whitespace. */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', columnGap: 28, rowGap: 0 }}>
               {run.checks.map((c) => <CheckCard key={c.id} c={c} />)}
             </div>
           </div>
@@ -654,12 +633,11 @@ function PropertyPanel({ t, runningId, busy, onRun, onTogglePause, onRemove, onS
         <>
           {slackCard}
           <div style={{ ...card, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '36px 20px', color: 'var(--text-muted)' }}>
-            <span style={{ fontSize: 28 }}>🔍</span>
-            <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--text)' }}>
+            <div style={{ fontWeight: 600, fontSize: 15, color: 'var(--text)' }}>
               {(t.history?.length ?? 0) > 0 ? 'No check has run in this session yet' : 'No check has run for this property yet'}
             </div>
             <div style={{ fontSize: 13, textAlign: 'center', maxWidth: 420, lineHeight: 1.5 }}>
-              Click <b>▶ Run check</b> above to verify data flow, key events, spikes/drops, conversion tracking and revenue integrity.
+              Click <b>Run check</b> above to verify data flow, key events, spikes/drops, conversion tracking and revenue integrity.
               {(t.history?.length ?? 0) > 0 ? ' Earlier runs are in the history below.' : ''}
             </div>
           </div>
@@ -825,28 +803,24 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
       {/* ── Header: identity + overall health + background status ── */}
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
         <div style={{ flex: 1, minWidth: 260 }}>
-          <h2 style={{ margin: '0 0 4px', fontSize: 20, fontWeight: 700 }}>🔔 GA4 Monitoring</h2>
+          <h2 style={{ margin: '0 0 5px', fontSize: 19, fontWeight: 600 }}>GA4 Monitoring</h2>
           <div style={{ color: 'var(--text-muted)', fontSize: 13.5 }}>
             {targets.length
-              ? <>Watching <b>{targets.length}</b> propert{targets.length === 1 ? 'y' : 'ies'} · <b style={{ color: openIssues ? 'var(--c-red)' : 'var(--c-green)' }}>{openIssues}</b> open issue{openIssues === 1 ? '' : 's'} across all.</>
+              ? <>Watching {targets.length} propert{targets.length === 1 ? 'y' : 'ies'} · <span style={{ color: openIssues ? 'var(--error)' : 'var(--success)' }}>{openIssues} open issue{openIssues === 1 ? '' : 's'}</span> across all.</>
               : 'Background health checks for your GA4 properties - data flow, key events, spikes/drops, conversion tracking and revenue integrity.'}
           </div>
         </div>
-        <div style={{ display: 'flex', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
-          {worst && (
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, color: HEALTH[worst].color, background: HEALTH[worst].bg, border: `1px solid ${HEALTH[worst].color}`, borderRadius: 999, padding: '4px 12px' }}>
-              {HEALTH[worst].icon} {HEALTH[worst].label}
-            </span>
-          )}
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: status?.running ? 'var(--c-green)' : 'var(--text-faint)', border: '1px solid var(--border)', borderRadius: 999, padding: '4px 12px' }}>
-            <span style={{ width: 7, height: 7, borderRadius: '50%', background: status?.running ? 'var(--c-green)' : 'var(--text-faint)', display: 'inline-block' }} />
-            {status?.running ? `background on · every ${intervalText}` : 'background off'}
-          </span>
+        <div style={{ display: 'flex', gap: 16, marginTop: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+          {worst && <StatusText color={HEALTH[worst].color} label={HEALTH[worst].label} />}
+          <StatusText
+            color={status?.running ? 'var(--success)' : 'var(--text-faint)'}
+            label={status?.running ? `Background on, every ${intervalText}` : 'Background off'}
+          />
         </div>
       </div>
 
       {note && <div style={{ fontSize: 13, color: 'var(--text-dim)' }}>{note}</div>}
-      {status?.lastError && <div style={{ fontSize: 12.5, color: 'var(--c-red)' }}>Last sweep error - {status.lastError}</div>}
+      {status?.lastError && <div style={{ fontSize: 12.5, color: 'var(--error)' }}>Last sweep error - {status.lastError}</div>}
 
       {/* ── Monitor a GA4 property (top of page): add a property (+ its optional Slack channel) and
              the shared schedule. Placed above the dashboard so adding a property is the first action,
@@ -863,7 +837,7 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
                   <option key={p.property} value={p.property}>{p.displayName} ({p.property.replace('properties/', '')})</option>
                 ))}
               </select>
-              <button style={primaryBtn} onClick={() => void addProperty()} disabled={busy || !addId}>+ Add</button>
+              <button style={primaryBtn} onClick={() => void addProperty()} disabled={busy || !addId}>Add</button>
             </div>
             {addId && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 2 }}>
@@ -894,7 +868,7 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
             Run in the background
           </label>
           <button style={primaryBtn} onClick={() => void runNow()} disabled={runningId !== null || enabledCount === 0}>
-            {runningId === '*' ? 'Checking all…' : enabledCount > 1 ? `▶ Run all (${enabledCount})` : '▶ Run now'}
+            {runningId === '*' ? 'Checking all…' : enabledCount > 1 ? `Run all (${enabledCount})` : 'Run now'}
           </button>
         </div>
       </div>
@@ -902,15 +876,14 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
       {/* ── Property tabs + the selected property's dashboard ── */}
       {targets.length === 0 ? (
         <div style={{ ...card, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '40px 20px', color: 'var(--text-muted)' }}>
-          <span style={{ fontSize: 30 }}>📡</span>
-          <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text)' }}>No properties monitored yet</div>
+          <div style={{ fontWeight: 600, fontSize: 15, color: 'var(--text)' }}>No properties monitored yet</div>
           <div style={{ fontSize: 13, textAlign: 'center', maxWidth: 460, lineHeight: 1.5 }}>
-            Pick a GA4 property in the <b>Monitor a GA4 property</b> panel above and click <b>＋ Add</b>. Each check verifies data flow, key events, spikes/drops, conversion tracking and revenue integrity - and can alert your Slack channel when something breaks.
+            Pick a GA4 property in the <b>Monitor a GA4 property</b> panel above and click <b>Add</b>. Each check verifies data flow, key events, spikes/drops, conversion tracking and revenue integrity - and can alert your Slack channel when something breaks.
           </div>
         </div>
       ) : (
         <div>
-          <div role="tablist" style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 14 }}>
+          <div role="tablist" style={{ display: 'flex', gap: 20, flexWrap: 'wrap', marginBottom: 18, borderBottom: '1px solid var(--border)' }}>
             {targets.map((t) => {
               const h = t.lastRun ? HEALTH[t.lastRun.health] : null;
               const on = t.propertyId === selectedId;
@@ -922,21 +895,19 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
                   aria-selected={on}
                   onClick={() => setSelectedId(t.propertyId)}
                   style={{
-                    display: 'inline-flex', alignItems: 'center', gap: 7,
-                    background: on ? 'var(--surface-3)' : 'var(--surface-2)',
-                    color: 'var(--text)',
-                    border: `1px solid ${on ? 'var(--c-blue)' : 'var(--border)'}`,
-                    borderRadius: 9, padding: '7px 14px', cursor: 'pointer', fontSize: 13,
-                    fontWeight: on ? 700 : 500,
+                    display: 'inline-flex', alignItems: 'center', gap: 8,
+                    background: 'transparent',
+                    color: on ? 'var(--text)' : 'var(--text-muted)',
+                    border: 'none', borderBottom: `2px solid ${on ? 'var(--primary)' : 'transparent'}`,
+                    borderRadius: 0, padding: '7px 2px', cursor: 'pointer', fontSize: 13,
+                    fontWeight: on ? 600 : 400,
                     opacity: t.enabled ? 1 : 0.55,
                   }}
                   title={`${t.propertyLabel || t.propertyId} (${t.propertyId.replace('properties/', '')})${t.enabled ? '' : ' - paused'}`}
                 >
-                  <span style={{ fontSize: 12 }}>{h ? h.icon : '⚪'}</span>
+                  <Dot color={h ? h.color : 'var(--text-faint)'} size={6} />
                   <span style={{ maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.propertyLabel || t.propertyId.replace('properties/', '')}</span>
-                  {alertCount > 0 && (
-                    <span style={{ fontSize: 10.5, fontWeight: 700, color: h?.color ?? 'var(--text)', background: h?.bg ?? 'var(--surface-3)', borderRadius: 999, padding: '1px 7px' }}>{alertCount}</span>
-                  )}
+                  {alertCount > 0 && <span style={{ fontSize: 11.5, color: h?.color ?? 'var(--text-muted)' }}>{alertCount}</span>}
                 </button>
               );
             })}
@@ -963,13 +934,13 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
              dashboard above) - there is no shared default channel. ── */}
       <div style={box}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, gap: 12, flexWrap: 'wrap' }}>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontWeight: 600 }}><SlackMark size={16} /> Slack alerts</span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 13.5, fontWeight: 600 }}><SlackMark size={16} /> Slack alerts</span>
         </div>
         <div style={{ fontSize: 12.5, color: 'var(--text-muted)', marginBottom: 8 }}>
-          One property, one channel: connect each property's Slack channel from its dashboard above (<b>＋ Connect channel</b> / <b>✎ Edit channel</b>) and pick <b>what it receives</b> there - new issue alerts, the weekly health digest, and/or the weekly audit summary. How to get a webhook URL for a channel:
+          One property, one channel: connect each property's Slack channel from its dashboard above (<b>Connect channel</b> / <b>Edit channel</b>) and pick <b>what it receives</b> there - new issue alerts, the weekly health digest, and/or the weekly audit summary. How to get a webhook URL for a channel:
         </div>
         <ol style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6, margin: 0, paddingLeft: 18 }}>
-          <li>Open <a href="https://api.slack.com/apps" target="_blank" rel="noreferrer" style={{ color: 'var(--c-blue)' }}>api.slack.com/apps</a> → <b>Create New App</b> → <b>From scratch</b> (or pick an existing app), then choose your workspace.</li>
+          <li>Open <a href="https://api.slack.com/apps" target="_blank" rel="noreferrer" style={{ color: 'var(--info)' }}>api.slack.com/apps</a> → <b>Create New App</b> → <b>From scratch</b> (or pick an existing app), then choose your workspace.</li>
           <li>In the app’s left menu open <b>Incoming Webhooks</b> and toggle <b>Activate Incoming Webhooks</b> to <b>On</b>.</li>
           <li>Click <b>Add New Webhook to Workspace</b>, pick the <b>channel</b> the alerts should post to, then <b>Allow</b>. (The channel is baked into the URL - that’s how you pick where alerts land.)</li>
           <li>Copy the generated <b>Webhook URL</b> - it starts with <code style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11 }}>https://hooks.slack.com/services/</code>.</li>
@@ -979,7 +950,7 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
 
       {/* ── Footer status line ── */}
       <div style={{ display: 'flex', gap: 16, fontSize: 12.5, color: 'var(--text-muted)', flexWrap: 'wrap' }}>
-        <span>Background: <b style={{ color: status?.running ? 'var(--c-green)' : 'var(--text-faint)' }}>{status?.running ? 'on' : 'off'}</b></span>
+        <span>Background: <b style={{ color: status?.running ? 'var(--success)' : 'var(--text-faint)' }}>{status?.running ? 'on' : 'off'}</b></span>
         <span>Last check: {fmtTime(status?.lastRunAt ?? null)}</span>
         <span>Last Slack alert: {status?.lastSlackAt ? fmtTime(status.lastSlackAt) : 'none sent yet'}</span>
       </div>
