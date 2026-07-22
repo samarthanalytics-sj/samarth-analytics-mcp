@@ -1,3 +1,9 @@
+## [1.384.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.383.0...v1.384.0) (2026-07-22)
+
+### Features
+
+* **desktop:** show the forms funnel in Tag suggestions - instances vs distinct forms ([0bec116](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/0bec116e03d2ff1a366d8bf3fa0b0ee7aecf32ef))
+
 ## [1.383.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.382.0...v1.383.0) (2026-07-22)
 
 ### Features
