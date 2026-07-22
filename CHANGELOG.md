@@ -1,3 +1,9 @@
+## [1.381.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.380.0...v1.381.0) (2026-07-22)
+
+### Features
+
+* **suggest:** recognise Salesforce Web-to-Lead forms; warn on malformed field names ([a1a124b](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a1a124b78124ec88b53df6409cb2cfc46b302dae))
+
 ## [1.380.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.379.0...v1.380.0) (2026-07-22)
 
 ### Features
