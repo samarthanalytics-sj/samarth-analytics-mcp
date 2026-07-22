@@ -1295,7 +1295,7 @@ export function buildToolRegistry(
     {
       name: 'run_ga4_report',
       description:
-        'Run a GA4 report. dimensions/metrics are GA4 API names (e.g. ["date"], ["activeUsers","sessions"]). Dates accept "NdaysAgo", "today", "yesterday", or YYYY-MM-DD.',
+        'Run a GA4 report. dimensions/metrics are GA4 API names (e.g. ["date"], ["activeUsers","sessions"]). Dates accept "NdaysAgo", "today", "yesterday", or YYYY-MM-DD. If unsure a dimension/metric combination is valid, call check_ga4_compatibility FIRST instead of guessing.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1316,6 +1316,27 @@ export function buildToolRegistry(
           dimensions: Array.isArray(a.dimensions) ? a.dimensions.map(String) : [],
           metrics: Array.isArray(a.metrics) ? a.metrics.map(String) : [],
         }),
+    },
+    {
+      name: 'check_ga4_compatibility',
+      description:
+        'Check which of the given GA4 dimensions/metrics can be combined in ONE report on this property (the Data API rejects incompatible pairs). Call this BEFORE run_ga4_report when combining unusual dimensions/metrics; drop or replace anything reported incompatible instead of retrying blind.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          property: { type: 'string' },
+          dimensions: { type: 'array', items: { type: 'string' } },
+          metrics: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['property'],
+        additionalProperties: false,
+      },
+      handler: (a) =>
+        data.ga4CheckCompatibility(
+          s(a.property),
+          Array.isArray(a.dimensions) ? a.dimensions.map(String) : [],
+          Array.isArray(a.metrics) ? a.metrics.map(String) : []
+        ),
     },
     {
       name: 'audit_ga4_property',

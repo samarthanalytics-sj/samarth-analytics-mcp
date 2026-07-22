@@ -521,6 +521,7 @@ async function main(): Promise<void> {
       'audit_install_drift',
       'audit_server_container',
       'audit_tracking_status',
+      'check_ga4_compatibility',
       'check_gtm_measurement_ids',
       'detect_meta_web_tags',
       'diff_gtm_versions',
@@ -589,7 +590,7 @@ async function main(): Promise<void> {
 
   await test('write tools appear ONLY when a confirm function is provided', async () => {
     const readOnly = buildToolRegistry(fakeData().data);
-    assert.equal(readOnly.list().length, 56, 'read-only registry has 56 tools');
+    assert.equal(readOnly.list().length, 57, 'read-only registry has 57 tools');
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
@@ -606,7 +607,8 @@ async function main(): Promise<void> {
     // plus the read-only rank_ga4_campaigns = 106, plus the read-only suggest_tags_from_url = 107,
     // plus the read-only get_form_tracking_recipe = 108, plus the read-only lookup_corpus_patterns = 109,
     // plus the read-only discover_site_urls = 110.
-    assert.equal(withWrites.list().length, 110 + 64, 'read + write registry has 110 GTM/GA4-read/context + 64 GA4-write tools');
+    // plus the read-only check_ga4_compatibility = 111.
+    assert.equal(withWrites.list().length, 111 + 64, 'read + write registry has 111 GTM/GA4-read/context + 64 GA4-write tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_pinterest_capi_server_tag'), true, 'create_pinterest_capi_server_tag present');
     assert.equal(withWrites.list().some((t) => t.name === 'create_reddit_capi_server_tag'), true, 'create_reddit_capi_server_tag present');
     assert.equal(withWrites.list().some((t) => t.name === 'create_amazon_capi_server_tag'), true, 'create_amazon_capi_server_tag present');
@@ -1609,6 +1611,7 @@ async function main(): Promise<void> {
       'monitor_ga4_property',
       'rank_ga4_campaigns',
       'run_ga4_realtime_report',
+      'check_ga4_compatibility',
       'run_ga4_report',
       'score_ga4_property',
     ];

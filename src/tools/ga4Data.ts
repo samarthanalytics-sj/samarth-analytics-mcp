@@ -156,6 +156,47 @@ export function registerGa4DataTools(
     }
   );
 
+  // ── ga4_check_compatibility ─────────────────────────────────────────────────
+  server.registerTool(
+    'ga4_check_compatibility',
+    {
+      description:
+        'Check which of the given GA4 dimensions/metrics can be combined in ONE report on this ' +
+        'property (the Data API rejects incompatible pairs). Call this BEFORE ga4_run_report when ' +
+        'combining unusual dimensions/metrics; drop or replace anything reported incompatible ' +
+        'instead of retrying blind. Read-only.',
+      inputSchema: z.object({
+        property: propertyArg,
+        dimensions: z.array(z.string()).optional().describe('Dimension API names to test.'),
+        metrics: z.array(z.string()).optional().describe('Metric API names to test.'),
+      }),
+    },
+    async ({ property, dimensions, metrics }) => {
+      try {
+        const res = await getClient().properties.checkCompatibility({
+          property: toPropertyName(property),
+          requestBody: {
+            dimensions: (dimensions ?? []).map((name) => ({ name })),
+            metrics: (metrics ?? []).map((name) => ({ name })),
+          },
+        });
+        const dims = res.data.dimensionCompatibilities ?? [];
+        const mets = res.data.metricCompatibilities ?? [];
+        const names = (rows: Array<Record<string, unknown>>, ok: boolean): string[] =>
+          rows
+            .filter((r) => ((r.compatibility as string) === 'COMPATIBLE') === ok)
+            .map((r) => ((r.dimensionMetadata ?? r.metricMetadata) as { apiName?: string } | undefined)?.apiName ?? '')
+            .filter(Boolean);
+        return jsonResult({
+          compatible: { dimensions: names(dims as never, true), metrics: names(mets as never, true) },
+          incompatible: { dimensions: names(dims as never, false), metrics: names(mets as never, false) },
+        });
+      } catch (err) {
+        return errorText(formatGa4Error('ga4_check_compatibility', err));
+      }
+    }
+  );
+
   // ── ga4_run_realtime_report ─────────────────────────────────────────────────
   server.registerTool(
     'ga4_run_realtime_report',

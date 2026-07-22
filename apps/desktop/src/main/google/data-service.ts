@@ -3272,6 +3272,34 @@ export class GoogleDataService {
     return { transactions, notSetShare: total > 0 ? Math.min(100, (notSet / total) * 100) : 0 };
   }
 
+  /** Data API checkCompatibility: which of the requested dimensions/metrics can be combined in one
+   *  report on THIS property (custom definitions included). Lets the chat validate before running. */
+  async ga4CheckCompatibility(property: string, dimensions: string[], metrics: string[]): Promise<{
+    compatible: { dimensions: string[]; metrics: string[] };
+    incompatible: { dimensions: string[]; metrics: string[] };
+  }> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof analyticsdata>[0]['auth'];
+    const data = analyticsdata({ version: 'v1beta', auth });
+    const res = await data.properties.checkCompatibility({
+      property,
+      requestBody: {
+        dimensions: dimensions.map((name) => ({ name })),
+        metrics: metrics.map((name) => ({ name })),
+      },
+    });
+    const dims = res.data.dimensionCompatibilities ?? [];
+    const mets = res.data.metricCompatibilities ?? [];
+    const pickNames = (rows: Array<{ compatibility?: string | null }>, ok: boolean): string[] =>
+      rows
+        .filter((r) => (r.compatibility === 'COMPATIBLE') === ok)
+        .map((r) => (r as { dimensionMetadata?: { apiName?: string | null }; metricMetadata?: { apiName?: string | null } }).dimensionMetadata?.apiName ?? (r as { metricMetadata?: { apiName?: string | null } }).metricMetadata?.apiName ?? '')
+        .filter(Boolean);
+    return {
+      compatible: { dimensions: pickNames(dims, true), metrics: pickNames(mets, true) },
+      incompatible: { dimensions: pickNames(dims, false), metrics: pickNames(mets, false) },
+    };
+  }
+
   async runGa4Report(input: {
     property: string;
     startDate: string;
