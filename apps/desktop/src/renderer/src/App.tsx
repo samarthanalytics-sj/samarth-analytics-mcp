@@ -3499,10 +3499,17 @@ function TagReviewPanel({
     }
   }
 
+  // How the CURRENT result set was produced, so "Rescan" can reproduce it in one click after the
+  // site changed. Holds the exact page set (or crawl target), NOT the options: settle time and
+  // platforms are read fresh at rescan time, so tweaking them and hitting Rescan applies the tweak.
+  // null = nothing rescannable (pasted JSON, or no scan yet).
+  const lastScanRef = useRef<{ kind: 'urls'; urls: string[] } | { kind: 'crawl'; target: string } | null>(null);
+
   // Clear the whole review state so switching source mode starts a fresh, clean
   // tab instead of showing the previous scan's stale suggestions/results.
   function resetScanState(): void {
     resetHeal();
+    lastScanRef.current = null;
     setSuggestions([]);
     setSShots({});
     setShotStatus(null);
@@ -3541,6 +3548,7 @@ function TagReviewPanel({
   async function doSinglePageScan(): Promise<void> {
     const target = url.trim();
     if (!target || scanning || discovering) return;
+    lastScanRef.current = { kind: 'urls', urls: [target] };
     onError('');
     setScanning(true);
     setScanProgress(null);
@@ -3584,6 +3592,7 @@ function TagReviewPanel({
   async function doScanSelected(): Promise<void> {
     const urls = (discovered?.urls ?? []).filter((u) => selectedPages[u] && !(skipBlog && isBlogUrl(u)));
     if (urls.length === 0 || scanning) return;
+    lastScanRef.current = { kind: 'urls', urls };
     onError('');
     setScanning(true);
     setScanProgress(null);
@@ -3602,6 +3611,7 @@ function TagReviewPanel({
   async function doQuickScan(): Promise<void> {
     const target = url.trim();
     if (!target || scanning) return;
+    lastScanRef.current = { kind: 'crawl', target };
     onError('');
     setScanning(true);
     setScanProgress(null);
@@ -3620,6 +3630,7 @@ function TagReviewPanel({
     onError('');
     try {
       const res = await window.desktop.tags.fromJson(pasteText);
+      lastScanRef.current = null; // pasted JSON has no site to rescan
       setMeta(null);
       setWarnings(res.warnings);
       setScanLog(null);
@@ -3650,6 +3661,7 @@ function TagReviewPanel({
       return;
     }
     const capped = urls.slice(0, CSV_URL_CAP);
+    lastScanRef.current = { kind: 'urls', urls: capped };
     onError('');
     setScanning(true);
     setScanProgress(null);
@@ -3658,6 +3670,29 @@ function TagReviewPanel({
     try {
       applyScanResult(await window.desktop.tags.scanUrlsStream(capped, { settleMs: effSettleMs(), platforms }, onScanProgress));
       if (capped.length < urls.length) setWarnings((w) => [`Only the first ${CSV_URL_CAP} of ${urls.length} URLs were scanned (CSV cap).`, ...w]);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setScanning(false);
+      setScanProgress(null);
+    }
+  }
+
+  // One-click "the site changed, look again": replay exactly the pages (or crawl) that produced the
+  // CURRENT results, with the options as they are set NOW. No re-discovery, no re-selection.
+  async function doRescan(): Promise<void> {
+    const last = lastScanRef.current;
+    if (!last || scanning || discovering) return;
+    onError('');
+    setScanning(true);
+    setScanProgress(null);
+    loadSuggestions([]); // clear the stale rows so streamed state is never mixed with the old scan
+    try {
+      applyScanResult(
+        last.kind === 'crawl'
+          ? await window.desktop.tags.scanStream(last.target, { maxPages: 25, maxDepth: 2, settleMs: effSettleMs(), platforms }, onScanProgress)
+          : await window.desktop.tags.scanUrlsStream(last.urls, { settleMs: effSettleMs(), platforms }, onScanProgress)
+      );
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -4696,6 +4731,20 @@ function TagReviewPanel({
                 )}
               </div>
               <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+                {/* Re-run the exact scan behind these results (same pages, options as set now). Hidden
+                    for pasted-JSON results, which have no site to rescan. */}
+                {lastScanRef.current && (
+                  <button
+                    style={styles.linkBtn}
+                    onClick={() => void doRescan()}
+                    disabled={scanning || discovering}
+                    title={lastScanRef.current.kind === 'crawl'
+                      ? `Crawl and scan ${lastScanRef.current.target} again (site changed? see what's new)`
+                      : `Scan the same ${lastScanRef.current.urls.length} page(s) again (site changed? see what's new)`}
+                  >
+                    ↻ Rescan
+                  </button>
+                )}
                 {/* Selection controls apply to both Cards and Table views (shared `selected` state). */}
                 <button style={styles.linkBtn} onClick={() => setAll(() => true)}>
                   Select all
