@@ -1,3 +1,10 @@
+## [1.379.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.378.0...v1.379.0) (2026-07-22)
+
+### Features
+
+* **desktop:** per-suggestion Details panel - provider, form identity, trigger strategy ([5c18c52](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/5c18c52ad818b9cb084bbb83fe8a9f64fbff246a))
+* **ga4:** real Ads economics - Spend, ROAS, CAC per campaign in the audit (and monitor findings) ([#651](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/651)) ([8f87988](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/8f879885e191cc135803061391f6b3d02d9dbe7e))
+
 ## [1.378.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.377.0...v1.378.0) (2026-07-22)
 
 ### Features
