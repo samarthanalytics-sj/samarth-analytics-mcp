@@ -68,7 +68,7 @@ import type {
   SuggestionScreenshotResult,
 } from '../shared/ipc';
 import type { Memory, MemoryInput, MemoryPatch, AddMemoryResult } from '../shared/chat-memory';
-import type { MemoryImportPlanView } from '../shared/ipc';
+import type { MemoryImportPlanView, SemanticCorpusStatus } from '../shared/ipc';
 import type { MemoryCandidate } from '../shared/memory-extract';
 import type { SeedCandidate } from '../shared/memory-seed';
 
@@ -119,6 +119,11 @@ const api = {
       ipcRenderer.invoke('providers:setKey', provider, key),
     clearKey: (provider: LlmProvider): Promise<ProviderStatus> =>
       ipcRenderer.invoke('providers:clearKey', provider),
+    semanticStatus: (): Promise<SemanticCorpusStatus> => ipcRenderer.invoke('providers:semanticStatus'),
+    setSemanticCorpus: (on: boolean): Promise<SemanticCorpusStatus> =>
+      ipcRenderer.invoke('providers:setSemanticCorpus', on),
+    buildSemanticIndex: (): Promise<SemanticCorpusStatus> => ipcRenderer.invoke('providers:buildSemanticIndex'),
+    clearSemanticCache: (): Promise<SemanticCorpusStatus> => ipcRenderer.invoke('providers:clearSemanticCache'),
   },
 
   secrets: {
