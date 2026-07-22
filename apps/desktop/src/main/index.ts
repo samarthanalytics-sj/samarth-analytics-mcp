@@ -250,7 +250,7 @@ app.whenReady().then(() => {
 
   registerIpcHandlers();
   registerRegistryIpc(registry);
-  registerProvidersIpc(providerKeys);
+  registerProvidersIpc(providerKeys, { index: semanticIndex, cache: embeddings, registry });
   registerAdsIpc(adsService, providerKeys, dataService);
   registerGoogleIpc(googleAuth);
   registerDataIpc(dataService);

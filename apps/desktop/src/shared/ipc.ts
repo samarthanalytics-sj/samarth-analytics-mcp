@@ -1594,3 +1594,22 @@ export interface MemoryImportPlanView {
   cancelled?: boolean;
   client?: { containerId?: string; containerName?: string; publicId?: string };
 }
+
+/** State of opt-in semantic corpus search, for the Settings card. Everything here is advisory: when
+ *  semantic search is off or unavailable, corpus lookup simply stays on keyword matching. */
+export interface SemanticCorpusStatus {
+  enabled: boolean;
+  /** The active account's LLM provider, which decides whether embeddings are possible at all. */
+  provider: string;
+  /** Distinct corpus terms a first build would embed, so the cost is stated before it is paid. */
+  vocabulary: number;
+  state: 'idle' | 'building' | 'ready' | 'failed';
+  /** Terms currently indexed. */
+  terms: number;
+  /** The provider's own error from the last failed build. */
+  error?: string;
+  /** Vectors held in the local cache. */
+  cached: number;
+  /** Why semantic search cannot run right now, or null when it can. */
+  unavailable: string | null;
+}

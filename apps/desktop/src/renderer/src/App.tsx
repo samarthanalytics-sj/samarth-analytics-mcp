@@ -58,7 +58,7 @@ import { findMergeGroups, mergeGroup, mergeLabel, type MergeGroup } from '../../
 import { parseCsvUrls, parseCsvUrlStats, CSV_URL_CAP } from '../../shared/csv-urls';
 import { platformIdHints } from '../../shared/platform-id-hints';
 import { planAdsConversionActions } from '../../shared/ads-bulk-plan';
-import type { MemoryImportPlanView } from '../../shared/ipc';
+import type { MemoryImportPlanView, SemanticCorpusStatus } from '../../shared/ipc';
 import { annotationLabel } from '../../shared/audit-annotations';
 import { parseRateLimit } from '../../shared/rate-limit';
 import { autoHealConfirmMessage } from '../../shared/workspace-warnings';
@@ -9178,7 +9178,7 @@ const SETTINGS_SECTIONS: Array<{ id: string; title: string; sub: string; keyword
   { id: 'accounts', title: 'Accounts', sub: 'Manage accounts', keywords: 'account switch rename remove disconnect connect active google email' },
   { id: 'memory', title: 'Memory', sub: 'What the assistant remembers', keywords: 'memory remember notes facts preferences rules pinned' },
   { id: 'llm', title: 'Language Model', sub: 'AI provider & model', keywords: 'llm model ai provider anthropic openai gemini claude gpt chat' },
-  { id: 'providers', title: 'Providers', sub: 'API credentials', keywords: 'api key credential anthropic openai google gemini token' },
+  { id: 'providers', title: 'Providers', sub: 'API credentials', keywords: 'api key credential anthropic openai google gemini token semantic embedding embeddings corpus vector search' },
   { id: 'network', title: 'Network & Location', sub: 'VPN & proxy', keywords: 'network location vpn proxy ip egress country city adapter' },
   { id: 'diagnostics', title: 'Diagnostics', sub: 'System info', keywords: 'diagnostics dpapi secret store runtime electron chrome node' },
   { id: 'about', title: 'About', sub: 'Version & updates', keywords: 'about version app info platform update' },
@@ -9806,6 +9806,8 @@ function SettingsView({
         <p style={styles.settingsSub}>App-level API keys, shared by every account that picks the provider.</p>
         <ProvidersEditor status={provStatus} onStatus={setProvStatus} onChange={refresh} onError={onError} />
         <div style={{ height: 1, background: 'var(--border-2)', margin: '18px 0' }} />
+        <SemanticCorpusCard onError={onError} />
+        <div style={{ height: 1, background: 'var(--border-2)', margin: '18px 0' }} />
         <GoogleAdsCard onError={onError} />
       </section>
       )}
@@ -9943,6 +9945,100 @@ function LlmEditor({
         API key: {hasKey ? `✓ using the app-level ${provider} key` : `not set (add the ${provider} key under Providers below)`}
         {saved && <span style={{ color: 'var(--c-green)' }}> · {saved}</span>}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Opt-in semantic corpus search.
+ *
+ * This is the ONE feature that sends anything to an embeddings endpoint, so the card states what
+ * leaves the machine right next to the switch rather than in a tooltip, and reports whether the
+ * active provider can do it at all. Everything degrades to keyword search, so nothing here can break
+ * a chat: the worst case is that corpus lookup stays exactly as it has always been.
+ */
+function SemanticCorpusCard({ onError }: { onError: (m: string) => void }): JSX.Element {
+  const [st, setSt] = useState<SemanticCorpusStatus | null>(null);
+  const [busy, setBusy] = useState<'' | 'toggle' | 'build' | 'clear'>('');
+
+  const load = (): void => {
+    window.desktop.providers.semanticStatus().then(setSt).catch((e) => onError(String(e)));
+  };
+  useEffect(load, []);
+
+  const run = async (kind: 'toggle' | 'build' | 'clear', fn: () => Promise<SemanticCorpusStatus>): Promise<void> => {
+    setBusy(kind);
+    try { setSt(await fn()); } catch (e) { onError(e instanceof Error ? e.message : String(e)); } finally { setBusy(''); }
+  };
+
+  const stateLabel = ((): { text: string; color: string } => {
+    if (!st) return { text: 'Loading…', color: 'var(--text-muted)' };
+    if (st.state === 'ready') return { text: `Ready · ${st.terms} term(s) indexed`, color: 'var(--c-green)' };
+    if (st.state === 'building') return { text: 'Building the index…', color: 'var(--c-amber)' };
+    if (st.state === 'failed') return { text: st.error ?? 'The last build failed', color: 'var(--c-red)' };
+    return { text: 'Not built yet. It builds on your next corpus question, or press Build now.', color: 'var(--text-muted)' };
+  })();
+
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600, fontSize: 13.5 }}>
+          <input
+            type="checkbox"
+            checked={!!st?.enabled}
+            disabled={!st || !!busy}
+            onChange={(e) => void run('toggle', () => window.desktop.providers.setSemanticCorpus(e.target.checked))}
+          />
+          Semantic corpus search
+        </label>
+        <span style={{ ...styles.muted, fontSize: 12 }}>{busy === 'toggle' ? 'Saving…' : 'Off by default'}</span>
+      </div>
+
+      {/* The disclosure belongs next to the switch: this is the only thing in the memory and corpus
+          stack that leaves the machine. */}
+      <p style={{ ...styles.muted, fontSize: 12.5, marginTop: 6, lineHeight: 1.55 }}>
+        Finds patterns that mean the same thing in different words, so “asking for a demo” also matches
+        “schedule a consultation”. To do that it sends the corpus VOCABULARY
+        {st?.vocabulary ? ` (${st.vocabulary} event names and data layer key paths)` : ''} to your
+        provider's embeddings API, once, and one short query per lookup. Your container data, your
+        chat and your saved notes are never sent. Results always include the keyword matches too, so
+        an exact hit is never replaced by a similar one.
+      </p>
+
+      {st?.unavailable && (
+        <div style={{ ...styles.muted, fontSize: 12.5, color: 'var(--c-amber)', marginTop: 4 }}>⚠ {st.unavailable}</div>
+      )}
+
+      {st?.enabled && !st.unavailable && (
+        <>
+          <div style={{ ...styles.kv, marginTop: 8 }}>
+            <span>Index</span>
+            <b style={{ fontWeight: 500, color: stateLabel.color, textAlign: 'right' }}>{stateLabel.text}</b>
+          </div>
+          <div style={{ ...styles.kv, borderBottom: 'none' }}>
+            <span>Cached vectors</span>
+            <b style={{ fontWeight: 500, color: 'var(--text-dim)' }}>{st.cached}</b>
+          </div>
+          <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+            <button
+              style={styles.toggleOff}
+              disabled={!!busy || st.state === 'building'}
+              onClick={() => void run('build', () => window.desktop.providers.buildSemanticIndex())}
+              title="Embed the corpus vocabulary now, so the first question does not pay for it"
+            >
+              {busy === 'build' ? 'Building…' : '⚡ Build now'}
+            </button>
+            <button
+              style={styles.dangerGhost}
+              disabled={!!busy || !st.cached}
+              onClick={() => void run('clear', () => window.desktop.providers.clearSemanticCache())}
+              title="Drop the stored vectors, e.g. after switching provider"
+            >
+              {busy === 'clear' ? 'Clearing…' : 'Clear cache'}
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 }
