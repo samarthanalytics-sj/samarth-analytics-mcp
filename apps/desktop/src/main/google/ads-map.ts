@@ -821,6 +821,8 @@ export interface ConversionHealthInputs {
   changes: AdsChangeEvent[];
   /** Per-campaign performance summed over the window. */
   performance: AdsCampaignPerformance[];
+  /** Audiences, when fetched: OPEN lists stuck at size 0 are a remarketing-tag/upload finding. */
+  userLists?: AdsUserList[];
 }
 
 /**
@@ -895,6 +897,20 @@ export function assembleConversionHealth(i: ConversionHealthInputs): HealthFindi
       severity: 'info',
       area: 'changes',
       finding: `${removals.length} REMOVE operation(s) in the window (campaigns/ads/etc.) - relevant if a specific campaign's conversions stopped.`,
+    });
+  }
+
+  // Audiences: an OPEN list that never populated means the remarketing tag / upload feeding it is dead.
+  const emptyLists = (i.userLists ?? []).filter(
+    (u) => u.membershipStatus === 'OPEN' && (u.sizeForDisplay ?? 0) === 0 && (u.sizeForSearch ?? 0) === 0,
+  );
+  if (emptyLists.length) {
+    out.push({
+      severity: 'warning',
+      area: 'audience',
+      finding:
+        `${emptyLists.length} open audience list(s) have size 0 (${capNames(emptyLists.map((u) => u.name), 5)}) - ` +
+        'whatever should populate them (a remarketing tag in GTM, or Customer Match uploads) is not doing so. Sizes lag by hours-days, so a list created THIS week may just be young.',
     });
   }
 
@@ -997,6 +1013,84 @@ export function auditAdsGa4Seam(i: AdsGa4SeamInput): HealthFinding[] {
     if (w.includes('double counting')) out.push({ severity: 'critical', area: 'seam', finding: w });
   }
   return out.sort((a, b) => SEV_RANK[a.severity] - SEV_RANK[b.severity]);
+}
+
+// ── diagnostic reads (Phase F2) ──────────────────────────────────────────────────────────
+
+export interface UploadClientSummary {
+  /** Which uploader: GOOGLE_ADS_API / GOOGLE_ADS_WEB_CLIENT / a partner integration name. */
+  client: string;
+  status: string;
+  /** 0..1 - the share of uploaded events Google accepted/matched. */
+  successRatio: number | null;
+  totalEventCount: number | null;
+  successfulEventCount: number | null;
+  lastUploadDateTime: string | null;
+}
+
+export function mapUploadClientSummary(row: unknown): UploadClientSummary {
+  const s = asRecord(get(row, 'offlineConversionUploadClientSummary')) ?? asRecord(row) ?? {};
+  const ratioRaw = get(s, 'successRatio');
+  const ratio = typeof ratioRaw === 'number' ? ratioRaw : typeof ratioRaw === 'string' ? Number(ratioRaw) : NaN;
+  return {
+    client: (str(get(s, 'client')) ?? 'UNKNOWN').toUpperCase(),
+    status: (str(get(s, 'status')) ?? 'UNKNOWN').toUpperCase(),
+    successRatio: Number.isFinite(ratio) ? ratio : null,
+    totalEventCount: toInt(get(s, 'totalEventCount')),
+    successfulEventCount: toInt(get(s, 'successfulEventCount')),
+    lastUploadDateTime: str(get(s, 'lastUploadDateTime')),
+  };
+}
+
+export interface AdsRecommendation {
+  resourceName: string;
+  type: string;
+  campaign: string | null;
+}
+
+export function mapRecommendation(row: unknown): AdsRecommendation {
+  const r = asRecord(get(row, 'recommendation')) ?? asRecord(row) ?? {};
+  return {
+    resourceName: str(get(r, 'resourceName')) ?? '',
+    type: (str(get(r, 'type')) ?? 'UNKNOWN').toUpperCase(),
+    campaign: str(get(r, 'campaign')),
+  };
+}
+
+export interface BudgetPacingRow {
+  campaign: string;
+  status: string;
+  dailyBudgetMicros: number;
+  sharedBudget: boolean;
+  avgDailySpendMicros: number;
+  /** avg daily spend / daily budget. >= 0.9 reads as budget-capped, <= 0.2 as underspending. */
+  paceRatio: number;
+  verdict: 'capped' | 'healthy' | 'underspending';
+}
+
+/** Join campaign config (daily budgets) with summed performance over a window into per-campaign
+ *  pacing. Campaigns without a readable budget or with zero spend AND zero budget are skipped -
+ *  a verdict fabricated from missing data is worse than no row. PURE. */
+export function assessBudgetPacing(campaigns: AdsCampaign[], perf: AdsCampaignPerformance[], windowDays: number): BudgetPacingRow[] {
+  const days = Math.max(1, Math.floor(windowDays));
+  const spendById = new Map(perf.map((p) => [p.id, p.costMicros] as const));
+  const out: BudgetPacingRow[] = [];
+  for (const c of campaigns) {
+    if (!c.budget || c.budget.amountMicros <= 0) continue;
+    if (c.status !== 'ENABLED') continue;
+    const avg = (spendById.get(c.id) ?? 0) / days;
+    const ratio = avg / c.budget.amountMicros;
+    out.push({
+      campaign: c.name,
+      status: c.status,
+      dailyBudgetMicros: c.budget.amountMicros,
+      sharedBudget: c.budget.shared,
+      avgDailySpendMicros: Math.round(avg),
+      paceRatio: Math.round(ratio * 100) / 100,
+      verdict: ratio >= 0.9 ? 'capped' : ratio <= 0.2 ? 'underspending' : 'healthy',
+    });
+  }
+  return out.sort((a, b) => b.paceRatio - a.paceRatio);
 }
 
 // ── upload results (Phase D) ─────────────────────────────────────────────────────────────

@@ -31,6 +31,10 @@ import {
   buildCustomerMatchOpsBody,
   STRUCTURE_GAQL,
   USER_LISTS_GAQL,
+  UPLOAD_DIAGNOSTICS_GAQL,
+  RECOMMENDATIONS_GAQL,
+  EC_LEADS_GAQL,
+  clampWindow,
   campaignByIdGaql,
   budgetByIdGaql,
   mutateCampaignsUrl,
@@ -65,6 +69,12 @@ import {
   parseUploadOutcome,
   mapUserList,
   mapStructureRow,
+  mapUploadClientSummary,
+  mapRecommendation,
+  assessBudgetPacing,
+  type UploadClientSummary,
+  type AdsRecommendation,
+  type BudgetPacingRow,
   type AdsUserList,
   type UploadOutcome,
   type AdsAccount,
@@ -401,6 +411,43 @@ export class GoogleAdsService {
     const outcome = parseUploadOutcome(ops, members.length);
     await this.call({ url: offlineUserDataJobOpUrl(jobResourceName, 'run'), method: 'POST', body: {}, loginCustomerId });
     return { jobResourceName, outcome };
+  }
+
+  /** Upload health per CLIENT (every integration feeding conversions in, not just ours). */
+  async uploadDiagnostics(customerId: string, loginCustomerId?: string): Promise<UploadClientSummary[]> {
+    const rows = await this.search(customerId, UPLOAD_DIAGNOSTICS_GAQL, loginCustomerId);
+    return rows.map(mapUploadClientSummary);
+  }
+
+  /** Google's own (non-dismissed) recommendations - types + target campaigns only, no impact claims. */
+  async recommendations(customerId: string, loginCustomerId?: string): Promise<AdsRecommendation[]> {
+    const rows = await this.search(customerId, RECOMMENDATIONS_GAQL, loginCustomerId);
+    return rows.map(mapRecommendation);
+  }
+
+  /** Enhanced conversions for leads - a separate probe so a version without the field degrades to
+   *  null (unknown) instead of breaking the tracking-setup read it rides along with. */
+  async enhancedConversionsForLeads(customerId: string, loginCustomerId?: string): Promise<boolean | null> {
+    try {
+      const rows = await this.search(customerId, EC_LEADS_GAQL, loginCustomerId);
+      const row = rows[0] as Record<string, unknown> | undefined;
+      const customer = (row?.customer ?? row?.['customer']) as Record<string, unknown> | undefined;
+      const setting = (customer?.conversionTrackingSetting ?? customer?.['conversion_tracking_setting']) as Record<string, unknown> | undefined;
+      const v = setting?.enhancedConversionsForLeadsEnabled ?? setting?.['enhanced_conversions_for_leads_enabled'];
+      return v === true || v === 'true' ? true : v === false || v === 'false' ? false : null;
+    } catch {
+      return null; // the field is a probe, never a blocker
+    }
+  }
+
+  /** Budget pacing: daily budgets vs average daily spend over a trailing window. */
+  async budgetPacing(customerId: string, days = 14, loginCustomerId?: string): Promise<{ windowLabel: string; pacing: BudgetPacingRow[] }> {
+    const [campaigns, perf] = await Promise.all([
+      this.listCampaigns(customerId, loginCustomerId),
+      this.campaignPerformance(customerId, { days }, loginCustomerId),
+    ]);
+    const clamped = clampWindow(days);
+    return { windowLabel: perf.windowLabel, pacing: assessBudgetPacing(campaigns, perf.campaigns, clamped) };
   }
 
   /** The reversible-write helper: dry-run (validateOnly) then apply the SAME body for real. Any
