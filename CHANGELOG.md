@@ -1,3 +1,9 @@
+## [1.398.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.398.3...v1.398.4) (2026-07-23)
+
+### Bug Fixes
+
+* **mcp:** honour Retry-After, and refuse an empty compatibility check ([#683](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/683)) ([352bfaf](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/352bfafd19d7658c9346afcaa4fdc7bfcfcdb0da))
+
 ## [1.398.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.398.2...v1.398.3) (2026-07-23)
 
 ### Bug Fixes
