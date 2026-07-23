@@ -84,6 +84,30 @@ export const GOOGLE_ADS_GUIDANCE =
   'A conversion action\'s ID and LABEL come from its tag snippet and are the only two values a GTM ' +
   'conversion tag needs; if the user is wiring one up, offer the GTM chat rather than guessing the tag. ';
 
+/**
+ * Answer the message the user just sent.
+ *
+ * Observed failure this fixes: mid-way through setting up a Google Ads conversion, the assistant
+ * asked "Please confirm if this is alright". The user replied "list all tags" - a GTM question. The
+ * assistant called list_gtm_tags, got a real answer, DISCARDED it, and replied with a list of 11
+ * Google Ads accounts, continuing the previous task instead.
+ *
+ * Two things made that easy. Nothing in the prompt said to answer the CURRENT message, and the
+ * tool-group gate reads the whole visible conversation (deliberately - "list all tags" then "delete
+ * the third one" needs that), so Ads tools stayed available from the earlier turns and were the
+ * nearest thing to hand.
+ *
+ * Widening the prompt is the safe half of the fix: narrowing the gate to recent turns would break
+ * the follow-up case it exists for.
+ */
+export const ANSWER_THE_CURRENT_MESSAGE =
+  'ANSWER THE MESSAGE THE USER JUST SENT. If your previous reply ended with a question and the new ' +
+  'message does not answer it, the user has moved on: drop the pending task and answer what they ' +
+  'actually asked. Do not carry an unfinished job into an unrelated question. ' +
+  'If you call a tool, its result must appear in your answer. Calling a read tool and then replying ' +
+  'about something else means the user paid for a read they never saw. When you genuinely need to ' +
+  'set the earlier work aside, say so in one line first, then answer. ';
+
 /** Naming convention for GA4 tags/triggers the chat creates. Exported for testing. */
 export const GA4_TAG_NAMING =
   'GA4 TAG NAMING — unless the user gives an explicit name, name every GA4 event tag you create "GA4 - Event - <Name>[ Click| Form] Tag" and its trigger "<Name>[ Click| Form] Trigger", where <Name> is the event in Title Case and the optional kind word reflects the TRIGGER: "Click" when the tag fires on a click trigger (link_click / all_clicks), "Form" when it fires on a form_submit trigger, and OMIT the word for any other trigger (a Custom Event / dataLayer event such as ecommerce, a pageview, a timer, etc.). Never double the kind word when <Name> already ends in it ("Newsletter Form" → "GA4 - Event - Newsletter Form Tag", not "... Form Form Tag"; "Email Click" → "GA4 - Event - Email Click Tag"). Examples: a "Book a Demo" button click → tag "GA4 - Event - Book A Demo Click Tag" + trigger "Book A Demo Click Trigger"; a newsletter form submit → "GA4 - Event - Newsletter Form Tag" + "Newsletter Form Trigger"; a Custom Event ecommerce add_to_cart → "GA4 - Event - Add To Cart Tag" + "Add To Cart Trigger"; purchase → "GA4 - Event - Purchase Tag" + "Purchase Trigger". Apply this to ALL GA4 tags/triggers you create. CRITICAL — a Custom Event trigger has TWO different fields: its display NAME (e.g. "Purchase Trigger") and its EVENT NAME (the dataLayer value it matches). The EVENT NAME must be the raw event in snake_case exactly as the dataLayer pushes it (purchase, add_to_cart, view_item, begin_checkout, generate_lead, file_download) — NEVER a display label like "Purchase Trigger" or "GA4 - Purchase" (the dataLayer never pushes that, so the trigger would never fire). Use snake_case underscore_words for the event name; the "GA4 - Event - " / "<Name>" formatting is the display name only. ';
@@ -584,6 +608,7 @@ export class ChatService {
       // Built from the groups THIS chat can really reveal: a GA4 chat has no "pixels" group and a
       // read-only chat has no writes, so a fixed sentence would promise capabilities that do not exist.
       buildToolGroupPrompt(gatedTools.availableGroups()) +
+      ANSWER_THE_CURRENT_MESSAGE +
       'Call tools when asked; never invent ids. When the user asks to list or count ' +
       'tags, triggers, variables, accounts, containers, or workspaces, the tools already ' +
       'return the COMPLETE paginated set — present EVERY item (a compact table is ideal) and ' +
