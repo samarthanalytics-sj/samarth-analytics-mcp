@@ -1,3 +1,9 @@
+## [1.395.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.395.0...v1.395.1) (2026-07-23)
+
+### Bug Fixes
+
+* **desktop:** Ads chat setup banner covers BOTH requirements with real paths ([a11ffd6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a11ffd6f9740d1a83aea92fbafa86714dd75c751))
+
 ## [1.395.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.394.0...v1.395.0) (2026-07-23)
 
 ### Features
