@@ -105,6 +105,50 @@ check('bar: retro ask below', shouldOfferExport(TABLE, 'why is my tag not firing
 check('bar: retro ask via "the above"', shouldOfferExport(TABLE, 'anything wrong here?', 'export the above as pdf'));
 check('NO bar: forward ask is for the NEXT reply', !shouldOfferExport(TABLE, 'why is my tag not firing', 'now give me a table of the triggers'));
 
+
+// ── Fenced JSON as a table ──────────────────────────────────────────────────────
+// "give me in export format" reliably produces a JSON array, not a pipe table, and that was the ONE
+// shape the exporter could not read - so CSV and XLSX sat disabled on the most structured data a
+// reply can contain.
+const FENCE = '`'.repeat(3);
+const fenced = (body: string, lang = 'json'): string => [FENCE + lang, body, FENCE].join('\n');
+const ROWS = '[{"tagId":"160","name":"cHTML - Apollo Tag","type":"html"},{"tagId":"189","name":"Google Ads - Conversion","type":"awct"}]';
+
+check('a fenced JSON array becomes a table', extractReplyTables(fenced(ROWS)).length === 1);
+check('its header is the object keys, in order', JSON.stringify(extractReplyTables(fenced(ROWS))[0].header) === '["tagId","name","type"]');
+check('every element becomes a row', extractReplyTables(fenced(ROWS))[0].rows.length === 2);
+check('a BARE fence is tried too (models emit both)', extractReplyTables(fenced(ROWS, ''))[0]?.rows.length === 2);
+check('the reply now earns CSV', replyCsv(fenced(ROWS)).includes('tagId,name,type'));
+check('and the export bar is offered for it', shouldOfferExport(fenced(ROWS), 'give me in export format', ''));
+
+// Header = UNION of keys, in first-seen order. First-row-only would silently drop later columns.
+const RAGGED = '[{"a":1},{"a":2,"b":3}]';
+check('a key appearing only in a later row still gets a column', JSON.stringify(extractReplyTables(fenced(RAGGED))[0].header) === '["a","b"]');
+// Indexed BY KEY, so a missing field is an empty cell rather than a shifted row.
+check('a row missing a field gets an EMPTY cell, not a shifted one', JSON.stringify(extractReplyTables(fenced(RAGGED))[0].rows[0]) === '["1",""]');
+
+check('an array of scalars becomes a single column', JSON.stringify(extractReplyTables(fenced('["a","b"]'))[0].header) === '["value"]');
+check('nested values are stringified, never dropped', extractReplyTables(fenced('[{"a":{"b":1}}]'))[0].rows[0][0] === '{"b":1}');
+check('null becomes an empty cell', extractReplyTables(fenced('[{"a":null}]'))[0].rows[0][0] === '');
+check('booleans and numbers survive as text', JSON.stringify(extractReplyTables(fenced('[{"a":true,"b":0}]'))[0].rows[0]) === '["true","0"]');
+
+// Only arrays convert. A guess here becomes a spreadsheet someone works from.
+check('a bare object is NOT a table', extractReplyTables(fenced('{"a":1}')).length === 0);
+check('an empty array is NOT a table', extractReplyTables(fenced('[]')).length === 0);
+check('a scalar is NOT a table', extractReplyTables(fenced('42')).length === 0);
+check('unparseable JSON is NOT a table', extractReplyTables(fenced('{oops')).length === 0);
+
+// Other languages are skipped WHOLE, so a pipe inside code cannot be read as a table row.
+check('a JS block is ignored', extractReplyTables(fenced('const a = b | c;', 'js')).length === 0);
+check('an HTML block is ignored', extractReplyTables(fenced('<a href="x">y</a>', 'html')).length === 0);
+check('a pipe inside a code block never becomes a table',
+  extractReplyTables([FENCE + 'js', 'a | b', '--|--', 'c | d', FENCE].join('\n')).length === 0);
+
+// Mixed content still finds both kinds.
+check('a JSON block and a pipe table coexist',
+  extractReplyTables([fenced(ROWS), '', '| A | B |', '|---|---|', '| 1 | 2 |'].join('\n')).length === 2);
+check('a heading titles the JSON table', extractReplyTables(['## Tags', fenced(ROWS)].join('\n'))[0].title === 'Tags');
+
 if (failures.length) console.error(failures.join('\n'));
 console.log(`chat-export: ${passed}/${passed + failed} checks passed`);
 if (failed > 0) process.exit(1);
