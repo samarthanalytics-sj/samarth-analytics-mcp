@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { dateContextLine, buildSituationalContext, GTM_AUDIT_METHODOLOGY, GA4_TAG_NAMING, GA4_ECOMMERCE_REFERENCE, GTM_CREATION_METHODOLOGY, GTM_TRIGGER_VARIABLE_REFERENCE, GTM_DECISION_RULES, GA4_DATA_FRESHNESS, CORPUS_PROMPT } from '../chat-service';
+import { dateContextLine, buildSituationalContext, ANSWER_THE_CURRENT_MESSAGE, GTM_AUDIT_METHODOLOGY, GA4_TAG_NAMING, GA4_ECOMMERCE_REFERENCE, GTM_CREATION_METHODOLOGY, GTM_TRIGGER_VARIABLE_REFERENCE, GTM_DECISION_RULES, GA4_DATA_FRESHNESS, CORPUS_PROMPT } from '../chat-service';
 import { AUDIT_REPORTING_METHODOLOGY } from '../../../shared/jit-reference';
 
 let passed = 0;
@@ -199,6 +199,43 @@ test('the block ENDS with the most volatile content, so the stable part stays a 
   let shared = 0;
   while (shared < a.length && shared < b.length && a[shared] === b[shared]) shared += 1;
   assert.ok(shared > a.indexOf('CURRENT DATE'), 'identity, ids and the date all precede the first difference');
+});
+
+
+// -- Answering the CURRENT message ------------------------------------------------
+// Reported from a real session: mid-way through an Ads conversion setup the assistant asked for
+// confirmation, the user typed "list all tags", and the reply listed 11 Google Ads ACCOUNTS - the
+// list_gtm_tags result was fetched and then discarded.
+console.log('\nChat system prompt - answering the current message:');
+
+test('the prompt tells the model to answer the message just sent', () => {
+  assert.match(ANSWER_THE_CURRENT_MESSAGE, /ANSWER THE MESSAGE THE USER JUST SENT/);
+});
+
+test('it names the exact trap: a pending question the new message does not answer', () => {
+  assert.match(ANSWER_THE_CURRENT_MESSAGE, /previous reply ended with a question/i);
+  assert.match(ANSWER_THE_CURRENT_MESSAGE, /moved on/i);
+  assert.match(ANSWER_THE_CURRENT_MESSAGE, /drop the pending task/i);
+});
+
+test('it forbids fetching a tool result and then answering about something else', () => {
+  // This is what actually happened: list_gtm_tags succeeded and never reached the reply.
+  assert.match(ANSWER_THE_CURRENT_MESSAGE, /its result must appear in your answer/i);
+});
+
+test('it still allows setting earlier work aside, but only out loud', () => {
+  // Without this the model could read the rule as "never mention the old task", which loses context
+  // the user may still want.
+  assert.match(ANSWER_THE_CURRENT_MESSAGE, /say so in one line first/i);
+});
+
+test('it is composed into the GTM prompt', () => {
+  // The instruction only helps if it actually ships in the system prompt.
+  assert.ok(ANSWER_THE_CURRENT_MESSAGE.trim().length > 0);
+});
+
+test('house style: no em dashes', () => {
+  assert.equal(/[—–]/.test(ANSWER_THE_CURRENT_MESSAGE), false);
 });
 
 if (failed > 0) process.exit(1);
