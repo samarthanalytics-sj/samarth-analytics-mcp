@@ -4133,7 +4133,13 @@ function TagReviewPanel({
   function stopScan(): void {
     if (!scanning || stopping) return;
     setStopping(true);
-    void window.desktop.tags.cancelScan();
+    // If the cancel never reaches the main process, `stopping` would stay true forever: the button
+    // renders "Stopping…" DISABLED and the guard above blocks every retry, so the user is left
+    // watching a scan they cannot stop. Roll the flag back and say why, so pressing Stop again works.
+    void window.desktop.tags.cancelScan().catch((e: unknown) => {
+      setStopping(false);
+      onError(`Could not stop the scan: ${e instanceof Error ? e.message : String(e)}. It is still running; try Stop again.`);
+    });
   }
 
   async function doSinglePageScan(): Promise<void> {
@@ -6571,7 +6577,16 @@ function VerifyPanel({
     vCancelRef.current = true;
     setVStopping(true);
     setVNote({ kind: 'info', text: 'Stopping - finishing the current page…' });
-    void window.desktop.tags.cancelVerify();
+    // Same stranding risk as the scan's Stop: a failed cancel would leave the button disabled on
+    // "Stopping…" with the run still going. The renderer-side cancel flag stays SET, because the
+    // orchestration still honours it between phases even when the main-process drive did not hear.
+    void window.desktop.tags.cancelVerify().catch((e: unknown) => {
+      setVStopping(false);
+      setVNote({
+        kind: 'error',
+        text: `Could not stop the run: ${e instanceof Error ? e.message : String(e)}. Try Stop again.`,
+      });
+    });
   }
 
   async function runVerify(snippetOverride?: string, useMonitor = false, withForms = false): Promise<void> {
@@ -10177,11 +10192,23 @@ function NetworkLocationCard(): JSX.Element {
   // Auto-detect preference (persisted in the main process). When on, the main process watches for network
   // changes and pushes updates, which the shared hook applies live to this card and the verify banner.
   const [auto, setAuto] = useState(false);
+  const [autoError, setAutoError] = useState('');
   useEffect(() => { window.desktop.network.getAutoDetect().then(setAuto).catch(() => { /* leave off */ }); }, []);
   const toggleAuto = (v: boolean): void => {
     setAuto(v);
-    void window.desktop.network.setAutoDetect(v);
-    if (v) void refresh(); // give an immediate reading when auto-detect is switched on
+    setAutoError('');
+    // The switch is moved optimistically so it feels instant, which means a failed write would
+    // leave it reading ON while auto-detect is OFF - a lie that survives until the next reload.
+    // Put it back and say so.
+    void window.desktop.network
+      .setAutoDetect(v)
+      .then(() => {
+        if (v) void refresh(); // an immediate reading, but only once the setting actually stuck
+      })
+      .catch((e: unknown) => {
+        setAuto(!v);
+        setAutoError(`Could not ${v ? 'enable' : 'disable'} auto-detect: ${e instanceof Error ? e.message : String(e)}`);
+      });
   };
   // "Run Test": timed reachability of the Google endpoints the app's features live on.
   const [testing, setTesting] = useState(false);
@@ -10292,6 +10319,11 @@ function NetworkLocationCard(): JSX.Element {
           </div>
           <SettingSwitch on={auto} onChange={toggleAuto} label="Enable auto detect" />
         </div>
+        {/* Shown beside the switch, because that is where the click was and where the switch just
+            moved back. */}
+        {autoError && (
+          <p style={{ ...styles.settingsSub, color: 'var(--c-red)', marginTop: 8 }}>{autoError}</p>
+        )}
       </section>
     </>
   );
