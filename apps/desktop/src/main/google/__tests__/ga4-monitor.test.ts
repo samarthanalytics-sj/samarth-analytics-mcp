@@ -226,8 +226,8 @@ test('internal-traffic data_quality alert id is STABLE across runs as the non-pr
 });
 
 test('firstMetric reads a scalar realtime metric, null when absent', () => {
-  assert.equal(firstMetric({ dimensionHeaders: [], metricHeaders: ['activeUsers'], rows: [{ dimensions: [], metrics: ['42'] }] }), 42);
-  assert.equal(firstMetric({ dimensionHeaders: [], metricHeaders: ['activeUsers'], rows: [] }), null);
+  assert.equal(firstMetric({ dimensionHeaders: [], metricHeaders: ['activeUsers'], rows: [{ dimensions: [], metrics: ['42'] }], completeness: { returned: 1, matched: 1, truncated: false } }), 42);
+  assert.equal(firstMetric({ dimensionHeaders: [], metricHeaders: ['activeUsers'], rows: [], completeness: { returned: 0, matched: 0, truncated: false } }), null);
   assert.equal(firstMetric(null), null);
 });
 
