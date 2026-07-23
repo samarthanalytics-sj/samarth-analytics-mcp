@@ -1,3 +1,9 @@
+## [1.398.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.398.1...v1.398.2) (2026-07-23)
+
+### Bug Fixes
+
+* **mcp:** paginate every list endpoint that can paginate ([#681](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/681)) ([89797ea](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/89797ea69ba4da52601ee7d6e2e8244fea91f211))
+
 ## [1.398.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.398.0...v1.398.1) (2026-07-23)
 
 ### Bug Fixes
