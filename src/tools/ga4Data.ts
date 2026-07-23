@@ -173,6 +173,14 @@ export function registerGa4DataTools(
     },
     async ({ property, dimensions, metrics }) => {
       try {
+        // Both lists are optional, so a call with NEITHER is well-formed - and it would return two
+        // empty buckets, which reads as "nothing is incompatible" for a check that tested nothing.
+        // Refuse it instead of answering a question nobody asked.
+        if ((dimensions?.length ?? 0) === 0 && (metrics?.length ?? 0) === 0) {
+          return errorText(
+            'Nothing to check: pass at least one dimension or metric. An empty request would report no incompatibilities without having tested anything.'
+          );
+        }
         const res = await getClient().properties.checkCompatibility({
           property: toPropertyName(property),
           requestBody: {
@@ -187,9 +195,20 @@ export function registerGa4DataTools(
             .filter((r) => ((r.compatibility as string) === 'COMPATIBLE') === ok)
             .map((r) => ((r.dimensionMetadata ?? r.metricMetadata) as { apiName?: string } | undefined)?.apiName ?? '')
             .filter(Boolean);
+        const incompatible = { dimensions: names(dims as never, false), metrics: names(mets as never, false) };
+        const anyIncompatible = incompatible.dimensions.length + incompatible.metrics.length > 0;
         return jsonResult({
           compatible: { dimensions: names(dims as never, true), metrics: names(mets as never, true) },
-          incompatible: { dimensions: names(dims as never, false), metrics: names(mets as never, false) },
+          incompatible,
+          // Each verdict is relative to the WHOLE set you sent, so two mutually incompatible fields
+          // both come back incompatible and dropping ONE can make the other fine. Reporting this
+          // stops a caller discarding more fields than the property actually requires.
+          ...(anyIncompatible
+            ? {
+                note:
+                  'Each verdict is relative to the full set requested. Two fields that clash are BOTH reported incompatible, so removing one may make the other usable - drop them one at a time and re-check rather than discarding the whole incompatible list. The compatible list is safe to run as-is.',
+              }
+            : {}),
         });
       } catch (err) {
         return errorText(formatGa4Error('ga4_check_compatibility', err));

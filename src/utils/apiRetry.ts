@@ -61,6 +61,65 @@ export function jitteredDelay(
   return Math.max(0, Math.min(jittered, maxDelayMs));
 }
 
+/**
+ * The server's own instruction for how long to wait, in ms, or null when it gave none.
+ *
+ * On a 429 Google usually sends `Retry-After`, and retrying before it elapses is what turns one
+ * throttle into a longer one. RFC 7231 allows two forms and both appear in practice: delta-seconds
+ * ("120") and an HTTP-date ("Wed, 21 Oct 2026 07:28:00 GMT"), so both are read.
+ *
+ * `now` is injectable so the date branch is testable without freezing the clock.
+ */
+export function retryAfterMs(
+  headers: unknown,
+  now: () => number = Date.now
+): number | null {
+  if (!headers || typeof headers !== 'object') return null;
+  // Header bags arrive as plain objects, Maps, or fetch Headers depending on the transport.
+  const bag = headers as { get?: (k: string) => string | null } & Record<string, unknown>;
+  const raw =
+    typeof bag.get === 'function'
+      ? bag.get('retry-after') ?? bag.get('Retry-After')
+      : (bag['retry-after'] ?? bag['Retry-After']);
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof value !== 'string' && typeof value !== 'number') return null;
+  const text = String(value).trim();
+  if (!text) return null;
+
+  // delta-seconds
+  if (/^\d+$/.test(text)) {
+    const ms = Number(text) * 1000;
+    return Number.isFinite(ms) ? ms : null;
+  }
+  // HTTP-date
+  const at = Date.parse(text);
+  if (!Number.isFinite(at)) return null;
+  const delta = at - now();
+  // A date already in the past means "retry now", not "wait a negative amount".
+  return delta > 0 ? delta : 0;
+}
+
+/**
+ * How long to actually wait before the next attempt.
+ *
+ * Takes the LARGER of our computed backoff and the server's Retry-After, then clamps to maxDelayMs.
+ * Larger, because either source may be the more conservative one and retrying sooner than EITHER
+ * asks is the failure mode being fixed: our own backoff can be shorter than the server's
+ * instruction on an early attempt, and the server's can be shorter than ours late in a sequence.
+ *
+ * The clamp is what keeps a single attempt bounded. A server asking for longer than the cap is not
+ * disobeyed so much as deferred: the wait is capped, the retry fails again, and totalTimeout ends
+ * the sequence with a real error rather than the tool hanging for minutes inside one call.
+ */
+export function effectiveRetryDelay(
+  computedMs: number,
+  serverMs: number | null,
+  maxDelayMs: number
+): number {
+  const wanted = serverMs === null ? computedMs : Math.max(computedMs, serverMs);
+  return Math.max(0, Math.min(wanted, maxDelayMs));
+}
+
 function intFromEnv(name: string, fallback: number, env: NodeJS.ProcessEnv): number {
   const raw = env[name];
   if (raw === undefined || raw === '') return fallback;
@@ -106,10 +165,16 @@ export function buildRetryOptions(
       retryDelayMultiplier: 2,
       maxRetryDelay,
       totalTimeout,
-      retryBackoff: (_err, defaultDelayMs) =>
-        new Promise((resolve) =>
-          setTimeout(resolve, jitteredDelay(defaultDelayMs, maxRetryDelay))
-        ),
+      retryBackoff: (err, defaultDelayMs) => {
+        // Jitter our own backoff (thundering-herd defence), then never wait LESS than the server
+        // asked for. Retrying inside a Retry-After window is what extends a throttle instead of
+        // clearing it, and gaxios does not read that header itself.
+        const jittered = jitteredDelay(defaultDelayMs, maxRetryDelay);
+        const server = retryAfterMs((err as { response?: { headers?: unknown } })?.response?.headers);
+        return new Promise((resolve) =>
+          setTimeout(resolve, effectiveRetryDelay(jittered, server, maxRetryDelay))
+        );
+      },
       onRetryAttempt: (err) => {
         const e = err as {
           config?: { method?: string; url?: string; retryConfig?: { currentRetryAttempt?: number } };
