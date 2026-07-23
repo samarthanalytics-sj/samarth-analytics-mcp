@@ -22,6 +22,7 @@ import type {
   Ga4PropertyListItem,
   TagWatchConfigView,
   Ga4PlanView,
+  Ga4AuditFindingView,
   Ga4PlanApplyResultView,
   GoogleClientStatus,
   GtmAccountView,
@@ -6890,6 +6891,10 @@ const SEV_BADGE: Record<string, React.CSSProperties> = {
   info: { background: 'var(--c-blue-bg)', color: 'var(--c-blue)', border: '1px solid var(--c-blue-bg)' },
 };
 const SEV_ORDER: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
+// Severity -> accent, for the GA4 findings list. Theme tokens only (WCAG-verified in both themes).
+const GA4_SEV_COLOR: Record<string, string> = {
+  critical: 'var(--c-red)', high: 'var(--c-red)', medium: 'var(--c-amber)', low: 'var(--c-amber)', info: 'var(--text-muted)',
+};
 
 // ───────────────────────── Workspace Comparison (Container Audit) ─────────────────────────
 // A SEPARATE functionality from the audit / report: pick 2+ workspaces in the same container and diff them
@@ -9165,6 +9170,152 @@ function Ga4PlanCard({ property, onError }: { property: string; onError: (m: str
   );
 }
 
+/** Plan ids are exact (`retention_14`) or per-stream (`em_site_search:9`) - match on the boundary so
+ *  `retention_1` can never match `retention_14`. Mirrors planItemMatches in ga4-fix-guide.ts. */
+function ga4PlanMatches(planId: string, prefix: string): boolean {
+  return planId === prefix || planId.startsWith(`${prefix}:`);
+}
+
+/**
+ * The GA4 audit findings list. Every finding offers BOTH resolution paths:
+ *   - "How to fix"  - the documented manual steps + the official doc link. ALWAYS available.
+ *   - "Fix it"      - one click, shown ONLY when the finding maps to an executable plan item that a
+ *                     GA4 Admin write genuinely applies. Two-step confirm, because GA4 has no draft
+ *                     state and an apply takes effect immediately.
+ * Findings the GA4 API cannot fix (PII being sent, parameter naming, BigQuery project links) never get
+ * a button - they say who has to act instead, so the UI never offers a fix that would no-op.
+ */
+function Ga4FindingsList({ findings, property, onApplied }: {
+  findings: Array<Ga4AuditFindingView & { area?: string }>;
+  property: string;
+  onApplied: () => void;
+}): JSX.Element | null {
+  const [open, setOpen] = useState<Set<number>>(new Set());
+  const [plan, setPlan] = useState<Ga4PlanView | null>(null);
+  const [state, setState] = useState<Record<number, 'idle' | 'confirm' | 'busy' | 'done' | 'err'>>({});
+  const [note, setNote] = useState<Record<number, string>>({});
+
+  // The plan tells us which one-click fixes are ACTUALLY available for this property right now (an
+  // item only exists while its issue is live), so a button is never offered for an item that is gone.
+  useEffect(() => {
+    if (!property) { setPlan(null); return; }
+    let alive = true;
+    window.desktop.ga4.plan(property).then((p) => { if (alive) setPlan(p); }).catch(() => { if (alive) setPlan(null); });
+    return () => { alive = false; };
+  }, [property]);
+
+  if (!findings.length) return null;
+
+  /** The executable plan items that apply this finding's fix (may be several, e.g. one per stream). */
+  const itemsFor = (f: Ga4AuditFindingView): Ga4PlanView['items'] => {
+    const prefix = f.fix?.planIdPrefix;
+    if (!prefix || !plan) return [];
+    return plan.items.filter((it) => it.executable && it.status === 'issue' && ga4PlanMatches(it.id, prefix));
+  };
+
+  const applyOne = async (i: number, f: Ga4AuditFindingView): Promise<void> => {
+    const items = itemsFor(f);
+    if (!items.length) return;
+    if (state[i] !== 'confirm') { setState((s) => ({ ...s, [i]: 'confirm' })); return; }
+    setState((s) => ({ ...s, [i]: 'busy' }));
+    try {
+      const res = await window.desktop.ga4.applyPlan(property, items.map((it) => it.id), {});
+      const ok = res.applied.length > 0;
+      setState((s) => ({ ...s, [i]: ok ? 'done' : 'err' }));
+      setNote((n) => ({
+        ...n,
+        [i]: ok
+          ? `Applied: ${res.applied.join(', ')}`
+          : (res.failed[0]?.error ?? res.skipped[0]?.reason ?? 'Nothing was applied.'),
+      }));
+      setPlan(res.plan);
+      if (ok) onApplied(); // re-run the audit so the finding disappears as proof
+    } catch (e) {
+      setState((s) => ({ ...s, [i]: 'err' }));
+      setNote((n) => ({ ...n, [i]: String(e) }));
+    }
+  };
+
+  const WHERE_LABEL: Record<string, string> = {
+    auto: 'We can apply this',
+    'ga4-ui': 'Do this in GA4 Admin',
+    site: 'Site / GTM change',
+  };
+
+  return (
+    <div style={styles.card}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--text)' }}>Findings</span>
+        <span style={{ ...styles.muted, fontSize: 12 }}>{findings.length} total · every one has how-to-fix steps; the ones we can apply show a Fix button</span>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column' }}>
+        {findings.map((f, i) => {
+          const sev = GA4_SEV_COLOR[f.severity] ?? 'var(--text-muted)';
+          const items = itemsFor(f);
+          const canAuto = f.fix?.where === 'auto' && items.length > 0;
+          const st = state[i] ?? 'idle';
+          const isOpen = open.has(i);
+          return (
+            <div key={`${f.checkId ?? f.message}-${i}`} style={{ padding: '11px 0', borderTop: i === 0 ? 'none' : '1px solid var(--border)' }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 11.5, color: sev, textTransform: 'capitalize', minWidth: 52 }}>{f.severity}</span>
+                <span style={{ ...styles.muted, fontSize: 11.5 }}>{f.area ?? f.category}</span>
+                <span style={{ flex: 1, minWidth: 240, fontSize: 13, color: 'var(--text)', lineHeight: 1.5 }}>{f.message}</span>
+              </div>
+              {f.recommendation && (
+                <div style={{ fontSize: 12.5, color: 'var(--text-dim)', marginTop: 4, lineHeight: 1.55 }}>{f.recommendation}</div>
+              )}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 7, flexWrap: 'wrap' }}>
+                {canAuto ? (
+                  <>
+                    <button
+                      style={st === 'confirm' ? { ...styles.primaryBtn, padding: '4px 12px', fontSize: 12 } : { ...styles.ghostBtn, padding: '4px 12px', fontSize: 12 }}
+                      disabled={st === 'busy' || st === 'done'}
+                      onClick={() => void applyOne(i, f)}
+                      title={`Applies immediately in GA4: ${items.map((it) => it.name).join(' · ')}`}
+                    >
+                      {st === 'busy' ? 'Applying…' : st === 'done' ? '✓ Applied' : st === 'confirm' ? 'Confirm - applies now' : 'Fix it'}
+                    </button>
+                    {st === 'confirm' && (
+                      <span style={{ ...styles.muted, fontSize: 11.5, color: 'var(--c-amber)' }}>
+                        GA4 has no draft state - this takes effect immediately.
+                      </span>
+                    )}
+                  </>
+                ) : (
+                  <span style={{ ...styles.muted, fontSize: 11.5 }}>{WHERE_LABEL[f.fix?.where ?? 'ga4-ui']}</span>
+                )}
+                {f.fix?.steps?.length ? (
+                  <button
+                    style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontFamily: 'inherit', fontSize: 11.5, color: 'var(--text-muted)', textDecoration: 'underline', textUnderlineOffset: 3 }}
+                    aria-expanded={isOpen}
+                    onClick={() => setOpen((s) => { const n = new Set(s); n.has(i) ? n.delete(i) : n.add(i); return n; })}
+                  >
+                    {isOpen ? 'Hide steps' : 'How to fix'}
+                  </button>
+                ) : null}
+                {note[i] && (
+                  <span style={{ fontSize: 11.5, color: st === 'err' ? 'var(--c-red)' : 'var(--c-green)' }}>{note[i]}</span>
+                )}
+              </div>
+              {isOpen && f.fix?.steps?.length ? (
+                <ol style={{ margin: '8px 0 0', paddingLeft: 20, fontSize: 12.5, color: 'var(--text-dim)', lineHeight: 1.65 }}>
+                  {f.fix.steps.map((s: string, k: number) => <li key={k}>{s}</li>)}
+                  {f.fix.docUrl && (
+                    <li style={{ listStyle: 'none', marginLeft: -20, marginTop: 4 }}>
+                      <a href={f.fix.docUrl} target="_blank" rel="noreferrer" style={{ color: 'var(--c-blue)', fontSize: 12 }}>Google documentation</a>
+                    </li>
+                  )}
+                </ol>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function Ga4AuditPanel({
   active,
   onError,
@@ -9470,6 +9621,10 @@ function Ga4AuditPanel({
                     {result.dataQuality.dateRange ?? `${result.dataQuality.windowDays} days`}.
                   </div>
                 </div>
+
+                {/* Findings - each with BOTH ways to resolve it: a one-click fix (only where a GA4
+                    write truly applies it) and the documented manual steps (always). */}
+                <Ga4FindingsList findings={findings} property={selected?.property ?? ''} onApplied={() => void runAudit()} />
 
                 {/* Coverage - what was checked + its status (Pass / Partial / Fail / Not Verified). */}
                 <div style={styles.card}>

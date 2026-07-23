@@ -72,6 +72,9 @@ export interface Ga4PropertySnapshot {
 }
 
 export interface Ga4Finding {
+  /** Stable per-check id. Keys the fix guide (one-click plan item + manual how-to steps) so the
+   *  mapping lives in one place and survives message rewording. Mirrors the GTM audit's checkId. */
+  checkId?: string;
   severity: 'high' | 'medium' | 'low' | 'info';
   /** collection | retention | conversions | measurement | privacy | integrations | benchmarking | customdef | attribution */
   category: string;
@@ -133,6 +136,7 @@ export function auditGa4(s: Ga4PropertySnapshot, extraFindings: Ga4Finding[] = [
 
   if (s.dataStreams.length === 0) {
     findings.push({
+      checkId: 'no_data_streams',
       severity: 'high',
       category: 'collection',
       message: 'This GA4 property has no data streams — it is not collecting any data.',
@@ -147,6 +151,7 @@ export function auditGa4(s: Ga4PropertySnapshot, extraFindings: Ga4Finding[] = [
     const ret = s.dataRetention.eventDataRetention;
     if (is360 && ret !== 'FIFTY_MONTHS' && ret !== '') {
       findings.push({
+      checkId: 'retention_360_under',
         severity: ret === 'TWO_MONTHS' ? 'medium' : 'low',
         category: 'retention',
         message: `Event data retention is ${retentionLabel(ret)} on a Google Analytics 360 property — 360 supports up to 50 months, so exploration/report data is discarded earlier than it needs to be.`,
@@ -154,6 +159,7 @@ export function auditGa4(s: Ga4PropertySnapshot, extraFindings: Ga4Finding[] = [
       });
     } else if (!is360 && ret === 'TWO_MONTHS') {
       findings.push({
+      checkId: 'retention_two_months',
         severity: 'medium',
         category: 'retention',
         message: 'Event data retention is 2 months (the default) — exploration/report data older than 2 months is discarded.',
@@ -164,6 +170,7 @@ export function auditGa4(s: Ga4PropertySnapshot, extraFindings: Ga4Finding[] = [
 
   if (s.keyEvents !== null && s.keyEvents.length === 0) {
     findings.push({
+      checkId: 'no_key_events',
       severity: 'medium',
       category: 'conversions',
       message: 'No key events (conversions) are marked — the property is not measuring conversion outcomes.',
@@ -174,6 +181,7 @@ export function auditGa4(s: Ga4PropertySnapshot, extraFindings: Ga4Finding[] = [
   for (const stream of s.dataStreams) {
     if (stream.type === 'WEB_DATA_STREAM' && stream.enhancedMeasurementEnabled === false) {
       findings.push({
+      checkId: 'em_master_off',
         severity: 'low',
         category: 'measurement',
         message: `Enhanced measurement is OFF on web stream "${stream.displayName}" — page views, scrolls, outbound clicks and site search are not auto-collected.`,
@@ -186,6 +194,7 @@ export function auditGa4(s: Ga4PropertySnapshot, extraFindings: Ga4Finding[] = [
     const hit = piiMatch(dim.displayName) ?? piiMatch(dim.parameterName);
     if (hit) {
       findings.push({
+      checkId: 'pii_custom_dimension',
         severity: 'high',
         category: 'privacy',
         message: `Custom dimension "${dim.displayName || dim.parameterName}" looks like it may capture PII ("${hit}"). GA4's terms prohibit sending personally identifiable information.`,
@@ -206,6 +215,7 @@ export function auditGa4(s: Ga4PropertySnapshot, extraFindings: Ga4Finding[] = [
     if (bad.length) {
       const shown = bad.slice(0, 8).map((d) => `"${d.name}" -> ${toSnakeEventName(d.name)}${d.user ? ' (user property)' : ''}`).join(', ');
       findings.push({
+      checkId: 'param_naming',
         severity: 'low',
         category: 'customdef',
         message: `${bad.length} custom-definition parameter name${bad.length === 1 ? '' : 's'} violate naming conventions: ${shown}${bad.length > 8 ? ` (+${bad.length - 8} more)` : ''}. The registered name must exactly match the parameter the tags send - a casing/separator drift means the definition quietly receives nothing.`,
@@ -216,6 +226,7 @@ export function auditGa4(s: Ga4PropertySnapshot, extraFindings: Ga4Finding[] = [
 
   if (s.googleAdsLinks === 0) {
     findings.push({
+      checkId: 'no_ads_links',
       severity: 'info',
       category: 'integrations',
       message: 'No Google Ads links — GA4 conversions are not imported to Ads and remarketing audiences cannot be built.',
@@ -228,6 +239,7 @@ export function auditGa4(s: Ga4PropertySnapshot, extraFindings: Ga4Finding[] = [
   // consent-gated, privacy-sensitive choice, not a clear-cut fix.
   if (s.googleSignals === 'GOOGLE_SIGNALS_DISABLED' && (s.googleAdsLinks ?? 0) > 0) {
     findings.push({
+      checkId: 'signals_off_with_ads',
       severity: 'info',
       category: 'integrations',
       message: 'Google Signals is disabled while Google Ads is linked — cross-device conversions and remarketing/demographics from signed-in Google users are unavailable.',
@@ -238,6 +250,7 @@ export function auditGa4(s: Ga4PropertySnapshot, extraFindings: Ga4Finding[] = [
   const industry = s.industryCategory;
   if (!industry || industry === 'INDUSTRY_CATEGORY_UNSPECIFIED') {
     findings.push({
+      checkId: 'industry_category_unset',
       severity: 'info',
       category: 'benchmarking',
       message: 'Industry category is not set — benchmarking comparisons are unavailable.',
@@ -251,6 +264,7 @@ export function auditGa4(s: Ga4PropertySnapshot, extraFindings: Ga4Finding[] = [
   const userDims = dims.filter((d) => d.scope === 'USER').length;
   if (eventDims >= 45) {
     findings.push({
+      checkId: 'event_dim_slots',
       severity: 'low',
       category: 'customdef',
       message: `${eventDims} of 50 event-scoped custom dimension slots are in use.`,
@@ -259,6 +273,7 @@ export function auditGa4(s: Ga4PropertySnapshot, extraFindings: Ga4Finding[] = [
   }
   if (userDims >= 22) {
     findings.push({
+      checkId: 'user_dim_slots',
       severity: 'low',
       category: 'customdef',
       message: `${userDims} of 25 user-scoped custom dimension slots are in use.`,
@@ -270,6 +285,7 @@ export function auditGa4(s: Ga4PropertySnapshot, extraFindings: Ga4Finding[] = [
   const webStreams = s.dataStreams.filter((d) => d.type === 'WEB_DATA_STREAM').length;
   if (webStreams > 1) {
     findings.push({
+      checkId: 'multiple_web_streams',
       severity: 'info',
       category: 'collection',
       message: `${webStreams} web data streams are configured — the same site sending to more than one stream double-counts users and sessions.`,
@@ -280,6 +296,7 @@ export function auditGa4(s: Ga4PropertySnapshot, extraFindings: Ga4Finding[] = [
   // A retention timer that does NOT reset on activity expires a returning user's earliest data.
   if (s.dataRetention && s.dataRetention.resetOnNewActivity === false) {
     findings.push({
+      checkId: 'retention_no_reset',
       severity: 'low',
       category: 'retention',
       message: "User-data retention does not reset on new activity — a returning user's earliest data still expires on the original timer.",
@@ -295,6 +312,7 @@ export function auditGa4(s: Ga4PropertySnapshot, extraFindings: Ga4Finding[] = [
   const activelyMeasuring = (s.keyEvents?.length ?? 0) > 0;
   if (s.customDimensions !== null && dims.length === 0 && s.customMetrics.length === 0 && activelyMeasuring) {
     findings.push({
+      checkId: 'no_custom_defs',
       severity: 'low',
       category: 'customdef',
       message: 'No custom dimensions or metrics are configured, yet the property marks key events — analysis is limited to GA4 default fields (no item attributes, user properties or marketing parameters in reports).',
@@ -308,6 +326,7 @@ export function auditGa4(s: Ga4PropertySnapshot, extraFindings: Ga4Finding[] = [
     const model = s.attribution.reportingAttributionModel;
     if (model && !/DATA_DRIVEN/i.test(model) && /LAST_CLICK/i.test(model)) {
       findings.push({
+      checkId: 'attribution_last_click',
         severity: 'low',
         category: 'attribution',
         message: `Reporting attribution uses a last-click model (${prettyEnum(model)}) — it credits only the final channel, under-crediting the channels that started the journey and skewing every channel-credit number in this report.`,
@@ -317,6 +336,7 @@ export function auditGa4(s: Ga4PropertySnapshot, extraFindings: Ga4Finding[] = [
     const other = s.attribution.otherLookback;
     if (other && !/90_DAYS/i.test(other)) {
       findings.push({
+      checkId: 'lookback_short',
         severity: 'info',
         category: 'attribution',
         message: `The conversion lookback for non-acquisition events is ${prettyEnum(other)} (max is 90 days) — conversions from touchpoints older than that window get no credit.`,
@@ -335,6 +355,7 @@ export function auditGa4(s: Ga4PropertySnapshot, extraFindings: Ga4Finding[] = [
       if (!stream.enhancedMeasurement.formInteractionsEnabled) off.push('form interactions');
       if (off.length) {
         findings.push({
+      checkId: 'em_subtoggles_off',
           severity: 'low',
           category: 'measurement',
           message: `Enhanced measurement is ON for web stream "${stream.displayName}" but ${off.join(', ')} ${off.length === 1 ? 'is' : 'are'} off — those interactions are not auto-collected despite the stream looking configured.`,
@@ -349,6 +370,7 @@ export function auditGa4(s: Ga4PropertySnapshot, extraFindings: Ga4Finding[] = [
   if (Array.isArray(s.bigQueryLinks)) {
     if (s.bigQueryLinks.length === 0) {
       findings.push({
+      checkId: 'no_bigquery',
         severity: 'info',
         category: 'integrations',
         message: 'No BigQuery export is configured — raw, unsampled event-level data is unavailable, and BigQuery is the standard escape hatch from GA4 report sampling and the data-retention limit.',
@@ -358,6 +380,7 @@ export function auditGa4(s: Ga4PropertySnapshot, extraFindings: Ga4Finding[] = [
       const dead = s.bigQueryLinks.filter((l) => !l.dailyExportEnabled && !l.streamingExportEnabled);
       if (dead.length) {
         findings.push({
+      checkId: 'bigquery_no_export',
           severity: 'low',
           category: 'integrations',
           message: `A BigQuery link exists but no export is enabled${dead.some((l) => l.project) ? ` (${dead.map((l) => l.project).filter(Boolean).join(', ')})` : ''} — the link is configured yet silently sends no data.`,
@@ -370,6 +393,7 @@ export function auditGa4(s: Ga4PropertySnapshot, extraFindings: Ga4Finding[] = [
   // Audiences: none while Ads is linked + key events marked is a missed remarketing-activation.
   if (typeof s.audiences === 'number' && s.audiences === 0 && (s.keyEvents?.length ?? 0) > 0 && (s.googleAdsLinks ?? 0) > 0) {
     findings.push({
+      checkId: 'no_audiences',
       severity: 'info',
       category: 'integrations',
       message: 'No audiences are configured while Google Ads is linked — you cannot build remarketing lists or audience-triggered events from GA4 behavior.',
@@ -383,6 +407,7 @@ export function auditGa4(s: Ga4PropertySnapshot, extraFindings: Ga4Finding[] = [
     const custom = (s.audienceDetails ?? []).filter((a) => !/^(all users|purchasers)$/i.test(a.displayName.trim()));
     if (custom.length === 0) {
       findings.push({
+      checkId: 'only_default_audiences',
         severity: 'info',
         category: 'integrations',
         message: `Only GA4's default audiences exist (${(s.audienceDetails ?? []).map((a) => a.displayName).join(', ')}) while Google Ads is linked — no remarketing list reflects your own funnel (cart abandoners, high-value users, repeat visitors).`,
@@ -395,6 +420,7 @@ export function auditGa4(s: Ga4PropertySnapshot, extraFindings: Ga4Finding[] = [
   // actual revenue is cross-checked in the report, which has the revenue figure.)
   if (s.currencyCode === '') {
     findings.push({
+      checkId: 'currency_unset',
       severity: 'info',
       category: 'collection',
       message: 'No reporting currency is set on the property — monetary values may be reported inconsistently.',

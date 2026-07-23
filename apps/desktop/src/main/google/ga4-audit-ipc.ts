@@ -190,7 +190,17 @@ export async function runGa4AuditPipeline(
   const exec = buildGa4ExecSummary(reportInput);
   const visuals = buildGa4Visuals(reportInput);
   const sections = buildGa4Sections(reportInput);
-  return { config, dataQuality, markdown, exec, visuals, sections };
+  // Attach BOTH fix paths to each config finding: the one-click plan item (only where a write tool
+  // truly applies it) and the always-present manual steps. Pure lookup by checkId - see ga4-fix-guide.
+  const { fixGuideFor } = await import('./ga4-fix-guide');
+  const configWithFixes = {
+    ...config,
+    findings: config.findings.map((f) => {
+      const g = fixGuideFor(f.checkId);
+      return g ? { ...f, fix: { where: g.where, ...(g.planIdPrefix ? { planIdPrefix: g.planIdPrefix } : {}), steps: g.steps, ...(g.docUrl ? { docUrl: g.docUrl } : {}) } } : f;
+    }),
+  };
+  return { config: configWithFixes, dataQuality, markdown, exec, visuals, sections };
 }
 
 export function registerGa4AuditIpc(data: GoogleDataService): void {
