@@ -1583,6 +1583,10 @@ export interface AdsMonitorTarget {
   issueLog?: Array<{ id: string; title: string; severity: string; openedAt: number; closedAt?: number }>;
   /** Rolling run history (newest last, capped at 30). Persisted. */
   history?: AdsMonitorHistoryEntry[];
+  /** The PREVIOUS sweep's compact state, diffed on the next one to detect what changed (a deleted
+   *  conversion action, a paused campaign, a collapsed audience). Opaque to the renderer: it is
+   *  monitor bookkeeping, not something the UI renders. Absent until the first sweep completes. */
+  snapshot?: unknown;
 }
 
 export interface AdsMonitorHistoryEntry {
