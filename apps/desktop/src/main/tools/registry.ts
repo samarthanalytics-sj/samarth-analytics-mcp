@@ -1083,11 +1083,11 @@ function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean, data
         additionalProperties: false,
       },
       write: true,
-      // destructive:true is NOT a claim that this deletes something. It is the flag that buys the
-      // two-step approval card (plain writes auto-apply, because a GTM write is only ever a reversible
-      // draft edit), and this is the one write in the registry that lands on a LIVE advertising account
-      // with no draft stage and nothing here able to undo it. It gets the strongest gate that exists.
-      destructive: true,
+      // NO approval card: CREATES apply in one click, deletes are what get gated. A conversion action
+      // is additive - it spends nothing and takes nothing away - so it follows the same rule as a GTM
+      // tag create. It IS live rather than a draft, which is why the prompt requires the assistant to
+      // state the account and the exact action BEFORE calling, and the summarize line below still
+      // spells that out wherever a write is echoed.
       summarize: (a) =>
         `Create a LIVE Google Ads conversion action "${s(a.name)}" (${s(a.category)}) in account ${s(a.customerId)}. This is not a draft: it exists in Google Ads the moment it is created`,
       // Readiness is checked HERE, not only in the handler: precheck runs before the approval card, so
@@ -1594,7 +1594,8 @@ function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean, data
         additionalProperties: false,
       },
       write: true,
-      destructive: true,
+      // A create, so one click - see create_google_ads_conversion_action. An audience list is
+      // additive and spends nothing.
       summarize: (a) => `Create Customer Match user list "${s(a.name)}" in LIVE Google Ads account ${s(a.customerId)}`,
       precheck: () => adsNotReady(ads),
       handler: (a) =>
