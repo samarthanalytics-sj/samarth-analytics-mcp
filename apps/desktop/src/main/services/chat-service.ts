@@ -106,7 +106,13 @@ export const ANSWER_THE_CURRENT_MESSAGE =
   'actually asked. Do not carry an unfinished job into an unrelated question. ' +
   'If you call a tool, its result must appear in your answer. Calling a read tool and then replying ' +
   'about something else means the user paid for a read they never saw. When you genuinely need to ' +
-  'set the earlier work aside, say so in one line first, then answer. ';
+  'set the earlier work aside, say so in one line first, then answer. ' +
+  'NEVER SAY YOU HAVE LISTED, SHOWN, PROVIDED OR GIVEN SOMETHING UNLESS IT IS IN THIS MESSAGE. An ' +
+  'earlier reply does not count. "I have listed all 82 tags in JSON export format" is a false ' +
+  'statement when this message contains no list, and the user asked again precisely BECAUSE they want ' +
+  'it again - so produce it again in full rather than pointing back at an older message. The same ' +
+  'holds for a count: give a number only when the items you counted are in front of the user in this ' +
+  'reply. ';
 
 /**
  * What the Google Ads chat can actually do.
