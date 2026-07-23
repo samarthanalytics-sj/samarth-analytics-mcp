@@ -42,6 +42,9 @@ import type {
   Ga4MonitorConfig,
   Ga4MonitorStatus,
   Ga4MonitorRun,
+  AdsMonitorConfig,
+  AdsMonitorStatus,
+  AdsMonitorRun,
   DiscoverResult,
   ParsedSuggestionsResult,
   ProviderStatus,
@@ -553,6 +556,26 @@ const api = {
       const listener = (_e: unknown, run: Ga4MonitorRun): void => cb(run);
       ipcRenderer.on('ga4monitoring:run', listener);
       return () => ipcRenderer.removeListener('ga4monitoring:run', listener);
+    },
+  },
+
+  // Google Ads Monitoring: schedule background conversion-health sweeps of a LIST of Ads accounts
+  // (tagging, action config, volume, changes, audiences) and receive a run per account whenever a
+  // sweep completes; new issues can post to a per-account Slack webhook.
+  adsmonitoring: {
+    status: (): Promise<AdsMonitorStatus> => ipcRenderer.invoke('adsmonitoring:status'),
+    configure: (patch: Partial<AdsMonitorConfig>): Promise<AdsMonitorStatus> =>
+      ipcRenderer.invoke('adsmonitoring:configure', patch),
+    /** Run one Ads account on demand, or (no arg) sweep all enabled accounts. */
+    runNow: (customerId?: string): Promise<AdsMonitorRun[]> => ipcRenderer.invoke('adsmonitoring:runNow', customerId),
+    setWebhook: (url: string, customerId: string): Promise<AdsMonitorStatus> => ipcRenderer.invoke('adsmonitoring:setWebhook', url, customerId),
+    clearWebhook: (customerId: string): Promise<AdsMonitorStatus> => ipcRenderer.invoke('adsmonitoring:clearWebhook', customerId),
+    sendTest: (customerId: string): Promise<{ ok: boolean; error: string | null }> => ipcRenderer.invoke('adsmonitoring:sendTest', customerId),
+    // Subscribe to pushed runs (background + on-demand); returns an unsubscribe function.
+    onRun: (cb: (run: AdsMonitorRun) => void): (() => void) => {
+      const listener = (_e: unknown, run: AdsMonitorRun): void => cb(run);
+      ipcRenderer.on('adsmonitoring:run', listener);
+      return () => ipcRenderer.removeListener('adsmonitoring:run', listener);
     },
   },
 

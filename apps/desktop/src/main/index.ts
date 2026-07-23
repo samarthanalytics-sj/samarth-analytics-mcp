@@ -30,10 +30,12 @@ import { registerGa4AuditIpc, runGa4AuditPipeline } from './google/ga4-audit-ipc
 import { probeConsentSignal } from './suggestions/consent-probe';
 import { Ga4MonitoringService } from './services/ga4-monitoring-service';
 import { registerGa4MonitoringIpc } from './ipc/ga4-monitoring-ipc';
+import { AdsMonitoringService } from './services/ads-monitoring-service';
+import { registerAdsMonitoringIpc } from './ipc/ads-monitoring-ipc';
 import { TagWatchService } from './services/tag-watch-service';
 import { registerTagWatchIpc } from './ipc/tag-watch-ipc';
 import { registerNetworkIpc } from './network/network-ipc';
-import type { MonitorAlert, Ga4MonitorRun } from '../shared/ipc';
+import type { MonitorAlert, Ga4MonitorRun, AdsMonitorRun } from '../shared/ipc';
 import { EmbeddingStore } from './storage/embedding-store';
 import { CorpusSemanticIndex } from './corpus/semantic-index';
 
@@ -250,6 +252,21 @@ app.whenReady().then(() => {
     probeConsent: (url) => probeConsentSignal(url),
   });
 
+  // Google Ads Monitoring: background conversion-health sweeps of chosen Ads accounts; pushes each
+  // completed run to every open window and (for new issues) posts to the target's Slack webhook.
+  const broadcastAdsRun = (run: AdsMonitorRun): void => {
+    for (const w of BrowserWindow.getAllWindows()) {
+      if (!w.isDestroyed()) w.webContents.send('adsmonitoring:run', run);
+    }
+  };
+  const adsMonitoring = new AdsMonitoringService({
+    registry,
+    ads: adsService,
+    secrets,
+    emit: broadcastAdsRun,
+    configPath: join(dataDir, 'ads-monitor-config.json'),
+  });
+
   registerIpcHandlers();
   registerRegistryIpc(registry);
   registerProvidersIpc(providerKeys, { index: semanticIndex, cache: embeddings, registry });
@@ -263,6 +280,7 @@ app.whenReady().then(() => {
   registerGtmAuditIpc(dataService, memory, registry);
   registerGa4AuditIpc(dataService);
   registerGa4MonitoringIpc(ga4Monitoring);
+  registerAdsMonitoringIpc(adsMonitoring);
 
   const tagWatch = new TagWatchService({
     fetchGtagJs: (id) => dataService.fetchGtagJs(id),
