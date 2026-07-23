@@ -218,11 +218,27 @@ export interface Ga4PropertyListItem {
   accountName: string;
 }
 /** One advisory GA4 audit finding (config or data-quality). GA4 is read-only — no auto-fix. */
+/** How a GA4 finding can be resolved: `auto` = one click from here, `ga4-ui` = a human in GA4 Admin,
+ *  `site` = a site/GTM/developer change (no GA4 setting can fix it). */
+export type Ga4FixWhereView = 'auto' | 'ga4-ui' | 'site';
+/** BOTH resolution paths for a finding: the one-click plan item (when one truly applies) and the
+ *  always-present manual steps. */
+export interface Ga4FixGuideView {
+  where: Ga4FixWhereView;
+  /** Plan item id (or `id:<streamId>` prefix) that applies this in one click. Absent unless where=auto. */
+  planIdPrefix?: string;
+  steps: string[];
+  docUrl?: string;
+}
 export interface Ga4AuditFindingView {
   severity: 'critical' | 'high' | 'medium' | 'low' | 'info';
   category: string;
   message: string;
   recommendation?: string;
+  /** Stable per-check id (keys the fix guide). */
+  checkId?: string;
+  /** Both ways to fix it - one-click plan item and/or documented manual steps. */
+  fix?: Ga4FixGuideView;
 }
 /** Per-area coverage for the audit (Pass / Partial / Fail / Not Verified). */
 export interface Ga4AreaStatusView {
