@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { AccountRepository, StoredAccount } from '../storage/account-repository';
 import type { SecretStore } from '../storage/secret-store';
 import type { ProviderKeyStore } from '../storage/provider-keys';
-import type { AccountView, Ga4Context, GtmContext, LlmProvider, SecretSelfTest } from '../../shared/ipc';
+import type { AccountView, AdsContext, Ga4Context, GtmContext, LlmProvider, SecretSelfTest } from '../../shared/ipc';
 
 // Facade the IPC layer talks to. Combines the account registry (metadata) with
 // the secret store (encrypted bytes), and is the ONLY place that converts an
@@ -27,6 +27,7 @@ export class RegistryService {
       lastProduct: a.lastProduct,
       gtmContext: a.gtmContext,
       ga4Context: a.ga4Context,
+      adsContext: a.adsContext,
       llm: a.llm
         ? {
             provider: a.llm.provider,
@@ -86,6 +87,13 @@ export class RegistryService {
     const a = this.repo.get(id);
     if (!a) throw new Error(`account not found: ${id}`);
     return this.toView(this.repo.update(id, { ga4Context }));
+  }
+
+  /** Remember the Google Ads customer the user is working in (the Ads chat's target). */
+  setAdsContext(id: string, adsContext: AdsContext): AccountView {
+    const a = this.repo.get(id);
+    if (!a) throw new Error(`account not found: ${id}`);
+    return this.toView(this.repo.update(id, { adsContext }));
   }
 
   /** Set the account's LLM provider + model. The API key is app-level (per provider). */

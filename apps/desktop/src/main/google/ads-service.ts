@@ -19,15 +19,51 @@ import {
   mutateConversionActionsUrl,
   normalizeCustomerId,
   searchStreamUrl,
+  perfDateClause,
+  isYmdDate,
+  uploadClickConversionsUrl,
+  uploadConversionAdjustmentsUrl,
+  offlineUserDataJobsUrl,
+  offlineUserDataJobOpUrl,
+  buildClickConversionsBody,
+  buildConversionAdjustmentsBody,
+  buildCustomerMatchJobBody,
+  buildCustomerMatchOpsBody,
+  STRUCTURE_GAQL,
+  USER_LISTS_GAQL,
+  type AdsStructureView,
+  type AdsConsent,
+  type ClickConversionInput,
+  type ConversionAdjustmentInput,
+  type PerfRange,
   type CreateConversionActionInput,
 } from './ads-rest';
 import {
   buildAccountTree,
+  mapCampaign,
+  mapCampaignPerformance,
   mapConversionAction,
+  mapChangeEvent,
+  mapUtmCustomer,
+  mapUtmCampaign,
+  auditUtmFindings,
+  summarizeConversionVolume,
   resolveConversionCustomer,
+  sumCampaignPerformance,
+  parseUploadOutcome,
+  mapUserList,
+  mapStructureRow,
+  type AdsUserList,
+  type UploadOutcome,
   type AdsAccount,
+  type AdsCampaign,
+  type AdsCampaignPerformance,
+  type AdsChangeEvent,
   type AdsConversionAction,
   type ConversionCustomer,
+  type ConversionVolumeSummary,
+  type UtmSetup,
+  type UtmFinding,
 } from './ads-map';
 import { adsErrorInfo, isAdsScopeGap, type AdsErrorInfo } from './ads-errors';
 import { hasAdsScope } from './oauth';
@@ -201,6 +237,158 @@ export class GoogleAdsService {
     const rows = await this.search(customerId, GAQL.conversionActions, loginCustomerId);
     const actions = rows.map(mapConversionAction).sort((a, b) => a.name.localeCompare(b.name));
     return { actions, conversionCustomer: cc };
+  }
+
+  /** Campaign CONFIG (no metrics, so no date range). A MANAGER account has no campaigns of its own,
+   *  which is a different thing from an advertiser with none, so the caller is told which it is
+   *  rather than being left to read an empty array. */
+  async listCampaigns(customerId: string, loginCustomerId?: string): Promise<AdsCampaign[]> {
+    const rows = await this.search(customerId, GAQL.campaigns, loginCustomerId);
+    return rows.map(mapCampaign);
+  }
+
+  /** Per-campaign performance over a window - a trailing `days` count OR an explicit custom date
+   *  range (perfDateClause decides, and its label is returned so the tool reports exactly what ran).
+   *  The API returns one row per campaign-DAY, so the rows are summed to one per campaign before
+   *  they leave this method - handing campaign-days to a caller that expects campaigns inflates
+   *  every count by the length of the window. */
+  async campaignPerformance(
+    customerId: string,
+    range: PerfRange = {},
+    loginCustomerId?: string,
+  ): Promise<{ windowLabel: string; custom: boolean; campaigns: AdsCampaignPerformance[] }> {
+    const { label, custom } = perfDateClause(range);
+    const rows = await this.search(customerId, GAQL.campaignPerformance(range), loginCustomerId);
+    return { windowLabel: label, custom, campaigns: sumCampaignPerformance(rows.map(mapCampaignPerformance)) };
+  }
+
+  /** Change history: who changed what, when, from which surface. The API only serves the LAST 30
+   *  DAYS and hard-requires a finite date filter + LIMIT; the range is clamped here so a caller can
+   *  ask for anything and still get a legal query. Dates are computed at CALL time (not in the pure
+   *  layer) so ads-rest stays clock-free and testable from literals. */
+  async changeHistory(
+    customerId: string,
+    opts: { startDate?: string; endDate?: string; limit?: number } = {},
+    loginCustomerId?: string,
+  ): Promise<{ startDate: string; endDate: string; events: AdsChangeEvent[] }> {
+    const ymd = (d: Date): string => d.toISOString().slice(0, 10);
+    const today = new Date();
+    const floor = new Date(today.getTime() - 29 * 86_400_000); // API cap: last 30 days incl. today
+    const defStart = new Date(today.getTime() - 13 * 86_400_000);
+    let start = isYmdDate(opts.startDate) ? opts.startDate : ymd(defStart);
+    let end = isYmdDate(opts.endDate) ? opts.endDate : ymd(today);
+    if (start < ymd(floor)) start = ymd(floor);
+    if (end > ymd(today)) end = ymd(today);
+    if (start > end) start = end;
+    const rows = await this.search(customerId, GAQL.changeEvents(start, end, opts.limit ?? 200), loginCustomerId);
+    return { startDate: start, endDate: end, events: rows.map(mapChangeEvent) };
+  }
+
+  /** Conversions per action over a window, summarized busiest-first. Rows only exist where at least
+   *  one conversion was recorded, so an enabled action MISSING from the list is the signal. */
+  async conversionVolume(
+    customerId: string,
+    range: PerfRange = {},
+    loginCustomerId?: string,
+  ): Promise<{ windowLabel: string; custom: boolean; volume: ConversionVolumeSummary[] }> {
+    const { label, custom } = perfDateClause(range);
+    const rows = await this.search(customerId, GAQL.conversionVolume(range), loginCustomerId);
+    return { windowLabel: label, custom, volume: summarizeConversionVolume(rows) };
+  }
+
+  /** Account + campaign UTM plumbing (auto-tagging, tracking templates, final URL suffixes) plus the
+   *  deterministic findings. Ad-level templates are deliberately not read (see GAQL.utmCampaigns). */
+  async utmSetup(
+    customerId: string,
+    loginCustomerId?: string,
+  ): Promise<{ setup: UtmSetup; findings: UtmFinding[] }> {
+    const customerRows = await this.search(customerId, GAQL.utmCustomer, loginCustomerId);
+    const campaignRows = await this.search(customerId, GAQL.utmCampaigns, loginCustomerId);
+    const setup: UtmSetup = { ...mapUtmCustomer(customerRows[0] ?? {}), campaigns: campaignRows.map(mapUtmCampaign) };
+    return { setup, findings: auditUtmFindings(setup) };
+  }
+
+  /** Audiences / user lists with sizes + membership status - verifies remarketing tags are actually
+   *  populating lists, and supplies the target for a Customer Match upload. */
+  async listUserLists(customerId: string, loginCustomerId?: string): Promise<AdsUserList[]> {
+    const rows = await this.search(customerId, USER_LISTS_GAQL, loginCustomerId);
+    return rows.map(mapUserList);
+  }
+
+  /** One structure view (keywords quality / search terms / landing pages / ads). Metric views take
+   *  the shared date range; attribute views ignore it. */
+  async structure(
+    customerId: string,
+    view: AdsStructureView,
+    range: PerfRange = {},
+    loginCustomerId?: string,
+  ): Promise<{ windowLabel: string | null; rows: Array<Record<string, unknown>> }> {
+    const dated = view === 'search_terms' || view === 'landing_pages';
+    const rows = await this.search(customerId, STRUCTURE_GAQL[view](range), loginCustomerId);
+    return { windowLabel: dated ? perfDateClause(range).label : null, rows: rows.map((r) => mapStructureRow(view, r)) };
+  }
+
+  /** LIVE upload of offline/enhanced conversions. partialFailure is forced true (the endpoint
+   *  requires it), so per-row failures come back in the outcome - the caller reports them. */
+  async uploadClickConversions(
+    customerId: string,
+    conversions: ClickConversionInput[],
+    consent: AdsConsent,
+    loginCustomerId?: string,
+  ): Promise<UploadOutcome> {
+    const data = await this.call({
+      url: uploadClickConversionsUrl(customerId),
+      method: 'POST',
+      body: buildClickConversionsBody(conversions, consent),
+      loginCustomerId,
+    });
+    return parseUploadOutcome(data, conversions.length);
+  }
+
+  /** LIVE retractions/restatements of already-recorded conversions. */
+  async uploadConversionAdjustments(
+    customerId: string,
+    adjustments: ConversionAdjustmentInput[],
+    loginCustomerId?: string,
+  ): Promise<UploadOutcome> {
+    const data = await this.call({
+      url: uploadConversionAdjustmentsUrl(customerId),
+      method: 'POST',
+      body: buildConversionAdjustmentsBody(adjustments),
+      loginCustomerId,
+    });
+    return parseUploadOutcome(data, adjustments.length);
+  }
+
+  /** Customer Match upload to an EXISTING user list: create job → add hashed identifiers → run.
+   *  Returns the job resource so the caller can name what was started (processing is async on
+   *  Google's side - list sizes update later, not immediately). */
+  async uploadCustomerMatch(
+    customerId: string,
+    userListResource: string,
+    members: Array<{ email?: string; phone?: string }>,
+    consent: AdsConsent,
+    loginCustomerId?: string,
+  ): Promise<{ jobResourceName: string; outcome: UploadOutcome }> {
+    const created = await this.call({
+      url: offlineUserDataJobsUrl(customerId, 'create'),
+      method: 'POST',
+      body: buildCustomerMatchJobBody(userListResource, consent),
+      loginCustomerId,
+    });
+    const jobResourceName = String((created as { resourceName?: string } | null)?.resourceName ?? '');
+    if (!jobResourceName) {
+      throw new AdsError({ code: '', status: 0, retryable: false, message: 'Google Ads did not return the offline user data job it was asked to create.', remedy: 'Retry; if it persists, check the user list still exists and is a CRM-based list.' });
+    }
+    const ops = await this.call({
+      url: offlineUserDataJobOpUrl(jobResourceName, 'addOperations'),
+      method: 'POST',
+      body: buildCustomerMatchOpsBody(members),
+      loginCustomerId,
+    });
+    const outcome = parseUploadOutcome(ops, members.length);
+    await this.call({ url: offlineUserDataJobOpUrl(jobResourceName, 'run'), method: 'POST', body: {}, loginCustomerId });
+    return { jobResourceName, outcome };
   }
 
   /** Validate a create WITHOUT executing it, so the review UI can surface a name collision or a bad

@@ -39,7 +39,9 @@ import type {
   NetworkConnectionType,
   ProviderStatus,
   AdsReadiness,
+  AdsReadinessView,
   AdsAccountView,
+  GoogleProduct,
   AdsConversionActionView,
   AdsCategoryOption,
   AdsPairingView,
@@ -73,6 +75,8 @@ import { MEMORY_KINDS, type Memory, type MemoryKind } from '../../shared/chat-me
 import type { SeedCandidate } from '../../shared/memory-seed';
 import { resolveChatInput, slashMenuMatches, type SlashCommand } from '../../shared/chat-commands';
 import { extractReplyTables, shouldOfferExport } from '../../shared/chat-export';
+import { adsStatus, adsStatusLabel, adsUsable, adsNeedsConsent } from '../../shared/ads-status';
+import { ADS_ACCESS_DOCS, ADS_ACCESS_LEVELS, ADS_ACCESS_SUMMARY, ADS_TOKEN_INSTALL_STEPS, ADS_TOKEN_STEPS } from '../../shared/ads-onboarding';
 import { parseSuggestionEvidence, isProviderFormIdLabel, providerDisplayName } from '../../shared/suggestion-details';
 import { execSummaryHtml } from '../../shared/ga4-exec-html';
 import { stripDuplicateCharts } from '../../shared/ga4-visuals-html';
@@ -703,7 +707,7 @@ export function App(): JSX.Element {
   // alert banner can deep-link straight to the Monitoring sub-tab.
   const [ga4Tab, setGa4Tab] = useState<Ga4Tab>('audit');
   // A prompt picked from the Prompts tab to drop into the chat input (nonce so re-picks fire).
-  const [chatSeed, setChatSeed] = useState<{ text: string; nonce: number; product?: 'gtm' | 'ga4' } | null>(null);
+  const [chatSeed, setChatSeed] = useState<{ text: string; nonce: number; product?: GoogleProduct } | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState('');
   // Cross-tab GA4 monitoring banner: a background run with NEW issues surfaces here on any tab.
@@ -1000,7 +1004,7 @@ function formatMsgTime(ts: number): string {
 /** The "Export report" bar under long / tabular assistant replies — save the reply as PDF, CSV,
  *  XLSX or Markdown via a main-process save dialog. CSV/XLSX export the reply's ACTUAL tables, so
  *  they're disabled (with the reason on hover) when the reply has none — never an empty file. */
-function ExportReplyBar({ text, product, onError }: { text: string; product: 'gtm' | 'ga4'; onError: (m: string) => void }): JSX.Element {
+function ExportReplyBar({ text, product, onError }: { text: string; product: GoogleProduct; onError: (m: string) => void }): JSX.Element {
   const [exporting, setExporting] = useState<'' | 'pdf' | 'csv' | 'xlsx' | 'md'>('');
   const [savedTo, setSavedTo] = useState('');
   const tableCount = useMemo(() => extractReplyTables(text).length, [text]);
@@ -1058,7 +1062,7 @@ function ExportReplyBar({ text, product, onError }: { text: string; product: 'gt
 // Per-account + per-container chat persistence (survives tab switches AND app restarts).
 const CHAT_THREADS_KEY = 'samarth.chatThreads.v1';
 /** Thread id: one conversation per account + product + (for GTM) container. */
-function chatThreadKey(accountId: string | undefined, product: 'gtm' | 'ga4', scopeId: string | undefined): string {
+function chatThreadKey(accountId: string | undefined, product: GoogleProduct, scopeId: string | undefined): string {
   // GTM threads key on the selected container, GA4 threads on the selected property - switching the
   // working target switches to (or starts) that target's own conversation.
   return `${accountId ?? 'none'}|${product}|${scopeId ?? 'na'}`;
@@ -1085,7 +1089,7 @@ function saveChatThread(key: string, messages: ChatMessage[]): void {
 /** Phase 2b — auto-suggest: run an LLM pass over the current conversation to PROPOSE durable memories, then
  *  let the user approve / edit / skip each one. Human-in-the-loop by design: nothing is saved until "Keep". */
 function MemorySuggestBar({ active, product, messages, onError }: {
-  active: AccountView | undefined; product: 'gtm' | 'ga4'; messages: ChatMessage[]; onError: (m: string) => void;
+  active: AccountView | undefined; product: GoogleProduct; messages: ChatMessage[]; onError: (m: string) => void;
 }): JSX.Element | null {
   const [busy, setBusy] = useState(false);
   const [cands, setCands] = useState<Array<{ id: number; kind: MemoryKind; text: string; scopeClient: boolean }> | null>(null);
@@ -1187,17 +1191,23 @@ function ChatView({
   active: AccountView | undefined;
   onError: (m: string) => void;
   refresh: () => Promise<void>;
-  seed?: { text: string; nonce: number; product?: 'gtm' | 'ga4' } | null;
+  seed?: { text: string; nonce: number; product?: GoogleProduct } | null;
 }): JSX.Element {
   const [input, setInput] = useState('');
   const [attachment, setAttachment] = useState<ChatAttachmentView | null>(null);
   const [attaching, setAttaching] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [product, setProduct] = useState<'gtm' | 'ga4'>('gtm');
+  const [product, setProduct] = useState<GoogleProduct>('gtm');
   // Slash-command autocomplete: highlighted index in the menu; reset whenever the input text changes.
   const [slashIdx, setSlashIdx] = useState(0);
   // One stored conversation per account + product + container; survives tab switches + restarts.
-  const threadKey = chatThreadKey(active?.id, product, product === 'gtm' ? active?.gtmContext?.containerId : active?.ga4Context?.property);
+  const threadKey = chatThreadKey(
+    active?.id,
+    product,
+    product === 'gtm' ? active?.gtmContext?.containerId
+      : product === 'ga4' ? active?.ga4Context?.property
+      : active?.adsContext?.customerId,
+  );
   const [messages, setMessages] = useState<ChatMessage[]>(() => loadChatThread(threadKey));
   const threadKeyRef = useRef(threadKey);
   // Load the right thread whenever the account / product / container changes.
@@ -1459,6 +1469,13 @@ function ChatView({
             >
               GA4
             </button>
+            <button
+              style={product === 'ads' ? styles.toggleActive : styles.toggleBtn}
+              onClick={() => setProduct('ads')}
+              title="Google Ads: accounts, campaigns and conversion actions"
+            >
+              Ads
+            </button>
           </div>
           {messages.length > 0 && (
             <button style={styles.ghostBtn} onClick={() => setMessages([])}>
@@ -1470,6 +1487,7 @@ function ChatView({
 
       {product === 'gtm' && active && <GtmContextBar key={active.id} active={active} refresh={refresh} onError={onError} />}
       {product === 'ga4' && active && <Ga4ContextBar key={active.id} active={active} refresh={refresh} onError={onError} />}
+      {product === 'ads' && active && <AdsContextBar key={active.id} active={active} refresh={refresh} onError={onError} />}
 
       <div style={styles.chatLog}>
         <div style={styles.chatColumn}>
@@ -2218,6 +2236,283 @@ function Ga4ContextBar({
       </button>
       {ctx?.property && (
         <button style={styles.linkBtn} onClick={() => setEditing(false)}>cancel</button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * How to obtain a Google Ads developer token and what the access levels mean. Rendered in BOTH the
+ * Ads chat (when the token is missing) and Settings > Providers (where it is entered), from the one
+ * definition in shared/ads-onboarding, because a setup procedure written twice drifts and the copy
+ * the user happens to read is always the stale one.
+ */
+function AdsTokenGuide(): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const num = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 18, height: 18, borderRadius: 9, background: 'var(--surface-3)', fontSize: 11, fontWeight: 700, flexShrink: 0 } as const;
+  const step = (s: { title: string; detail: string; warning?: string }, i: number): JSX.Element => (
+    <li key={s.title} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginBottom: 8 }}>
+      <span style={num}>{i + 1}</span>
+      <span style={{ fontSize: 12.5, lineHeight: 1.5 }}>
+        <b>{s.title}</b>
+        <span style={{ color: 'var(--text-muted)' }}> {s.detail}</span>
+        {s.warning && (
+          <div style={{ marginTop: 4, padding: '6px 9px', borderRadius: 7, border: '1px solid var(--c-amber)', background: 'rgba(230,160,30,0.08)', fontSize: 12, lineHeight: 1.45 }}>
+            <b>Do not skip this. </b>{s.warning}
+          </div>
+        )}
+      </span>
+    </li>
+  );
+
+  return (
+    <div style={{ marginTop: 10, borderTop: '1px solid var(--border-2)', paddingTop: 10 }}>
+      <div style={{ fontSize: 12.5, marginBottom: 8 }}>{ADS_ACCESS_SUMMARY}</div>
+      <button style={styles.ctxChangeBtn} onClick={() => setOpen(!open)}>
+        {open ? '▾ Hide the setup steps' : '▸ How do I get a developer token?'}
+      </button>
+      {open && (
+        <div style={{ marginTop: 10 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-faint)', marginBottom: 6 }}>
+            Get the token from Google
+          </div>
+          <ol style={{ listStyle: 'none', padding: 0, margin: 0 }}>{ADS_TOKEN_STEPS.map(step)}</ol>
+
+          <div style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-faint)', margin: '12px 0 6px' }}>
+            Add it here
+          </div>
+          <ol style={{ listStyle: 'none', padding: 0, margin: 0 }}>{ADS_TOKEN_INSTALL_STEPS.map(step)}</ol>
+
+          <div style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-faint)', margin: '12px 0 6px' }}>
+            Access levels
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ borderCollapse: 'collapse', fontSize: 12.5, width: '100%', minWidth: 420 }}>
+              <thead>
+                <tr>
+                  {['Level', 'Daily limit', 'What it means here'].map((h) => (
+                    <th key={h} style={{ textAlign: 'left', padding: '5px 8px', borderBottom: '1px solid var(--border)', color: 'var(--text-faint)', fontWeight: 600, whiteSpace: 'nowrap' }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {ADS_ACCESS_LEVELS.map((l) => (
+                  <tr key={l.level}>
+                    <td style={{ padding: '6px 8px', borderBottom: '1px solid var(--border-2)', whiteSpace: 'nowrap', verticalAlign: 'top' }}>
+                      {/* The usable/unusable mark is the whole point of the table: Test is not a
+                          smaller Basic, it cannot reach a real account at all. */}
+                      <span style={{ color: l.worksHere ? 'var(--c-green)' : 'var(--c-red)' }}>{l.worksHere ? '●' : '○'}</span>{' '}
+                      <b>{l.level}</b>
+                    </td>
+                    <td style={{ padding: '6px 8px', borderBottom: '1px solid var(--border-2)', verticalAlign: 'top', whiteSpace: 'nowrap' }}>{l.limit}</td>
+                    <td style={{ padding: '6px 8px', borderBottom: '1px solid var(--border-2)', color: 'var(--text-muted)', lineHeight: 1.45, verticalAlign: 'top' }}>{l.meaning}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 8, lineHeight: 1.5 }}>
+            Figures are a guide; Google changes them.{' '}
+            {/* Same pattern as every other outbound link here: the main process's window-open
+                handler sends it to the real browser. */}
+            <a href={ADS_ACCESS_DOCS} target="_blank" rel="noreferrer" style={{ color: 'var(--c-cyan)' }}>
+              Google&apos;s access levels page ↗
+            </a>{' '}
+            has the current ones.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The Google Ads chat's working-account bar: the same shape as the GTM and GA4 bars, plus the one
+ * thing they do not need - a CONNECTION STATUS, because Google Ads can fail to be usable in several
+ * distinct ways (not signed in, no developer token, scope never granted) and each needs a different
+ * fix. The status comes from shared/ads-status so the wording cannot drift from any other surface.
+ */
+function AdsContextBar({
+  active,
+  refresh,
+  onError,
+}: {
+  active: AccountView;
+  refresh: () => Promise<void>;
+  onError: (m: string) => void;
+}): JSX.Element {
+  const ctx = active.adsContext;
+  const [status, setStatus] = useState<AdsReadinessView | null>(null);
+  const [editing, setEditing] = useState(!ctx?.customerId);
+  const [accounts, setAccounts] = useState<AdsAccountView[]>([]);
+  const [sel, setSel] = useState<string>(ctx?.customerId ?? '');
+  const [loading, setLoading] = useState(false);
+  const [query, setQuery] = useState('');
+
+  // Status is checked on every mount and after a re-consent, never cached across accounts: a token
+  // granted for one Google account says nothing about another.
+  const checkStatus = useCallback(async (): Promise<AdsReadinessView> => {
+    const r = active.hasGoogleToken ? await window.desktop.ads.status().catch(() => null) : null;
+    const s = adsStatus(r, active.hasGoogleToken);
+    setStatus(s);
+    return s;
+  }, [active.hasGoogleToken]);
+  useEffect(() => { void checkStatus(); }, [checkStatus, active.id]);
+
+  // The account list is only fetched once the integration is actually usable. Asking for accounts
+  // while the developer token is missing returns the same failure the status already explains, and
+  // showing it twice reads as two separate problems.
+  const loadedForAccount = useRef<string>('');
+  useEffect(() => {
+    if (!editing || !status || !adsUsable(status) || loadedForAccount.current === active.id) return;
+    loadedForAccount.current = active.id;
+    setLoading(true);
+    window.desktop.ads
+      .listAccounts()
+      .then((list) => {
+        setAccounts(list);
+        if (list.length === 0) {
+          onError('No Google Ads accounts are reachable from this Google sign-in. Check you picked the right account, or that it has access in Google Ads.');
+        }
+      })
+      .catch((e) => onError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setLoading(false));
+  }, [editing, status, active.id, onError]);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase().replace(/-/g, '');
+    if (!q) return accounts;
+    return accounts.filter((a) => a.name.toLowerCase().includes(q) || a.id.includes(q));
+  }, [accounts, query]);
+  // Managers first, each followed by what sits under it, so the list reads like the Ads account
+  // switcher rather than a flat id dump.
+  const groups = useMemo(() => {
+    const m = new Map<string, AdsAccountView[]>();
+    for (const a of filtered) {
+      const k = a.manager ? 'Manager (MCC) accounts' : 'Advertising accounts';
+      const arr = m.get(k) ?? [];
+      arr.push(a);
+      m.set(k, arr);
+    }
+    return [...m.entries()].sort((x, y) => (x[0] === 'Advertising accounts' ? -1 : 1) - (y[0] === 'Advertising accounts' ? -1 : 1));
+  }, [filtered]);
+  useEffect(() => {
+    if (query.trim() && filtered.length === 1) setSel(filtered[0].id);
+  }, [query, filtered]);
+
+  async function save(): Promise<void> {
+    const a = accounts.find((x) => x.id === sel);
+    if (!a) return;
+    try {
+      await window.desktop.accounts.setAdsContext(active.id, {
+        customerId: a.id,
+        customerName: a.name,
+        manager: a.manager,
+        testAccount: a.testAccount,
+        ...(a.loginCustomerId ? { loginCustomerId: a.loginCustomerId } : {}),
+      });
+      await refresh();
+      setEditing(false);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  // Not usable: show WHY and the one action that fixes it, instead of an account picker that cannot
+  // populate. Re-consent is offered only for a scope gap - it does not install a developer token.
+  if (status && !adsUsable(status)) {
+    // A missing developer token is not a one-line problem: nothing works until it is obtained, and
+    // obtaining it is a multi-step process outside this app that people reliably get wrong in the
+    // same two ways (starting from a non-manager account, and stopping at Test access). So that one
+    // case gets the full guide inline, where the user actually hit it, instead of a link to Settings.
+    const needsToken = status.state === 'no_developer_token';
+    return (
+      <div style={{ ...styles.ctxBarEdit, borderColor: 'var(--c-amber)', flexDirection: 'column', alignItems: 'stretch', gap: 0 }}>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ ...styles.ctxMutedLabel, color: 'var(--c-amber)' }}>Google Ads</span>
+          <span style={{ fontSize: 12.5, fontWeight: 600 }}>{adsStatusLabel(status)}</span>
+          <span style={{ fontSize: 12.5, color: 'var(--text-muted)', flex: 1, minWidth: 160 }}>
+            {needsToken ? 'Add a Google Ads developer token to use this tab. It takes a few minutes plus Google\'s review.' : `${status.message} ${status.remedy ?? ''}`}
+          </span>
+          {adsNeedsConsent(status) && (
+            <button
+              style={styles.ctxChangeBtn}
+              onClick={() => {
+                // Re-consent adds the adwords scope to the EXISTING grant (google.connectAds), so
+                // Tag Manager and Analytics access is untouched.
+                void window.desktop.google
+                  .connectAds()
+                  .then(async () => { await refresh(); await checkStatus(); })
+                  .catch((e: unknown) => onError(e instanceof Error ? e.message : String(e)));
+              }}
+            >
+              Connect Google Ads
+            </button>
+          )}
+          <button style={styles.ctxChangeBtn} onClick={() => void checkStatus()}>↻ Recheck</button>
+        </div>
+        {needsToken && <AdsTokenGuide />}
+      </div>
+    );
+  }
+
+  if (!editing && ctx?.customerId) {
+    return (
+      <div style={styles.ctxBar}>
+        <span style={styles.ctxBreadcrumb}>
+          <span style={styles.ctxMutedLabel}>Working in</span>
+          <span style={styles.ctxContainerPill} title={`${ctx.customerName ?? ''} (${ctx.customerId})`}>
+            📣 {ctx.customerName ?? ctx.customerId}
+            <span style={styles.ctxPillId}> #{ctx.customerId}</span>
+          </span>
+          {/* Both flags change what the account can answer, so they are stated rather than left for
+              the user to discover through an empty campaign or conversion list. */}
+          {ctx.manager && <span style={styles.ctxSep}>manager (MCC), serves no ads itself</span>}
+          {ctx.testAccount && <span style={styles.ctxSep}>test account, no real conversions</span>}
+        </span>
+        {status?.state === 'ready' && <span style={{ fontSize: 11.5, color: 'var(--c-green)' }}>● Connected</span>}
+        <button style={styles.ctxChangeBtn} onClick={() => { setSel(ctx.customerId ?? ''); setEditing(true); }}>
+          ✎ Change
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div style={styles.ctxBarEdit}>
+      <span style={styles.ctxMutedLabel}>Working in</span>
+      <label style={styles.ctxField}>
+        <span style={styles.ctxFieldLabel}>Search</span>
+        <input
+          style={{ ...styles.ctxSelect, width: 170 }}
+          type="text"
+          placeholder="🔍 Name or customer id…"
+          value={query}
+          disabled={loading}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && sel && filtered.some((a) => a.id === sel)) void save(); }}
+        />
+      </label>
+      <label style={styles.ctxField}>
+        <span style={styles.ctxFieldLabel}>
+          Google Ads account{query.trim() ? ` (${filtered.length} match${filtered.length === 1 ? '' : 'es'})` : ''}
+        </span>
+        <select style={styles.ctxSelect} value={sel} disabled={loading} onChange={(e) => setSel(e.target.value)}>
+          <option value="">{loading ? 'Loading…' : 'Select an account…'}</option>
+          {groups.map(([label, list]) => (
+            <optgroup key={label} label={label}>
+              {list.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name} (#{a.id}){a.testAccount ? ' - test' : ''}{a.hidden ? ' - hidden' : ''}
+                </option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
+      </label>
+      <button style={styles.ctxChangeBtn} disabled={!sel || loading} onClick={() => void save()}>✓ Use this account</button>
+      {ctx?.customerId && (
+        <button style={styles.ctxChangeBtn} onClick={() => setEditing(false)}>Cancel</button>
       )}
     </div>
   );
@@ -11368,6 +11663,9 @@ function GoogleAdsCard({ onError }: { onError: (m: string) => void }): JSX.Eleme
         Issued from a Google Ads <b>manager (MCC)</b> account under Tools and Settings, API Center. A standard
         Ads account cannot issue one. Shared by every signed-in Google account; stored encrypted (DPAPI).
       </p>
+      {/* The full procedure, from the SAME definition the Ads chat shows, so the two cannot drift.
+          Collapsed by default here: someone already in Settings with a saved token does not need it. */}
+      {hasToken === false && <AdsTokenGuide />}
 
       <div style={{ ...styles.formRow, marginTop: 10 }}>
         <button style={styles.ghostBtn} onClick={test} disabled={busy !== '' || !hasToken}>

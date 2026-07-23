@@ -1,3 +1,55 @@
+## [1.391.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.390.0...v1.391.0) (2026-07-23)
+
+### Features
+
+* **desktop:** Google Ads phases D+E - uploads behind the strongest gate, audiences, structure reads ([89019ba](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/89019ba1db5cd321d47b5857ceb34df5431ca361))
+
+## [1.390.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.389.0...v1.390.0) (2026-07-23)
+
+### Features
+
+* **desktop:** Google Ads phase C - conversion-health composite + Ads-GA4 seam audit ([6ae7b07](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/6ae7b0767793faef20dd827c28d2a3625d95bb6a))
+
+## [1.389.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.388.1...v1.389.0) (2026-07-23)
+
+### Features
+
+* **desktop:** Google Ads phase B - change history, conversion volume, UTM audit ([124b590](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/124b59024d71546ea960b79f159d71b8db273db8))
+
+## [1.388.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.388.0...v1.388.1) (2026-07-22)
+
+### Bug Fixes
+
+* **desktop:** smoke read-tool inventory count 62 -> 63 (get_google_ads_tracking_setup) ([ea27d1f](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/ea27d1fcff86ad01deaac22ebf5198f097aa85ff)), closes [#664](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/664)
+
+## [1.388.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.387.0...v1.388.0) (2026-07-22)
+
+### Features
+
+* **desktop:** Google Ads phase A - custom date ranges, tracking setup, full conversion config ([2eb1c59](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/2eb1c593efc391db3fa22e65249f235d01e319b2))
+
+### Bug Fixes
+
+* **desktop:** map get_google_ads_tracking_setup into the google-ads tool group ([d6d155a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d6d155a05e7ae0204369890d6b955fb9a27c84f8))
+
+## [1.387.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.386.1...v1.387.0) (2026-07-22)
+
+### Features
+
+* **desktop:** guide the user through getting a Google Ads developer token ([#663](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/663)) ([9cd2a74](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/9cd2a74a041c0a60a09a779faa743c8278df22d6))
+
+## [1.386.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.386.0...v1.386.1) (2026-07-22)
+
+### Bug Fixes
+
+* **desktop:** GA4 Monitoring - Slack channel bar moves to the top, Recent alerts gets the full row ([7c02c29](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/7c02c291cccbf289e222d184e62e8700aba5a1a0))
+
+## [1.386.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.385.0...v1.386.0) (2026-07-22)
+
+### Features
+
+* **desktop:** Google Ads as a first-class chat product alongside GTM and GA4 ([#660](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/660)) ([615ad54](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/615ad541efe4e159e00320ae4926066451e2af4e))
+
 ## [1.385.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.384.0...v1.385.0) (2026-07-22)
 
 ### Features

@@ -6,6 +6,10 @@
 // published sunset date after which requests hard-fail, so the constant below is the single place
 // to bump. v24 is current at the time of writing.
 
+// node:crypto is used ONLY for SHA-256 hashing of upload identifiers (deterministic compute, no
+// I/O) - the "I/O-free" rule above still holds: nothing here touches network or disk.
+import { createHash } from 'node:crypto';
+
 export const ADS_API_VERSION = 'v24';
 export const ADS_BASE = 'https://googleads.googleapis.com';
 
@@ -65,6 +69,12 @@ export const GAQL: {
   customerClients: string;
   conversionTrackingSetting: string;
   conversionActions: string;
+  campaigns: string;
+  campaignPerformance: (range: PerfRange) => string;
+  changeEvents: (startDate: string, endDate: string, limit: number) => string;
+  conversionVolume: (range: PerfRange) => string;
+  utmCustomer: string;
+  utmCampaigns: string;
 } = {
   // The MCC hierarchy walk. `level <= 1` means "this account plus its direct children": going
   // deeper returns the whole sub-tree of every manager under a large MCC, which is thousands of
@@ -80,8 +90,10 @@ export const GAQL: {
   // compares them without stripping the prefix always concludes they differ. conversion_tracking_status
   // is relative to the login-customer-id the request was made under, meaning the same account can
   // legitimately report a different status through a different manager.
+  // auto_tagging_enabled rides in the SAME query: it lives on the customer, and "is GCLID present at
+  // all" belongs to the same tracking-setup question as "who owns the conversions".
   conversionTrackingSetting:
-    'SELECT customer.id, customer.descriptive_name, customer.conversion_tracking_setting.conversion_tracking_id, customer.conversion_tracking_setting.cross_account_conversion_tracking_id, customer.conversion_tracking_setting.google_ads_conversion_customer, customer.conversion_tracking_setting.accepted_customer_data_terms, customer.conversion_tracking_setting.conversion_tracking_status FROM customer',
+    'SELECT customer.id, customer.descriptive_name, customer.auto_tagging_enabled, customer.conversion_tracking_setting.conversion_tracking_id, customer.conversion_tracking_setting.cross_account_conversion_tracking_id, customer.conversion_tracking_setting.google_ads_conversion_customer, customer.conversion_tracking_setting.accepted_customer_data_terms, customer.conversion_tracking_setting.conversion_tracking_status FROM customer',
 
   // Everything the reuse picker needs. tag_snippets is the payload that matters: the conversion
   // LABEL has no field of its own anywhere in the API, it exists only inside
@@ -99,9 +111,105 @@ export const GAQL: {
   // tag_snippets is legitimately empty for UPLOAD_CLICKS, app, store-visit and GA4-originated
   // actions (the latter usually arrive with status HIDDEN), so the caller must treat an empty
   // array as "not taggable from the web", never as an error.
+  // The FULL config read: attribution model (+ data-driven status), the two lookback windows, and the
+  // value settings ride along so a config audit needs no second query. include_in_conversions_metric
+  // stays deliberately UNSELECTED (see the omissions note above) - primary_for_goal is the field.
   conversionActions:
-    "SELECT conversion_action.resource_name, conversion_action.id, conversion_action.name, conversion_action.status, conversion_action.type, conversion_action.category, conversion_action.owner_customer, conversion_action.primary_for_goal, conversion_action.counting_type, conversion_action.tag_snippets FROM conversion_action WHERE conversion_action.status != 'REMOVED'",
+    "SELECT conversion_action.resource_name, conversion_action.id, conversion_action.name, conversion_action.status, conversion_action.type, conversion_action.category, conversion_action.owner_customer, conversion_action.primary_for_goal, conversion_action.counting_type, conversion_action.attribution_model_settings.attribution_model, conversion_action.attribution_model_settings.data_driven_model_status, conversion_action.click_through_lookback_window_days, conversion_action.view_through_lookback_window_days, conversion_action.value_settings.default_value, conversion_action.value_settings.default_currency_code, conversion_action.value_settings.always_use_default_value, conversion_action.tag_snippets FROM conversion_action WHERE conversion_action.status != 'REMOVED'",
+
+  // Campaign CONFIG only - no metrics, so it needs no date range and cannot be mistaken for
+  // performance. REMOVED campaigns are excluded because they can outnumber the live ones many times
+  // over in a long-running account; PAUSED ones are kept, since "why is this paused" is a real
+  // question. The budget arrives in MICROS of the account currency (1,000,000 = 1 unit) and is
+  // SHARED: one budget can back several campaigns, so its amount is not that campaign's spend.
+  campaigns:
+    "SELECT campaign.id, campaign.name, campaign.status, campaign.advertising_channel_type, campaign.advertising_channel_sub_type, campaign.start_date, campaign.end_date, campaign.bidding_strategy_type, campaign_budget.id, campaign_budget.amount_micros, campaign_budget.explicitly_shared FROM campaign WHERE campaign.status != 'REMOVED' ORDER BY campaign.name",
+
+  // Campaign PERFORMANCE over a window. Separate from the config read because the moment a GAQL
+  // query names a metric it becomes date-ranged, and rows then represent campaign-days rather than
+  // campaigns. The date clause comes from perfDateClause: an explicit BETWEEN for a custom range,
+  // else DURING LAST_N (which excludes today, whose data is still accruing and would read as a
+  // collapse in every trend). cost_micros is micros of the account currency.
+  campaignPerformance: (range: PerfRange): string =>
+    'SELECT campaign.id, campaign.name, campaign.status, metrics.impressions, metrics.clicks, metrics.cost_micros, metrics.conversions, metrics.conversions_value, metrics.all_conversions ' +
+    `FROM campaign WHERE campaign.status != 'REMOVED' AND ${perfDateClause(range).clause}`,
+
+  // "Who changed what, right before the drop". change_event HARD-REQUIRES a finite date predicate on
+  // change_date_time AND a LIMIT, and only covers the LAST 30 DAYS - all three constraints are
+  // enforced HERE (clamped dates arrive from the service, the limit is clamped below) so a caller
+  // can never assemble the query the API rejects. The end date gets 23:59:59 appended because
+  // change_date_time is a DATETIME: a bare end date would exclude everything after midnight of that
+  // day, silently dropping the most recent (most interesting) changes.
+  changeEvents: (startDate: string, endDate: string, limit: number): string =>
+    'SELECT change_event.change_date_time, change_event.user_email, change_event.client_type, change_event.change_resource_type, change_event.resource_change_operation, change_event.changed_fields, change_event.change_resource_name, campaign.name ' +
+    `FROM change_event WHERE change_event.change_date_time >= '${startDate}' AND change_event.change_date_time <= '${endDate} 23:59:59' ` +
+    `ORDER BY change_event.change_date_time DESC LIMIT ${clampChangeLimit(limit)}`,
+
+  // Conversions per ACTION per DAY. Segmenting by conversion_action means a row exists only where at
+  // least one conversion was recorded - an enabled action with NO row over the range is the "tag may
+  // be dead" signal (or simply no ads ran; the caller must say which it cannot distinguish).
+  conversionVolume: (range: PerfRange): string =>
+    'SELECT segments.date, segments.conversion_action, segments.conversion_action_name, metrics.all_conversions ' +
+    `FROM campaign WHERE ${perfDateClause(range).clause}`,
+
+  // UTM plumbing, account level: auto-tagging + the account-wide tracking template / suffix.
+  utmCustomer:
+    'SELECT customer.id, customer.auto_tagging_enabled, customer.tracking_url_template, customer.final_url_suffix FROM customer',
+
+  // UTM plumbing, campaign level: per-campaign template/suffix overrides. Ad-level templates exist
+  // too but are deliberately NOT read here (thousands of rows on a big account); the audit says so.
+  utmCampaigns:
+    "SELECT campaign.id, campaign.name, campaign.status, campaign.tracking_url_template, campaign.final_url_suffix FROM campaign WHERE campaign.status = 'ENABLED'",
 };
+
+/** change_event refuses LIMIT-less queries and caps at 10000; default is a readable page. */
+export function clampChangeLimit(limit: number): number {
+  const n = Number.isFinite(limit) ? Math.floor(limit) : 200;
+  return Math.min(10_000, Math.max(1, n > 0 ? n : 200));
+}
+
+/** A performance window: either a trailing `days` count, or an explicit inclusive date range. */
+export interface PerfRange {
+  days?: number;
+  startDate?: string;
+  endDate?: string;
+}
+
+/** Strict YYYY-MM-DD. GAQL's BETWEEN takes quoted dates in exactly this shape; anything else is a
+ *  query error, so a malformed date must fall back rather than reach the wire. */
+export function isYmdDate(s: unknown): s is string {
+  return typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s);
+}
+
+/**
+ * The segments.date clause for a performance query, plus the human label the tool reports - decided
+ * in ONE place so the query and the wording can never disagree.
+ *
+ * A custom range is honoured only when it is fully valid (both dates YYYY-MM-DD, start <= end);
+ * anything else falls back to the fixed trailing window (see clampWindow) instead of erroring, so a
+ * model that sends a sloppy range still gets a truthful, labelled answer. BETWEEN is inclusive, and
+ * unlike DURING LAST_N it CAN include today - the caller's note must say today's data is partial.
+ */
+export function perfDateClause(range: PerfRange): { clause: string; label: string; custom: boolean } {
+  const { startDate, endDate } = range;
+  if (isYmdDate(startDate) && isYmdDate(endDate) && startDate <= endDate) {
+    return {
+      clause: `segments.date BETWEEN '${startDate}' AND '${endDate}'`,
+      label: `${startDate} to ${endDate}`,
+      custom: true,
+    };
+  }
+  const n = clampWindow(range.days ?? 30);
+  return { clause: `segments.date DURING LAST_${n}_DAYS`, label: `last ${n} days, excluding today`, custom: false };
+}
+
+/** Google Ads only accepts a fixed set of LAST_N_DAYS windows; anything else is a query error rather
+ *  than a nearest match, so snap to the closest supported one instead of passing the number through. */
+export function clampWindow(days: number): 7 | 14 | 30 {
+  const allowed: Array<7 | 14 | 30> = [7, 14, 30];
+  const n = Number.isFinite(days) ? days : 30;
+  return allowed.reduce((best, v) => (Math.abs(v - n) < Math.abs(best - n) ? v : best), 30);
+}
 
 export interface CreateConversionActionInput {
   name: string;
@@ -204,3 +312,182 @@ export function createConversionActionBody(
     validateOnly: Boolean(validateOnly),
   };
 }
+
+/* ── Phase D: data-in uploads (offline conversions, adjustments, customer match) ──────────
+ * All uploads are LIVE writes to the advertising account. Unlike conversionActions:mutate above,
+ * the upload endpoints REQUIRE partial_failure=true - the API rejects a transactional batch - so
+ * per-row failures are a first-class result the caller must surface, never swallow. */
+
+/** SHA-256 hex of a NORMALIZED email (trim, lowercase, and for gmail/googlemail strip dots in the
+ *  local part - Google's documented normalization; a hash of the un-normalized form never matches). */
+export function hashEmail(email: string): string {
+  let e = String(email ?? '').trim().toLowerCase();
+  const m = /^([^@]+)@(gmail|googlemail)\.com$/.exec(e);
+  if (m) e = `${m[1].replace(/\./g, '')}@${m[2]}.com`;
+  return createHash('sha256').update(e).digest('hex');
+}
+
+/** SHA-256 hex of an E.164 phone number ("+" + digits). Anything else is normalized to digits with a
+ *  leading +; a number without a country code cannot be safely guessed, so it is hashed as given
+ *  (Google will simply not match it - honest failure beats a fabricated country code). */
+export function hashPhone(phone: string): string {
+  const digitsOnly = String(phone ?? '').replace(/[^\d+]/g, '');
+  const e164 = digitsOnly.startsWith('+') ? digitsOnly : `+${digitsOnly}`;
+  return createHash('sha256').update(e164).digest('hex');
+}
+
+/** 'yyyy-MM-dd HH:mm:ss±HH:mm' - the upload endpoints REQUIRE the timezone offset; a bare local
+ *  datetime is rejected (or worse, silently attributed to the wrong day). */
+export function isAdsDateTime(s: unknown): s is string {
+  return typeof s === 'string' && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/.test(s);
+}
+
+/** EEA/DMA consent that MUST ride on every uploaded record. The tool schema requires the caller to
+ *  state it explicitly - defaulting it would fabricate a legal signal. */
+export interface AdsConsent {
+  adUserData: 'GRANTED' | 'DENIED' | 'UNSPECIFIED';
+  adPersonalization: 'GRANTED' | 'DENIED' | 'UNSPECIFIED';
+}
+
+export function uploadClickConversionsUrl(customerId: string): string {
+  return `${ADS_BASE}/${ADS_API_VERSION}/customers/${normalizeCustomerId(customerId)}:uploadClickConversions`;
+}
+export function uploadConversionAdjustmentsUrl(customerId: string): string {
+  return `${ADS_BASE}/${ADS_API_VERSION}/customers/${normalizeCustomerId(customerId)}:uploadConversionAdjustments`;
+}
+export function offlineUserDataJobsUrl(customerId: string, suffix: 'create' | '' = ''): string {
+  const base = `${ADS_BASE}/${ADS_API_VERSION}/customers/${normalizeCustomerId(customerId)}/offlineUserDataJobs`;
+  return suffix === 'create' ? `${base}:create` : base;
+}
+export function offlineUserDataJobOpUrl(jobResourceName: string, op: 'addOperations' | 'run'): string {
+  return `${ADS_BASE}/${ADS_API_VERSION}/${jobResourceName}:${op}`;
+}
+
+export interface ClickConversionInput {
+  /** The click id from auto-tagging; OR omit and provide email/phone (enhanced conversions for leads). */
+  gclid?: string;
+  /** Plain email/phone - hashed HERE with Google's normalization; the plaintext never leaves the app. */
+  email?: string;
+  phone?: string;
+  conversionActionResource: string;
+  conversionDateTime: string;
+  conversionValue?: number;
+  currencyCode?: string;
+  orderId?: string;
+}
+
+/** :uploadClickConversions body. partialFailure is FORCED true (the endpoint requires it). */
+export function buildClickConversionsBody(conversions: ClickConversionInput[], consent: AdsConsent): Record<string, unknown> {
+  return {
+    conversions: conversions.map((c) => ({
+      ...(c.gclid ? { gclid: c.gclid } : {}),
+      conversionAction: c.conversionActionResource,
+      conversionDateTime: c.conversionDateTime,
+      ...(typeof c.conversionValue === 'number' && Number.isFinite(c.conversionValue) ? { conversionValue: c.conversionValue } : {}),
+      ...(c.currencyCode ? { currencyCode: c.currencyCode.trim().toUpperCase() } : {}),
+      ...(c.orderId ? { orderId: c.orderId } : {}),
+      ...(c.email || c.phone
+        ? {
+            userIdentifiers: [
+              ...(c.email ? [{ hashedEmail: hashEmail(c.email) }] : []),
+              ...(c.phone ? [{ hashedPhoneNumber: hashPhone(c.phone) }] : []),
+            ],
+          }
+        : {}),
+      consent,
+    })),
+    partialFailure: true,
+  };
+}
+
+export interface ConversionAdjustmentInput {
+  conversionActionResource: string;
+  adjustmentType: 'RETRACTION' | 'RESTATEMENT';
+  adjustmentDateTime: string;
+  /** Identify the original conversion: by order id (preferred), or gclid + its conversionDateTime. */
+  orderId?: string;
+  gclid?: string;
+  conversionDateTime?: string;
+  /** RESTATEMENT only: the corrected value. */
+  restatedValue?: number;
+  currencyCode?: string;
+}
+
+/** :uploadConversionAdjustments body. partialFailure forced true, same as conversions. */
+export function buildConversionAdjustmentsBody(adjustments: ConversionAdjustmentInput[]): Record<string, unknown> {
+  return {
+    conversionAdjustments: adjustments.map((a) => ({
+      conversionAction: a.conversionActionResource,
+      adjustmentType: a.adjustmentType,
+      adjustmentDateTime: a.adjustmentDateTime,
+      ...(a.orderId ? { orderId: a.orderId } : {}),
+      ...(a.gclid && a.conversionDateTime
+        ? { gclidDateTimePair: { gclid: a.gclid, conversionDateTime: a.conversionDateTime } }
+        : {}),
+      ...(a.adjustmentType === 'RESTATEMENT' && typeof a.restatedValue === 'number' && Number.isFinite(a.restatedValue)
+        ? { restatementValue: { adjustedValue: a.restatedValue, ...(a.currencyCode ? { currencyCode: a.currencyCode.trim().toUpperCase() } : {}) } }
+        : {}),
+    })),
+    partialFailure: true,
+  };
+}
+
+/** offlineUserDataJobs:create body for a Customer Match list refresh. Consent lives in the JOB
+ *  metadata (per-job, not per-identifier). */
+export function buildCustomerMatchJobBody(userListResource: string, consent: AdsConsent): Record<string, unknown> {
+  return {
+    job: {
+      type: 'CUSTOMER_MATCH_USER_LIST',
+      customerMatchUserListMetadata: { userList: userListResource, consent },
+    },
+  };
+}
+
+/** :addOperations body - hashed identifiers only; enablePartialFailure so one bad row is reported
+ *  rather than sinking the batch. */
+export function buildCustomerMatchOpsBody(members: Array<{ email?: string; phone?: string }>): Record<string, unknown> {
+  return {
+    operations: members
+      .map((m) => ({
+        create: {
+          userIdentifiers: [
+            ...(m.email ? [{ hashedEmail: hashEmail(m.email) }] : []),
+            ...(m.phone ? [{ hashedPhoneNumber: hashPhone(m.phone) }] : []),
+          ],
+        },
+      }))
+      .filter((op) => op.create.userIdentifiers.length > 0),
+    enablePartialFailure: true,
+  };
+}
+
+/* ── Phase E: structure reads, one GAQL per view ─────────────────────────────────────────── */
+
+export type AdsStructureView = 'keywords' | 'search_terms' | 'landing_pages' | 'ads';
+
+export const STRUCTURE_GAQL: Record<AdsStructureView, (range: PerfRange) => string> = {
+  // Quality score + its three components are ATTRIBUTES (no date range needed); metrics would turn
+  // rows into keyword-days, so this stays a pure config/quality read.
+  keywords: () =>
+    'SELECT campaign.name, ad_group.name, ad_group_criterion.keyword.text, ad_group_criterion.keyword.match_type, ' +
+    'ad_group_criterion.quality_info.quality_score, ad_group_criterion.quality_info.creative_quality_score, ' +
+    'ad_group_criterion.quality_info.post_click_quality_score, ad_group_criterion.quality_info.search_predicted_ctr ' +
+    "FROM keyword_view WHERE ad_group_criterion.status != 'REMOVED' LIMIT 500",
+  // Search terms are metric rows, so they take the shared date clause. Privacy thresholds hide
+  // low-volume terms - the tool note says so, or totals get chased against campaign clicks forever.
+  search_terms: (range) =>
+    'SELECT search_term_view.search_term, search_term_view.status, campaign.name, metrics.impressions, metrics.clicks, metrics.conversions, metrics.cost_micros ' +
+    `FROM search_term_view WHERE ${perfDateClause(range).clause} ORDER BY metrics.clicks DESC LIMIT 500`,
+  landing_pages: (range) =>
+    'SELECT landing_page_view.unexpanded_final_url, metrics.clicks, metrics.cost_micros, metrics.conversions, metrics.conversions_value ' +
+    `FROM landing_page_view WHERE ${perfDateClause(range).clause} ORDER BY metrics.clicks DESC LIMIT 500`,
+  ads: () =>
+    'SELECT campaign.name, ad_group.name, ad_group_ad.ad.id, ad_group_ad.ad.type, ad_group_ad.status, ad_group_ad.ad_strength, ad_group_ad.ad.final_urls ' +
+    "FROM ad_group_ad WHERE ad_group_ad.status != 'REMOVED' LIMIT 500",
+};
+
+/** Audiences / user lists - sizes + membership status so remarketing-tag population is verifiable. */
+export const USER_LISTS_GAQL =
+  'SELECT user_list.id, user_list.name, user_list.type, user_list.membership_status, user_list.membership_life_span, ' +
+  'user_list.size_for_display, user_list.size_for_search, user_list.read_only, user_list.match_rate_percentage ' +
+  'FROM user_list ORDER BY user_list.name';

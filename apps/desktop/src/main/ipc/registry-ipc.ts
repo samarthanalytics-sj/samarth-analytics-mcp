@@ -1,6 +1,6 @@
 import { ipcMain } from 'electron';
 import type { RegistryService } from '../services/registry-service';
-import type { AddAccountInput, Ga4Context, GtmContext, LlmProvider } from '../../shared/ipc';
+import type { AddAccountInput, AdsContext, Ga4Context, GtmContext, LlmProvider } from '../../shared/ipc';
 
 // Registers the account/secret IPC handlers. Each handler validates its input
 // and returns renderer-safe AccountViews (never secret bytes/refs). A thrown
@@ -48,6 +48,10 @@ export function registerRegistryIpc(service: RegistryService): void {
 
   ipcMain.handle('accounts:setGa4Context', (_event, id: string, ctx: Ga4Context) =>
     service.setGa4Context(id, ctx && typeof ctx === 'object' ? ctx : {})
+  );
+
+  ipcMain.handle('accounts:setAdsContext', (_event, id: string, ctx: AdsContext) =>
+    service.setAdsContext(id, ctx && typeof ctx === 'object' ? ctx : {})
   );
 
   ipcMain.handle('secrets:available', () => service.secretSelfTest().encryptionAvailable);

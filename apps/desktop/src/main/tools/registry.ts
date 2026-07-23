@@ -1,6 +1,7 @@
 import type { GoogleDataService } from '../google/data-service';
 import { AdsError, type GoogleAdsService } from '../google/ads-service';
-import { CONVERSION_CATEGORIES } from '../google/ads-rest';
+import { CONVERSION_CATEGORIES, isAdsDateTime, type AdsConsent, type ClickConversionInput, type ConversionAdjustmentInput } from '../google/ads-rest';
+import { conversionSetupWarnings, silentConversionActions, assembleConversionHealth, auditAdsGa4Seam } from '../google/ads-map';
 import type { LlmToolDef, ToolExecutor } from '../llm/types';
 import type { GoogleProduct, GtmContext } from '../../shared/ipc';
 import type { AuditHistoryStore } from '../storage/audit-history';
@@ -396,7 +397,7 @@ async function adsNotReady(ads: GoogleAdsService): Promise<Record<string, unknow
  * `writesEnabled` mirrors the GTM/GA4 rule: the create tool exists only when the registry was built
  * with a confirm fn, so a read-only registry cannot even name it.
  */
-function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean): Tool[] {
+function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean, data?: GoogleDataService): Tool[] {
   // Every handler runs behind the readiness gate and swallows its own errors, so an Ads failure is a
   // structured answer the model can read out, never a throw carrying a request config.
   const run = async (fn: () => Promise<unknown>): Promise<unknown> => {
@@ -443,6 +444,125 @@ function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean): Too
         }),
     },
     {
+      name: 'list_google_ads_campaigns',
+      description:
+        'List a Google Ads account\'s campaigns with status, channel type, dates, bidding strategy and daily budget. ' +
+        'CONFIG ONLY - no spend or performance (use google_ads_campaign_performance for that). Read-only. Budgets are ' +
+        'returned in MICROS of the account currency (1,000,000 micros = 1 unit) and a SHARED budget backs several ' +
+        'campaigns, so its amount is not that campaign\'s alone. A manager (MCC) account runs no campaigns of its own, ' +
+        'so an empty list there means the account TYPE, not an empty advertiser.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          customerId: { type: 'string', description: 'Google Ads account id, bare digits (strip the dashes).' },
+          loginCustomerId: { type: 'string', description: 'Manager (MCC) id to act through, when reached via a manager.' },
+        },
+        required: ['customerId'],
+        additionalProperties: false,
+      },
+      handler: (a) =>
+        run(async () => {
+          const campaigns = await ads.listCampaigns(s(a.customerId), login(a));
+          return {
+            ok: true,
+            count: campaigns.length,
+            campaigns,
+            note:
+              'budget.amountMicros is MICROS of the account currency (divide by 1,000,000 before showing it, and name the currency). ' +
+              'budget.shared true means the budget is shared across campaigns. This is configuration only: it contains no spend, ' +
+              'clicks or conversions, so do not describe a campaign as performing well or badly from this result.',
+          };
+        }),
+    },
+    {
+      name: 'google_ads_campaign_performance',
+      description:
+        'Per-campaign performance: impressions, clicks, cost, conversions and conversion value. Read-only. Two ways to ' +
+        'set the window: days (7/14/30 trailing, EXCLUDES today) or an explicit startDate+endDate (YYYY-MM-DD, inclusive ' +
+        '- any span, e.g. a full quarter or a single day). Use the custom range whenever the user names dates or a ' +
+        'month/quarter. Cost is in MICROS of the account currency, and rows are already summed per campaign over the ' +
+        'window - they are not daily rows.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          customerId: { type: 'string', description: 'Google Ads account id, bare digits (strip the dashes).' },
+          days: { type: 'number', description: 'Trailing window: 7, 14 or 30 (default 30; other values snap). Ignored when startDate+endDate are given.' },
+          startDate: { type: 'string', description: 'Custom range start, YYYY-MM-DD (inclusive). Requires endDate.' },
+          endDate: { type: 'string', description: 'Custom range end, YYYY-MM-DD (inclusive). Requires startDate; must be >= startDate.' },
+          loginCustomerId: { type: 'string', description: 'Manager (MCC) id to act through, when reached via a manager.' },
+        },
+        required: ['customerId'],
+        additionalProperties: false,
+      },
+      handler: (a) =>
+        run(async () => {
+          const range = {
+            ...(typeof a.days === 'number' ? { days: a.days } : {}),
+            ...(s(a.startDate).trim() ? { startDate: s(a.startDate).trim() } : {}),
+            ...(s(a.endDate).trim() ? { endDate: s(a.endDate).trim() } : {}),
+          };
+          const r = await ads.campaignPerformance(s(a.customerId), range, login(a));
+          // A half-given or malformed custom range silently became the default window - say so, or the
+          // model reports figures for a window the user did not ask about.
+          const fellBack = (range.startDate || range.endDate) && !r.custom;
+          return {
+            ok: true,
+            window: r.windowLabel,
+            count: r.campaigns.length,
+            campaigns: r.campaigns,
+            ...(fellBack ? { warning: 'The custom date range was invalid (need BOTH startDate and endDate as YYYY-MM-DD with startDate <= endDate), so the default trailing window ran instead - the window field is what actually ran.' } : {}),
+            note:
+              'costMicros is MICROS of the account currency (divide by 1,000,000; name the currency). "conversions" counts only ' +
+              'actions marked primary for goals; "allConversions" includes secondary ones, so the two legitimately differ and ' +
+              'neither is wrong. Report the window field verbatim - never imply the figures are all-time. ' +
+              (r.custom ? 'A custom range that includes today contains PARTIAL data for today.' : 'The trailing window excludes today (partial data).'),
+          };
+        }),
+    },
+    {
+      name: 'get_google_ads_tracking_setup',
+      description:
+        'The account\'s measurement plumbing in one read: whether AUTO-TAGGING is enabled (no auto-tagging means ad ' +
+        'clicks carry no GCLID, so offline conversion imports, enhanced conversions and clean GA4 session attribution ' +
+        'all degrade), and WHERE conversion tracking is owned (this account, or a manager under cross-account ' +
+        'conversion tracking). Read-only. Answers "is auto-tagging on", "does GCLID exist", "who owns conversions ' +
+        'here". Requires customerId; pass loginCustomerId when reached via a manager.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          customerId: { type: 'string', description: 'Google Ads account id, bare digits (strip the dashes).' },
+          loginCustomerId: { type: 'string', description: 'Manager (MCC) id to act through, when reached via a manager.' },
+        },
+        required: ['customerId'],
+        additionalProperties: false,
+      },
+      handler: (a) =>
+        run(async () => {
+          const cc = await ads.conversionCustomer(s(a.customerId), login(a));
+          const notes: string[] = [];
+          if (cc.autoTaggingEnabled === false) {
+            notes.push('Auto-tagging is OFF: ad clicks land WITHOUT a GCLID. Conversion imports, enhanced conversions and GA4 auto-linking all depend on it - recommend enabling it in Google Ads Settings > Account settings > Auto-tagging (safe unless the site\'s URL handling breaks on unknown query params, which is rare and testable).');
+          }
+          if (cc.isCrossAccount && cc.conversionCustomerId) {
+            notes.push(`Conversion tracking is owned by manager ${cc.conversionCustomerId} (cross-account conversion tracking): conversion actions live there and are shared with its other clients. That is a normal, healthy setup - just be aware edits affect every client of that manager.`);
+          }
+          return {
+            ok: true,
+            customerId: s(a.customerId),
+            // null = the API did not return the field, which is UNKNOWN - never report it as "off".
+            autoTaggingEnabled: cc.autoTaggingEnabled ?? null,
+            conversionTracking: {
+              ownerCustomerId: cc.conversionCustomerId,
+              isCrossAccount: cc.isCrossAccount,
+              status: cc.status,
+              trackingId: cc.trackingId,
+              crossAccountTrackingId: cc.crossAccountTrackingId,
+            },
+            ...(notes.length ? { notes } : {}),
+          };
+        }),
+    },
+    {
       name: 'list_google_ads_conversion_actions',
       description:
         'List a Google Ads account\'s conversion actions WITH each one\'s Conversion ID (AW-xxxxxxxxx) and Conversion ' +
@@ -470,6 +590,7 @@ function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean): Too
       handler: (a) =>
         run(async () => {
           const { actions, conversionCustomer } = await ads.listConversionActions(s(a.customerId), login(a));
+          const setupWarnings = conversionSetupWarnings(actions);
           return {
             ok: true,
             customerId: s(a.customerId),
@@ -491,11 +612,327 @@ function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean): Too
               conversionLabel: x.conversionLabel,
               taggable: x.taggable,
               ...(x.primaryForGoal === undefined ? {} : { primaryForGoal: x.primaryForGoal }),
+              // Full config (when returned): counting, attribution, lookback windows, value settings -
+              // enough for a conversion-config audit without a second read.
+              ...(x.countingType ? { countingType: x.countingType } : {}),
+              ...(x.attributionModel ? { attributionModel: x.attributionModel } : {}),
+              ...(x.dataDrivenModelStatus ? { dataDrivenModelStatus: x.dataDrivenModelStatus } : {}),
+              ...(x.clickLookbackDays === undefined ? {} : { clickLookbackDays: x.clickLookbackDays }),
+              ...(x.viewLookbackDays === undefined ? {} : { viewLookbackDays: x.viewLookbackDays }),
+              ...(x.defaultValue === undefined ? {} : { defaultValue: x.defaultValue }),
+              ...(x.defaultCurrencyCode ? { defaultCurrencyCode: x.defaultCurrencyCode } : {}),
+              ...(x.alwaysUseDefaultValue === undefined ? {} : { alwaysUseDefaultValue: x.alwaysUseDefaultValue }),
               ...(x.note ? { note: x.note } : {}),
             })),
+            // Deterministic config findings (double counting, zero-value forcing) - report these to the
+            // user; they are computed from the rows above, never guessed.
+            ...(setupWarnings.length ? { setupWarnings } : {}),
             ...(conversionCustomer.isCrossAccount && conversionCustomer.conversionCustomerId
               ? { note: `Conversion tracking for this account is owned by manager ${conversionCustomer.conversionCustomerId}, so these actions are shared with its other client accounts. Editing one affects all of them.` }
               : {}),
+          };
+        }),
+    },
+    {
+      name: 'get_google_ads_change_history',
+      description:
+        'WHO changed WHAT in the Google Ads account, newest first: timestamp, user email, the surface it came from ' +
+        '(web UI / API / scripts), resource type (campaign, budget, conversion action, ...), operation and the exact ' +
+        'fields touched. THE tool for "what changed right before the drop" - correlate the change dates against the ' +
+        'performance/volume window. Read-only. LIMIT: the API only serves the LAST 30 DAYS; asking for older dates ' +
+        'silently clamps to that floor, so say so if the user wanted more. Optional startDate/endDate (YYYY-MM-DD, ' +
+        'default last 14 days) and limit (default 200, max 10000).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          customerId: { type: 'string', description: 'Google Ads account id, bare digits (strip the dashes).' },
+          startDate: { type: 'string', description: 'YYYY-MM-DD; clamped to the API\'s 30-day floor.' },
+          endDate: { type: 'string', description: 'YYYY-MM-DD; defaults to today.' },
+          limit: { type: 'number', description: 'Max events (default 200, hard cap 10000).' },
+          loginCustomerId: { type: 'string', description: 'Manager (MCC) id to act through, when reached via a manager.' },
+        },
+        required: ['customerId'],
+        additionalProperties: false,
+      },
+      handler: (a) =>
+        run(async () => {
+          const r = await ads.changeHistory(
+            s(a.customerId),
+            {
+              ...(s(a.startDate).trim() ? { startDate: s(a.startDate).trim() } : {}),
+              ...(s(a.endDate).trim() ? { endDate: s(a.endDate).trim() } : {}),
+              ...(typeof a.limit === 'number' ? { limit: a.limit } : {}),
+            },
+            login(a),
+          );
+          return {
+            ok: true,
+            range: `${r.startDate} to ${r.endDate}`,
+            count: r.events.length,
+            events: r.events,
+            note:
+              'Timestamps are in the ACCOUNT\'s timezone. The API serves only the last 30 days of history - a quiet ' +
+              'result for older dates means out-of-window, not "nothing happened". clientType tells you the surface: ' +
+              'GOOGLE_ADS_WEB_CLIENT is a human in the UI, GOOGLE_ADS_API is software (including this app).',
+          };
+        }),
+    },
+    {
+      name: 'get_google_ads_conversion_volume',
+      description:
+        'Conversions per conversion ACTION over a window (default last 30 days; or startDate/endDate YYYY-MM-DD), plus ' +
+        'silentActions: ENABLED actions that recorded NOTHING in the window - the "is this tag dead?" signal from the ' +
+        'Ads side, to cross-check against the GTM container (does the tag still exist / fire?). Read-only. HONESTY: a ' +
+        'silent action can also mean no ads ran or no budget - this data cannot distinguish a dead tag from a paused ' +
+        'account, so present silentActions as "needs a look", never as "broken".',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          customerId: { type: 'string', description: 'Google Ads account id, bare digits (strip the dashes).' },
+          days: { type: 'number', description: 'Trailing window: 7, 14 or 30 (default 30). Ignored when startDate+endDate are given.' },
+          startDate: { type: 'string', description: 'Custom range start, YYYY-MM-DD (inclusive). Requires endDate.' },
+          endDate: { type: 'string', description: 'Custom range end, YYYY-MM-DD (inclusive).' },
+          loginCustomerId: { type: 'string', description: 'Manager (MCC) id to act through, when reached via a manager.' },
+        },
+        required: ['customerId'],
+        additionalProperties: false,
+      },
+      handler: (a) =>
+        run(async () => {
+          const range = {
+            ...(typeof a.days === 'number' ? { days: a.days } : {}),
+            ...(s(a.startDate).trim() ? { startDate: s(a.startDate).trim() } : {}),
+            ...(s(a.endDate).trim() ? { endDate: s(a.endDate).trim() } : {}),
+          };
+          const [vol, list] = await Promise.all([
+            ads.conversionVolume(s(a.customerId), range, login(a)),
+            ads.listConversionActions(s(a.customerId), login(a)),
+          ]);
+          const silent = silentConversionActions(list.actions, vol.volume);
+          return {
+            ok: true,
+            window: vol.windowLabel,
+            volume: vol.volume,
+            ...(silent.length ? { silentActions: silent } : {}),
+            note:
+              'Counts are all_conversions (primary + secondary) attributed to ads. silentActions recorded ZERO in this ' +
+              'window: cross-check each against the GTM container before calling anything broken - and remember zero ' +
+              'also happens when no ads served. lastDate shows when an action last recorded a conversion inside the window.',
+          };
+        }),
+    },
+    {
+      name: 'audit_google_ads_utm_setup',
+      description:
+        'Audit the account\'s click-tagging plumbing: auto-tagging vs tracking templates and final URL suffixes at ' +
+        'ACCOUNT and CAMPAIGN level, with deterministic findings (no gclid AND no UTMs; manual UTMs missing ' +
+        'utm_campaign; templates without an {lpurl} landing-page insert; manual gclid conflicting with auto-tagging). ' +
+        'Broken click-tagging is the root of most "GA4 attribution is wrong / everything is direct" tickets. ' +
+        'Read-only. Ad-level templates are NOT read (too many rows) - say so when reporting.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          customerId: { type: 'string', description: 'Google Ads account id, bare digits (strip the dashes).' },
+          loginCustomerId: { type: 'string', description: 'Manager (MCC) id to act through, when reached via a manager.' },
+        },
+        required: ['customerId'],
+        additionalProperties: false,
+      },
+      handler: (a) =>
+        run(async () => {
+          const { setup, findings } = await ads.utmSetup(s(a.customerId), login(a));
+          return {
+            ok: true,
+            autoTaggingEnabled: setup.autoTaggingEnabled ?? null,
+            account: { trackingUrlTemplate: setup.trackingUrlTemplate, finalUrlSuffix: setup.finalUrlSuffix },
+            // Only campaigns that OVERRIDE something are listed - a campaign with neither template nor
+            // suffix inherits the account level and would just be noise here.
+            campaignOverrides: setup.campaigns.filter((c) => c.trackingUrlTemplate || c.finalUrlSuffix),
+            findings,
+            note:
+              'Findings are provable from the CONFIG alone. Ad-level tracking templates were not read; if campaign and ' +
+              'account levels are clean but attribution still breaks, check ad-level templates and the landing pages ' +
+              'themselves (redirects that strip query parameters).',
+          };
+        }),
+    },
+    {
+      name: 'audit_google_ads_conversion_health',
+      description:
+        'THE conversion-health audit: runs every read in one pass (tagging/UTM plumbing, full conversion-action ' +
+        'config, per-action volume, campaign spend, recent change history) and returns FINDINGS ordered worst-first - ' +
+        'what is wrong, why it matters, what to do - not raw rows. Areas: tagging (gclid/UTM), config (double ' +
+        'counting, zero-value forcing, missing labels), volume (silent actions, spend without conversions), changes ' +
+        '(who touched conversion measurement recently). Use this FIRST for "is my conversion tracking healthy" / ' +
+        '"why did conversions drop"; use the individual tools to drill into a specific finding. Read-only. ' +
+        'BOUNDARY: config-plane only - whether tags actually FIRE on the site is runtime evidence (GTM tab verify); ' +
+        'never claim firing health from this result. Optional days or startDate/endDate window (default 30 days).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          customerId: { type: 'string', description: 'Google Ads account id, bare digits (strip the dashes).' },
+          days: { type: 'number', description: 'Trailing window: 7, 14 or 30 (default 30). Ignored when startDate+endDate are given.' },
+          startDate: { type: 'string', description: 'Custom range start, YYYY-MM-DD. Requires endDate.' },
+          endDate: { type: 'string', description: 'Custom range end, YYYY-MM-DD.' },
+          loginCustomerId: { type: 'string', description: 'Manager (MCC) id to act through, when reached via a manager.' },
+        },
+        required: ['customerId'],
+        additionalProperties: false,
+      },
+      handler: (a) =>
+        run(async () => {
+          const cid = s(a.customerId);
+          const lg = login(a);
+          const range = {
+            ...(typeof a.days === 'number' ? { days: a.days } : {}),
+            ...(s(a.startDate).trim() ? { startDate: s(a.startDate).trim() } : {}),
+            ...(s(a.endDate).trim() ? { endDate: s(a.endDate).trim() } : {}),
+          };
+          // One pass, everything in parallel - each read already carries its own retry/backoff.
+          const [tracking, list, vol, utm, changes, perf] = await Promise.all([
+            ads.conversionCustomer(cid, lg),
+            ads.listConversionActions(cid, lg),
+            ads.conversionVolume(cid, range, lg),
+            ads.utmSetup(cid, lg),
+            ads.changeHistory(cid, {}, lg),
+            ads.campaignPerformance(cid, range, lg),
+          ]);
+          const findings = assembleConversionHealth({
+            tracking,
+            actions: list.actions,
+            volume: vol.volume,
+            utmFindings: utm.findings,
+            changes: changes.events,
+            performance: perf.campaigns,
+          });
+          const counts = {
+            critical: findings.filter((f) => f.severity === 'critical').length,
+            warning: findings.filter((f) => f.severity === 'warning').length,
+            info: findings.filter((f) => f.severity === 'info').length,
+          };
+          return {
+            ok: true,
+            window: vol.windowLabel,
+            changesWindow: `${changes.startDate} to ${changes.endDate}`,
+            counts,
+            findings,
+            note:
+              'Report findings worst-first with their area; every claim above is provable from account CONFIG and ' +
+              'recorded data. Firing behaviour on the site is NOT covered - offer the GTM tab\'s tag verification for ' +
+              'that. For "who changed it", get_google_ads_change_history has the full event list.',
+          };
+        }),
+    },
+    {
+      name: 'audit_google_ads_ga4_link',
+      description:
+        'Audit the Ads ↔ GA4 SEAM for one Ads account + one GA4 property: is the property linked to this account ' +
+        '(direct vs manager-level vs missing), do the GA4-IMPORTED conversion actions still match the property\'s ' +
+        'key events (renamed/removed key events leave imports counting nothing), which key events are not imported, ' +
+        'and the classic double-count (GA4 import + website tag both primary). Requires property ("properties/123..." ' +
+        '- list_ga4_properties or the active GA4 context supplies it) AND customerId. Read-only; uses the existing ' +
+        'GA4 access, no extra scopes.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          customerId: { type: 'string', description: 'Google Ads account id, bare digits (strip the dashes).' },
+          property: { type: 'string', description: 'GA4 property resource name, e.g. "properties/123456".' },
+          loginCustomerId: { type: 'string', description: 'Manager (MCC) id to act through, when reached via a manager.' },
+        },
+        required: ['customerId', 'property'],
+        additionalProperties: false,
+      },
+      handler: (a) =>
+        run(async () => {
+          if (!data) {
+            return { ok: false, error: 'GA4 access is not available in this session, so the Ads-GA4 link cannot be audited from here.' };
+          }
+          const prop = s(a.property).trim();
+          if (!/^properties\/\d+$/.test(prop)) {
+            return { ok: false, error: 'property must be a GA4 property resource name like "properties/123456".' };
+          }
+          const cid = s(a.customerId);
+          const [links, keyEvents, list] = await Promise.all([
+            data.listGa4GoogleAdsLinks(prop),
+            data.listGa4KeyEvents(prop),
+            ads.listConversionActions(cid, login(a)),
+          ]);
+          const findings = auditAdsGa4Seam({ customerId: cid, links, actions: list.actions, keyEvents });
+          return {
+            ok: true,
+            property: prop,
+            customerId: cid,
+            linkCount: links.length,
+            keyEventCount: keyEvents.length,
+            findings,
+            note:
+              'The stale-import check matches names heuristically - present those as "verify in GA4 Admin", never as ' +
+              'certain. A manager-level link (canManageClients) can legitimately cover this account without a direct link.',
+          };
+        }),
+    },
+    {
+      name: 'list_google_ads_audiences',
+      description:
+        'The account\'s audiences / user lists with SIZES and membership status - verifies whether remarketing tags ' +
+        'are actually populating lists (a list stuck at size 0 with an active remarketing tag is a firing problem), ' +
+        'and supplies the target list for a Customer Match upload. Read-only. sizeForDisplay/sizeForSearch are ' +
+        'Google-estimated and lag by hours-days; matchRatePercentage exists only for CRM lists.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          customerId: { type: 'string', description: 'Google Ads account id, bare digits (strip the dashes).' },
+          loginCustomerId: { type: 'string', description: 'Manager (MCC) id to act through, when reached via a manager.' },
+        },
+        required: ['customerId'],
+        additionalProperties: false,
+      },
+      handler: (a) =>
+        run(async () => {
+          const lists = await ads.listUserLists(s(a.customerId), login(a));
+          return { ok: true, count: lists.length, audiences: lists };
+        }),
+    },
+    {
+      name: 'get_google_ads_structure',
+      description:
+        'Structure reads for deeper audits, one view per call: "keywords" (quality score + its three components - ' +
+        'ad relevance, landing page experience, expected CTR - per keyword), "search_terms" (what people actually ' +
+        'searched, with clicks/conversions; PRIVACY THRESHOLDS hide low-volume terms so totals will NEVER match ' +
+        'campaign clicks - say so, do not chase the gap), "landing_pages" (spend vs conversions per URL - feeds ' +
+        'landing-page conversations), "ads" (final URLs + ad strength per ad, for auditing destinations, not managing ' +
+        'creative). Read-only, capped at 500 rows per view. search_terms/landing_pages take the days or ' +
+        'startDate/endDate window; keywords/ads are config reads that ignore it.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          customerId: { type: 'string', description: 'Google Ads account id, bare digits (strip the dashes).' },
+          view: { type: 'string', enum: ['keywords', 'search_terms', 'landing_pages', 'ads'], description: 'Which structure read to run.' },
+          days: { type: 'number', description: 'Trailing window for metric views (7/14/30, default 30).' },
+          startDate: { type: 'string', description: 'Custom range start, YYYY-MM-DD. Requires endDate.' },
+          endDate: { type: 'string', description: 'Custom range end, YYYY-MM-DD.' },
+          loginCustomerId: { type: 'string', description: 'Manager (MCC) id to act through, when reached via a manager.' },
+        },
+        required: ['customerId', 'view'],
+        additionalProperties: false,
+      },
+      handler: (a) =>
+        run(async () => {
+          const view = ['keywords', 'search_terms', 'landing_pages', 'ads'].includes(s(a.view)) ? (s(a.view) as 'keywords' | 'search_terms' | 'landing_pages' | 'ads') : 'keywords';
+          const range = {
+            ...(typeof a.days === 'number' ? { days: a.days } : {}),
+            ...(s(a.startDate).trim() ? { startDate: s(a.startDate).trim() } : {}),
+            ...(s(a.endDate).trim() ? { endDate: s(a.endDate).trim() } : {}),
+          };
+          const r = await ads.structure(s(a.customerId), view, range, login(a));
+          return {
+            ok: true,
+            view,
+            ...(r.windowLabel ? { window: r.windowLabel } : {}),
+            count: r.rows.length,
+            rows: r.rows,
+            ...(r.rows.length === 500 ? { warning: 'Row cap (500) hit - the account has more; narrow the window or filter before drawing totals.' } : {}),
+            ...(view === 'search_terms' ? { note: 'Privacy thresholds hide low-volume search terms, so these rows will not sum to campaign clicks - that gap is expected, not missing data.' } : {}),
           };
         }),
     },
@@ -585,6 +1022,264 @@ function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean): Too
               ...(action.note ? { note: action.note } : {}),
             },
             note: 'This conversion action is LIVE in Google Ads now. Pass its conversionId and conversionLabel as LITERAL values to create_gtm_tracking_tag (platform google_ads_conversion), never as a {{variable}}. The label exists nowhere else in the API, so if it came back null, read the action in Google Ads rather than guessing.',
+          };
+        }),
+    },
+    {
+      name: 'upload_google_ads_offline_conversions',
+      description:
+        'Upload OFFLINE conversions to the LIVE Google Ads account: each row is a gclid (from auto-tagging) OR an ' +
+        'email/phone (enhanced conversions for leads - hashed in-app with Google\'s normalization; plaintext never ' +
+        'leaves the machine), plus the conversion action id and the conversion datetime in the EXACT format ' +
+        '"yyyy-MM-dd HH:mm:ss+05:30" (timezone offset REQUIRED). consent (adUserData + adPersonalization, ' +
+        'GRANTED/DENIED/UNSPECIFIED) is REQUIRED on the call - for EEA users it must reflect what the user actually ' +
+        'consented to; never invent GRANTED. These conversions feed reporting AND Smart Bidding immediately, with no ' +
+        'draft and no undo except a later adjustment - hence the strongest approval gate. Per-row failures come back ' +
+        'in `failures`; report them, never claim a clean upload when rows were rejected. Max 500 rows per call.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          customerId: { type: 'string', description: 'Account that owns the conversion action, bare digits.' },
+          conversions: {
+            type: 'array',
+            maxItems: 500,
+            items: {
+              type: 'object',
+              properties: {
+                gclid: { type: 'string', description: 'The Google click id. Omit when identifying by email/phone.' },
+                email: { type: 'string', description: 'Plain email for enhanced conversions for leads - hashed in-app.' },
+                phone: { type: 'string', description: 'Phone in E.164 (+14155551234) - hashed in-app.' },
+                conversionActionId: { type: 'string', description: 'Numeric conversion action id (list_google_ads_conversion_actions).' },
+                conversionDateTime: { type: 'string', description: '"yyyy-MM-dd HH:mm:ss+HH:MM" - offset required.' },
+                conversionValue: { type: 'number' },
+                currencyCode: { type: 'string' },
+                orderId: { type: 'string', description: 'Recommended: enables later adjustments by order id.' },
+              },
+              required: ['conversionActionId', 'conversionDateTime'],
+              additionalProperties: false,
+            },
+          },
+          consent: {
+            type: 'object',
+            properties: {
+              adUserData: { type: 'string', enum: ['GRANTED', 'DENIED', 'UNSPECIFIED'] },
+              adPersonalization: { type: 'string', enum: ['GRANTED', 'DENIED', 'UNSPECIFIED'] },
+            },
+            required: ['adUserData', 'adPersonalization'],
+            additionalProperties: false,
+          },
+          loginCustomerId: { type: 'string', description: 'Manager (MCC) id to act through, when reached via a manager.' },
+        },
+        required: ['customerId', 'conversions', 'consent'],
+        additionalProperties: false,
+      },
+      write: true,
+      destructive: true,
+      summarize: (a) => {
+        const rows = Array.isArray(a.conversions) ? a.conversions.length : 0;
+        return `Upload ${rows} offline conversion(s) into LIVE Google Ads account ${s(a.customerId)}. They count in reporting and Smart Bidding immediately; the only undo is a later adjustment`;
+      },
+      precheck: () => adsNotReady(ads),
+      handler: (a) =>
+        run(async () => {
+          const cid = s(a.customerId);
+          const raw = Array.isArray(a.conversions) ? (a.conversions as Array<Record<string, unknown>>) : [];
+          if (raw.length === 0) return { ok: false, error: 'No conversions supplied.' };
+          if (raw.length > 500) return { ok: false, error: 'Max 500 conversions per call - split the batch.' };
+          const conversions: ClickConversionInput[] = [];
+          for (let i = 0; i < raw.length; i++) {
+            const r = raw[i];
+            const gclid = String(r.gclid ?? '').trim();
+            const email = String(r.email ?? '').trim();
+            const phone = String(r.phone ?? '').trim();
+            const dt = String(r.conversionDateTime ?? '');
+            if (!gclid && !email && !phone) return { ok: false, error: `Row ${i}: needs a gclid OR an email/phone identifier.` };
+            if (!isAdsDateTime(dt)) return { ok: false, error: `Row ${i}: conversionDateTime must be "yyyy-MM-dd HH:mm:ss+HH:MM" (timezone offset required), got "${dt}".` };
+            const actionId = String(r.conversionActionId ?? '').replace(/\D/g, '');
+            if (!actionId) return { ok: false, error: `Row ${i}: conversionActionId must be the numeric action id.` };
+            conversions.push({
+              ...(gclid ? { gclid } : {}),
+              ...(email ? { email } : {}),
+              ...(phone ? { phone } : {}),
+              conversionActionResource: `customers/${cid}/conversionActions/${actionId}`,
+              conversionDateTime: dt,
+              ...(typeof r.conversionValue === 'number' ? { conversionValue: r.conversionValue } : {}),
+              ...(r.currencyCode ? { currencyCode: String(r.currencyCode) } : {}),
+              ...(r.orderId ? { orderId: String(r.orderId) } : {}),
+            });
+          }
+          const consent = a.consent as AdsConsent;
+          const outcome = await ads.uploadClickConversions(cid, conversions, consent, login(a));
+          return {
+            ok: outcome.failures.length === 0,
+            uploaded: outcome.accepted,
+            total: outcome.total,
+            ...(outcome.failures.length ? { failures: outcome.failures } : {}),
+            note:
+              outcome.failures.length === 0
+                ? 'All rows accepted. Conversions appear in reporting within a few hours (attributed to the CLICK date, not today).'
+                : 'Some rows were REJECTED - report each failure with its row index. Accepted rows are live; rejected ones were not uploaded.',
+          };
+        }),
+    },
+    {
+      name: 'upload_google_ads_conversion_adjustments',
+      description:
+        'RETRACT (remove) or RESTATE (revalue) conversions already recorded in the LIVE account - the CRM-driven ' +
+        'quality loop: junk lead → RETRACTION; deal closed at a different value → RESTATEMENT with the corrected ' +
+        'value. Identify the original conversion by orderId (preferred - set it at upload time) or by gclid + its ' +
+        'original conversionDateTime. adjustmentDateTime must be AFTER the original conversion, format ' +
+        '"yyyy-MM-dd HH:mm:ss+HH:MM". Adjustments feed Smart Bidding; a wrong retraction un-teaches the bidder - ' +
+        'hence the strongest approval gate. Per-row failures come back in `failures`. Max 500 per call.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          customerId: { type: 'string', description: 'Account that owns the conversion action, bare digits.' },
+          adjustments: {
+            type: 'array',
+            maxItems: 500,
+            items: {
+              type: 'object',
+              properties: {
+                conversionActionId: { type: 'string', description: 'Numeric conversion action id.' },
+                adjustmentType: { type: 'string', enum: ['RETRACTION', 'RESTATEMENT'] },
+                adjustmentDateTime: { type: 'string', description: '"yyyy-MM-dd HH:mm:ss+HH:MM" - offset required.' },
+                orderId: { type: 'string', description: 'The original conversion\'s order id (preferred identifier).' },
+                gclid: { type: 'string', description: 'Original click id - requires conversionDateTime too.' },
+                conversionDateTime: { type: 'string', description: 'The ORIGINAL conversion\'s datetime (with offset), when identifying by gclid.' },
+                restatedValue: { type: 'number', description: 'RESTATEMENT only: the corrected value.' },
+                currencyCode: { type: 'string' },
+              },
+              required: ['conversionActionId', 'adjustmentType', 'adjustmentDateTime'],
+              additionalProperties: false,
+            },
+          },
+          loginCustomerId: { type: 'string', description: 'Manager (MCC) id to act through, when reached via a manager.' },
+        },
+        required: ['customerId', 'adjustments'],
+        additionalProperties: false,
+      },
+      write: true,
+      destructive: true,
+      summarize: (a) => {
+        const rows = Array.isArray(a.adjustments) ? (a.adjustments as Array<Record<string, unknown>>) : [];
+        const retractions = rows.filter((r) => r.adjustmentType === 'RETRACTION').length;
+        return `Adjust ${rows.length} conversion(s) in LIVE Google Ads account ${s(a.customerId)} (${retractions} retraction(s), ${rows.length - retractions} restatement(s)). This rewrites recorded results and re-teaches Smart Bidding`;
+      },
+      precheck: () => adsNotReady(ads),
+      handler: (a) =>
+        run(async () => {
+          const cid = s(a.customerId);
+          const raw = Array.isArray(a.adjustments) ? (a.adjustments as Array<Record<string, unknown>>) : [];
+          if (raw.length === 0) return { ok: false, error: 'No adjustments supplied.' };
+          if (raw.length > 500) return { ok: false, error: 'Max 500 adjustments per call - split the batch.' };
+          const adjustments: ConversionAdjustmentInput[] = [];
+          for (let i = 0; i < raw.length; i++) {
+            const r = raw[i];
+            const type = r.adjustmentType === 'RETRACTION' ? 'RETRACTION' : r.adjustmentType === 'RESTATEMENT' ? 'RESTATEMENT' : null;
+            if (!type) return { ok: false, error: `Row ${i}: adjustmentType must be RETRACTION or RESTATEMENT.` };
+            const adt = String(r.adjustmentDateTime ?? '');
+            if (!isAdsDateTime(adt)) return { ok: false, error: `Row ${i}: adjustmentDateTime must be "yyyy-MM-dd HH:mm:ss+HH:MM", got "${adt}".` };
+            const orderId = String(r.orderId ?? '').trim();
+            const gclid = String(r.gclid ?? '').trim();
+            const cdt = String(r.conversionDateTime ?? '');
+            if (!orderId && !(gclid && isAdsDateTime(cdt))) return { ok: false, error: `Row ${i}: identify the original conversion by orderId, or by gclid + its original conversionDateTime (with offset).` };
+            if (type === 'RESTATEMENT' && typeof r.restatedValue !== 'number') return { ok: false, error: `Row ${i}: a RESTATEMENT needs restatedValue.` };
+            const actionId = String(r.conversionActionId ?? '').replace(/\D/g, '');
+            if (!actionId) return { ok: false, error: `Row ${i}: conversionActionId must be the numeric action id.` };
+            adjustments.push({
+              conversionActionResource: `customers/${cid}/conversionActions/${actionId}`,
+              adjustmentType: type,
+              adjustmentDateTime: adt,
+              ...(orderId ? { orderId } : {}),
+              ...(gclid && isAdsDateTime(cdt) ? { gclid, conversionDateTime: cdt } : {}),
+              ...(typeof r.restatedValue === 'number' ? { restatedValue: r.restatedValue } : {}),
+              ...(r.currencyCode ? { currencyCode: String(r.currencyCode) } : {}),
+            });
+          }
+          const outcome = await ads.uploadConversionAdjustments(cid, adjustments, login(a));
+          return {
+            ok: outcome.failures.length === 0,
+            adjusted: outcome.accepted,
+            total: outcome.total,
+            ...(outcome.failures.length ? { failures: outcome.failures } : {}),
+            note: outcome.failures.length === 0
+              ? 'All adjustments accepted; reporting updates within hours.'
+              : 'Some adjustments were REJECTED - report each failure with its row index (a common cause: the original conversion is outside its action\'s adjustment window).',
+          };
+        }),
+    },
+    {
+      name: 'upload_google_ads_customer_match',
+      description:
+        'Add members to an EXISTING Customer Match user list (pick it from list_google_ads_audiences - CRM-based, ' +
+        'not read-only): emails/phones are hashed in-app with Google\'s normalization (plaintext never leaves the ' +
+        'machine), a job is created, populated and started. consent (adUserData + adPersonalization) is REQUIRED - ' +
+        'for EEA users it must reflect real consent; never invent GRANTED. Processing is ASYNC on Google\'s side: ' +
+        'list sizes update hours later, so never claim the list grew - report the started job instead. ' +
+        'Max 5000 members per call.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          customerId: { type: 'string', description: 'Account that owns the user list, bare digits.' },
+          userListId: { type: 'string', description: 'Numeric user list id (list_google_ads_audiences).' },
+          members: {
+            type: 'array',
+            maxItems: 5000,
+            items: {
+              type: 'object',
+              properties: {
+                email: { type: 'string', description: 'Plain email - hashed in-app.' },
+                phone: { type: 'string', description: 'Phone in E.164 - hashed in-app.' },
+              },
+              additionalProperties: false,
+            },
+          },
+          consent: {
+            type: 'object',
+            properties: {
+              adUserData: { type: 'string', enum: ['GRANTED', 'DENIED', 'UNSPECIFIED'] },
+              adPersonalization: { type: 'string', enum: ['GRANTED', 'DENIED', 'UNSPECIFIED'] },
+            },
+            required: ['adUserData', 'adPersonalization'],
+            additionalProperties: false,
+          },
+          loginCustomerId: { type: 'string', description: 'Manager (MCC) id to act through, when reached via a manager.' },
+        },
+        required: ['customerId', 'userListId', 'members', 'consent'],
+        additionalProperties: false,
+      },
+      write: true,
+      destructive: true,
+      summarize: (a) => {
+        const rows = Array.isArray(a.members) ? a.members.length : 0;
+        return `Add ${rows} member(s) to Customer Match user list ${s(a.userListId)} in LIVE Google Ads account ${s(a.customerId)}. Identifiers are hashed before upload; the list change feeds ad targeting`;
+      },
+      precheck: () => adsNotReady(ads),
+      handler: (a) =>
+        run(async () => {
+          const cid = s(a.customerId);
+          const listId = s(a.userListId).replace(/\D/g, '');
+          if (!listId) return { ok: false, error: 'userListId must be the numeric list id (see list_google_ads_audiences).' };
+          const raw = Array.isArray(a.members) ? (a.members as Array<Record<string, unknown>>) : [];
+          const members = raw
+            .map((m) => ({
+              ...(String(m.email ?? '').trim() ? { email: String(m.email).trim() } : {}),
+              ...(String(m.phone ?? '').trim() ? { phone: String(m.phone).trim() } : {}),
+            }))
+            .filter((m) => m.email || m.phone);
+          if (members.length === 0) return { ok: false, error: 'No usable members - each needs an email or a phone.' };
+          if (members.length > 5000) return { ok: false, error: 'Max 5000 members per call - split the batch.' };
+          const r = await ads.uploadCustomerMatch(cid, `customers/${cid}/userLists/${listId}`, members, a.consent as AdsConsent, login(a));
+          return {
+            ok: r.outcome.failures.length === 0,
+            job: r.jobResourceName,
+            submitted: r.outcome.accepted,
+            total: r.outcome.total,
+            ...(r.outcome.failures.length ? { failures: r.outcome.failures } : {}),
+            note:
+              'The job has been STARTED - Google processes it asynchronously, and list sizes update hours later. ' +
+              'Report the job as started, not the list as grown; re-check sizes with list_google_ads_audiences later.',
           };
         }),
     },
@@ -4461,17 +5156,34 @@ export function buildToolRegistry(
     },
   ];
 
-  // GOOGLE ADS belongs to the GTM toolset, NOT to a product of its own and NOT to the GA4 chat: its
-  // entire job here is to hand the GTM half a real Conversion ID + Label so a google_ads_conversion tag
-  // can be built without asking the user to paste them. So these go through the SAME product filter as
-  // everything else (productOf files them under 'gtm', since no Ads tool name contains "ga4"), and the
-  // create tool rides in the confirm-gated half exactly like every other write.
-  const adsTools: Tool[] = ads ? buildGoogleAdsTools(ads, Boolean(confirm)) : [];
+  // GOOGLE ADS serves TWO products, which is why it cannot be filed by productOf like everything else:
+  //   'ads' - the Google Ads chat, where these ARE the toolset.
+  //   'gtm' - the GTM chat, where their job is to hand the tag builder a real Conversion ID + Label so
+  //           a google_ads_conversion tag can be built without asking the user to paste them.
+  // They never belong to the GA4 chat. The create tool rides in the confirm-gated half exactly like
+  // every other write.
+  const adsTools: Tool[] = ads ? buildGoogleAdsTools(ads, Boolean(confirm), data) : [];
+  const adsToolNames = new Set(adsTools.map((t) => t.name));
 
   // GA4 Admin write tools (product 'ga4') live in a separate catalog; included
   // only when a confirm function is provided, exactly like the GTM write tools.
   const all = [...readTools, ...(confirm ? [...writeTools, ...buildGa4WriteTools(data)] : []), ...contextTools, ...adsTools];
-  const tools = [...(product ? all.filter((t) => productOf(t.name) === product) : all), ...memoryTools, ...corpusTools];
+  const inProduct = (t: Tool): boolean => {
+    if (adsToolNames.has(t.name)) return product === 'ads' || product === 'gtm';
+    // An Ads chat gets NO GTM or GA4 tools. Its account scope is a customer id, not a container or a
+    // property, so a GTM tool reached from here would act on whatever container was last selected in
+    // another tab - a different client entirely.
+    if (product === 'ads') return false;
+    return productOf(t.name) === product;
+  };
+  const tools = [
+    ...(product ? all.filter(inProduct) : all),
+    ...memoryTools,
+    // The corpus is a library of past GTM CONTAINER patterns, so it has nothing to say about an Ads
+    // account. Offering it there would invite the model to cite container conventions as if they
+    // described the advertiser's campaigns.
+    ...(product === 'ads' ? [] : corpusTools),
+  ];
 
   return {
     // SENT list only. Tools that cannot act on the active container's kind are withheld to keep the

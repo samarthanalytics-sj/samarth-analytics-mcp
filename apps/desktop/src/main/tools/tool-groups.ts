@@ -293,7 +293,24 @@ const GROUP_MEMBERS: Record<ToolGroup, readonly string[]> = {
   // ---- GOOGLE ADS. RECLASSIFIED: the two list_* tools would fall in core by the "list_/get_ is a
   // read" rule, but together they cost more than a sixth of the whole core budget and only matter
   // when Google Ads is in play, so the product travels as one group.
-  'google-ads': ['list_google_ads_accounts', 'list_google_ads_conversion_actions', 'create_google_ads_conversion_action'],
+  'google-ads': [
+    'list_google_ads_accounts',
+    'get_google_ads_tracking_setup',
+    'list_google_ads_conversion_actions',
+    'create_google_ads_conversion_action',
+    'list_google_ads_campaigns',
+    'google_ads_campaign_performance',
+    'get_google_ads_change_history',
+    'get_google_ads_conversion_volume',
+    'audit_google_ads_utm_setup',
+    'audit_google_ads_conversion_health',
+    'audit_google_ads_ga4_link',
+    'list_google_ads_audiences',
+    'get_google_ads_structure',
+    'upload_google_ads_offline_conversions',
+    'upload_google_ads_conversion_adjustments',
+    'upload_google_ads_customer_match',
+  ],
 };
 
 const NAME_TO_GROUP: ReadonlyMap<string, ToolGroup> = (() => {
@@ -656,7 +673,7 @@ const PROMPT_LABEL: Record<Exclude<ToolGroup, 'core'>, string> = {
   pixels: 'marketing pixels and gallery templates',
   'audit-verify': 'audits, verification, diffs and reports',
   ga4: 'GA4 Admin configuration changes',
-  'google-ads': 'Google Ads accounts and conversion actions',
+  'google-ads': 'Google Ads accounts, campaigns and conversion actions',
 };
 
 /** First sentence of a tool description, so the group listing stays one line per tool. */

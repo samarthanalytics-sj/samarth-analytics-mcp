@@ -489,10 +489,10 @@ function PropertyPanel({ t, runningId, busy, onRun, onTogglePause, onRemove, onS
   const criticalCount = run ? run.alerts.filter((a) => a.severity === 'critical' || a.severity === 'high').length : 0;
   const warningCount = run ? run.alerts.filter((a) => a.severity === 'medium' || a.severity === 'low').length : 0;
 
-  // The property's Slack-channel card: rendered in the Configuration column beside Recent alerts when a
-  // run exists, else standalone under the header — so connecting a channel is always reachable.
+  // The property's Slack-channel card: a slim full-width bar at the TOP of the dashboard (both
+  // branches), so connecting a channel is always reachable and Recent alerts keeps the full row.
   const slackCard = (
-    <div style={{ ...card, display: 'flex', flexDirection: 'column', gap: 10, flex: '1 1 300px', minWidth: 280, alignSelf: 'flex-start' }}>
+    <div style={{ ...card, display: 'flex', flexDirection: 'column', gap: 10, width: '100%', boxSizing: 'border-box' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 13.5, fontWeight: 600, color: 'var(--text)' }}><SlackMark size={14} /> Slack channel</span>
           {t.hasWebhook ? (
@@ -586,6 +586,10 @@ function PropertyPanel({ t, runningId, busy, onRun, onTogglePause, onRemove, onS
         </div>
       </div>
 
+      {/* ── Slack channel: a slim bar at the TOP (both branches), so Recent alerts below gets the
+             full row to itself instead of sharing a two-column split with configuration. ── */}
+      {slackCard}
+
       {run && counts ? (
         <>
           {/* ── Hero row (mockup format): the worst finding + the score / stat column ── */}
@@ -623,15 +627,11 @@ function PropertyPanel({ t, runningId, busy, onRun, onTogglePause, onRemove, onS
             </div>
           </div>
 
-          {/* ── Recent alerts + this property's channel/configuration (mockup two-column row) ── */}
-          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-            <RecentAlerts run={run} issueLog={t.issueLog ?? []} />
-            {slackCard}
-          </div>
+          {/* ── Recent alerts: full-width now that the Slack bar lives at the top. ── */}
+          <RecentAlerts run={run} issueLog={t.issueLog ?? []} />
         </>
       ) : (
         <>
-          {slackCard}
           <div style={{ ...card, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '36px 20px', color: 'var(--text-muted)' }}>
             <div style={{ fontWeight: 600, fontSize: 15, color: 'var(--text)' }}>
               {(t.history?.length ?? 0) > 0 ? 'No check has run in this session yet' : 'No check has run for this property yet'}

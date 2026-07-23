@@ -11,6 +11,17 @@ import {
   mapConversionAction,
   buildAccountTree,
   resolveConversionCustomer,
+  conversionSetupWarnings,
+  mapChangeEvent,
+  summarizeConversionVolume,
+  silentConversionActions,
+  auditUtmFindings,
+  assembleConversionHealth,
+  auditAdsGa4Seam,
+  parseUploadOutcome,
+  mapUserList,
+  mapStructureRow,
+  type AdsConversionAction,
 } from '../ads-map';
 
 let passed = 0;
@@ -354,6 +365,223 @@ const remember = (note: string | undefined): void => { if (note) notes.push(note
   const offending = notes.filter((n) => BANNED_DASHES.test(n));
   check('no produced note contains an em dash or en dash', offending.length === 0, offending.join(' | '));
   check('notes were actually collected (the dash check is not vacuous)', notes.length >= 8, String(notes.length));
+}
+
+// ── Phase A: full config fields, auto-tagging, and the deterministic setup warnings ──
+{
+  const full = mapConversionAction({
+    conversionAction: {
+      resourceName: 'customers/1/conversionActions/9', name: 'Purchase', status: 'ENABLED', type: 'WEBPAGE',
+      category: 'PURCHASE', countingType: 'MANY_PER_CLICK',
+      attributionModelSettings: { attributionModel: 'GOOGLE_ADS_LAST_CLICK', dataDrivenModelStatus: 'AVAILABLE' },
+      clickThroughLookbackWindowDays: '30', viewThroughLookbackWindowDays: 1,
+      valueSettings: { defaultValue: 25.5, defaultCurrencyCode: 'usd', alwaysUseDefaultValue: false },
+      tagSnippets: [],
+    },
+  });
+  check('full config: counting + attribution + dd status', full.countingType === 'MANY_PER_CLICK' && full.attributionModel === 'GOOGLE_ADS_LAST_CLICK' && full.dataDrivenModelStatus === 'AVAILABLE');
+  check('full config: lookback windows accept int64-string AND number', full.clickLookbackDays === 30 && full.viewLookbackDays === 1);
+  check('full config: value settings mapped, currency upper-cased', full.defaultValue === 25.5 && full.defaultCurrencyCode === 'USD' && full.alwaysUseDefaultValue === false);
+  const snake = mapConversionAction({
+    conversion_action: {
+      resource_name: 'customers/1/conversionActions/10', name: 'Lead', status: 'ENABLED', type: 'WEBPAGE', category: 'SUBMIT_LEAD_FORM',
+      attribution_model_settings: { attribution_model: 'DATA_DRIVEN' }, click_through_lookback_window_days: '90',
+      value_settings: { default_value: '0', always_use_default_value: true }, tag_snippets: [],
+    },
+  });
+  check('full config: snake_case rows read the same fields', snake.attributionModel === 'DATA_DRIVEN' && snake.clickLookbackDays === 90 && snake.defaultValue === 0 && snake.alwaysUseDefaultValue === true);
+  const minimal = mapConversionAction({ conversionAction: { resourceName: 'customers/1/conversionActions/11', name: 'Old', status: 'ENABLED', type: 'WEBPAGE', category: 'CONTACT', tagSnippets: [] } });
+  check('full config: absent fields stay ABSENT, never 0/empty', !('attributionModel' in minimal) && !('clickLookbackDays' in minimal) && !('defaultValue' in minimal));
+
+  check('auto-tagging: true / false / absent all survive', (() => {
+    const on = resolveConversionCustomer({ customer: { autoTaggingEnabled: true, conversionTrackingSetting: {} } }, '1');
+    const off = resolveConversionCustomer({ customer: { auto_tagging_enabled: 'false', conversion_tracking_setting: {} } }, '1');
+    const unknown = resolveConversionCustomer({ customer: { conversionTrackingSetting: {} } }, '1');
+    return on.autoTaggingEnabled === true && off.autoTaggingEnabled === false && unknown.autoTaggingEnabled === undefined;
+  })());
+
+  const act = (over: Partial<AdsConversionAction>): AdsConversionAction => ({
+    resourceName: 'customers/1/conversionActions/1', id: '1', name: over.name ?? 'A', status: 'ENABLED', type: 'WEBPAGE',
+    category: 'SUBMIT_LEAD_FORM', conversionId: null, conversionLabel: null, taggable: false, ...over,
+  });
+  const dbl = conversionSetupWarnings([
+    act({ name: 'GA4 lead import', type: 'GOOGLE_ANALYTICS_4_CUSTOM' }),
+    act({ name: 'Website lead', type: 'WEBPAGE' }),
+  ]);
+  check('warnings: GA4 import + website action, same category, both primary → double-count warning', dbl.length === 1 && dbl[0].includes('double counting') && dbl[0].includes('GA4 lead import') && dbl[0].includes('Website lead'));
+  check('warnings: a SECONDARY GA4 import does not fire', conversionSetupWarnings([
+    act({ name: 'GA4 import', type: 'GOOGLE_ANALYTICS_4_CUSTOM', primaryForGoal: false }),
+    act({ name: 'Website lead' }),
+  ]).length === 0);
+  check('warnings: different categories do not fire', conversionSetupWarnings([
+    act({ name: 'GA4 purchase', type: 'GOOGLE_ANALYTICS_4_CUSTOM', category: 'PURCHASE' }),
+    act({ name: 'Website lead' }),
+  ]).length === 0);
+  check('warnings: paused actions do not fire', conversionSetupWarnings([
+    act({ name: 'GA4 import', type: 'GOOGLE_ANALYTICS_4_CUSTOM', status: 'PAUSED' }),
+    act({ name: 'Website lead' }),
+  ]).length === 0);
+  check('warnings: always-use-default with zero/no value → zero-value warning', (() => {
+    const w = conversionSetupWarnings([act({ name: 'Zeroed', alwaysUseDefaultValue: true, defaultValue: 0 })]);
+    return w.length === 1 && w[0].includes('value 0');
+  })());
+  check('warnings: always-use-default WITH a real value does not fire', conversionSetupWarnings([
+    act({ name: 'Valued', alwaysUseDefaultValue: true, defaultValue: 25 }),
+  ]).length === 0);
+}
+
+// ── Phase B: change events, conversion volume, UTM findings ──
+{
+  const ev = mapChangeEvent({
+    changeEvent: {
+      changeDateTime: '2026-07-20 14:03:22', userEmail: 'ops@acme.com', clientType: 'GOOGLE_ADS_WEB_CLIENT',
+      changeResourceType: 'CAMPAIGN_BUDGET', resourceChangeOperation: 'UPDATE',
+      changedFields: { paths: ['amount_micros', 'status'] }, changeResourceName: 'customers/1/campaignBudgets/9',
+    },
+    campaign: { name: 'Brand - Search' },
+  });
+  check('change event: who/what/when mapped', ev.at === '2026-07-20 14:03:22' && ev.user === 'ops@acme.com' && ev.resourceType === 'CAMPAIGN_BUDGET' && ev.operation === 'UPDATE' && ev.campaignName === 'Brand - Search');
+  check('change event: FieldMask paths → changedFields', JSON.stringify(ev.changedFields) === JSON.stringify(['amount_micros', 'status']));
+  check('change event: comma-string mask + snake_case row also parse', (() => {
+    const e = mapChangeEvent({ change_event: { change_date_time: 'x', changed_fields: 'status, name', resource_change_operation: 'create' } });
+    return JSON.stringify(e.changedFields) === JSON.stringify(['status', 'name']) && e.operation === 'CREATE';
+  })());
+
+  const volRows = [
+    { segments: { date: '2026-07-19', conversionAction: 'customers/1/conversionActions/55', conversionActionName: 'Lead' }, metrics: { allConversions: '3' } },
+    { segments: { date: '2026-07-20', conversionAction: 'customers/1/conversionActions/55', conversionActionName: 'Lead' }, metrics: { allConversions: 2 } },
+    { segments: { date: '2026-07-20', conversionAction: 'customers/1/conversionActions/77', conversionActionName: 'Purchase' }, metrics: { allConversions: 1 } },
+  ];
+  const vol = summarizeConversionVolume(volRows);
+  check('volume: summed per action, busiest first', vol[0]?.actionId === '55' && vol[0]?.total === 5 && vol[1]?.total === 1);
+  check('volume: first/last active day + activeDays', vol[0]?.firstDate === '2026-07-19' && vol[0]?.lastDate === '2026-07-20' && vol[0]?.activeDays === 2);
+  const act = (id: string, name: string, status = 'ENABLED'): AdsConversionAction => ({
+    resourceName: `customers/1/conversionActions/${id}`, id, name, status, type: 'WEBPAGE', category: 'SUBMIT_LEAD_FORM',
+    conversionId: null, conversionLabel: null, taggable: false,
+  });
+  const silent = silentConversionActions([act('55', 'Lead'), act('88', 'Dead form'), act('99', 'Paused one', 'PAUSED')], vol);
+  check('silent actions: enabled + zero volume only (paused excluded, active excluded)', silent.length === 1 && silent[0].id === '88');
+
+  const noTagging = auditUtmFindings({ autoTaggingEnabled: false, trackingUrlTemplate: null, finalUrlSuffix: null, campaigns: [] });
+  check('utm: auto-tagging off + no manual utm → critical', noTagging.some((f) => f.severity === 'critical' && f.finding.includes('NO gclid and NO UTMs')));
+  const partial = auditUtmFindings({
+    autoTaggingEnabled: false, trackingUrlTemplate: '{lpurl}?utm_source=google&utm_medium=cpc', finalUrlSuffix: null, campaigns: [],
+  });
+  check('utm: manual utm missing utm_campaign → warning naming the gap', partial.some((f) => f.severity === 'warning' && f.finding.includes('utm_campaign')));
+  const noLpurl = auditUtmFindings({
+    autoTaggingEnabled: true, trackingUrlTemplate: null, finalUrlSuffix: null,
+    campaigns: [{ id: '1', name: 'Broken', trackingUrlTemplate: 'https://track.example.com/?x=1', finalUrlSuffix: null }],
+  });
+  check('utm: campaign template without lpurl → critical naming the campaign', noLpurl.some((f) => f.severity === 'critical' && f.finding.includes('"Broken"') && f.finding.includes('{lpurl}')));
+  const clean = auditUtmFindings({ autoTaggingEnabled: true, trackingUrlTemplate: null, finalUrlSuffix: null, campaigns: [] });
+  check('utm: auto-tagging on + nothing manual → single info, no alarms', clean.length === 1 && clean[0].severity === 'info');
+  const manualGclid = auditUtmFindings({ autoTaggingEnabled: true, trackingUrlTemplate: '{lpurl}?gclid={gclid}', finalUrlSuffix: null, campaigns: [] });
+  check('utm: manual gclid with auto-tagging on → conflict warning', manualGclid.some((f) => f.severity === 'warning' && f.finding.includes('gclid')));
+}
+
+// ── Phase C: conversion-health composite + the Ads↔GA4 seam ──
+{
+  const act3 = (over: Partial<AdsConversionAction>): AdsConversionAction => ({
+    resourceName: 'customers/1/conversionActions/1', id: over.id ?? '1', name: over.name ?? 'A', status: 'ENABLED',
+    type: 'WEBPAGE', category: 'SUBMIT_LEAD_FORM', conversionId: 'AW-1', conversionLabel: 'L', taggable: true, ...over,
+  });
+  const tracking = { conversionCustomerId: '999', status: 'X', trackingId: null, crossAccountTrackingId: null, isCrossAccount: true };
+  const health = assembleConversionHealth({
+    tracking,
+    actions: [
+      act3({ id: '1', name: 'GA4 lead', type: 'GOOGLE_ANALYTICS_4_CUSTOM', taggable: false, conversionLabel: null }),
+      act3({ id: '2', name: 'Web lead' }),
+      act3({ id: '3', name: 'Unlabelled', conversionLabel: null }),
+      act3({ id: '4', name: 'Silent one' }),
+    ],
+    volume: [{ actionId: '2', name: 'Web lead', total: 5, firstDate: '2026-07-01', lastDate: '2026-07-20', activeDays: 4 }],
+    utmFindings: [
+      { severity: 'critical', finding: 'no tagging at all' },
+      { severity: 'info', finding: 'all clear elsewhere' },
+    ],
+    changes: [
+      { at: '2026-07-19 10:00:00', user: 'x@y.z', clientType: 'GOOGLE_ADS_WEB_CLIENT', resourceType: 'CONVERSION_ACTION', operation: 'UPDATE', changedFields: ['status'], resourceName: 'r' },
+      { at: '2026-07-18 09:00:00', user: 'x@y.z', clientType: 'GOOGLE_ADS_WEB_CLIENT', resourceType: 'CAMPAIGN', operation: 'REMOVE', changedFields: [], resourceName: 'r2' },
+    ],
+    performance: [
+      { id: 'c1', name: 'Burning', status: 'ENABLED', impressions: 100, clicks: 10, costMicros: 5_000_000, conversions: 0, conversionsValue: 0, allConversions: 0 },
+      { id: 'c2', name: 'Fine', status: 'ENABLED', impressions: 100, clicks: 10, costMicros: 5_000_000, conversions: 2, conversionsValue: 10, allConversions: 2 },
+    ],
+  });
+  const areas = new Set(health.map((f) => f.area));
+  check('health: folds tagging findings, drops the info all-clear', health.some((f) => f.area === 'tagging' && f.finding === 'no tagging at all') && !health.some((f) => f.finding === 'all clear elsewhere'));
+  check('health: double-count surfaces as critical config', health.some((f) => f.area === 'config' && f.severity === 'critical' && f.finding.includes('double counting')));
+  check('health: unlabelled website action flagged (GA4 import NOT counted there)', (() => {
+    const f = health.find((x) => x.finding.includes('no readable conversion label'));
+    return !!f && f.finding.includes('"Unlabelled"') && !f.finding.includes('GA4 lead');
+  })());
+  check('health: silent actions + burning campaigns under volume', health.some((f) => f.area === 'volume' && f.finding.includes('Silent one')) && health.some((f) => f.area === 'volume' && f.finding.includes('"Burning"') && !f.finding.includes('"Fine"')));
+  check('health: conversion-touching change called out with who/when', health.some((f) => f.area === 'changes' && f.finding.includes('x@y.z') && f.finding.includes('CONVERSION_ACTION')));
+  check('health: cross-account ownership is INFO, not an alarm', health.some((f) => f.area === 'config' && f.severity === 'info' && f.finding.includes('999')));
+  check('health: worst first', health[0].severity === 'critical' && areas.size >= 4);
+
+  const clean = assembleConversionHealth({
+    tracking: { ...tracking, isCrossAccount: false, conversionCustomerId: null },
+    actions: [act3({ id: '2', name: 'Web lead' })],
+    volume: [{ actionId: '2', name: 'Web lead', total: 5, firstDate: '2026-07-01', lastDate: '2026-07-20', activeDays: 4 }],
+    utmFindings: [{ severity: 'info', finding: 'auto-tagging on' }],
+    changes: [],
+    performance: [],
+  });
+  check('health: clean account → single honest all-clear naming the runtime boundary', clean.length === 1 && clean[0].severity === 'info' && clean[0].finding.includes('runtime'));
+
+  const seamBase = {
+    customerId: '123-456-7890',
+    actions: [
+      act3({ id: '1', name: 'purchase (GA4)', type: 'GOOGLE_ANALYTICS_4_PURCHASE', taggable: false, conversionLabel: null }),
+      act3({ id: '2', name: 'stale_event import', type: 'GOOGLE_ANALYTICS_4_CUSTOM', taggable: false, conversionLabel: null }),
+    ],
+    keyEvents: [{ eventName: 'purchase' }, { eventName: 'generate_lead' }],
+  };
+  const linked = auditAdsGa4Seam({ ...seamBase, links: [{ customerId: '1234567890', adsPersonalizationEnabled: true, canManageClients: false }] });
+  check('seam: direct link recognised (dashed id normalized)', linked.some((f) => f.severity === 'info' && f.finding.includes('linked directly')));
+  check('seam: stale import flagged as heuristic, matching one spared', (() => {
+    const f = linked.find((x) => x.finding.includes('match NO current key event'));
+    return !!f && f.finding.includes('stale_event') && !f.finding.includes('purchase (GA4)') && f.finding.includes('heuristic');
+  })());
+  check('seam: unimported key event listed as opportunity, not alarm', linked.some((f) => f.severity === 'info' && f.finding.includes('generate_lead')));
+  const managerOnly = auditAdsGa4Seam({ ...seamBase, links: [{ customerId: '999', adsPersonalizationEnabled: null, canManageClients: true }] });
+  check('seam: manager-level link → warning to confirm, not critical', managerOnly.some((f) => f.severity === 'warning' && f.finding.includes('manager-level')) && !managerOnly.some((f) => f.severity === 'critical' && f.finding.includes('NO Google Ads link')));
+  const unlinked = auditAdsGa4Seam({ ...seamBase, links: [] });
+  check('seam: no link at all → critical', unlinked.some((f) => f.severity === 'critical' && f.finding.includes('NO Google Ads link')));
+}
+
+// ── Phase D/E: upload outcome parsing, user lists, structure rows ──
+{
+  check('upload outcome: clean 200 → all accepted', (() => {
+    const o = parseUploadOutcome({ results: [{}, {}] }, 2);
+    return o.accepted === 2 && o.failures.length === 0;
+  })());
+  check('upload outcome: per-row failure parsed with its index', (() => {
+    const o = parseUploadOutcome({
+      partialFailureError: {
+        code: 3,
+        message: 'partial',
+        details: [{ errors: [{ message: 'gclid expired', location: { fieldPathElements: [{ fieldName: 'conversions', index: 1 }] } }] }],
+      },
+    }, 3);
+    return o.accepted === 2 && o.failures.length === 1 && o.failures[0].index === 1 && o.failures[0].message === 'gclid expired';
+  })());
+  check('upload outcome: message-only status → batch-level failure, nothing claimed accepted', (() => {
+    const o = parseUploadOutcome({ partialFailureError: { message: 'all bad' } }, 4);
+    return o.failures.length === 1 && o.failures[0].index === -1 && o.accepted === 0;
+  })());
+
+  const ul = mapUserList({ userList: { id: '9', resourceName: 'customers/1/userLists/9', name: 'Newsletter', type: 'CRM_BASED', membershipStatus: 'OPEN', membershipLifeSpan: '180', sizeForDisplay: '1200', sizeForSearch: 800, readOnly: false, matchRatePercentage: 61 } });
+  check('user list: sizes + lifespan + match rate mapped (int64 strings ok)', ul.sizeForDisplay === 1200 && ul.sizeForSearch === 800 && ul.membershipLifeSpanDays === 180 && ul.matchRatePercentage === 61 && ul.type === 'CRM_BASED');
+
+  const kw = mapStructureRow('keywords', {
+    campaign: { name: 'Brand' }, adGroup: { name: 'Core' },
+    adGroupCriterion: { keyword: { text: 'chownow pos', matchType: 'PHRASE' }, qualityInfo: { qualityScore: 7, creativeQualityScore: 'ABOVE_AVERAGE', postClickQualityScore: 'BELOW_AVERAGE', searchPredictedCtr: 'AVERAGE' } },
+  });
+  check('structure keywords row: quality trio + names', kw.qualityScore === 7 && kw.landingPageExperience === 'BELOW_AVERAGE' && kw.campaign === 'Brand' && kw.keyword === 'chownow pos');
+  const adRow = mapStructureRow('ads', { campaign: { name: 'Brand' }, adGroup: { name: 'Core' }, adGroupAd: { status: 'ENABLED', adStrength: 'GOOD', ad: { id: '345', type: 'RESPONSIVE_SEARCH_AD', finalUrls: ['https://x.com/a'] } } });
+  check('structure ads row: strength + final urls', adRow.adStrength === 'GOOD' && Array.isArray(adRow.finalUrls) && (adRow.finalUrls as string[])[0] === 'https://x.com/a');
 }
 
 console.log(`\nads-map: ${passed} passed, ${failed} failed`);
