@@ -11,6 +11,7 @@ import { RegistryService } from './services/registry-service';
 import { registerRegistryIpc } from './ipc/registry-ipc';
 import { registerProvidersIpc } from './ipc/providers-ipc';
 import { registerAdsIpc } from './ipc/ads-ipc';
+import { registerNotifyIpc } from './ipc/notify-ipc';
 import { GoogleAdsService, type AdsRequest } from './google/ads-service';
 import { GoogleAuthService } from './services/google-auth-service';
 import { closeOpenTaWindow } from './suggestions/ta-driver';
@@ -271,6 +272,7 @@ app.whenReady().then(() => {
   registerRegistryIpc(registry);
   registerProvidersIpc(providerKeys, { index: semanticIndex, cache: embeddings, registry });
   registerAdsIpc(adsService, providerKeys, dataService);
+  registerNotifyIpc();
   registerGoogleIpc(googleAuth);
   registerDataIpc(dataService);
   registerChatIpc(chatService);

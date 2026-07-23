@@ -4016,6 +4016,34 @@ function TagReviewPanel({
     setDone(null);
   }
 
+  // A 250-page crawl runs for minutes, which is the whole reason it streams progress: you start it
+  // and go elsewhere. So the OUTCOME is announced with an OS notification, suppressed by the main
+  // process when the window is focused (you are already looking at it) or the scan was too quick to
+  // have freed anyone up. One place, so all five scan paths report identically.
+  const scanStartRef = useRef(0);
+  const beginScan = (): void => { scanStartRef.current = Date.now(); };
+  function notifyScanDone(res: TagScanResult): void {
+    // The engine labels a stopped run in its warnings (see scan-core), which is the only signal that
+    // survives to here: `stopping` is renderer state and is reset by the next run.
+    const stopped = (res.warnings ?? []).some((w) => /stopped early/i.test(w));
+    void window.desktop.notify.taskDone({
+      task: 'Tag suggestion scan',
+      outcome: stopped ? 'stopped' : 'completed',
+      elapsedMs: Date.now() - scanStartRef.current,
+      done: res.summary?.pagesScanned,
+      found: dedupeViewsByGtmName(res.suggestions ?? []).length,
+      foundLabel: 'tag',
+    }).catch(() => undefined); // a notification must never surface as a scan failure
+  }
+  function notifyScanFailed(e: unknown): void {
+    void window.desktop.notify.taskDone({
+      task: 'Tag suggestion scan',
+      outcome: 'failed',
+      elapsedMs: Date.now() - scanStartRef.current,
+      error: e instanceof Error ? e.message : String(e),
+    }).catch(() => undefined);
+  }
+
   function applyScanResult(res: TagScanResult): void {
     setMeta(res.summary);
     setScanMeta({ site: res.site || res.siteHost || undefined, scannedAt: res.scannedAt || undefined });
@@ -4028,6 +4056,7 @@ function TagReviewPanel({
     // (form) tags of a screenshot even though they were locatable.
     const deduped = dedupeViewsByGtmName(res.suggestions);
     loadSuggestions(deduped);
+    notifyScanDone(res);
     // Fill in a proof screenshot per creatable tag (the element it would track, ringed) - async +
     // best-effort so the suggestion list is usable immediately and screenshots appear as they arrive.
     void captureSuggestionShots(deduped, res.site || res.siteHost || url);
@@ -4112,6 +4141,7 @@ function TagReviewPanel({
     lastScanRef.current = { kind: 'urls', urls: [target] };
     onError('');
     setScanning(true);
+    beginScan();
     setStopping(false); // fresh run - a Stop from a previous scan must not disable this one's button
     setScanProgress(null);
     setDiscovered(null);
@@ -4120,6 +4150,7 @@ function TagReviewPanel({
       applyScanResult(await window.desktop.tags.scanUrlsStream([target], { settleMs: effSettleMs(), platforms }, onScanProgress));
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
+      notifyScanFailed(e);
     } finally {
       setScanning(false);
       setScanProgress(null);
@@ -4157,6 +4188,7 @@ function TagReviewPanel({
     lastScanRef.current = { kind: 'urls', urls };
     onError('');
     setScanning(true);
+    beginScan();
     setStopping(false); // fresh run - a Stop from a previous scan must not disable this one's button
     setScanProgress(null);
     loadSuggestions([]); // clear any prior scan's rows so streamed state is never stale
@@ -4164,6 +4196,7 @@ function TagReviewPanel({
       applyScanResult(await window.desktop.tags.scanUrlsStream(urls, { settleMs: effSettleMs(), platforms }, onScanProgress));
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
+      notifyScanFailed(e);
     } finally {
       setScanning(false);
       setScanProgress(null);
@@ -4177,6 +4210,7 @@ function TagReviewPanel({
     lastScanRef.current = { kind: 'crawl', target };
     onError('');
     setScanning(true);
+    beginScan();
     setStopping(false); // fresh run - a Stop from a previous scan must not disable this one's button
     setScanProgress(null);
     loadSuggestions([]); // clear any prior scan's rows so streamed state is never stale
@@ -4184,6 +4218,7 @@ function TagReviewPanel({
       applyScanResult(await window.desktop.tags.scanStream(target, { maxPages: 25, maxDepth: 2, settleMs: effSettleMs(), platforms }, onScanProgress));
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
+      notifyScanFailed(e);
     } finally {
       setScanning(false);
       setScanProgress(null);
@@ -4228,6 +4263,7 @@ function TagReviewPanel({
     lastScanRef.current = { kind: 'urls', urls: capped };
     onError('');
     setScanning(true);
+    beginScan();
     setStopping(false); // fresh run - a Stop from a previous scan must not disable this one's button
     setScanProgress(null);
     setDiscovered(null);
@@ -4237,6 +4273,7 @@ function TagReviewPanel({
       if (capped.length < urls.length) setWarnings((w) => [`Only the first ${CSV_URL_CAP} of ${urls.length} URLs were scanned (CSV cap).`, ...w]);
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
+      notifyScanFailed(e);
     } finally {
       setScanning(false);
       setScanProgress(null);
@@ -4250,6 +4287,7 @@ function TagReviewPanel({
     if (!last || scanning || discovering) return;
     onError('');
     setScanning(true);
+    beginScan();
     setStopping(false); // fresh run - a Stop from a previous scan must not disable this one's button
     setScanProgress(null);
     loadSuggestions([]); // clear the stale rows so streamed state is never mixed with the old scan
@@ -4261,6 +4299,7 @@ function TagReviewPanel({
       );
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
+      notifyScanFailed(e);
     } finally {
       setScanning(false);
       setScanProgress(null);
