@@ -28,7 +28,7 @@ if (!existsSync(distRetry)) {
   process.exit(1);
 }
 
-const { buildRetryOptions, jitteredDelay, SAFE_HTTP_METHODS_TO_RETRY } = await import(
+const { buildRetryOptions, jitteredDelay, retryAfterMs, effectiveRetryDelay, SAFE_HTTP_METHODS_TO_RETRY } = await import(
   pathToFileURL(distRetry).href
 );
 
@@ -150,6 +150,64 @@ await test('onRetryAttempt never throws on malformed error shapes', () => {
   } finally {
     console.error = origError;
   }
+});
+
+
+// ── Retry-After ──────────────────────────────────────────────────────────────
+// On a 429 Google usually says how long to wait. Retrying inside that window extends the throttle
+// instead of clearing it, and gaxios does not read the header itself.
+
+await test('retryAfterMs reads delta-seconds', () => {
+  assert.strictEqual(retryAfterMs({ 'retry-after': '120' }), 120_000);
+  assert.strictEqual(retryAfterMs({ 'retry-after': '0' }), 0);
+});
+
+await test('retryAfterMs reads the capitalised form and header bags with get()', () => {
+  assert.strictEqual(retryAfterMs({ 'Retry-After': '30' }), 30_000);
+  assert.strictEqual(retryAfterMs({ get: (k) => (k === 'retry-after' ? '45' : null) }), 45_000);
+});
+
+await test('retryAfterMs reads an HTTP-date, relative to now', () => {
+  const now = Date.parse('2026-01-01T00:00:00Z');
+  assert.strictEqual(retryAfterMs({ 'retry-after': 'Thu, 01 Jan 2026 00:02:00 GMT' }, () => now), 120_000);
+});
+
+await test('retryAfterMs treats a PAST date as "retry now", never a negative wait', () => {
+  const now = Date.parse('2026-01-01T00:05:00Z');
+  assert.strictEqual(retryAfterMs({ 'retry-after': 'Thu, 01 Jan 2026 00:00:00 GMT' }, () => now), 0);
+});
+
+await test('retryAfterMs returns null when there is nothing usable', () => {
+  // null means "the server said nothing", which is different from "wait 0" - the caller must fall
+  // back to its own backoff rather than retrying immediately.
+  for (const h of [undefined, null, {}, 'not-an-object', { 'retry-after': '' }, { 'retry-after': 'soon' }, { 'retry-after': {} }]) {
+    assert.strictEqual(retryAfterMs(h), null, JSON.stringify(h));
+  }
+});
+
+await test('effectiveRetryDelay never waits LESS than either source asks', () => {
+  assert.strictEqual(effectiveRetryDelay(2_000, 10_000, 30_000), 10_000);
+  assert.strictEqual(effectiveRetryDelay(20_000, 5_000, 30_000), 20_000);
+  assert.strictEqual(effectiveRetryDelay(8_000, null, 30_000), 8_000);
+});
+
+await test('effectiveRetryDelay clamps so one attempt stays bounded', () => {
+  assert.strictEqual(effectiveRetryDelay(1_000, 600_000, 30_000), 30_000);
+  assert.strictEqual(effectiveRetryDelay(0, 0, 30_000), 0);
+  assert.ok(effectiveRetryDelay(-5, null, 30_000) >= 0, 'never negative');
+});
+
+await test('retryBackoff honours Retry-After end to end', async () => {
+  const opts = buildRetryOptions({ GTM_MCP_RETRY_MAX_DELAY_MS: '30000' });
+  const started = Date.now();
+  await opts.retryConfig.retryBackoff({ response: { headers: { 'retry-after': '0' } } }, 0);
+  assert.ok(Date.now() - started < 1_000, 'a zero Retry-After resolves promptly');
+});
+
+await test('retryBackoff still works when the error carries no headers', () => {
+  const opts = buildRetryOptions({});
+  assert.doesNotThrow(() => opts.retryConfig.retryBackoff(undefined, 0));
+  assert.doesNotThrow(() => opts.retryConfig.retryBackoff({ response: {} }, 0));
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
