@@ -1,3 +1,9 @@
+## [1.398.7](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.398.6...v1.398.7) (2026-07-23)
+
+### Bug Fixes
+
+* **desktop:** answer the message the user just sent ([#686](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/686)) ([030f878](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/030f87886800bcc98fefcea01f08f6fdef2a12e5)), closes [#645](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/645)
+
 ## [1.398.6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.398.5...v1.398.6) (2026-07-23)
 
 ### Bug Fixes
