@@ -1,7 +1,7 @@
 import type { GoogleDataService } from '../google/data-service';
 import { AdsError, type GoogleAdsService } from '../google/ads-service';
 import { CONVERSION_CATEGORIES } from '../google/ads-rest';
-import { conversionSetupWarnings, silentConversionActions } from '../google/ads-map';
+import { conversionSetupWarnings, silentConversionActions, assembleConversionHealth, auditAdsGa4Seam } from '../google/ads-map';
 import type { LlmToolDef, ToolExecutor } from '../llm/types';
 import type { GoogleProduct, GtmContext } from '../../shared/ipc';
 import type { AuditHistoryStore } from '../storage/audit-history';
@@ -397,7 +397,7 @@ async function adsNotReady(ads: GoogleAdsService): Promise<Record<string, unknow
  * `writesEnabled` mirrors the GTM/GA4 rule: the create tool exists only when the registry was built
  * with a confirm fn, so a read-only registry cannot even name it.
  */
-function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean): Tool[] {
+function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean, data?: GoogleDataService): Tool[] {
   // Every handler runs behind the readiness gate and swallows its own errors, so an Ads failure is a
   // structured answer the model can read out, never a throw carrying a request config.
   const run = async (fn: () => Promise<unknown>): Promise<unknown> => {
@@ -753,6 +753,121 @@ function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean): Too
               'Findings are provable from the CONFIG alone. Ad-level tracking templates were not read; if campaign and ' +
               'account levels are clean but attribution still breaks, check ad-level templates and the landing pages ' +
               'themselves (redirects that strip query parameters).',
+          };
+        }),
+    },
+    {
+      name: 'audit_google_ads_conversion_health',
+      description:
+        'THE conversion-health audit: runs every read in one pass (tagging/UTM plumbing, full conversion-action ' +
+        'config, per-action volume, campaign spend, recent change history) and returns FINDINGS ordered worst-first - ' +
+        'what is wrong, why it matters, what to do - not raw rows. Areas: tagging (gclid/UTM), config (double ' +
+        'counting, zero-value forcing, missing labels), volume (silent actions, spend without conversions), changes ' +
+        '(who touched conversion measurement recently). Use this FIRST for "is my conversion tracking healthy" / ' +
+        '"why did conversions drop"; use the individual tools to drill into a specific finding. Read-only. ' +
+        'BOUNDARY: config-plane only - whether tags actually FIRE on the site is runtime evidence (GTM tab verify); ' +
+        'never claim firing health from this result. Optional days or startDate/endDate window (default 30 days).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          customerId: { type: 'string', description: 'Google Ads account id, bare digits (strip the dashes).' },
+          days: { type: 'number', description: 'Trailing window: 7, 14 or 30 (default 30). Ignored when startDate+endDate are given.' },
+          startDate: { type: 'string', description: 'Custom range start, YYYY-MM-DD. Requires endDate.' },
+          endDate: { type: 'string', description: 'Custom range end, YYYY-MM-DD.' },
+          loginCustomerId: { type: 'string', description: 'Manager (MCC) id to act through, when reached via a manager.' },
+        },
+        required: ['customerId'],
+        additionalProperties: false,
+      },
+      handler: (a) =>
+        run(async () => {
+          const cid = s(a.customerId);
+          const lg = login(a);
+          const range = {
+            ...(typeof a.days === 'number' ? { days: a.days } : {}),
+            ...(s(a.startDate).trim() ? { startDate: s(a.startDate).trim() } : {}),
+            ...(s(a.endDate).trim() ? { endDate: s(a.endDate).trim() } : {}),
+          };
+          // One pass, everything in parallel - each read already carries its own retry/backoff.
+          const [tracking, list, vol, utm, changes, perf] = await Promise.all([
+            ads.conversionCustomer(cid, lg),
+            ads.listConversionActions(cid, lg),
+            ads.conversionVolume(cid, range, lg),
+            ads.utmSetup(cid, lg),
+            ads.changeHistory(cid, {}, lg),
+            ads.campaignPerformance(cid, range, lg),
+          ]);
+          const findings = assembleConversionHealth({
+            tracking,
+            actions: list.actions,
+            volume: vol.volume,
+            utmFindings: utm.findings,
+            changes: changes.events,
+            performance: perf.campaigns,
+          });
+          const counts = {
+            critical: findings.filter((f) => f.severity === 'critical').length,
+            warning: findings.filter((f) => f.severity === 'warning').length,
+            info: findings.filter((f) => f.severity === 'info').length,
+          };
+          return {
+            ok: true,
+            window: vol.windowLabel,
+            changesWindow: `${changes.startDate} to ${changes.endDate}`,
+            counts,
+            findings,
+            note:
+              'Report findings worst-first with their area; every claim above is provable from account CONFIG and ' +
+              'recorded data. Firing behaviour on the site is NOT covered - offer the GTM tab\'s tag verification for ' +
+              'that. For "who changed it", get_google_ads_change_history has the full event list.',
+          };
+        }),
+    },
+    {
+      name: 'audit_google_ads_ga4_link',
+      description:
+        'Audit the Ads ↔ GA4 SEAM for one Ads account + one GA4 property: is the property linked to this account ' +
+        '(direct vs manager-level vs missing), do the GA4-IMPORTED conversion actions still match the property\'s ' +
+        'key events (renamed/removed key events leave imports counting nothing), which key events are not imported, ' +
+        'and the classic double-count (GA4 import + website tag both primary). Requires property ("properties/123..." ' +
+        '- list_ga4_properties or the active GA4 context supplies it) AND customerId. Read-only; uses the existing ' +
+        'GA4 access, no extra scopes.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          customerId: { type: 'string', description: 'Google Ads account id, bare digits (strip the dashes).' },
+          property: { type: 'string', description: 'GA4 property resource name, e.g. "properties/123456".' },
+          loginCustomerId: { type: 'string', description: 'Manager (MCC) id to act through, when reached via a manager.' },
+        },
+        required: ['customerId', 'property'],
+        additionalProperties: false,
+      },
+      handler: (a) =>
+        run(async () => {
+          if (!data) {
+            return { ok: false, error: 'GA4 access is not available in this session, so the Ads-GA4 link cannot be audited from here.' };
+          }
+          const prop = s(a.property).trim();
+          if (!/^properties\/\d+$/.test(prop)) {
+            return { ok: false, error: 'property must be a GA4 property resource name like "properties/123456".' };
+          }
+          const cid = s(a.customerId);
+          const [links, keyEvents, list] = await Promise.all([
+            data.listGa4GoogleAdsLinks(prop),
+            data.listGa4KeyEvents(prop),
+            ads.listConversionActions(cid, login(a)),
+          ]);
+          const findings = auditAdsGa4Seam({ customerId: cid, links, actions: list.actions, keyEvents });
+          return {
+            ok: true,
+            property: prop,
+            customerId: cid,
+            linkCount: links.length,
+            keyEventCount: keyEvents.length,
+            findings,
+            note:
+              'The stale-import check matches names heuristically - present those as "verify in GA4 Admin", never as ' +
+              'certain. A manager-level link (canManageClients) can legitimately cover this account without a direct link.',
           };
         }),
     },
@@ -4724,7 +4839,7 @@ export function buildToolRegistry(
   //           a google_ads_conversion tag can be built without asking the user to paste them.
   // They never belong to the GA4 chat. The create tool rides in the confirm-gated half exactly like
   // every other write.
-  const adsTools: Tool[] = ads ? buildGoogleAdsTools(ads, Boolean(confirm)) : [];
+  const adsTools: Tool[] = ads ? buildGoogleAdsTools(ads, Boolean(confirm), data) : [];
   const adsToolNames = new Set(adsTools.map((t) => t.name));
 
   // GA4 Admin write tools (product 'ga4') live in a separate catalog; included

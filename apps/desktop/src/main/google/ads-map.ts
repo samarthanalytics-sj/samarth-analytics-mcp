@@ -798,3 +798,203 @@ export function auditUtmFindings(setup: UtmSetup): UtmFinding[] {
   }
   return out;
 }
+
+// ── conversion health composite (Phase C) ────────────────────────────────────────────────
+
+export interface HealthFinding {
+  severity: 'critical' | 'warning' | 'info';
+  /** Which lens produced it: tagging | config | volume | changes | seam. */
+  area: string;
+  finding: string;
+}
+
+const SEV_RANK: Record<HealthFinding['severity'], number> = { critical: 0, warning: 1, info: 2 };
+const capNames = (names: string[], cap: number): string =>
+  names.slice(0, cap).map((n) => `"${n}"`).join(', ') + (names.length > cap ? ` (+${names.length - cap} more)` : '');
+
+export interface ConversionHealthInputs {
+  tracking: ConversionCustomer;
+  actions: AdsConversionAction[];
+  volume: ConversionVolumeSummary[];
+  utmFindings: UtmFinding[];
+  /** Change events inside (roughly) the same window, newest first. */
+  changes: AdsChangeEvent[];
+  /** Per-campaign performance summed over the window. */
+  performance: AdsCampaignPerformance[];
+}
+
+/**
+ * The composite: every deterministic conversion-health finding the reads can prove, ordered worst
+ * first. Findings, not rows - each says what is wrong, why it matters, and what to do. Anything
+ * needing runtime evidence (does the tag FIRE on the page) is explicitly out of scope: that is the
+ * GTM tab's verify job, and the caller's note says so.
+ */
+export function assembleConversionHealth(i: ConversionHealthInputs): HealthFinding[] {
+  const out: HealthFinding[] = [];
+
+  // Tagging plumbing (auto-tagging / UTMs) - fold the UTM audit in under its own area.
+  for (const f of i.utmFindings) {
+    if (f.severity === 'info') continue; // the composite reports problems; the dedicated tool keeps the all-clear
+    out.push({ severity: f.severity, area: 'tagging', finding: f.finding });
+  }
+
+  // Config: double counting + forced zero values (classify the shared warnings by content).
+  for (const w of conversionSetupWarnings(i.actions)) {
+    out.push({ severity: w.includes('double counting') ? 'critical' : 'warning', area: 'config', finding: w });
+  }
+
+  // Config: an ENABLED website action whose snippet/label never materialized cannot be tagged.
+  const unlabelled = i.actions.filter((a) => a.status === 'ENABLED' && a.type === 'WEBPAGE' && a.taggable && !a.conversionLabel);
+  if (unlabelled.length) {
+    out.push({
+      severity: 'warning',
+      area: 'config',
+      finding: `${unlabelled.length} enabled website action(s) have no readable conversion label (${capNames(unlabelled.map((a) => a.name), 5)}) - a GTM tag cannot be built for them until Google publishes their event snippet.`,
+    });
+  }
+
+  // Volume: enabled actions that recorded nothing in the window.
+  const silent = silentConversionActions(i.actions, i.volume);
+  if (silent.length) {
+    out.push({
+      severity: 'warning',
+      area: 'volume',
+      finding:
+        `${silent.length} enabled action(s) recorded ZERO conversions in the window (${capNames(silent.map((x) => x.name), 8)}). ` +
+        'Zero can mean a dead tag OR simply no ads served - cross-check each against the GTM container (does the tag exist and fire?) before calling it broken.',
+    });
+  }
+
+  // Volume: money spent with nothing measured.
+  const burning = i.performance.filter((p) => p.costMicros > 0 && p.allConversions === 0);
+  if (burning.length) {
+    out.push({
+      severity: 'warning',
+      area: 'volume',
+      finding:
+        `${burning.length} campaign(s) spent in the window with ZERO recorded conversions (${capNames(burning.map((p) => p.name), 5)}). ` +
+        'For performance campaigns that is spend without measurement; for awareness campaigns it may be intended - ask which before recommending changes.',
+    });
+  }
+
+  // Changes: anything that touched conversion measurement recently correlates with drops.
+  const convChanges = i.changes.filter((c) => c.resourceType.includes('CONVERSION'));
+  if (convChanges.length) {
+    const latest = convChanges[0];
+    out.push({
+      severity: 'warning',
+      area: 'changes',
+      finding:
+        `${convChanges.length} change(s) touched conversion measurement in the window - latest: ${latest.operation} on ${latest.resourceType} by ${latest.user} at ${latest.at}` +
+        `${latest.changedFields.length ? ` (fields: ${latest.changedFields.join(', ')})` : ''}. Correlate these dates against any conversion drop before blaming the tags.`,
+    });
+  }
+  const removals = i.changes.filter((c) => c.operation === 'REMOVE' && !c.resourceType.includes('CONVERSION'));
+  if (removals.length) {
+    out.push({
+      severity: 'info',
+      area: 'changes',
+      finding: `${removals.length} REMOVE operation(s) in the window (campaigns/ads/etc.) - relevant if a specific campaign's conversions stopped.`,
+    });
+  }
+
+  // Ownership: cross-account is healthy, but the operator must know where edits land.
+  if (i.tracking.isCrossAccount && i.tracking.conversionCustomerId) {
+    out.push({
+      severity: 'info',
+      area: 'config',
+      finding: `Conversion tracking is owned by manager ${i.tracking.conversionCustomerId} (cross-account) - a normal setup; edits to shared actions affect every client of that manager.`,
+    });
+  }
+
+  if (!out.some((f) => f.severity !== 'info')) {
+    out.push({
+      severity: 'info',
+      area: 'summary',
+      finding: 'No config-level conversion problems detected: tagging, action config, volume and recent changes all look consistent. Whether the tags actually FIRE on the site is runtime evidence - verify from the GTM tab.',
+    });
+  }
+  return out.sort((a, b) => SEV_RANK[a.severity] - SEV_RANK[b.severity]);
+}
+
+// ── the Ads ↔ GA4 seam (Phase C) ─────────────────────────────────────────────────────────
+
+export interface AdsGa4SeamInput {
+  /** Bare digits of the Ads account being audited. */
+  customerId: string;
+  /** The GA4 property's Google Ads links. */
+  links: Array<{ customerId: string; adsPersonalizationEnabled: boolean | null; canManageClients: boolean | null }>;
+  actions: AdsConversionAction[];
+  keyEvents: Array<{ eventName: string }>;
+}
+
+/** Does an imported action's name plausibly correspond to a GA4 key event? Ads names GA4 imports
+ *  with the event name in them (exact shape varies by era), so substring either way is the honest
+ *  test - anything stricter produces false "stale" alarms. */
+function importMatchesKeyEvent(actionName: string, keyEvents: Array<{ eventName: string }>): boolean {
+  const a = actionName.toLowerCase();
+  return keyEvents.some((k) => {
+    const e = k.eventName.toLowerCase();
+    return e.length > 0 && (a.includes(e) || e.includes(a));
+  });
+}
+
+/**
+ * The seam audit: is THIS Ads account linked to THIS GA4 property, and do the GA4-imported
+ * conversion actions still line up with the property's key events. The classic paid-for finding
+ * (GA4 import + website tag both primary) lives in conversionSetupWarnings and is folded in here
+ * too, because the seam is where clients actually experience it.
+ */
+export function auditAdsGa4Seam(i: AdsGa4SeamInput): HealthFinding[] {
+  const out: HealthFinding[] = [];
+  const me = i.customerId.replace(/\D/g, '');
+  const direct = i.links.find((l) => l.customerId.replace(/\D/g, '') === me);
+  const managerLink = i.links.find((l) => l.canManageClients === true);
+
+  if (direct) {
+    out.push({ severity: 'info', area: 'seam', finding: `The GA4 property is linked directly to Ads account ${me}.` });
+    if (direct.adsPersonalizationEnabled === false) {
+      out.push({ severity: 'info', area: 'seam', finding: 'Ads personalization is DISABLED on the link - GA4 audiences will not be usable for remarketing/personalization in this account (measurement import is unaffected).' });
+    }
+  } else if (managerLink) {
+    out.push({
+      severity: 'warning',
+      area: 'seam',
+      finding: `No DIRECT link between this GA4 property and Ads account ${me}, but a manager-level link exists (customer ${managerLink.customerId.replace(/\D/g, '')}, canManageClients) - it may cover this account. Confirm in GA4 Admin > Google Ads links before relying on imports.`,
+    });
+  } else {
+    out.push({
+      severity: 'critical',
+      area: 'seam',
+      finding: `This GA4 property has NO Google Ads link to account ${me} - GA4 key events cannot be imported as conversions, audiences cannot be shared, and GA4's Ads reporting stays empty. Create the link in GA4 Admin (or from the Ads side).`,
+    });
+  }
+
+  const imported = i.actions.filter((a) => /^GOOGLE_ANALYTICS_4_/.test(a.type));
+  const stale = imported.filter((a) => a.status === 'ENABLED' && i.keyEvents.length > 0 && !importMatchesKeyEvent(a.name, i.keyEvents));
+  if (stale.length) {
+    out.push({
+      severity: 'warning',
+      area: 'seam',
+      finding:
+        `${stale.length} GA4-imported conversion action(s) match NO current key event on this property (${capNames(stale.map((a) => a.name), 5)}) - ` +
+        'the key event behind them may have been renamed or removed, leaving the import counting nothing. Verify in GA4 Admin > Key events (name matching is heuristic, so confirm before deleting anything).',
+    });
+  }
+
+  if ((direct || managerLink) && i.keyEvents.length > 0) {
+    const unimported = i.keyEvents.filter((k) => !imported.some((a) => importMatchesKeyEvent(a.name, [k])));
+    if (unimported.length) {
+      out.push({
+        severity: 'info',
+        area: 'seam',
+        finding: `${unimported.length} GA4 key event(s) are not imported into Ads (${capNames(unimported.map((k) => k.eventName), 5)}) - an opportunity IF they represent conversions Ads should optimize toward; importing everything is not a goal in itself.`,
+      });
+    }
+  }
+
+  for (const w of conversionSetupWarnings(i.actions)) {
+    if (w.includes('double counting')) out.push({ severity: 'critical', area: 'seam', finding: w });
+  }
+  return out.sort((a, b) => SEV_RANK[a.severity] - SEV_RANK[b.severity]);
+}
