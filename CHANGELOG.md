@@ -1,3 +1,9 @@
+## [1.394.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.393.0...v1.394.0) (2026-07-23)
+
+### Features
+
+* **desktop:** Google Ads diagnostic reads - upload diagnostics, budget pacing, recommendations, EC-for-leads probe, empty-audience finding ([c2aea3a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c2aea3a02c4a6f5ab6fe7a5cd4e8d577493fedb0))
+
 ## [1.393.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.392.0...v1.393.0) (2026-07-23)
 
 ### Features
