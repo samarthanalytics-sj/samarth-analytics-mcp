@@ -76,6 +76,7 @@ import type { SeedCandidate } from '../../shared/memory-seed';
 import { resolveChatInput, slashMenuMatches, type SlashCommand } from '../../shared/chat-commands';
 import { extractReplyTables, shouldOfferExport } from '../../shared/chat-export';
 import { adsStatus, adsStatusLabel, adsUsable, adsNeedsConsent } from '../../shared/ads-status';
+import { describeAdsToken } from '../../shared/ads-token-scope';
 import { ADS_ACCESS_DOCS, ADS_ACCESS_LEVELS, ADS_ACCESS_SUMMARY, ADS_TOKEN_INSTALL_STEPS, ADS_TOKEN_STEPS, ADS_API_CENTER_PATH } from '../../shared/ads-onboarding';
 import { parseSuggestionEvidence, isProviderFormIdLabel, providerDisplayName } from '../../shared/suggestion-details';
 import { execSummaryHtml } from '../../shared/ga4-exec-html';
@@ -10973,7 +10974,7 @@ function SettingsView({
         <div style={{ height: 1, background: 'var(--border-2)', margin: '18px 0' }} />
         <SemanticCorpusCard onError={onError} />
         <div style={{ height: 1, background: 'var(--border-2)', margin: '18px 0' }} />
-        <GoogleAdsCard onError={onError} />
+        <GoogleAdsCard onError={onError} active={active} />
       </section>
       )}
 
@@ -11692,8 +11693,12 @@ const adsStyles: Record<string, React.CSSProperties> = {
  *  are reported separately rather than as one "not working" state: the token belongs to the operator's
  *  Ads MANAGER account and is shared by every signed-in identity, while the scope is granted per Google
  *  account and needs a re-consent. */
-function GoogleAdsCard({ onError }: { onError: (m: string) => void }): JSX.Element {
+function GoogleAdsCard({ onError, active }: { onError: (m: string) => void; active?: AccountView }): JSX.Element {
   const [hasToken, setHasToken] = useState<boolean | null>(null);
+  // Which token the ACTIVE account actually uses. Separate from hasToken, which answers the shared
+  // one: an account can have no shared token and still work, on its own override.
+  const [tokenSource, setTokenSource] = useState<string>('none');
+  const [acctToken, setAcctToken] = useState('');
   const [readiness, setReadiness] = useState<AdsReadiness | null>(null);
   const [token, setToken] = useState('');
   const [busy, setBusy] = useState<'' | 'saving' | 'connecting' | 'testing'>('');
@@ -11702,11 +11707,12 @@ function GoogleAdsCard({ onError }: { onError: (m: string) => void }): JSX.Eleme
   const refresh = useCallback(async (): Promise<void> => {
     try {
       setHasToken(await window.desktop.ads.hasDeveloperToken());
+      setTokenSource(active?.id ? await window.desktop.ads.tokenSource(active.id) : 'none');
       setReadiness(await window.desktop.ads.status());
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     }
-  }, [onError]);
+  }, [onError, active?.id]);
 
   useEffect(() => { void refresh(); }, [refresh]);
 
@@ -11781,7 +11787,61 @@ function GoogleAdsCard({ onError }: { onError: (m: string) => void }): JSX.Eleme
       </p>
       {/* The full procedure, from the SAME definition the Ads chat shows, so the two cannot drift.
           Collapsed by default here: someone already in Settings with a saved token does not need it. */}
-      {hasToken === false && <AdsTokenGuide />}
+      {hasToken === false && tokenSource === 'none' && <AdsTokenGuide />}
+
+      {/* PER-ACCOUNT OVERRIDE. A developer token identifies the application, not the user, so one
+          shared token normally covers every Google account here and this stays closed. The case it
+          does not cover: an account reaching Google Ads through a DIFFERENT manager account's API
+          access (agency work under a client's own access) must use that manager's token, and the
+          shared one is simply rejected for it. */}
+      {active && (
+        <details style={{ marginTop: 12 }}>
+          <summary style={{ cursor: 'pointer', fontSize: 12.5, color: 'var(--c-blue)' }}>
+            Developer token for {active.email}
+            {tokenSource === 'account' ? ' (its own)' : tokenSource === 'shared' ? ' (using the shared one)' : ' (none)'}
+          </summary>
+          <p style={{ ...styles.muted, marginTop: 8 }}>
+            {describeAdsToken({ ref: tokenSource === 'none' ? null : 'set', source: tokenSource as 'account' | 'shared' | 'none' }, active.email)}
+          </p>
+          <div style={styles.formRow}>
+            <input
+              style={styles.input}
+              type="password"
+              value={acctToken}
+              onChange={(e) => setAcctToken(e.target.value)}
+              placeholder={tokenSource === 'account' ? 'token saved for this account (enter to replace)' : 'developer token for this account only'}
+            />
+            <button
+              style={styles.ghostBtn}
+              disabled={busy !== '' || acctToken.trim() === ''}
+              onClick={() => {
+                void window.desktop.ads
+                  .setAccountDeveloperToken(active.id, acctToken.trim())
+                  .then(async () => { setAcctToken(''); await refresh(); })
+                  .catch((e: unknown) => onError(e instanceof Error ? e.message : String(e)));
+              }}
+            >
+              Save for this account
+            </button>
+            {tokenSource === 'account' && (
+              <button
+                style={styles.dangerGhost}
+                disabled={busy !== ''}
+                onClick={() => {
+                  // Clearing an override falls BACK to the shared token; it never leaves the account
+                  // with nothing when a shared token exists.
+                  void window.desktop.ads
+                    .clearAccountDeveloperToken(active.id)
+                    .then(async () => { await refresh(); })
+                    .catch((e: unknown) => onError(e instanceof Error ? e.message : String(e)));
+                }}
+              >
+                Use the shared token
+              </button>
+            )}
+          </div>
+        </details>
+      )}
 
       <div style={{ ...styles.formRow, marginTop: 10 }}>
         <button style={styles.ghostBtn} onClick={test} disabled={busy !== '' || !hasToken}>

@@ -147,7 +147,15 @@ const api = {
   // so only a boolean ever crosses this boundary, never the token itself.
   ads: {
     status: (): Promise<AdsReadiness> => ipcRenderer.invoke('ads:status'),
-    hasDeveloperToken: (): Promise<boolean> => ipcRenderer.invoke('ads:hasDeveloperToken'),
+    /** Scoped to one app account when given: "can THIS account reach Ads", not "is any token set". */
+    hasDeveloperToken: (accountId?: string): Promise<boolean> => ipcRenderer.invoke('ads:hasDeveloperToken', accountId),
+    /** 'account' | 'shared' | 'none' - which token is in play. Never the token itself. */
+    tokenSource: (accountId?: string): Promise<string> => ipcRenderer.invoke('ads:tokenSource', accountId),
+    setAccountDeveloperToken: (accountId: string, token: string): Promise<boolean> =>
+      ipcRenderer.invoke('ads:setAccountDeveloperToken', accountId, token),
+    clearAccountDeveloperToken: (accountId: string): Promise<boolean> =>
+      ipcRenderer.invoke('ads:clearAccountDeveloperToken', accountId),
+    /** The SHARED token: the default every account without its own override uses. */
     setDeveloperToken: (token: string): Promise<boolean> => ipcRenderer.invoke('ads:setDeveloperToken', token),
     clearDeveloperToken: (): Promise<boolean> => ipcRenderer.invoke('ads:clearDeveloperToken'),
     listAccounts: (): Promise<AdsAccountView[]> => ipcRenderer.invoke('ads:listAccounts'),

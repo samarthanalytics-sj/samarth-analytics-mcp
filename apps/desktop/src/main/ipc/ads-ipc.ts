@@ -43,7 +43,28 @@ export function registerAdsIpc(service: GoogleAdsService, keys: ProviderKeyStore
     }
   });
 
-  ipcMain.handle('ads:hasDeveloperToken', (): boolean => keys.hasAdsDeveloperToken());
+  // Scoped to ONE app account when an id is given, so the Ads tab can answer "can THIS account
+  // reach Google Ads" rather than "is any token configured anywhere".
+  ipcMain.handle('ads:hasDeveloperToken', (_e, accountId?: string): boolean =>
+    keys.hasAdsDeveloperToken(typeof accountId === 'string' && accountId ? accountId : undefined));
+
+  /** Where this account's token comes from: its own override, the shared one, or nothing. The token
+   *  itself never crosses this boundary - only which of the two is in play. */
+  ipcMain.handle('ads:tokenSource', (_e, accountId?: string): string =>
+    keys.adsDeveloperTokenSource(typeof accountId === 'string' && accountId ? accountId : undefined));
+
+  ipcMain.handle('ads:setAccountDeveloperToken', (_e, accountId: string, token: string): boolean => {
+    if (typeof accountId !== 'string' || !accountId) throw new Error('Account required.');
+    if (typeof token !== 'string' || token.trim().length === 0) throw new Error('Developer token required.');
+    keys.setAccountAdsDeveloperToken(accountId, token);
+    return true;
+  });
+
+  ipcMain.handle('ads:clearAccountDeveloperToken', (_e, accountId: string): boolean => {
+    if (typeof accountId !== 'string' || !accountId) throw new Error('Account required.');
+    keys.clearAccountAdsDeveloperToken(accountId);
+    return true;
+  });
 
   ipcMain.handle('ads:setDeveloperToken', (_e, token: string): boolean => {
     if (typeof token !== 'string' || token.trim().length === 0) throw new Error('Developer token required.');
