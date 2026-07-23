@@ -75,6 +75,7 @@ import type {
   SuggestionScreenshotResult,
 } from '../shared/ipc';
 import type { Memory, MemoryInput, MemoryPatch, AddMemoryResult } from '../shared/chat-memory';
+import type { TaskResultSummary } from '../shared/task-notification';
 import type { MemoryImportPlanView, SemanticCorpusStatus } from '../shared/ipc';
 import type { MemoryCandidate } from '../shared/memory-extract';
 import type { SeedCandidate } from '../shared/memory-seed';
@@ -160,6 +161,12 @@ const api = {
     /** Advisory only: does this container already carry tags for the selected Ads account? */
     checkPairing: (accountId: string, containerId: string, workspaceId: string, conversionId: string | null, accountName?: string): Promise<AdsPairingView> =>
       ipcRenderer.invoke('ads:checkPairing', accountId, containerId, workspaceId, conversionId, accountName),
+  },
+
+  /** Desktop notification when a long task finishes. Returns whether one was actually shown: the
+   *  main process suppresses it when the window is focused or the task was too quick to matter. */
+  notify: {
+    taskDone: (summary: TaskResultSummary): Promise<boolean> => ipcRenderer.invoke('notify:taskDone', summary),
   },
 
   google: {
