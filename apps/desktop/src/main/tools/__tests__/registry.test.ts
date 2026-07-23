@@ -506,6 +506,14 @@ const gtmWithAds = (
 ): ReturnType<typeof buildToolRegistry> =>
   buildToolRegistry(fakeData().data, confirm, 'gtm', undefined, undefined, undefined, undefined, ads);
 
+/** The ADS chat's registry. Ads WRITES live here only: the GTM chat gets Ads reads, because it needs
+ *  a conversion action's ID and Label for tag prefill and nothing more. */
+const adsChat = (
+  ads: GoogleAdsService,
+  confirm?: Parameters<typeof buildToolRegistry>[1]
+): ReturnType<typeof buildToolRegistry> =>
+  buildToolRegistry(fakeData().data, confirm, 'ads', undefined, undefined, undefined, undefined, ads);
+
 async function main(): Promise<void> {
   console.log('\nTool registry:');
 
@@ -2485,7 +2493,7 @@ async function main(): Promise<void> {
     // No confirm fn → not registered at all, and calling it cannot reach Google Ads.
     const ro = fakeAds();
     await assert.rejects(
-      () => gtmWithAds(ro.ads).execute('create_google_ads_conversion_action', { customerId: '9876543210', name: 'X', category: 'CONTACT' }),
+      () => adsChat(ro.ads).execute('create_google_ads_conversion_action', { customerId: '9876543210', name: 'X', category: 'CONTACT' }),
       /Unknown tool/
     );
     assert.equal(ro.calls.length, 0, 'nothing reached Google Ads');
@@ -2498,7 +2506,7 @@ async function main(): Promise<void> {
     const twice = seqConfirm(true, true);
     const fa2 = fakeAds();
     const created = rec(JSON.parse(
-      await gtmWithAds(fa2.ads, twice.fn).execute('create_google_ads_conversion_action', { customerId: '9876543210', name: 'Contact form', category: 'SUBMIT_LEAD_FORM' })
+      await adsChat(fa2.ads, twice.fn).execute('create_google_ads_conversion_action', { customerId: '9876543210', name: 'Contact form', category: 'SUBMIT_LEAD_FORM' })
     ));
     assert.equal(created.created, true);
     assert.equal(rec(created.action).conversionLabel, 'NEWLABEL123');
@@ -2510,7 +2518,7 @@ async function main(): Promise<void> {
     // The dry run refusing (duplicate name) stops the write and says why.
     const dup = fakeAds({ invalid: { message: 'A conversion action with this name already exists.', remedy: 'Reuse that action instead.' } });
     const refused = rec(JSON.parse(
-      await gtmWithAds(dup.ads, seqConfirm(true, true).fn).execute('create_google_ads_conversion_action', { customerId: '9876543210', name: 'Contact form', category: 'SUBMIT_LEAD_FORM' })
+      await adsChat(dup.ads, seqConfirm(true, true).fn).execute('create_google_ads_conversion_action', { customerId: '9876543210', name: 'Contact form', category: 'SUBMIT_LEAD_FORM' })
     ));
     assert.equal(refused.created, false);
     assert.match(String(refused.error), /already exists/);
@@ -2531,7 +2539,7 @@ async function main(): Promise<void> {
     const c = seqConfirm(true, true);
     const fa2 = fakeAds({ notReady: reason });
     const out2 = rec(JSON.parse(
-      await gtmWithAds(fa2.ads, c.fn).execute('create_google_ads_conversion_action', { customerId: '9876543210', name: 'Contact form', category: 'SUBMIT_LEAD_FORM' })
+      await adsChat(fa2.ads, c.fn).execute('create_google_ads_conversion_action', { customerId: '9876543210', name: 'Contact form', category: 'SUBMIT_LEAD_FORM' })
     ));
     assert.equal(c.calls.length, 0, 'no approval card for an impossible write');
     assert.match(String(out2.error), /developer token/i);
@@ -2557,7 +2565,7 @@ async function main(): Promise<void> {
     };
     for (const fail of [gaxiosLike, shaped]) {
       for (const [tool, a] of Object.entries(args)) {
-        const reg = gtmWithAds(fakeAds({ fail }).ads, seqConfirm(true, true).fn);
+        const reg = adsChat(fakeAds({ fail }).ads, seqConfirm(true, true).fn);
         // A THROW would carry the raw error out through a different path, so this must not reject.
         const out = await reg.execute(tool, a);
         assert.ok(!out.includes(ADS_DEV_TOKEN), `${tool}: developer token absent`);
@@ -2572,6 +2580,30 @@ async function main(): Promise<void> {
     assert.equal(out.error, 'That Google Ads account is not active.');
     assert.equal(out.remedy, 'Pick another account.');
     assert.equal(out.code, 'CUSTOMER_NOT_ENABLED');
+  });
+
+  await test('the GTM chat gets Ads READS only; every Ads write stays in the Ads chat', async () => {
+    // The GTM chat needs Ads reads for ONE job: a conversion action's ID and Label, so a
+    // google_ads_conversion tag can be built without the user pasting them. It was also carrying
+    // seven money/data movers (campaign status, budget, negative keywords, three uploads) while every
+    // word of prompt guidance about them lives in the Ads arm, which a GTM turn never sees.
+    const fa = fakeAds();
+    const gtmNames = gtmWithAds(fa.ads, seqConfirm(true, true).fn).list().map((t) => t.name);
+    const adsInGtm = gtmNames.filter((n) => n.includes('google_ads'));
+    const isWrite = (n: string) => /^(create|update|set|add|upload)_/.test(n);
+
+    assert.ok(adsInGtm.length > 0, 'the GTM chat still sees Ads tools');
+    assert.deepEqual(adsInGtm.filter(isWrite), [], 'but NO Ads write reaches a GTM turn');
+    // The one read the tag-prefill flow depends on must survive the narrowing.
+    assert.ok(adsInGtm.includes('list_google_ads_conversion_actions'), 'the ID/Label read is kept');
+    assert.ok(adsInGtm.includes('list_google_ads_accounts'), 'the account read is kept');
+
+    // The money movers are not gone from the app - they moved, and must still be reachable where the
+    // guidance is. A fix that quietly deleted them would be worse than the problem.
+    const adsChatNames = adsChat(fa.ads, seqConfirm(true, true).fn).list().map((t) => t.name);
+    for (const n of ['set_google_ads_campaign_status', 'update_google_ads_campaign_budget', 'upload_google_ads_customer_match']) {
+      assert.ok(adsChatNames.includes(n), `${n} is still available in the Ads chat`);
+    }
   });
 
   await test('container-kind scoping shrinks the SENT tool list without making anything unreachable', async () => {

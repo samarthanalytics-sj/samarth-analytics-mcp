@@ -5498,7 +5498,15 @@ export function buildToolRegistry(
   // only when a confirm function is provided, exactly like the GTM write tools.
   const all = [...readTools, ...(confirm ? [...writeTools, ...buildGa4WriteTools(data)] : []), ...contextTools, ...adsTools];
   const inProduct = (t: Tool): boolean => {
-    if (adsToolNames.has(t.name)) return product === 'ads' || product === 'gtm';
+    if (adsToolNames.has(t.name)) {
+      // The GTM chat gets Ads READS only. It needs them for one job: reading a conversion action's
+      // ID and Label so a google_ads_conversion tag can be built without the user pasting them.
+      // It has no reason to pause a campaign or move a budget, and it was carrying seven such
+      // tools with NO prompt guidance about them - every word about money, live accounts and which
+      // gate applies lives in the Ads arm of the system prompt, which a GTM turn never sees. The
+      // writes stay fully available in the Ads chat, where that guidance is.
+      return product === 'ads' || (product === 'gtm' && !t.write);
+    }
     // An Ads chat gets NO GTM or GA4 tools. Its account scope is a customer id, not a container or a
     // property, so a GTM tool reached from here would act on whatever container was last selected in
     // another tab - a different client entirely.
