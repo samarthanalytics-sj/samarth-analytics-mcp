@@ -1,3 +1,9 @@
+## [1.395.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.394.0...v1.395.0) (2026-07-23)
+
+### Features
+
+* **desktop:** Ads Monitoring tab - scheduled conversion-health sweeps, Slack alerts, issue log and run history ([2719196](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/271919694bff8faaf83ac0cd9431b48b121dbcca))
+
 ## [1.394.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.393.0...v1.394.0) (2026-07-23)
 
 ### Features
