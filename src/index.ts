@@ -25,6 +25,7 @@ import {
   deriveApiBase,
   GoogleScopeError,
 } from './auth/googleIdentityResolver.js';
+import { resolveHttpBinding, bindingBanner } from './utils/httpBinding.js';
 import { createStytchTokenValidator } from './auth/stytchTokenValidator.js';
 import type { StytchClaims } from './auth/stytchTokenValidator.js';
 
@@ -83,6 +84,17 @@ async function startHttpServer(
   const multiUser = stytchProjectId.length > 0;
 
   const staticToken = process.env.GTM_MCP_HTTP_AUTH_TOKEN ?? '';
+  // Decide the bind host and whether we may start AT ALL, before anything listens. An
+  // unauthenticated HTTP transport used to start on EVERY interface behind a single stderr
+  // warning, so anyone who could reach the port got this server's Google credentials.
+  const binding = resolveHttpBinding(process.env);
+  if (binding.refuse) {
+    console.error(`[samarth-gtm-mcp] ${binding.refuse}`);
+    process.exit(1);
+  }
+  if (binding.warning) {
+    console.error(`[samarth-gtm-mcp] WARNING: ${binding.warning}`);
+  }
   if (!multiUser && !staticToken) {
     console.error(
       '[samarth-gtm-mcp] WARNING: GTM_MCP_HTTP_AUTH_TOKEN is not set — /mcp is unauthenticated. ' +
@@ -217,6 +229,12 @@ async function startHttpServer(
         res.status(401).json({ error: 'Unauthorized. Provide Authorization: Bearer <token>.' });
         return undefined;
       }
+    } else {
+      // No token configured. Reaching here means the operator opted in with
+      // GTM_MCP_HTTP_ALLOW_UNAUTHENTICATED=true (startup refuses otherwise), so the request is
+      // served - but say so per request rather than letting an open server look like a
+      // configured one in the logs.
+      console.error('[samarth-gtm-mcp] serving an UNAUTHENTICATED /mcp request (no auth configured)');
     }
     return auth;
   }
@@ -387,10 +405,13 @@ async function startHttpServer(
     });
   });
 
-  app.listen(port, () => {
-    console.error(`[samarth-gtm-mcp] HTTP server running on http://localhost:${port}`);
-    console.error(`[samarth-gtm-mcp] MCP endpoint: POST http://localhost:${port}/mcp`);
-    console.error(`[samarth-gtm-mcp] Health: GET http://localhost:${port}/health`);
+  app.listen(port, binding.host, () => {
+    // The banner reports the host ACTUALLY bound. It used to say "localhost" unconditionally
+    // while listening on every interface, and that sentence is what an operator trusts when
+    // deciding whether the port is exposed.
+    console.error(`[samarth-gtm-mcp] HTTP server ${bindingBanner(binding, port)}`);
+    console.error('[samarth-gtm-mcp] MCP endpoint: POST /mcp');
+    console.error('[samarth-gtm-mcp] Health: GET /health');
   });
 }
 
