@@ -34,6 +34,62 @@ function plainCell(text: string): string {
     .trim();
 }
 
+/**
+ * A fenced JSON array of objects, as a table.
+ *
+ * Asking for "export format" reliably produces a JSON array rather than a pipe table, and that was
+ * the ONE shape the exporter could not read: it understood GFM tables only, so CSV and XLSX sat
+ * disabled on the most structured data a reply can contain.
+ *
+ * Only an array converts. A bare object, a scalar, or anything unparseable returns null, because a
+ * guess here becomes a spreadsheet someone works from.
+ */
+export function jsonBlockToTable(source: string): { header: string[]; rows: string[][] } | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(source);
+  } catch {
+    return null; // not JSON (a JS snippet, an HTML tag) - leave it as prose
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0) return null;
+
+  const isRecord = (v: unknown): v is Record<string, unknown> =>
+    typeof v === 'object' && v !== null && !Array.isArray(v);
+
+  // An array of scalars is still exportable, as one column.
+  if (!parsed.some(isRecord)) {
+    return { header: ['value'], rows: parsed.map((v) => [cellText(v)]) };
+  }
+
+  // Header = the UNION of keys in first-seen order. Using only the first row's keys would silently
+  // drop columns that appear later, and sorting them would scramble the order the model chose.
+  const header: string[] = [];
+  for (const row of parsed) {
+    if (!isRecord(row)) continue;
+    for (const k of Object.keys(row)) if (!header.includes(k)) header.push(k);
+  }
+  if (header.length === 0) return null;
+
+  const rows = parsed.map((row) =>
+    // Index by KEY, not position, so a row missing a field gets an empty cell instead of shifting
+    // every later value into the wrong column.
+    header.map((k) => (isRecord(row) ? cellText(row[k]) : '')),
+  );
+  return { header, rows };
+}
+
+/** One JSON value as a cell. Nested structures are stringified rather than flattened or dropped:
+ *  a visible {"a":1} tells the reader the shape was nested, an empty cell tells them nothing. */
+function cellText(v: unknown): string {
+  if (v === null || v === undefined) return '';
+  if (typeof v === 'string') return v;
+  if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+  try {
+    return JSON.stringify(v);
+  } catch {
+    return String(v);
+  }
+}
 /** All GFM tables in a chat reply, each titled by the closest preceding heading or standalone bold line. */
 export function extractReplyTables(md: string): ChatReplyTable[] {
   const lines = (md ?? '').replace(/\r\n/g, '\n').split('\n');
@@ -52,6 +108,27 @@ export function extractReplyTables(md: string): ChatReplyTable[] {
     if (b) {
       lastTitle = plainCell(b[1]).replace(/:$/, '');
       i++;
+      continue;
+    }
+    // A fenced block. Only JSON arrays become tables; every other language (a JS snippet, an HTML
+    // tag) is skipped WHOLE, so a stray pipe inside code can never be mistaken for a table row.
+    if (line.trim().startsWith('```')) {
+      const lang = line.trim().slice(3).trim().toLowerCase();
+      const body: string[] = [];
+      i++;
+      while (i < lines.length && !lines[i].trim().startsWith('```')) {
+        body.push(lines[i]);
+        i++;
+      }
+      i++; // past the closing fence
+      // An unlabelled fence is worth trying: models emit bare ``` around JSON as often as ```json.
+      if (lang === '' || lang === 'json') {
+        const t = jsonBlockToTable(body.join('\n'));
+        if (t) {
+          tables.push({ title: lastTitle || `Table ${tables.length + 1}`, header: t.header, rows: t.rows });
+          lastTitle = '';
+        }
+      }
       continue;
     }
     if (line.includes('|') && i + 1 < lines.length && isTableSep(lines[i + 1])) {
