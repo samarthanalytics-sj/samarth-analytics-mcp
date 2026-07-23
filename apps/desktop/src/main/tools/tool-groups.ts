@@ -303,6 +303,8 @@ const GROUP_MEMBERS: Record<ToolGroup, readonly string[]> = {
     'get_google_ads_change_history',
     'get_google_ads_conversion_volume',
     'audit_google_ads_utm_setup',
+    'audit_google_ads_conversion_health',
+    'audit_google_ads_ga4_link',
   ],
 };
 

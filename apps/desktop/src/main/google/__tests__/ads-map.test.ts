@@ -16,6 +16,8 @@ import {
   summarizeConversionVolume,
   silentConversionActions,
   auditUtmFindings,
+  assembleConversionHealth,
+  auditAdsGa4Seam,
   type AdsConversionAction,
 } from '../ads-map';
 
@@ -472,6 +474,78 @@ const remember = (note: string | undefined): void => { if (note) notes.push(note
   check('utm: auto-tagging on + nothing manual → single info, no alarms', clean.length === 1 && clean[0].severity === 'info');
   const manualGclid = auditUtmFindings({ autoTaggingEnabled: true, trackingUrlTemplate: '{lpurl}?gclid={gclid}', finalUrlSuffix: null, campaigns: [] });
   check('utm: manual gclid with auto-tagging on → conflict warning', manualGclid.some((f) => f.severity === 'warning' && f.finding.includes('gclid')));
+}
+
+// ── Phase C: conversion-health composite + the Ads↔GA4 seam ──
+{
+  const act3 = (over: Partial<AdsConversionAction>): AdsConversionAction => ({
+    resourceName: 'customers/1/conversionActions/1', id: over.id ?? '1', name: over.name ?? 'A', status: 'ENABLED',
+    type: 'WEBPAGE', category: 'SUBMIT_LEAD_FORM', conversionId: 'AW-1', conversionLabel: 'L', taggable: true, ...over,
+  });
+  const tracking = { conversionCustomerId: '999', status: 'X', trackingId: null, crossAccountTrackingId: null, isCrossAccount: true };
+  const health = assembleConversionHealth({
+    tracking,
+    actions: [
+      act3({ id: '1', name: 'GA4 lead', type: 'GOOGLE_ANALYTICS_4_CUSTOM', taggable: false, conversionLabel: null }),
+      act3({ id: '2', name: 'Web lead' }),
+      act3({ id: '3', name: 'Unlabelled', conversionLabel: null }),
+      act3({ id: '4', name: 'Silent one' }),
+    ],
+    volume: [{ actionId: '2', name: 'Web lead', total: 5, firstDate: '2026-07-01', lastDate: '2026-07-20', activeDays: 4 }],
+    utmFindings: [
+      { severity: 'critical', finding: 'no tagging at all' },
+      { severity: 'info', finding: 'all clear elsewhere' },
+    ],
+    changes: [
+      { at: '2026-07-19 10:00:00', user: 'x@y.z', clientType: 'GOOGLE_ADS_WEB_CLIENT', resourceType: 'CONVERSION_ACTION', operation: 'UPDATE', changedFields: ['status'], resourceName: 'r' },
+      { at: '2026-07-18 09:00:00', user: 'x@y.z', clientType: 'GOOGLE_ADS_WEB_CLIENT', resourceType: 'CAMPAIGN', operation: 'REMOVE', changedFields: [], resourceName: 'r2' },
+    ],
+    performance: [
+      { id: 'c1', name: 'Burning', status: 'ENABLED', impressions: 100, clicks: 10, costMicros: 5_000_000, conversions: 0, conversionsValue: 0, allConversions: 0 },
+      { id: 'c2', name: 'Fine', status: 'ENABLED', impressions: 100, clicks: 10, costMicros: 5_000_000, conversions: 2, conversionsValue: 10, allConversions: 2 },
+    ],
+  });
+  const areas = new Set(health.map((f) => f.area));
+  check('health: folds tagging findings, drops the info all-clear', health.some((f) => f.area === 'tagging' && f.finding === 'no tagging at all') && !health.some((f) => f.finding === 'all clear elsewhere'));
+  check('health: double-count surfaces as critical config', health.some((f) => f.area === 'config' && f.severity === 'critical' && f.finding.includes('double counting')));
+  check('health: unlabelled website action flagged (GA4 import NOT counted there)', (() => {
+    const f = health.find((x) => x.finding.includes('no readable conversion label'));
+    return !!f && f.finding.includes('"Unlabelled"') && !f.finding.includes('GA4 lead');
+  })());
+  check('health: silent actions + burning campaigns under volume', health.some((f) => f.area === 'volume' && f.finding.includes('Silent one')) && health.some((f) => f.area === 'volume' && f.finding.includes('"Burning"') && !f.finding.includes('"Fine"')));
+  check('health: conversion-touching change called out with who/when', health.some((f) => f.area === 'changes' && f.finding.includes('x@y.z') && f.finding.includes('CONVERSION_ACTION')));
+  check('health: cross-account ownership is INFO, not an alarm', health.some((f) => f.area === 'config' && f.severity === 'info' && f.finding.includes('999')));
+  check('health: worst first', health[0].severity === 'critical' && areas.size >= 4);
+
+  const clean = assembleConversionHealth({
+    tracking: { ...tracking, isCrossAccount: false, conversionCustomerId: null },
+    actions: [act3({ id: '2', name: 'Web lead' })],
+    volume: [{ actionId: '2', name: 'Web lead', total: 5, firstDate: '2026-07-01', lastDate: '2026-07-20', activeDays: 4 }],
+    utmFindings: [{ severity: 'info', finding: 'auto-tagging on' }],
+    changes: [],
+    performance: [],
+  });
+  check('health: clean account → single honest all-clear naming the runtime boundary', clean.length === 1 && clean[0].severity === 'info' && clean[0].finding.includes('runtime'));
+
+  const seamBase = {
+    customerId: '123-456-7890',
+    actions: [
+      act3({ id: '1', name: 'purchase (GA4)', type: 'GOOGLE_ANALYTICS_4_PURCHASE', taggable: false, conversionLabel: null }),
+      act3({ id: '2', name: 'stale_event import', type: 'GOOGLE_ANALYTICS_4_CUSTOM', taggable: false, conversionLabel: null }),
+    ],
+    keyEvents: [{ eventName: 'purchase' }, { eventName: 'generate_lead' }],
+  };
+  const linked = auditAdsGa4Seam({ ...seamBase, links: [{ customerId: '1234567890', adsPersonalizationEnabled: true, canManageClients: false }] });
+  check('seam: direct link recognised (dashed id normalized)', linked.some((f) => f.severity === 'info' && f.finding.includes('linked directly')));
+  check('seam: stale import flagged as heuristic, matching one spared', (() => {
+    const f = linked.find((x) => x.finding.includes('match NO current key event'));
+    return !!f && f.finding.includes('stale_event') && !f.finding.includes('purchase (GA4)') && f.finding.includes('heuristic');
+  })());
+  check('seam: unimported key event listed as opportunity, not alarm', linked.some((f) => f.severity === 'info' && f.finding.includes('generate_lead')));
+  const managerOnly = auditAdsGa4Seam({ ...seamBase, links: [{ customerId: '999', adsPersonalizationEnabled: null, canManageClients: true }] });
+  check('seam: manager-level link → warning to confirm, not critical', managerOnly.some((f) => f.severity === 'warning' && f.finding.includes('manager-level')) && !managerOnly.some((f) => f.severity === 'critical' && f.finding.includes('NO Google Ads link')));
+  const unlinked = auditAdsGa4Seam({ ...seamBase, links: [] });
+  check('seam: no link at all → critical', unlinked.some((f) => f.severity === 'critical' && f.finding.includes('NO Google Ads link')));
 }
 
 console.log(`\nads-map: ${passed} passed, ${failed} failed`);
