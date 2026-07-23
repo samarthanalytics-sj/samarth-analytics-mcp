@@ -1,3 +1,9 @@
+## [1.397.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.396.0...v1.397.0) (2026-07-23)
+
+### Features
+
+* **desktop:** Ads monitoring detects what CHANGED between sweeps ([#676](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/676)) ([723ec96](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/723ec96758bb4e2a5eafc8b10b7560404848e717))
+
 ## [1.396.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.395.2...v1.396.0) (2026-07-23)
 
 ### Features
