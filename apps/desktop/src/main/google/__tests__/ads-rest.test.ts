@@ -16,6 +16,15 @@ import {
   isYmdDate,
   perfDateClause,
   clampChangeLimit,
+  hashEmail,
+  hashPhone,
+  isAdsDateTime,
+  buildClickConversionsBody,
+  buildConversionAdjustmentsBody,
+  buildCustomerMatchJobBody,
+  buildCustomerMatchOpsBody,
+  STRUCTURE_GAQL,
+  USER_LISTS_GAQL,
 } from '../ads-rest';
 
 let passed = 0;
@@ -294,6 +303,48 @@ const createOf = (body: Record<string, unknown>): Record<string, unknown> => {
 
   check('utmCustomer: auto-tagging + account template/suffix', ['customer.auto_tagging_enabled', 'customer.tracking_url_template', 'customer.final_url_suffix'].every((f) => GAQL.utmCustomer.includes(f)));
   check('utmCampaigns: per-campaign template/suffix, ENABLED only', GAQL.utmCampaigns.includes('campaign.tracking_url_template') && GAQL.utmCampaigns.includes("campaign.status = 'ENABLED'"));
+}
+
+// ── Phase D: uploads (hashing, datetime, bodies) + Phase E structure GAQL ──
+{
+  // Known SHA-256 vector so a hashing regression is caught by value, not by shape.
+  check('hashEmail: known vector', hashEmail('test@example.com') === '973dfe463ec85785f5f95af5ba3906eedb2d931c24e69824a89ea65dba4e813b');
+  check('hashEmail: trims, lowercases, strips gmail dots', hashEmail('  John.Doe@Gmail.com ') === hashEmail('johndoe@gmail.com') && hashEmail('a.b@company.com') !== hashEmail('ab@company.com'));
+  check('hashPhone: formatting stripped to E.164 before hashing', hashPhone('+1 (415) 555-1234') === hashPhone('+14155551234'));
+  check('isAdsDateTime: requires the timezone offset', isAdsDateTime('2026-07-23 14:30:00+05:30') && !isAdsDateTime('2026-07-23 14:30:00') && !isAdsDateTime('2026-07-23T14:30:00+05:30'));
+
+  const consent = { adUserData: 'GRANTED', adPersonalization: 'DENIED' } as const;
+  const body = buildClickConversionsBody(
+    [
+      { gclid: 'Cj0K', conversionActionResource: 'customers/1/conversionActions/55', conversionDateTime: '2026-07-23 10:00:00+05:30', conversionValue: 25, currencyCode: 'inr', orderId: 'o-1' },
+      { email: 'Lead@Example.com', conversionActionResource: 'customers/1/conversionActions/55', conversionDateTime: '2026-07-23 10:00:00+05:30' },
+    ],
+    consent,
+  );
+  const json = JSON.stringify(body);
+  check('click conversions: partialFailure FORCED true', (body as { partialFailure?: boolean }).partialFailure === true);
+  check('click conversions: consent rides on EVERY row', (json.match(/"adUserData":"GRANTED"/g) ?? []).length === 2);
+  check('click conversions: currency upper-cased, value + orderId kept', json.includes('"currencyCode":"INR"') && json.includes('"conversionValue":25') && json.includes('"orderId":"o-1"'));
+  check('click conversions: email row carries the HASH, never the plaintext', json.includes(hashEmail('lead@example.com')) && !/example\.com/i.test(json.replace(/"hashedEmail":"[a-f0-9]{64}"/g, '')));
+
+  const adj = buildConversionAdjustmentsBody([
+    { conversionActionResource: 'customers/1/conversionActions/55', adjustmentType: 'RETRACTION', adjustmentDateTime: '2026-07-23 11:00:00+05:30', orderId: 'o-1' },
+    { conversionActionResource: 'customers/1/conversionActions/55', adjustmentType: 'RESTATEMENT', adjustmentDateTime: '2026-07-23 11:00:00+05:30', gclid: 'Cj0K', conversionDateTime: '2026-07-20 09:00:00+05:30', restatedValue: 99.5, currencyCode: 'inr' },
+  ]);
+  const adjJson = JSON.stringify(adj);
+  check('adjustments: retraction by orderId; restatement carries value + gclidDateTimePair', adjJson.includes('"orderId":"o-1"') && adjJson.includes('"adjustedValue":99.5') && adjJson.includes('"gclidDateTimePair"') && adjJson.includes('"currencyCode":"INR"'));
+  check('adjustments: partialFailure forced true', (adj as { partialFailure?: boolean }).partialFailure === true);
+
+  const job = buildCustomerMatchJobBody('customers/1/userLists/9', consent);
+  check('customer match: job type + consent in metadata', JSON.stringify(job).includes('CUSTOMER_MATCH_USER_LIST') && JSON.stringify(job).includes('"adPersonalization":"DENIED"'));
+  const ops = buildCustomerMatchOpsBody([{ email: 'a@b.com' }, { phone: '+14155551234' }, {}]);
+  check('customer match ops: empty member dropped, partial failure enabled, hashes only', (ops.operations as unknown[]).length === 2 && (ops as { enablePartialFailure?: boolean }).enablePartialFailure === true && !JSON.stringify(ops).includes('a@b.com'));
+
+  check('structure keywords: quality components, NO metrics (config read)', STRUCTURE_GAQL.keywords({}).includes('quality_info.post_click_quality_score') && !STRUCTURE_GAQL.keywords({}).includes('metrics.'));
+  check('structure search_terms: date clause + click order + cap', STRUCTURE_GAQL.search_terms({ days: 7 }).includes('DURING LAST_7_DAYS') && STRUCTURE_GAQL.search_terms({}).includes('LIMIT 500'));
+  check('structure landing_pages: unexpanded url + conversions', STRUCTURE_GAQL.landing_pages({}).includes('landing_page_view.unexpanded_final_url'));
+  check('structure ads: strength + final urls, removed excluded', STRUCTURE_GAQL.ads({}).includes('ad_group_ad.ad_strength') && STRUCTURE_GAQL.ads({}).includes("!= 'REMOVED'"));
+  check('user lists: sizes + membership + match rate', ['size_for_display', 'size_for_search', 'membership_status', 'match_rate_percentage'].every((f) => USER_LISTS_GAQL.includes(f)));
 }
 
 console.log(`\ndesktop ads-rest: ${passed} passed, ${failed} failed`);

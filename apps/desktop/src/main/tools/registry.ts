@@ -1,6 +1,6 @@
 import type { GoogleDataService } from '../google/data-service';
 import { AdsError, type GoogleAdsService } from '../google/ads-service';
-import { CONVERSION_CATEGORIES } from '../google/ads-rest';
+import { CONVERSION_CATEGORIES, isAdsDateTime, type AdsConsent, type ClickConversionInput, type ConversionAdjustmentInput } from '../google/ads-rest';
 import { conversionSetupWarnings, silentConversionActions, assembleConversionHealth, auditAdsGa4Seam } from '../google/ads-map';
 import type { LlmToolDef, ToolExecutor } from '../llm/types';
 import type { GoogleProduct, GtmContext } from '../../shared/ipc';
@@ -871,6 +871,71 @@ function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean, data
           };
         }),
     },
+    {
+      name: 'list_google_ads_audiences',
+      description:
+        'The account\'s audiences / user lists with SIZES and membership status - verifies whether remarketing tags ' +
+        'are actually populating lists (a list stuck at size 0 with an active remarketing tag is a firing problem), ' +
+        'and supplies the target list for a Customer Match upload. Read-only. sizeForDisplay/sizeForSearch are ' +
+        'Google-estimated and lag by hours-days; matchRatePercentage exists only for CRM lists.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          customerId: { type: 'string', description: 'Google Ads account id, bare digits (strip the dashes).' },
+          loginCustomerId: { type: 'string', description: 'Manager (MCC) id to act through, when reached via a manager.' },
+        },
+        required: ['customerId'],
+        additionalProperties: false,
+      },
+      handler: (a) =>
+        run(async () => {
+          const lists = await ads.listUserLists(s(a.customerId), login(a));
+          return { ok: true, count: lists.length, audiences: lists };
+        }),
+    },
+    {
+      name: 'get_google_ads_structure',
+      description:
+        'Structure reads for deeper audits, one view per call: "keywords" (quality score + its three components - ' +
+        'ad relevance, landing page experience, expected CTR - per keyword), "search_terms" (what people actually ' +
+        'searched, with clicks/conversions; PRIVACY THRESHOLDS hide low-volume terms so totals will NEVER match ' +
+        'campaign clicks - say so, do not chase the gap), "landing_pages" (spend vs conversions per URL - feeds ' +
+        'landing-page conversations), "ads" (final URLs + ad strength per ad, for auditing destinations, not managing ' +
+        'creative). Read-only, capped at 500 rows per view. search_terms/landing_pages take the days or ' +
+        'startDate/endDate window; keywords/ads are config reads that ignore it.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          customerId: { type: 'string', description: 'Google Ads account id, bare digits (strip the dashes).' },
+          view: { type: 'string', enum: ['keywords', 'search_terms', 'landing_pages', 'ads'], description: 'Which structure read to run.' },
+          days: { type: 'number', description: 'Trailing window for metric views (7/14/30, default 30).' },
+          startDate: { type: 'string', description: 'Custom range start, YYYY-MM-DD. Requires endDate.' },
+          endDate: { type: 'string', description: 'Custom range end, YYYY-MM-DD.' },
+          loginCustomerId: { type: 'string', description: 'Manager (MCC) id to act through, when reached via a manager.' },
+        },
+        required: ['customerId', 'view'],
+        additionalProperties: false,
+      },
+      handler: (a) =>
+        run(async () => {
+          const view = ['keywords', 'search_terms', 'landing_pages', 'ads'].includes(s(a.view)) ? (s(a.view) as 'keywords' | 'search_terms' | 'landing_pages' | 'ads') : 'keywords';
+          const range = {
+            ...(typeof a.days === 'number' ? { days: a.days } : {}),
+            ...(s(a.startDate).trim() ? { startDate: s(a.startDate).trim() } : {}),
+            ...(s(a.endDate).trim() ? { endDate: s(a.endDate).trim() } : {}),
+          };
+          const r = await ads.structure(s(a.customerId), view, range, login(a));
+          return {
+            ok: true,
+            view,
+            ...(r.windowLabel ? { window: r.windowLabel } : {}),
+            count: r.rows.length,
+            rows: r.rows,
+            ...(r.rows.length === 500 ? { warning: 'Row cap (500) hit - the account has more; narrow the window or filter before drawing totals.' } : {}),
+            ...(view === 'search_terms' ? { note: 'Privacy thresholds hide low-volume search terms, so these rows will not sum to campaign clicks - that gap is expected, not missing data.' } : {}),
+          };
+        }),
+    },
   ];
 
   if (!writesEnabled) return readTools;
@@ -957,6 +1022,264 @@ function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean, data
               ...(action.note ? { note: action.note } : {}),
             },
             note: 'This conversion action is LIVE in Google Ads now. Pass its conversionId and conversionLabel as LITERAL values to create_gtm_tracking_tag (platform google_ads_conversion), never as a {{variable}}. The label exists nowhere else in the API, so if it came back null, read the action in Google Ads rather than guessing.',
+          };
+        }),
+    },
+    {
+      name: 'upload_google_ads_offline_conversions',
+      description:
+        'Upload OFFLINE conversions to the LIVE Google Ads account: each row is a gclid (from auto-tagging) OR an ' +
+        'email/phone (enhanced conversions for leads - hashed in-app with Google\'s normalization; plaintext never ' +
+        'leaves the machine), plus the conversion action id and the conversion datetime in the EXACT format ' +
+        '"yyyy-MM-dd HH:mm:ss+05:30" (timezone offset REQUIRED). consent (adUserData + adPersonalization, ' +
+        'GRANTED/DENIED/UNSPECIFIED) is REQUIRED on the call - for EEA users it must reflect what the user actually ' +
+        'consented to; never invent GRANTED. These conversions feed reporting AND Smart Bidding immediately, with no ' +
+        'draft and no undo except a later adjustment - hence the strongest approval gate. Per-row failures come back ' +
+        'in `failures`; report them, never claim a clean upload when rows were rejected. Max 500 rows per call.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          customerId: { type: 'string', description: 'Account that owns the conversion action, bare digits.' },
+          conversions: {
+            type: 'array',
+            maxItems: 500,
+            items: {
+              type: 'object',
+              properties: {
+                gclid: { type: 'string', description: 'The Google click id. Omit when identifying by email/phone.' },
+                email: { type: 'string', description: 'Plain email for enhanced conversions for leads - hashed in-app.' },
+                phone: { type: 'string', description: 'Phone in E.164 (+14155551234) - hashed in-app.' },
+                conversionActionId: { type: 'string', description: 'Numeric conversion action id (list_google_ads_conversion_actions).' },
+                conversionDateTime: { type: 'string', description: '"yyyy-MM-dd HH:mm:ss+HH:MM" - offset required.' },
+                conversionValue: { type: 'number' },
+                currencyCode: { type: 'string' },
+                orderId: { type: 'string', description: 'Recommended: enables later adjustments by order id.' },
+              },
+              required: ['conversionActionId', 'conversionDateTime'],
+              additionalProperties: false,
+            },
+          },
+          consent: {
+            type: 'object',
+            properties: {
+              adUserData: { type: 'string', enum: ['GRANTED', 'DENIED', 'UNSPECIFIED'] },
+              adPersonalization: { type: 'string', enum: ['GRANTED', 'DENIED', 'UNSPECIFIED'] },
+            },
+            required: ['adUserData', 'adPersonalization'],
+            additionalProperties: false,
+          },
+          loginCustomerId: { type: 'string', description: 'Manager (MCC) id to act through, when reached via a manager.' },
+        },
+        required: ['customerId', 'conversions', 'consent'],
+        additionalProperties: false,
+      },
+      write: true,
+      destructive: true,
+      summarize: (a) => {
+        const rows = Array.isArray(a.conversions) ? a.conversions.length : 0;
+        return `Upload ${rows} offline conversion(s) into LIVE Google Ads account ${s(a.customerId)}. They count in reporting and Smart Bidding immediately; the only undo is a later adjustment`;
+      },
+      precheck: () => adsNotReady(ads),
+      handler: (a) =>
+        run(async () => {
+          const cid = s(a.customerId);
+          const raw = Array.isArray(a.conversions) ? (a.conversions as Array<Record<string, unknown>>) : [];
+          if (raw.length === 0) return { ok: false, error: 'No conversions supplied.' };
+          if (raw.length > 500) return { ok: false, error: 'Max 500 conversions per call - split the batch.' };
+          const conversions: ClickConversionInput[] = [];
+          for (let i = 0; i < raw.length; i++) {
+            const r = raw[i];
+            const gclid = String(r.gclid ?? '').trim();
+            const email = String(r.email ?? '').trim();
+            const phone = String(r.phone ?? '').trim();
+            const dt = String(r.conversionDateTime ?? '');
+            if (!gclid && !email && !phone) return { ok: false, error: `Row ${i}: needs a gclid OR an email/phone identifier.` };
+            if (!isAdsDateTime(dt)) return { ok: false, error: `Row ${i}: conversionDateTime must be "yyyy-MM-dd HH:mm:ss+HH:MM" (timezone offset required), got "${dt}".` };
+            const actionId = String(r.conversionActionId ?? '').replace(/\D/g, '');
+            if (!actionId) return { ok: false, error: `Row ${i}: conversionActionId must be the numeric action id.` };
+            conversions.push({
+              ...(gclid ? { gclid } : {}),
+              ...(email ? { email } : {}),
+              ...(phone ? { phone } : {}),
+              conversionActionResource: `customers/${cid}/conversionActions/${actionId}`,
+              conversionDateTime: dt,
+              ...(typeof r.conversionValue === 'number' ? { conversionValue: r.conversionValue } : {}),
+              ...(r.currencyCode ? { currencyCode: String(r.currencyCode) } : {}),
+              ...(r.orderId ? { orderId: String(r.orderId) } : {}),
+            });
+          }
+          const consent = a.consent as AdsConsent;
+          const outcome = await ads.uploadClickConversions(cid, conversions, consent, login(a));
+          return {
+            ok: outcome.failures.length === 0,
+            uploaded: outcome.accepted,
+            total: outcome.total,
+            ...(outcome.failures.length ? { failures: outcome.failures } : {}),
+            note:
+              outcome.failures.length === 0
+                ? 'All rows accepted. Conversions appear in reporting within a few hours (attributed to the CLICK date, not today).'
+                : 'Some rows were REJECTED - report each failure with its row index. Accepted rows are live; rejected ones were not uploaded.',
+          };
+        }),
+    },
+    {
+      name: 'upload_google_ads_conversion_adjustments',
+      description:
+        'RETRACT (remove) or RESTATE (revalue) conversions already recorded in the LIVE account - the CRM-driven ' +
+        'quality loop: junk lead → RETRACTION; deal closed at a different value → RESTATEMENT with the corrected ' +
+        'value. Identify the original conversion by orderId (preferred - set it at upload time) or by gclid + its ' +
+        'original conversionDateTime. adjustmentDateTime must be AFTER the original conversion, format ' +
+        '"yyyy-MM-dd HH:mm:ss+HH:MM". Adjustments feed Smart Bidding; a wrong retraction un-teaches the bidder - ' +
+        'hence the strongest approval gate. Per-row failures come back in `failures`. Max 500 per call.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          customerId: { type: 'string', description: 'Account that owns the conversion action, bare digits.' },
+          adjustments: {
+            type: 'array',
+            maxItems: 500,
+            items: {
+              type: 'object',
+              properties: {
+                conversionActionId: { type: 'string', description: 'Numeric conversion action id.' },
+                adjustmentType: { type: 'string', enum: ['RETRACTION', 'RESTATEMENT'] },
+                adjustmentDateTime: { type: 'string', description: '"yyyy-MM-dd HH:mm:ss+HH:MM" - offset required.' },
+                orderId: { type: 'string', description: 'The original conversion\'s order id (preferred identifier).' },
+                gclid: { type: 'string', description: 'Original click id - requires conversionDateTime too.' },
+                conversionDateTime: { type: 'string', description: 'The ORIGINAL conversion\'s datetime (with offset), when identifying by gclid.' },
+                restatedValue: { type: 'number', description: 'RESTATEMENT only: the corrected value.' },
+                currencyCode: { type: 'string' },
+              },
+              required: ['conversionActionId', 'adjustmentType', 'adjustmentDateTime'],
+              additionalProperties: false,
+            },
+          },
+          loginCustomerId: { type: 'string', description: 'Manager (MCC) id to act through, when reached via a manager.' },
+        },
+        required: ['customerId', 'adjustments'],
+        additionalProperties: false,
+      },
+      write: true,
+      destructive: true,
+      summarize: (a) => {
+        const rows = Array.isArray(a.adjustments) ? (a.adjustments as Array<Record<string, unknown>>) : [];
+        const retractions = rows.filter((r) => r.adjustmentType === 'RETRACTION').length;
+        return `Adjust ${rows.length} conversion(s) in LIVE Google Ads account ${s(a.customerId)} (${retractions} retraction(s), ${rows.length - retractions} restatement(s)). This rewrites recorded results and re-teaches Smart Bidding`;
+      },
+      precheck: () => adsNotReady(ads),
+      handler: (a) =>
+        run(async () => {
+          const cid = s(a.customerId);
+          const raw = Array.isArray(a.adjustments) ? (a.adjustments as Array<Record<string, unknown>>) : [];
+          if (raw.length === 0) return { ok: false, error: 'No adjustments supplied.' };
+          if (raw.length > 500) return { ok: false, error: 'Max 500 adjustments per call - split the batch.' };
+          const adjustments: ConversionAdjustmentInput[] = [];
+          for (let i = 0; i < raw.length; i++) {
+            const r = raw[i];
+            const type = r.adjustmentType === 'RETRACTION' ? 'RETRACTION' : r.adjustmentType === 'RESTATEMENT' ? 'RESTATEMENT' : null;
+            if (!type) return { ok: false, error: `Row ${i}: adjustmentType must be RETRACTION or RESTATEMENT.` };
+            const adt = String(r.adjustmentDateTime ?? '');
+            if (!isAdsDateTime(adt)) return { ok: false, error: `Row ${i}: adjustmentDateTime must be "yyyy-MM-dd HH:mm:ss+HH:MM", got "${adt}".` };
+            const orderId = String(r.orderId ?? '').trim();
+            const gclid = String(r.gclid ?? '').trim();
+            const cdt = String(r.conversionDateTime ?? '');
+            if (!orderId && !(gclid && isAdsDateTime(cdt))) return { ok: false, error: `Row ${i}: identify the original conversion by orderId, or by gclid + its original conversionDateTime (with offset).` };
+            if (type === 'RESTATEMENT' && typeof r.restatedValue !== 'number') return { ok: false, error: `Row ${i}: a RESTATEMENT needs restatedValue.` };
+            const actionId = String(r.conversionActionId ?? '').replace(/\D/g, '');
+            if (!actionId) return { ok: false, error: `Row ${i}: conversionActionId must be the numeric action id.` };
+            adjustments.push({
+              conversionActionResource: `customers/${cid}/conversionActions/${actionId}`,
+              adjustmentType: type,
+              adjustmentDateTime: adt,
+              ...(orderId ? { orderId } : {}),
+              ...(gclid && isAdsDateTime(cdt) ? { gclid, conversionDateTime: cdt } : {}),
+              ...(typeof r.restatedValue === 'number' ? { restatedValue: r.restatedValue } : {}),
+              ...(r.currencyCode ? { currencyCode: String(r.currencyCode) } : {}),
+            });
+          }
+          const outcome = await ads.uploadConversionAdjustments(cid, adjustments, login(a));
+          return {
+            ok: outcome.failures.length === 0,
+            adjusted: outcome.accepted,
+            total: outcome.total,
+            ...(outcome.failures.length ? { failures: outcome.failures } : {}),
+            note: outcome.failures.length === 0
+              ? 'All adjustments accepted; reporting updates within hours.'
+              : 'Some adjustments were REJECTED - report each failure with its row index (a common cause: the original conversion is outside its action\'s adjustment window).',
+          };
+        }),
+    },
+    {
+      name: 'upload_google_ads_customer_match',
+      description:
+        'Add members to an EXISTING Customer Match user list (pick it from list_google_ads_audiences - CRM-based, ' +
+        'not read-only): emails/phones are hashed in-app with Google\'s normalization (plaintext never leaves the ' +
+        'machine), a job is created, populated and started. consent (adUserData + adPersonalization) is REQUIRED - ' +
+        'for EEA users it must reflect real consent; never invent GRANTED. Processing is ASYNC on Google\'s side: ' +
+        'list sizes update hours later, so never claim the list grew - report the started job instead. ' +
+        'Max 5000 members per call.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          customerId: { type: 'string', description: 'Account that owns the user list, bare digits.' },
+          userListId: { type: 'string', description: 'Numeric user list id (list_google_ads_audiences).' },
+          members: {
+            type: 'array',
+            maxItems: 5000,
+            items: {
+              type: 'object',
+              properties: {
+                email: { type: 'string', description: 'Plain email - hashed in-app.' },
+                phone: { type: 'string', description: 'Phone in E.164 - hashed in-app.' },
+              },
+              additionalProperties: false,
+            },
+          },
+          consent: {
+            type: 'object',
+            properties: {
+              adUserData: { type: 'string', enum: ['GRANTED', 'DENIED', 'UNSPECIFIED'] },
+              adPersonalization: { type: 'string', enum: ['GRANTED', 'DENIED', 'UNSPECIFIED'] },
+            },
+            required: ['adUserData', 'adPersonalization'],
+            additionalProperties: false,
+          },
+          loginCustomerId: { type: 'string', description: 'Manager (MCC) id to act through, when reached via a manager.' },
+        },
+        required: ['customerId', 'userListId', 'members', 'consent'],
+        additionalProperties: false,
+      },
+      write: true,
+      destructive: true,
+      summarize: (a) => {
+        const rows = Array.isArray(a.members) ? a.members.length : 0;
+        return `Add ${rows} member(s) to Customer Match user list ${s(a.userListId)} in LIVE Google Ads account ${s(a.customerId)}. Identifiers are hashed before upload; the list change feeds ad targeting`;
+      },
+      precheck: () => adsNotReady(ads),
+      handler: (a) =>
+        run(async () => {
+          const cid = s(a.customerId);
+          const listId = s(a.userListId).replace(/\D/g, '');
+          if (!listId) return { ok: false, error: 'userListId must be the numeric list id (see list_google_ads_audiences).' };
+          const raw = Array.isArray(a.members) ? (a.members as Array<Record<string, unknown>>) : [];
+          const members = raw
+            .map((m) => ({
+              ...(String(m.email ?? '').trim() ? { email: String(m.email).trim() } : {}),
+              ...(String(m.phone ?? '').trim() ? { phone: String(m.phone).trim() } : {}),
+            }))
+            .filter((m) => m.email || m.phone);
+          if (members.length === 0) return { ok: false, error: 'No usable members - each needs an email or a phone.' };
+          if (members.length > 5000) return { ok: false, error: 'Max 5000 members per call - split the batch.' };
+          const r = await ads.uploadCustomerMatch(cid, `customers/${cid}/userLists/${listId}`, members, a.consent as AdsConsent, login(a));
+          return {
+            ok: r.outcome.failures.length === 0,
+            job: r.jobResourceName,
+            submitted: r.outcome.accepted,
+            total: r.outcome.total,
+            ...(r.outcome.failures.length ? { failures: r.outcome.failures } : {}),
+            note:
+              'The job has been STARTED - Google processes it asynchronously, and list sizes update hours later. ' +
+              'Report the job as started, not the list as grown; re-check sizes with list_google_ads_audiences later.',
           };
         }),
     },

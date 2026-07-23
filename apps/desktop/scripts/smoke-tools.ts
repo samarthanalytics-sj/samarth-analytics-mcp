@@ -274,7 +274,7 @@ async function main(): Promise<void> {
     );
     // 56 GTM/GA4 read tools (55 plus discover_site_urls, the sitemap/crawl site lister) + the 4
     // read-only Google Ads tools (accounts, conversion actions, campaigns, campaign performance).
-    record('read-only registry exposes the 68 read tools', readOnlyNames.size === 68, `${readOnlyNames.size} tools`);
+    record('read-only registry exposes the 70 read tools', readOnlyNames.size === 70, `${readOnlyNames.size} tools`);
   }
 
   // ── B. Approval is DELETE-ONLY: a declining confirm blocks every destructive
@@ -286,8 +286,10 @@ async function main(): Promise<void> {
     // create_google_ads_conversion_action carries destructive:true despite the create_ prefix: it is
     // the one write that lands on a LIVE Google Ads account with no draft stage and no undo, so it
     // takes the same two-step card as a delete and must decline the same way.
+    // upload_google_ads_* carry destructive:true despite not being deletes: they write conversions /
+    // adjustments / audience members into the LIVE advertising account with no draft stage.
     const isDestructive = (n: string) =>
-      n.startsWith('delete_') || n.startsWith('archive_') || n === 'create_google_ads_conversion_action';
+      n.startsWith('delete_') || n.startsWith('archive_') || n === 'create_google_ads_conversion_action' || n.startsWith('upload_google_ads_');
     const destructiveNames = writeNames.filter(isDestructive);
     let destructiveDeclined = 0;
     let othersApplied = 0;

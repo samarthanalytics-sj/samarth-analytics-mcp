@@ -18,6 +18,9 @@ import {
   auditUtmFindings,
   assembleConversionHealth,
   auditAdsGa4Seam,
+  parseUploadOutcome,
+  mapUserList,
+  mapStructureRow,
   type AdsConversionAction,
 } from '../ads-map';
 
@@ -546,6 +549,39 @@ const remember = (note: string | undefined): void => { if (note) notes.push(note
   check('seam: manager-level link → warning to confirm, not critical', managerOnly.some((f) => f.severity === 'warning' && f.finding.includes('manager-level')) && !managerOnly.some((f) => f.severity === 'critical' && f.finding.includes('NO Google Ads link')));
   const unlinked = auditAdsGa4Seam({ ...seamBase, links: [] });
   check('seam: no link at all → critical', unlinked.some((f) => f.severity === 'critical' && f.finding.includes('NO Google Ads link')));
+}
+
+// ── Phase D/E: upload outcome parsing, user lists, structure rows ──
+{
+  check('upload outcome: clean 200 → all accepted', (() => {
+    const o = parseUploadOutcome({ results: [{}, {}] }, 2);
+    return o.accepted === 2 && o.failures.length === 0;
+  })());
+  check('upload outcome: per-row failure parsed with its index', (() => {
+    const o = parseUploadOutcome({
+      partialFailureError: {
+        code: 3,
+        message: 'partial',
+        details: [{ errors: [{ message: 'gclid expired', location: { fieldPathElements: [{ fieldName: 'conversions', index: 1 }] } }] }],
+      },
+    }, 3);
+    return o.accepted === 2 && o.failures.length === 1 && o.failures[0].index === 1 && o.failures[0].message === 'gclid expired';
+  })());
+  check('upload outcome: message-only status → batch-level failure, nothing claimed accepted', (() => {
+    const o = parseUploadOutcome({ partialFailureError: { message: 'all bad' } }, 4);
+    return o.failures.length === 1 && o.failures[0].index === -1 && o.accepted === 0;
+  })());
+
+  const ul = mapUserList({ userList: { id: '9', resourceName: 'customers/1/userLists/9', name: 'Newsletter', type: 'CRM_BASED', membershipStatus: 'OPEN', membershipLifeSpan: '180', sizeForDisplay: '1200', sizeForSearch: 800, readOnly: false, matchRatePercentage: 61 } });
+  check('user list: sizes + lifespan + match rate mapped (int64 strings ok)', ul.sizeForDisplay === 1200 && ul.sizeForSearch === 800 && ul.membershipLifeSpanDays === 180 && ul.matchRatePercentage === 61 && ul.type === 'CRM_BASED');
+
+  const kw = mapStructureRow('keywords', {
+    campaign: { name: 'Brand' }, adGroup: { name: 'Core' },
+    adGroupCriterion: { keyword: { text: 'chownow pos', matchType: 'PHRASE' }, qualityInfo: { qualityScore: 7, creativeQualityScore: 'ABOVE_AVERAGE', postClickQualityScore: 'BELOW_AVERAGE', searchPredictedCtr: 'AVERAGE' } },
+  });
+  check('structure keywords row: quality trio + names', kw.qualityScore === 7 && kw.landingPageExperience === 'BELOW_AVERAGE' && kw.campaign === 'Brand' && kw.keyword === 'chownow pos');
+  const adRow = mapStructureRow('ads', { campaign: { name: 'Brand' }, adGroup: { name: 'Core' }, adGroupAd: { status: 'ENABLED', adStrength: 'GOOD', ad: { id: '345', type: 'RESPONSIVE_SEARCH_AD', finalUrls: ['https://x.com/a'] } } });
+  check('structure ads row: strength + final urls', adRow.adStrength === 'GOOD' && Array.isArray(adRow.finalUrls) && (adRow.finalUrls as string[])[0] === 'https://x.com/a');
 }
 
 console.log(`\nads-map: ${passed} passed, ${failed} failed`);
