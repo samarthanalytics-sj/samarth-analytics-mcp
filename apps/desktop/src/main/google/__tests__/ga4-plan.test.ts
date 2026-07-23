@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { severityFor } from '../../../shared/ga4-check-severity';
 import { buildGa4Plan, streamIdOf } from '../ga4-plan';
 import type { Ga4PropertySnapshot } from '../ga4-audit';
 
@@ -48,10 +49,13 @@ test('a clean property plans NOTHING to fix - verified states listed as ok, emai
   assert.ok(plan.items.some((i) => i.id === 'em_ok:9' && i.status === 'ok'));
 });
 
-test('2-month retention plans a pre-checked HIGH fix; reset-off plans a LOW fix', () => {
+test('2-month retention plans a pre-checked fix graded LIKE THE AUDIT; reset-off plans a LOW fix', () => {
   const plan = buildGa4Plan(snap({ dataRetention: { eventDataRetention: 'TWO_MONTHS', resetOnNewActivity: false } }));
   const r = plan.items.find((i) => i.id === 'retention_14')!;
-  assert.equal(r.category, 'high');
+  // Was 'high' here while the audit called the same fact 'medium', on the same screen. One table
+  // now grades it (shared/ga4-check-severity), and the audit's scale wins.
+  assert.equal(r.category, severityFor('retention_two_months', 'medium'));
+  assert.equal(r.category, 'medium');
   assert.equal(r.defaultSelected, true);
   assert.ok(plan.items.some((i) => i.id === 'retention_reset' && i.category === 'low'));
 });
@@ -77,10 +81,10 @@ test('privacy/business decisions are executable but NEVER pre-selected', () => {
   assert.ok(/re-states historical/.test(at.description));
 });
 
-test('zero key events is a HIGH advisory, not fake-executable (needs a human event choice)', () => {
+test('zero key events is an advisory graded like the audit, not fake-executable (needs a human event choice)', () => {
   const plan = buildGa4Plan(snap({ keyEvents: [] }));
   const ke = plan.items.find((i) => i.id === 'key_events')!;
-  assert.equal(ke.category, 'high');
+  assert.equal(ke.category, severityFor('no_key_events', 'medium'));
   assert.equal(ke.executable, false);
   // Unreadable is DISTINCT from zero - no finding when null.
   assert.ok(!buildGa4Plan(snap({ keyEvents: null })).items.some((i) => i.id === 'key_events'));

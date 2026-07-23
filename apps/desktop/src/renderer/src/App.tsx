@@ -9468,7 +9468,7 @@ function Ga4PlanCard({ property, onError }: { property: string; onError: (m: str
   return (
     <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: '12px 14px', marginTop: 10, display: 'flex', flexDirection: 'column', gap: 10 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <span style={{ fontWeight: 700, fontSize: 13.5 }}>Setup plan - fix the config from the audit</span>
+        <span style={{ fontWeight: 700, fontSize: 13.5 }}>Setup plan - the findings above that can be applied for you</span>
         <span style={{ flex: 1 }} />
         <button style={{ ...styles.ghostBtn, color: 'var(--c-blue)' }} disabled={loading} onClick={() => void load()}>
           {loading ? 'Planning…' : plan ? '↻ Re-plan' : '▶ Build plan'}
@@ -9476,7 +9476,7 @@ function Ga4PlanCard({ property, onError }: { property: string; onError: (m: str
       </div>
       {!plan && !loading && (
         <div style={{ fontSize: 12.5, color: 'var(--text-muted)', lineHeight: 1.5 }}>
-          Turns the config audit into a checklist you can apply in one click: retention, enhanced-measurement toggles, email redaction, attribution, Google Signals. Changes apply directly to GA4 via the Admin API; privacy-weight decisions are never pre-selected.
+          The subset of the findings above that a GA4 Admin write can apply for you: retention, enhanced-measurement toggles, email redaction, attribution, Google Signals. It is deliberately shorter than the findings list, because data-quality findings (an event that never fired, a key event that does not match) have no config setting to change - those carry manual steps instead. Changes apply directly to GA4 via the Admin API; privacy-weight decisions are never pre-selected.
         </div>
       )}
       {plan && issues.length === 0 && (
@@ -9968,7 +9968,6 @@ function Ga4AuditPanel({
                     : 'Config checks ignore the window; it scopes the data-quality pass.'}
                 </span>
               </div>
-              {selected && <Ga4PlanCard key={selected.property} property={selected.property} onError={onError} />}
             </div>
 
             {/* Results */}
@@ -9991,6 +9990,13 @@ function Ga4AuditPanel({
                 {/* Findings - each with BOTH ways to resolve it: a one-click fix (only where a GA4
                     write truly applies it) and the documented manual steps (always). */}
                 <Ga4FindingsList findings={findings} property={selected?.property ?? ''} onApplied={() => void runAudit()} />
+
+                {/* The setup plan reads the SAME property config the audit above just read, so it
+                    belongs after it: shown first (which it was) it invited applying fixes for an
+                    audit that had not run. It is the applicable SUBSET of the findings, never a
+                    second opinion - severity for anything stated on both surfaces comes from one
+                    table (shared/ga4-check-severity). */}
+                {selected && <Ga4PlanCard key={selected.property} property={selected.property} onError={onError} />}
 
                 {/* Coverage - what was checked + its status (Pass / Partial / Fail / Not Verified). */}
                 <div style={styles.card}>

@@ -3,6 +3,7 @@
 // user to make in the GA4 UI); there are no auto-fixes.
 
 import { toSnakeEventName } from './ga4-event-hygiene';
+import { severityFor } from '../../shared/ga4-check-severity';
 
 export interface Ga4DataStreamConfig {
   name: string;
@@ -160,7 +161,7 @@ export function auditGa4(s: Ga4PropertySnapshot, extraFindings: Ga4Finding[] = [
     } else if (!is360 && ret === 'TWO_MONTHS') {
       findings.push({
       checkId: 'retention_two_months',
-        severity: 'medium',
+        severity: severityFor('retention_two_months', 'medium'),
         category: 'retention',
         message: 'Event data retention is 2 months (the default) — exploration/report data older than 2 months is discarded.',
         recommendation: 'Increase it to 14 months in Admin → Data settings → Data retention (the max for standard properties).',
@@ -171,7 +172,7 @@ export function auditGa4(s: Ga4PropertySnapshot, extraFindings: Ga4Finding[] = [
   if (s.keyEvents !== null && s.keyEvents.length === 0) {
     findings.push({
       checkId: 'no_key_events',
-      severity: 'medium',
+      severity: severityFor('no_key_events', 'medium'),
       category: 'conversions',
       message: 'No key events (conversions) are marked — the property is not measuring conversion outcomes.',
       recommendation: 'Mark your important events (purchase, generate_lead, sign_up…) as key events in Admin → Key events.',
@@ -297,7 +298,7 @@ export function auditGa4(s: Ga4PropertySnapshot, extraFindings: Ga4Finding[] = [
   if (s.dataRetention && s.dataRetention.resetOnNewActivity === false) {
     findings.push({
       checkId: 'retention_no_reset',
-      severity: 'low',
+      severity: severityFor('retention_no_reset', 'low'),
       category: 'retention',
       message: "User-data retention does not reset on new activity — a returning user's earliest data still expires on the original timer.",
       recommendation: 'Enable "Reset user data on new activity" in Admin → Data settings → Data retention so active users are retained.',
@@ -327,7 +328,7 @@ export function auditGa4(s: Ga4PropertySnapshot, extraFindings: Ga4Finding[] = [
     if (model && !/DATA_DRIVEN/i.test(model) && /LAST_CLICK/i.test(model)) {
       findings.push({
       checkId: 'attribution_last_click',
-        severity: 'low',
+        severity: severityFor('attribution_last_click', 'low'),
         category: 'attribution',
         message: `Reporting attribution uses a last-click model (${prettyEnum(model)}) — it credits only the final channel, under-crediting the channels that started the journey and skewing every channel-credit number in this report.`,
         recommendation: 'Switch to "Data-driven" in Admin → Attribution settings unless last-click is a deliberate policy.',
