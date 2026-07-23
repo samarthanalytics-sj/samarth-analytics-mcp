@@ -1,3 +1,9 @@
+## [1.395.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.395.1...v1.395.2) (2026-07-23)
+
+### Bug Fixes
+
+* **ga4:** one severity per check, and the setup plan moves below the audit ([#674](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/674)) ([a356e46](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a356e4658af0699d3f65ea4981f227dbf2645cf5))
+
 ## [1.395.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.395.0...v1.395.1) (2026-07-23)
 
 ### Bug Fixes
