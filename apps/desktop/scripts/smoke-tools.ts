@@ -272,9 +272,11 @@ async function main(): Promise<void> {
       blocked === writeNames.length && fd.mutations() === 0,
       `${blocked}/${writeNames.length} write tools rejected, ${fd.mutations()} mutations`
     );
-    // 56 GTM/GA4 read tools (55 plus discover_site_urls, the sitemap/crawl site lister) + the 4
-    // read-only Google Ads tools (accounts, conversion actions, campaigns, campaign performance).
-    record('read-only registry exposes the 70 read tools', readOnlyNames.size === 70, `${readOnlyNames.size} tools`);
+    // 56 GTM/GA4 read tools (55 plus discover_site_urls, the sitemap/crawl site lister) + the
+    // read-only Google Ads tools (accounts, tracking setup, conversion actions, campaigns,
+    // performance, change history, volume, UTM/health/GA4-link audits, audiences, structure,
+    // upload diagnostics, budget pacing, recommendations).
+    record('read-only registry exposes the 73 read tools', readOnlyNames.size === 73, `${readOnlyNames.size} tools`);
   }
 
   // ── B. Approval is DELETE-ONLY: a declining confirm blocks every destructive

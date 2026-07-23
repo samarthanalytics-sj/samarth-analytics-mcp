@@ -584,6 +584,29 @@ export function buildUserListCreateBody(name: string, membershipLifeSpanDays: nu
   };
 }
 
+/* ── Phase F2: diagnostic reads ──────────────────────────────────────────────────────────── */
+
+/** Upload health for EVERY client feeding conversions into the account (their CRM connector, Zapier,
+ *  our own uploads): match/success ratios and volumes. The companion to the upload tools - "your
+ *  uploads are 40% unmatched" is a finding, and it is not always OUR uploads that are broken. */
+export const UPLOAD_DIAGNOSTICS_GAQL =
+  'SELECT offline_conversion_upload_client_summary.client, offline_conversion_upload_client_summary.status, ' +
+  'offline_conversion_upload_client_summary.success_ratio, offline_conversion_upload_client_summary.total_event_count, ' +
+  'offline_conversion_upload_client_summary.successful_event_count, offline_conversion_upload_client_summary.last_upload_date_time ' +
+  'FROM offline_conversion_upload_client_summary';
+
+/** Google's OWN recommendations for the account. Read them as what they are: partly optimization,
+ *  partly sales (budget raises, broad match). Impact numbers are omitted on purpose - Google's
+ *  projections presented as our findings would be borrowed authority. */
+export const RECOMMENDATIONS_GAQL =
+  'SELECT recommendation.resource_name, recommendation.type, recommendation.dismissed, recommendation.campaign ' +
+  "FROM recommendation WHERE recommendation.dismissed = FALSE LIMIT 100";
+
+/** Enhanced conversions for LEADS - a CUSTOMER-level switch. Queried SEPARATELY from the shared
+ *  tracking-setting read so an API version that lacks the field degrades ONLY this probe. */
+export const EC_LEADS_GAQL =
+  'SELECT customer.conversion_tracking_setting.enhanced_conversions_for_leads_enabled FROM customer';
+
 /** Audiences / user lists - sizes + membership status so remarketing-tag population is verifiable. */
 export const USER_LISTS_GAQL =
   'SELECT user_list.id, user_list.name, user_list.type, user_list.membership_status, user_list.membership_life_span, ' +

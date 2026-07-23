@@ -538,7 +538,11 @@ function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean, data
       },
       handler: (a) =>
         run(async () => {
-          const cc = await ads.conversionCustomer(s(a.customerId), login(a));
+          const [cc, ecForLeads] = await Promise.all([
+            ads.conversionCustomer(s(a.customerId), login(a)),
+            // Separate probe on purpose: if this API version lacks the field, ONLY this degrades (to null).
+            ads.enhancedConversionsForLeads(s(a.customerId), login(a)),
+          ]);
           const notes: string[] = [];
           if (cc.autoTaggingEnabled === false) {
             notes.push('Auto-tagging is OFF: ad clicks land WITHOUT a GCLID. Conversion imports, enhanced conversions and GA4 auto-linking all depend on it - recommend enabling it in Google Ads Settings > Account settings > Auto-tagging (safe unless the site\'s URL handling breaks on unknown query params, which is rare and testable).');
@@ -551,6 +555,9 @@ function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean, data
             customerId: s(a.customerId),
             // null = the API did not return the field, which is UNKNOWN - never report it as "off".
             autoTaggingEnabled: cc.autoTaggingEnabled ?? null,
+            // Same null-is-unknown rule. This is the account-level toggle for enhanced conversions for
+            // LEADS (user-provided data from lead forms); web enhanced conversions are per-action.
+            enhancedConversionsForLeadsEnabled: ecForLeads,
             conversionTracking: {
               ownerCustomerId: cc.conversionCustomerId,
               isCrossAccount: cc.isCrossAccount,
@@ -789,13 +796,15 @@ function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean, data
             ...(s(a.endDate).trim() ? { endDate: s(a.endDate).trim() } : {}),
           };
           // One pass, everything in parallel - each read already carries its own retry/backoff.
-          const [tracking, list, vol, utm, changes, perf] = await Promise.all([
+          const [tracking, list, vol, utm, changes, perf, userLists] = await Promise.all([
             ads.conversionCustomer(cid, lg),
             ads.listConversionActions(cid, lg),
             ads.conversionVolume(cid, range, lg),
             ads.utmSetup(cid, lg),
             ads.changeHistory(cid, {}, lg),
             ads.campaignPerformance(cid, range, lg),
+            // Audiences are a bonus probe: a permissions/version hiccup here must not sink the audit.
+            ads.listUserLists(cid, lg).catch(() => undefined),
           ]);
           const findings = assembleConversionHealth({
             tracking,
@@ -804,6 +813,7 @@ function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean, data
             utmFindings: utm.findings,
             changes: changes.events,
             performance: perf.campaigns,
+            ...(userLists ? { userLists } : {}),
           });
           const counts = {
             critical: findings.filter((f) => f.severity === 'critical').length,
@@ -933,6 +943,105 @@ function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean, data
             rows: r.rows,
             ...(r.rows.length === 500 ? { warning: 'Row cap (500) hit - the account has more; narrow the window or filter before drawing totals.' } : {}),
             ...(view === 'search_terms' ? { note: 'Privacy thresholds hide low-volume search terms, so these rows will not sum to campaign clicks - that gap is expected, not missing data.' } : {}),
+          };
+        }),
+    },
+    {
+      name: 'get_google_ads_upload_diagnostics',
+      description:
+        'Google\'s own per-CLIENT summary of offline conversion uploads: for each integration feeding conversions in ' +
+        '(the Ads API, the web UI, partner platforms like HubSpot/Salesforce/Zapier), its status, success ratio and ' +
+        'last upload time. THE first read when "my offline conversions are not showing" - it distinguishes "nothing ' +
+        'was ever uploaded" from "uploads arrive but rows fail matching". Read-only. Covers uploads from ANY source, ' +
+        'not just ones made through this app.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          customerId: { type: 'string', description: 'Google Ads account id, bare digits (strip the dashes).' },
+          loginCustomerId: { type: 'string', description: 'Manager (MCC) id to act through, when reached via a manager.' },
+        },
+        required: ['customerId'],
+        additionalProperties: false,
+      },
+      handler: (a) =>
+        run(async () => {
+          const rows = await ads.uploadDiagnostics(s(a.customerId), login(a));
+          return {
+            ok: true,
+            count: rows.length,
+            clients: rows,
+            note: rows.length
+              ? 'successRatio is 0..1 (present as a percentage). A low ratio means rows ARRIVE but fail matching - usually missing/expired GCLIDs or hashed identifiers that do not match signed-in users. An old lastUploadDateTime on a client the user believes is active means that pipe has silently stopped.'
+              : 'No upload client summaries: Google has recorded NO offline conversion uploads for this account from any source. If offline imports are expected, the pipeline never delivered - that is the finding.',
+          };
+        }),
+    },
+    {
+      name: 'get_google_ads_budget_pacing',
+      description:
+        'Daily budgets vs ACTUAL average daily spend per enabled campaign over a trailing window (default 14 days): ' +
+        'flags budget-CAPPED campaigns (spending ~their full budget, likely losing eligible impressions) and ' +
+        'UNDERSPENDING ones (barely spending - low bids, narrow targeting, or disapprovals). Answers "are my ' +
+        'campaigns limited by budget" / "why is spend so low". Read-only.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          customerId: { type: 'string', description: 'Google Ads account id, bare digits (strip the dashes).' },
+          days: { type: 'number', description: 'Trailing window: 7, 14 or 30 (default 14).' },
+          loginCustomerId: { type: 'string', description: 'Manager (MCC) id to act through, when reached via a manager.' },
+        },
+        required: ['customerId'],
+        additionalProperties: false,
+      },
+      handler: (a) =>
+        run(async () => {
+          const r = await ads.budgetPacing(s(a.customerId), typeof a.days === 'number' ? a.days : 14, login(a));
+          return {
+            ok: true,
+            window: r.windowLabel,
+            count: r.pacing.length,
+            pacing: r.pacing,
+            note:
+              'Micros are MICROS of the account currency (divide by 1,000,000; name the currency). "capped" = avg daily ' +
+              'spend >= 90% of daily budget; a SHARED budget serves several campaigns, so its per-campaign ratio can ' +
+              'legitimately exceed simple expectations - say when sharedBudget is true. Paused/removed campaigns and ' +
+              'campaigns without a readable budget are excluded, not hidden failures. To raise a budget, ' +
+              'update_google_ads_campaign_budget is the write tool (asks approval, dry-runs first, reversible).',
+          };
+        }),
+    },
+    {
+      name: 'get_google_ads_recommendations',
+      description:
+        'GOOGLE\'S OWN active (non-dismissed) recommendations for the account: the same cards the Recommendations page ' +
+        'shows, as type + target campaign. Useful as "what does Google itself suggest here". Read-only; capped at 100. ' +
+        'IMPORTANT: these are GOOGLE\'S suggestions, often biased toward spending more (raise budgets, broaden match, ' +
+        'switch bidding) - present them as Google\'s view to evaluate, NEVER as this app\'s advice, and never ' +
+        'auto-apply them.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          customerId: { type: 'string', description: 'Google Ads account id, bare digits (strip the dashes).' },
+          loginCustomerId: { type: 'string', description: 'Manager (MCC) id to act through, when reached via a manager.' },
+        },
+        required: ['customerId'],
+        additionalProperties: false,
+      },
+      handler: (a) =>
+        run(async () => {
+          const recs = await ads.recommendations(s(a.customerId), login(a));
+          const byType = new Map<string, number>();
+          for (const r of recs) byType.set(r.type, (byType.get(r.type) ?? 0) + 1);
+          return {
+            ok: true,
+            count: recs.length,
+            byType: Object.fromEntries(byType),
+            recommendations: recs,
+            note:
+              'Frame every item as "Google suggests ..." and give the trade-off (most types increase spend). Impact ' +
+              'estimates were deliberately not fetched - Google\'s projected uplifts are optimistic marketing numbers ' +
+              'and quoting them would launder them as this app\'s analysis. Applying/dismissing happens in the Google ' +
+              'Ads UI; there is no apply tool here by design.',
           };
         }),
     },

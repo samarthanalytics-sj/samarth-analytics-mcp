@@ -21,7 +21,12 @@ import {
   parseUploadOutcome,
   mapUserList,
   mapStructureRow,
+  mapUploadClientSummary,
+  mapRecommendation,
+  assessBudgetPacing,
   type AdsConversionAction,
+  type AdsCampaign,
+  type AdsCampaignPerformance,
 } from '../ads-map';
 
 let passed = 0;
@@ -582,6 +587,73 @@ const remember = (note: string | undefined): void => { if (note) notes.push(note
   check('structure keywords row: quality trio + names', kw.qualityScore === 7 && kw.landingPageExperience === 'BELOW_AVERAGE' && kw.campaign === 'Brand' && kw.keyword === 'chownow pos');
   const adRow = mapStructureRow('ads', { campaign: { name: 'Brand' }, adGroup: { name: 'Core' }, adGroupAd: { status: 'ENABLED', adStrength: 'GOOD', ad: { id: '345', type: 'RESPONSIVE_SEARCH_AD', finalUrls: ['https://x.com/a'] } } });
   check('structure ads row: strength + final urls', adRow.adStrength === 'GOOD' && Array.isArray(adRow.finalUrls) && (adRow.finalUrls as string[])[0] === 'https://x.com/a');
+}
+
+// ── Phase F2: upload diagnostics, recommendations, budget pacing, empty-audience finding ──
+{
+  const sum = mapUploadClientSummary({
+    offlineConversionUploadClientSummary: {
+      client: 'GOOGLE_ADS_API', status: 'EXCELLENT', successRatio: '0.94',
+      totalEventCount: '1200', successfulEventCount: '1128', lastUploadDateTime: '2026-07-20 10:00:00',
+    },
+  });
+  check('upload summary: nested row mapped, ratio string coerced', sum.client === 'GOOGLE_ADS_API' && sum.successRatio === 0.94 && sum.totalEventCount === 1200 && sum.successfulEventCount === 1128 && sum.lastUploadDateTime === '2026-07-20 10:00:00');
+  const bare = mapUploadClientSummary({ client: 'google_ads_web_client', status: 'needs_attention' });
+  check('upload summary: bare row, missing fields → nulls + upper-cased enums', bare.client === 'GOOGLE_ADS_WEB_CLIENT' && bare.status === 'NEEDS_ATTENTION' && bare.successRatio === null && bare.totalEventCount === null && bare.lastUploadDateTime === null);
+  check('upload summary: unparsable ratio → null, never NaN', mapUploadClientSummary({ successRatio: 'lots' }).successRatio === null);
+
+  const rec = mapRecommendation({ recommendation: { resourceName: 'customers/1/recommendations/abc', type: 'CAMPAIGN_BUDGET', campaign: 'customers/1/campaigns/42' } });
+  check('recommendation: type + campaign resource mapped', rec.type === 'CAMPAIGN_BUDGET' && rec.campaign === 'customers/1/campaigns/42' && rec.resourceName.endsWith('/abc'));
+  check('recommendation: account-level rec has null campaign + UNKNOWN default type', (() => {
+    const r = mapRecommendation({ recommendation: { resourceName: 'r' } });
+    return r.campaign === null && r.type === 'UNKNOWN';
+  })());
+
+  const camp = (over: Partial<AdsCampaign>): AdsCampaign => ({ id: over.id ?? '1', name: over.name ?? 'C', status: 'ENABLED', channelType: 'SEARCH', ...over });
+  const perfRow = (id: string, costMicros: number): AdsCampaignPerformance => ({ id, name: id, status: 'ENABLED', impressions: 0, clicks: 0, costMicros, conversions: 0, conversionsValue: 0, allConversions: 0 });
+  const pacing = assessBudgetPacing(
+    [
+      camp({ id: 'a', name: 'Capped', budget: { id: 'b1', amountMicros: 10_000_000, shared: false } }),
+      camp({ id: 'b', name: 'Healthy', budget: { id: 'b2', amountMicros: 10_000_000, shared: true } }),
+      camp({ id: 'c', name: 'Sleepy', budget: { id: 'b3', amountMicros: 10_000_000, shared: false } }),
+      camp({ id: 'd', name: 'NoBudget' }),
+      camp({ id: 'e', name: 'Paused', status: 'PAUSED', budget: { id: 'b4', amountMicros: 10_000_000, shared: false } }),
+    ],
+    [perfRow('a', 140_000_000), perfRow('b', 70_000_000), perfRow('c', 7_000_000)],
+    14,
+  );
+  check('pacing: capped/healthy/underspending thresholds over the window', (() => {
+    const by = new Map(pacing.map((p) => [p.campaign, p] as const));
+    return by.get('Capped')?.verdict === 'capped' && by.get('Healthy')?.verdict === 'healthy' && by.get('Sleepy')?.verdict === 'underspending';
+  })());
+  check('pacing: avg daily spend computed and shared flag carried', (() => {
+    const h = pacing.find((p) => p.campaign === 'Healthy');
+    return !!h && h.avgDailySpendMicros === 5_000_000 && h.paceRatio === 0.5 && h.sharedBudget === true;
+  })());
+  check('pacing: no-budget and paused campaigns skipped, sorted worst-first', pacing.length === 3 && pacing[0].campaign === 'Capped' && !pacing.some((p) => p.campaign === 'NoBudget' || p.campaign === 'Paused'));
+  check('pacing: campaign with budget but zero spend rows → underspending at 0, not dropped', (() => {
+    const r = assessBudgetPacing([camp({ id: 'z', name: 'Ghost', budget: { id: 'b', amountMicros: 5_000_000, shared: false } })], [], 7);
+    return r.length === 1 && r[0].paceRatio === 0 && r[0].verdict === 'underspending';
+  })());
+
+  const ul = (over: Record<string, unknown>) => mapUserList({ userList: { id: '1', resourceName: 'r', name: 'L', type: 'RULE_BASED', membershipStatus: 'OPEN', ...over } });
+  const baseHealth = {
+    tracking: { conversionCustomerId: null, status: 'X', trackingId: null, crossAccountTrackingId: null, isCrossAccount: false },
+    actions: [], volume: [], utmFindings: [], changes: [], performance: [],
+  };
+  const withEmpty = assembleConversionHealth({
+    ...baseHealth,
+    userLists: [
+      ul({ name: 'Dead list', sizeForDisplay: 0, sizeForSearch: 0 }),
+      ul({ name: 'Alive', sizeForDisplay: '5000', sizeForSearch: '3000' }),
+      ul({ name: 'Closed empty', membershipStatus: 'CLOSED', sizeForDisplay: 0, sizeForSearch: 0 }),
+    ],
+  });
+  check('health: OPEN size-0 list → audience warning naming the list, sized/closed spared', (() => {
+    const f = withEmpty.find((x) => x.area === 'audience');
+    return !!f && f.severity === 'warning' && f.finding.includes('Dead list') && !f.finding.includes('Alive') && !f.finding.includes('Closed empty');
+  })());
+  check('health: userLists omitted → no audience finding (probe optional)', !assembleConversionHealth(baseHealth).some((f) => f.area === 'audience'));
 }
 
 console.log(`\nads-map: ${passed} passed, ${failed} failed`);

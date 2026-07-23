@@ -403,6 +403,41 @@ async function main(): Promise<void> {
     check('perf range: a days window still uses DURING and the honest label', query.includes('DURING LAST_14_DAYS') && !r.custom && r.windowLabel === 'last 14 days, excluding today');
   }
 
+  // ── Phase F2: diagnostic reads ──
+  {
+    const { s } = svc([
+      { match: 'offline_conversion_upload_client_summary', reply: [{ results: [{ offlineConversionUploadClientSummary: { client: 'GOOGLE_ADS_API', status: 'EXCELLENT', successRatio: 0.9, totalEventCount: '10', successfulEventCount: '9', lastUploadDateTime: '2026-07-20 10:00:00' } }] }] },
+    ]);
+    const rows = await s.uploadDiagnostics('1111111111');
+    check('upload diagnostics: rows mapped through the summary mapper', rows.length === 1 && rows[0].client === 'GOOGLE_ADS_API' && rows[0].successRatio === 0.9 && rows[0].successfulEventCount === 9);
+  }
+  {
+    const { s } = svc([
+      { match: 'FROM recommendation', reply: [{ results: [{ recommendation: { resourceName: 'customers/1/recommendations/r1', type: 'CAMPAIGN_BUDGET', campaign: 'customers/1/campaigns/7' } }] }] },
+    ]);
+    const recs = await s.recommendations('1111111111');
+    check('recommendations: mapped with type + campaign', recs.length === 1 && recs[0].type === 'CAMPAIGN_BUDGET' && recs[0].campaign === 'customers/1/campaigns/7');
+  }
+  {
+    const { s } = svc([
+      { match: 'enhanced_conversions_for_leads_enabled', reply: [{ results: [{ customer: { conversionTrackingSetting: { enhancedConversionsForLeadsEnabled: true } } }] }] },
+    ]);
+    check('EC for leads: enabled flag read', (await s.enhancedConversionsForLeads('1111111111')) === true);
+  }
+  {
+    // No route at all: the fake throws, and the probe must degrade to null (unknown), never throw.
+    const { s } = svc([]);
+    check('EC for leads: probe failure degrades to null, not an error', (await s.enhancedConversionsForLeads('1111111111')) === null);
+  }
+  {
+    const { s } = svc([
+      { match: 'metrics.cost_micros', reply: [{ results: [{ campaign: { id: '7', name: 'Brand', status: 'ENABLED' }, metrics: { costMicros: '140000000', impressions: '1', clicks: '1', conversions: 0, conversionsValue: 0, allConversions: 0 } }] }] },
+      { match: 'campaign_budget.explicitly_shared', reply: [{ results: [{ campaign: { id: '7', name: 'Brand', status: 'ENABLED', advertisingChannelType: 'SEARCH' }, campaignBudget: { id: '9', amountMicros: '10000000', explicitlyShared: false } }] }] },
+    ]);
+    const r = await s.budgetPacing('1111111111', 14);
+    check('budget pacing: campaigns + perf joined into a capped verdict with the honest window label', r.pacing.length === 1 && r.pacing[0].verdict === 'capped' && r.pacing[0].paceRatio === 1 && r.windowLabel === 'last 14 days, excluding today');
+  }
+
   if (passed < 32) { console.error(`✗ only ${passed} assertions ran (expected 32+)`); process.exit(1); }
   console.log(`\nads-service: ${passed} passed, ${failures.length} failed`);
   if (failures.length) { console.error(failures.join('\n')); process.exit(1); }

@@ -315,6 +315,9 @@ const GROUP_MEMBERS: Record<ToolGroup, readonly string[]> = {
     'update_google_ads_campaign_budget',
     'add_google_ads_negative_keywords',
     'create_google_ads_user_list',
+    'get_google_ads_upload_diagnostics',
+    'get_google_ads_budget_pacing',
+    'get_google_ads_recommendations',
   ],
 };
 

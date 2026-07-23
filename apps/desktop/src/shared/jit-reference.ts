@@ -61,6 +61,12 @@ export const ADS_ACTIONS_GUIDE =
   'STEP 3 - the GTM tag: create_gtm_tracking_tag platform google_ads_conversion with the chosen conversionId + conversionLabel as LITERAL values (never {{variables}}), on a trigger for the user\'s action. Also check list_gtm_tags for a Conversion Linker (type gclidw): if the container has none, explain in one line that it stores the ad-click id in a first-party cookie so conversions attribute to the click, and offer to add one (platform conversion_linker, All Pages trigger). ' +
   'CLOSE with a plain-words summary: which conversion action (name + id/label pair), which GTM tag on which trigger, that the GTM side stays in the draft workspace until published, and - if an action was created - that the Ads side is already live. ';
 
+export const ADS_HEALTH_GUIDE =
+  'PRESENTING THE CONVERSION-HEALTH AUDIT: report findings worst-first, grouped by area, in plain language - what is wrong, why it matters to THEIR money, what to do. ' +
+  'Connect findings to the tools that can act on them, and say what each action involves before proposing it: a paused-campaign or budget finding -> set_google_ads_campaign_status / update_google_ads_campaign_budget (both ask approval, dry-run first, and report the previous value so they are revertible); a double-counting or zero-value config finding -> update_google_ads_conversion_action; an empty-audience finding -> the GTM tab to verify the remarketing tag fires, or upload_google_ads_customer_match for CRM lists; upload/matching problems -> get_google_ads_upload_diagnostics; "why is spend low" -> get_google_ads_budget_pacing. ' +
+  'Never propose a write as a casual fix - each one changes the LIVE account and shows a type-"delete" approval card (strongest gate wording, nothing is deleted). ' +
+  'BOUNDARY: this audit is config-plane only. Whether tags actually fire on the site is runtime evidence - offer the GTM tab\'s tag verification for that, and never claim firing health from this result. ';
+
 /** Audit tools whose RESULT should carry the reporting methodology. */
 const AUDIT_TOOLS = new Set(['audit_gtm_container', 'audit_server_container']);
 /** Raw creates whose FAILURE should carry the resource shapes (the typed builders never need them). */
@@ -71,6 +77,7 @@ export function referenceForResult(toolName: string): string | undefined {
   if (AUDIT_TOOLS.has(toolName)) return AUDIT_REPORTING_METHODOLOGY;
   if (toolName === 'list_google_ads_accounts') return ADS_ACCOUNTS_GUIDE;
   if (toolName === 'list_google_ads_conversion_actions') return ADS_ACTIONS_GUIDE;
+  if (toolName === 'audit_google_ads_conversion_health') return ADS_HEALTH_GUIDE;
   return undefined;
 }
 

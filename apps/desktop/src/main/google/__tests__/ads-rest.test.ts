@@ -32,6 +32,9 @@ import {
   buildUserListCreateBody,
   campaignByIdGaql,
   budgetByIdGaql,
+  UPLOAD_DIAGNOSTICS_GAQL,
+  RECOMMENDATIONS_GAQL,
+  EC_LEADS_GAQL,
 } from '../ads-rest';
 
 let passed = 0;
@@ -371,6 +374,13 @@ const createOf = (body: Record<string, unknown>): Record<string, unknown> => {
   check('user list: CRM CONTACT_INFO list, lifespan capped at 540', JSON.stringify(ul).includes('CONTACT_INFO') && JSON.stringify(ul).includes('"membershipLifeSpan":540'));
   check('user list: default lifespan 180', JSON.stringify(buildUserListCreateBody('X', undefined, false)).includes('"membershipLifeSpan":180'));
   check('by-id lookups embed the bare id', campaignByIdGaql('7-7').includes('campaign.id = 77') && budgetByIdGaql('9').includes('campaign_budget.id = 9'));
+}
+
+// ── Phase F2: diagnostic-read GAQL ──
+{
+  check('upload diagnostics: per-client summary fields', ['offline_conversion_upload_client_summary.client', '.success_ratio', '.total_event_count', '.successful_event_count', '.last_upload_date_time'].every((f) => UPLOAD_DIAGNOSTICS_GAQL.includes(f)));
+  check('recommendations: active only, capped, NO impact metrics fetched', RECOMMENDATIONS_GAQL.includes('recommendation.dismissed = FALSE') && RECOMMENDATIONS_GAQL.includes('LIMIT 100') && !RECOMMENDATIONS_GAQL.includes('impact'));
+  check('EC-for-leads probe is its OWN query (degrades alone if the field is unsupported)', EC_LEADS_GAQL.includes('enhanced_conversions_for_leads_enabled') && EC_LEADS_GAQL.trim().startsWith('SELECT'));
 }
 
 console.log(`\ndesktop ads-rest: ${passed} passed, ${failed} failed`);
