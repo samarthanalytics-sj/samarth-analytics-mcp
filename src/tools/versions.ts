@@ -7,6 +7,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { GtmClient } from '../utils/gtmClient.js';
 import { checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
+import { paginate, paginationFields, buildListResult } from '../utils/pagination.js';
 import { jsonResult, textResult, errorResult } from '../utils/toolResponse.js';
 
 const containerBase = z.object({
@@ -23,19 +24,29 @@ export function registerVersionTools(server: McpServer, getClient: () => GtmClie
     {
       description: 'List all container version headers (summary) for a GTM container.',
       inputSchema: containerBase.extend({
+        ...paginationFields,
         includeDeleted: z.boolean().optional().describe('Include deleted versions in results.'),
       }),
     },
-    async ({ accountId, containerId, includeDeleted }) => {
+    async ({ accountId, containerId, includeDeleted, pageToken, maxPages }) => {
       try {
         const client = getClient();
-        // GTM API v2 uses version_headers.list for listing version summaries
-        const res = await client.accounts.containers.version_headers.list({
-          parent: `accounts/${accountId}/containers/${containerId}`,
-          ...(includeDeleted !== undefined ? { includeDeleted } : {}),
-        });
-        const versions = res.data.containerVersionHeader ?? [];
-        return jsonResult({ versions, count: versions.length });
+        // GTM API v2 uses version_headers.list for listing version summaries. It paginates, and a
+        // long-lived container accumulates versions faster than anything else here, so this was the
+        // most likely of the three to be silently cut short.
+        const result = await paginate(
+          (token) =>
+            client.accounts.containers.version_headers
+              .list({
+                parent: `accounts/${accountId}/containers/${containerId}`,
+                ...(includeDeleted !== undefined ? { includeDeleted } : {}),
+                pageToken: token,
+              })
+              .then((r) => r.data),
+          (data) => data.containerVersionHeader,
+          { pageToken, maxPages }
+        );
+        return jsonResult(buildListResult('versions', result));
       } catch (err) {
         return errorResult('versions_list', err);
       }

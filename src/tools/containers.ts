@@ -281,6 +281,11 @@ export function registerContainerTools(server: McpServer, getClient: () => GtmCl
     async ({ accountId, containerId }) => {
       try {
         const client = getClient();
+        // NOT paginated, and that is correct: Params$Resource$Accounts$Containers$Destinations$List
+        // accepts only `parent`, with no pageToken, so the client has no way to request a second
+        // page. (The RESPONSE type does declare a nextPageToken, which reads like an oversight in
+        // Google's own schema - do not add pagination here on the strength of it.) One call is the
+        // whole answer.
         const res = await client.accounts.containers.destinations.list({
           parent: `accounts/${accountId}/containers/${containerId}`,
         });
