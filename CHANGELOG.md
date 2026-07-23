@@ -1,3 +1,9 @@
+## [1.399.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.399.0...v1.399.1) (2026-07-23)
+
+### Bug Fixes
+
+* **desktop:** give Google Ads its own prompt, and make Ads creates one-click ([#688](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/688)) ([8a489ca](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/8a489ca47f6ff826716155bf57c02c2d86a03ed3)), closes [#660](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/660)
+
 ## [1.399.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.398.7...v1.399.0) (2026-07-23)
 
 ### Features
