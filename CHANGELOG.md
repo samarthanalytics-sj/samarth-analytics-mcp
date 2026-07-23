@@ -1,3 +1,9 @@
+## [1.398.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.398.0...v1.398.1) (2026-07-23)
+
+### Bug Fixes
+
+* **ga4:** stop reporting truncated reports as missing data ([#680](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/680)) ([447917b](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/447917b881ed0c029da7bf5ee035deffc48fe603))
+
 ## [1.398.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.397.0...v1.398.0) (2026-07-23)
 
 ### Features
