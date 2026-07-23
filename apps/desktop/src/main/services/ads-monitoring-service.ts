@@ -9,6 +9,7 @@
 
 import { readJsonFile, writeJsonFileAtomic } from '../storage/json-file';
 import { assembleConversionHealth } from '../google/ads-map';
+import { captureAdsSnapshot, diffAdsSnapshots, detectVolumeAnomalies, type AdsSnapshot } from '../google/ads-snapshot';
 import { buildAdsMonitorResult, buildAdsSlackPayload, buildAdsSlackTestPayload } from '../google/ads-monitor';
 import { sendSlackWebhook, isValidSlackWebhook, type FetchLike } from './slack-notify';
 import type { GoogleAdsService } from '../google/ads-service';
@@ -120,6 +121,11 @@ export class AdsMonitoringService {
         ...(acct ? { accountId: acct } : {}),
         ...(Array.isArray(src.issueLog) ? { issueLog: src.issueLog.slice(-ISSUE_LOG_KEEP) } : {}),
         ...(Array.isArray(src.history) ? { history: src.history.slice(-HISTORY_KEEP) } : {}),
+        // SERVER-OWNED, like issueLog and history: taken from the live target (`src`), never from
+        // the renderer's echo. Without this a configure() call - changing a label, toggling an
+        // account - would drop the previous snapshot, and the next sweep would silently have
+        // nothing to compare against and report no changes at all.
+        ...(src.snapshot ? { snapshot: src.snapshot } : {}),
       });
     }
     return targets;
@@ -315,8 +321,33 @@ export class AdsMonitoringService {
           performance: perf.campaigns,
           ...(userLists ? { userLists } : {}),
         });
-        const result = buildAdsMonitorResult(findings);
         const at = this.now();
+        // WHAT CHANGED since the last sweep. The live reads above describe the account right now,
+        // so a deleted conversion action, a paused campaign or a collapsed audience is invisible to
+        // them - those only exist as a difference against the previous run. The snapshot is captured
+        // every sweep and diffed on the next; the first sweep produces nothing to compare and
+        // therefore reports no changes, which is what stops it opening dozens of alerts at once.
+        const prevSnapshot = (liveTarget().snapshot as AdsSnapshot | undefined) ?? undefined;
+        const snapshot = captureAdsSnapshot({
+          at,
+          windowDays: this.config.days,
+          actions: list.actions,
+          campaigns: perf.campaigns.map((c) => ({ id: c.id, name: c.name, status: c.status })),
+          // Sections that failed to read are passed through as undefined, never as [] - an unread
+          // audience list must not read as "every audience was deleted".
+          ...(userLists ? { audiences: userLists } : {}),
+          // `total` is the action's conversion count over the window. Conversion VALUE is not
+          // available at action grain from this read (summarizeConversionVolume returns counts and
+          // dates only), so it is not supplied and the engine's value-break check stays dormant
+          // rather than being fed a fabricated zero that would fire on every second sweep.
+          volume: vol.volume.map((v) => ({ id: v.actionId, name: v.name, conversions: v.total })),
+        });
+        const changeFindings = [
+          ...diffAdsSnapshots(prevSnapshot, snapshot),
+          ...detectVolumeAnomalies(prevSnapshot, snapshot),
+        ];
+
+        const result = buildAdsMonitorResult([...findings, ...changeFindings]);
         st.lastRunAt = at;
         st.lastError = null;
 
@@ -383,6 +414,9 @@ export class AdsMonitoringService {
               trigger,
             },
           ].slice(-HISTORY_KEEP);
+          // Persisted LAST, and only after the diff above has already read the previous one, so a
+          // sweep compares against the run before it rather than against itself.
+          tgt.snapshot = snapshot;
         }
         if (this.deps.configPath) writeJsonFileAtomic(this.deps.configPath, this.config);
       } catch (e) {

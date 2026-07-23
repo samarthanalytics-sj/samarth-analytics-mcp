@@ -202,3 +202,45 @@ test('removing a target drops its runtime state and its channel secret', async (
   assert.equal(secrets.store.size, 0, 'orphaned webhook removed');
   assert.equal(svc.status().targetStatuses.length, 0);
 });
+
+test('snapshot: captured on every sweep, and SURVIVES a configure() from the renderer', async () => {
+  // The whole change-detection feature rests on the previous sweep's snapshot still being there on
+  // the next one. It is server-owned state that the renderer never sends back, so a configure()
+  // call (renaming a target, toggling an account) must not drop it.
+  const svc = new AdsMonitoringService({
+    registry: { getActiveView: () => account },
+    ads: fakeAds({ utmCritical: true }),
+    secrets: makeSecrets(),
+    emit: () => {},
+    now: () => 2_000_000,
+  });
+  svc.configure({ targets: [{ customerId: '1112223333', label: 'Acme', enabled: true }], enabled: false });
+
+  assert.equal(svc.status().targets[0].snapshot, undefined, 'no snapshot before the first sweep');
+  await svc.runOnce();
+  const afterSweep = svc.status().targets[0].snapshot as { at: number; windowDays: number } | undefined;
+  assert.ok(afterSweep, 'a sweep records a snapshot');
+  assert.equal(afterSweep?.at, 2_000_000, 'stamped with the sweep time');
+
+  // The renderer echoes the config back WITHOUT the snapshot, which is exactly how it would be lost.
+  svc.configure({ targets: [{ customerId: '1112223333', label: 'Acme renamed', enabled: true }], enabled: false });
+  const afterConfigure = svc.status().targets[0].snapshot as { at: number } | undefined;
+  assert.ok(afterConfigure, 'the snapshot survives a renderer config echo');
+  assert.equal(afterConfigure?.at, 2_000_000, 'and it is the same snapshot, not a fresh empty one');
+  assert.equal(svc.status().targets[0].label, 'Acme renamed', 'while the renderer-owned label DID update');
+});
+
+test('snapshot: the FIRST sweep reports no change alerts (nothing to compare against)', async () => {
+  // Otherwise every existing conversion action and campaign would be announced as new on day one.
+  const svc = new AdsMonitoringService({
+    registry: { getActiveView: () => account },
+    ads: fakeAds({ utmCritical: false }),
+    secrets: makeSecrets(),
+    emit: () => {},
+    now: () => 3_000_000,
+  });
+  svc.configure({ targets: [{ customerId: '1112223333', label: 'Acme', enabled: true }], enabled: false });
+  const runs = await svc.runOnce();
+  const changeAlerts = runs[0].alerts.filter((a) => a.area === 'changes');
+  assert.equal(changeAlerts.length, 0, 'no change alerts on the very first sweep');
+});
