@@ -85,9 +85,19 @@ export async function gatherGa4MonitorInput(
 
   const keyEventNames = (snap?.keyEvents ?? []).map((k) => k.eventName);
   const ecom = hasEcommerce(keyEventNames);
-  // Event deltas + transactions use the resolved data-quality window when available (matches the audit).
-  const sd = dqCounts?.startDate ?? startDate;
-  const ed = dqCounts?.endDate ?? endDate;
+  // Event deltas + transactions use the resolved data-quality window, which ends YESTERDAY (see
+  // windowDates): a window ending today puts a PARTIAL day against an all-full-days prior window and
+  // deflates every current-vs-prior comparison, which is exactly the bias windowDates exists to
+  // remove. The old fallback here was the live baseline window (ending today), so a failed
+  // data-quality query silently reintroduced that bias on the very run where something had already
+  // gone wrong. Now an unresolved window means the delta comparison is SKIPPED rather than run
+  // biased: no answer beats a wrong one, and the skip is reported through the existing error list.
+  const fullDayWindow = dqCounts?.startDate && dqCounts?.endDate
+    ? { startDate: dqCounts.startDate, endDate: dqCounts.endDate }
+    : null;
+  if (!fullDayWindow) {
+    errors.push('The full-day reporting window could not be resolved, so event-delta and transaction checks were skipped for this run (comparing a partial day against complete days would report drops that did not happen).');
+  }
   // Prior-window data-quality (for consent/attribution DRIFT) — only when the baseline gave us prior
   // bounds. A separate report over the prior equal window; best-effort like the rest.
   const priorDqP =
@@ -96,8 +106,8 @@ export async function gatherGa4MonitorInput(
       : Promise.resolve(null);
 
   const [eventDeltas, transactions, priorDq, campaigns] = await Promise.all([
-    grab(withQuotaRetry(() => data.getGa4EventDeltas(property, sd, ed))),
-    ecom ? grab(withQuotaRetry(() => data.getGa4Transactions(property, sd, ed))) : Promise.resolve(null),
+    fullDayWindow ? grab(withQuotaRetry(() => data.getGa4EventDeltas(property, fullDayWindow.startDate, fullDayWindow.endDate))) : Promise.resolve(null),
+    ecom && fullDayWindow ? grab(withQuotaRetry(() => data.getGa4Transactions(property, fullDayWindow.startDate, fullDayWindow.endDate))) : Promise.resolve(null),
     priorDqP,
     // Campaign performance feeds the revenue-reconciliation + untagged-share checks (the audit's
     // HIGH finding, now watched on a schedule). Best-effort like everything else.

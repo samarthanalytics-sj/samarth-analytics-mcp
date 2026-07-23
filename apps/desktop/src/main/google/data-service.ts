@@ -12,6 +12,7 @@ import { withQuotaRetry } from './quota-retry';
 import type { Ga4PropertySnapshot } from './ga4-audit';
 import type { DataQualityCounts } from './ga4-data-quality';
 import { windowDates } from './ga4-data-quality';
+import { reportCompleteness, absenceMeansZero, truncationNote, type ReportCompleteness } from '../../shared/ga4-truncation';
 import type { Ga4CampaignInput } from './ga4-campaigns';
 import type { Ga4EventDeltaInput, Ga4TransactionInput } from './ga4-integrity';
 import { planRetentionCohorts, parseRetentionRows, type RetentionCohort } from './ga4-retention';
@@ -263,6 +264,9 @@ export interface Ga4ReportResult {
   dimensionHeaders: string[];
   metricHeaders: string[];
   rows: Array<{ dimensions: string[]; metrics: string[] }>;
+  /** Whether `rows` is the whole answer or a top-N. Consult it before concluding anything from a
+   *  row's ABSENCE: on a truncated report absent means "below the cut-off", not "no data". */
+  completeness: ReportCompleteness;
 }
 
 // Read-only GTM/GA4 fetches for the ACTIVE account, using the small per-API
@@ -3013,7 +3017,7 @@ export class GoogleDataService {
     // 100-row cap would truncate for windows > 100 days. The daily series is the per-day report ordered
     // NEWEST-FIRST at limit 1000, then reversed to chronological — so a custom range longer than the cap
     // keeps the MOST-RECENT days (what spike/trend cares about), not the oldest. Country = top-N (250).
-    const emptyResult: Ga4ReportResult = { dimensionHeaders: [], metricHeaders: [], rows: [] };
+    const emptyResult: Ga4ReportResult = { dimensionHeaders: [], metricHeaders: [], rows: [], completeness: { returned: 0, matched: 0, truncated: false } };
     const [curTotal, priorTotal, byEngagement, byDate, byDevice, byNvR, byCountry, byChannelDate, byChannelPerf, byLandingPage, byDevicePerf, byGeoPerf, byFunnel, byLlmSource, byPriorChannel, byItems] = await Promise.all([
       this.runGa4Report({ property, startDate, endDate, dimensions: [], metrics: TREND_METRICS }),
       this.runGa4Report({ property, startDate: priorStartDate, endDate: priorEndDate, dimensions: [], metrics: TREND_METRICS }),
@@ -3242,9 +3246,48 @@ export class GoogleDataService {
       seen.add(name);
       return { name, count: Number(r.metrics[0]) || 0, priorCount: priorMap.get(name) ?? 0 };
     });
-    // Events present in the prior window but absent now (count 0) — the drop-to-zero case.
-    for (const [name, priorCount] of priorMap) if (!seen.has(name)) events.push({ name, count: 0, priorCount });
-    return { events };
+    // Events present in the prior window but absent from the CURRENT rows. On a complete report that
+    // means zero, which is the drop-to-zero signal the integrity audit exists to catch. On a
+    // TRUNCATED report it only means "below the top 500", and reporting that as zero turns an event
+    // that is still firing perfectly well into a critical "stopped firing" alert. So when the current
+    // report was capped, the missing names are re-queried EXPLICITLY (an inListFilter returns that
+    // exact set rather than a top-N) and their real counts used.
+    const missing = [...priorMap.keys()].filter((n) => !seen.has(n));
+    let resolved = new Map<string, number>();
+    if (missing.length && !absenceMeansZero(cur.completeness)) {
+      try {
+        // Chunked: an inListFilter with thousands of values is its own failure mode.
+        for (let i = 0; i < missing.length; i += 250) {
+          const batch = missing.slice(i, i + 250);
+          const exact = await this.runGa4Report({
+            property, startDate, endDate,
+            dimensions: ['eventName'], metrics: ['eventCount'],
+            dimensionFilter: { filter: { fieldName: 'eventName', inListFilter: { values: batch, caseSensitive: true } } },
+            limit: String(batch.length),
+          });
+          for (const r of exact.rows) resolved.set(r.dimensions[0] ?? '', Number(r.metrics[0]) || 0);
+        }
+      } catch {
+        // The re-query is the accuracy path, not the availability path: if it fails, report NOTHING
+        // for these events rather than a zero we cannot stand behind.
+        resolved = new Map([...missing.map((n) => [n, -1] as [string, number])]);
+      }
+    }
+    const complete = absenceMeansZero(cur.completeness);
+    for (const name of missing) {
+      const priorCount = priorMap.get(name) ?? 0;
+      if (complete) {
+        // The whole current window was read: absent really is zero, and that is the signal.
+        events.push({ name, count: 0, priorCount });
+        continue;
+      }
+      const real = resolved.get(name);
+      // -1 marks a re-query we could not complete. Omitting the event says "unknown"; pushing a zero
+      // would say "it stopped firing", which is a claim the data does not support.
+      if (real !== undefined && real >= 0) events.push({ name, count: real, priorCount });
+    }
+    const note = truncationNote(cur.completeness, 'event names');
+    return { events, ...(note ? { note } : {}) };
   }
 
   /** Ecommerce transaction integrity: the per-transaction purchase counts (top-N, for duplicate
@@ -3342,13 +3385,19 @@ export class GoogleDataService {
         limit: input.limit ?? '100',
       },
     });
+    const rows = (res.data.rows ?? []).map((r) => ({
+      dimensions: (r.dimensionValues ?? []).map((v) => v.value ?? ''),
+      metrics: (r.metricValues ?? []).map((v) => v.value ?? ''),
+    }));
     return {
       dimensionHeaders: (res.data.dimensionHeaders ?? []).map((h) => h.name ?? ''),
       metricHeaders: (res.data.metricHeaders ?? []).map((h) => h.name ?? ''),
-      rows: (res.data.rows ?? []).map((r) => ({
-        dimensions: (r.dimensionValues ?? []).map((v) => v.value ?? ''),
-        metrics: (r.metricValues ?? []).map((v) => v.value ?? ''),
-      })),
+      rows,
+      // `rowCount` is how many rows MATCHED; `rows` is how many fitted under `limit`. Returning only
+      // the second made a capped report indistinguishable from a complete one, which is how "absent
+      // from the report" silently became "has no data". Callers that draw conclusions from ABSENCE
+      // must consult this.
+      completeness: reportCompleteness(rows.length, (res.data as { rowCount?: unknown }).rowCount),
     };
   }
 
@@ -4021,13 +4070,15 @@ export class GoogleDataService {
         limit: '100',
       },
     });
+    const rows = (res.data.rows ?? []).map((r) => ({
+      dimensions: (r.dimensionValues ?? []).map((v) => v.value ?? ''),
+      metrics: (r.metricValues ?? []).map((v) => v.value ?? ''),
+    }));
     return {
       dimensionHeaders: (res.data.dimensionHeaders ?? []).map((h) => h.name ?? ''),
       metricHeaders: (res.data.metricHeaders ?? []).map((h) => h.name ?? ''),
-      rows: (res.data.rows ?? []).map((r) => ({
-        dimensions: (r.dimensionValues ?? []).map((v) => v.value ?? ''),
-        metrics: (r.metricValues ?? []).map((v) => v.value ?? ''),
-      })),
+      rows,
+      completeness: reportCompleteness(rows.length, (res.data as { rowCount?: unknown }).rowCount),
     };
   }
 
