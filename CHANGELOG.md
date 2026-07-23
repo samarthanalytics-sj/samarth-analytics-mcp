@@ -1,3 +1,9 @@
+## [1.389.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.388.1...v1.389.0) (2026-07-23)
+
+### Features
+
+* **desktop:** Google Ads phase B - change history, conversion volume, UTM audit ([124b590](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/124b59024d71546ea960b79f159d71b8db273db8))
+
 ## [1.388.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.388.0...v1.388.1) (2026-07-22)
 
 ### Bug Fixes
