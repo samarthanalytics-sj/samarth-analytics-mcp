@@ -1564,6 +1564,94 @@ export interface Ga4MonitorStatus extends Ga4MonitorConfig {
   targetStatuses: Ga4MonitorTargetStatus[];
 }
 
+// ── Google Ads monitoring (mirrors the GA4 monitor shapes, leaner) ─────────────────────────────
+
+export interface AdsMonitorTarget {
+  /** Google Ads account id, bare digits. */
+  customerId: string;
+  /** Display name (account name from list_google_ads_accounts). */
+  label: string;
+  /** Manager (MCC) id the account is reached through, when applicable. */
+  loginCustomerId?: string;
+  /** Pause/resume this account without removing it from the list. */
+  enabled: boolean;
+  /** Human label for this account's Slack channel; the webhook URL lives encrypted in the keychain. */
+  slackLabel?: string;
+  /** The app account (mail) this target was added under - targets only show/run for their own. */
+  accountId?: string;
+  /** Rolling issue history (capped at 50): when each alert opened and closed. Persisted. */
+  issueLog?: Array<{ id: string; title: string; severity: string; openedAt: number; closedAt?: number }>;
+  /** Rolling run history (newest last, capped at 30). Persisted. */
+  history?: AdsMonitorHistoryEntry[];
+}
+
+export interface AdsMonitorHistoryEntry {
+  at: number;
+  health: 'healthy' | 'warning' | 'critical';
+  /** Derived 0-100 score for this run (from its findings, not measured by Google). */
+  score: number;
+  critical: number;
+  warnings: number;
+  durationMs: number;
+  trigger: 'manual' | 'scheduled';
+}
+
+export interface AdsMonitorConfig {
+  enabled: boolean;
+  /** Minutes between sweeps (clamped to a sane minimum in main - Ads API quota is precious). */
+  intervalMinutes: number;
+  targets: AdsMonitorTarget[];
+  /** Lookback window (days) for volume/spend checks, shared by all targets. */
+  days: number;
+}
+
+export interface AdsMonitorAlertView {
+  id: string;
+  area: string;
+  severity: 'critical' | 'warning' | 'info';
+  title: string;
+}
+
+export interface AdsMonitorCheckView {
+  id: string;
+  label: string;
+  status: 'pass' | 'warn' | 'fail';
+  detail: string;
+}
+
+export interface AdsMonitorRun {
+  at: number;
+  customerId: string;
+  label: string;
+  health: 'healthy' | 'warning' | 'critical';
+  summary: string;
+  checks: AdsMonitorCheckView[];
+  alerts: AdsMonitorAlertView[];
+  /** ids of the alerts NEW vs the previous sweep (the set that posted to Slack). */
+  newAlertIds: string[];
+  score: number;
+  durationMs: number;
+  trigger: 'manual' | 'scheduled';
+  slackSent: number;
+  slackError: string | null;
+}
+
+export interface AdsMonitorTargetStatus extends AdsMonitorTarget {
+  lastRunAt: number | null;
+  lastError: string | null;
+  lastRun: AdsMonitorRun | null;
+  hasWebhook: boolean;
+  lastSlackAt: number | null;
+}
+
+export interface AdsMonitorStatus extends AdsMonitorConfig {
+  running: boolean;
+  lastRunAt: number | null;
+  lastError: string | null;
+  lastSlackAt: number | null;
+  targetStatuses: AdsMonitorTargetStatus[];
+}
+
 /** How the current outbound connection is classified. `unknown` = we have an IP but not enough signal. */
 export type NetworkConnectionType = 'local' | 'vpn' | 'proxy' | 'unknown';
 

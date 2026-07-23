@@ -83,6 +83,7 @@ import { stripDuplicateCharts } from '../../shared/ga4-visuals-html';
 import { ga4SectionsHtml } from '../../shared/ga4-sections-html';
 import { Ga4Charts } from './Ga4Charts';
 import { Ga4MonitoringPanel } from './Ga4MonitoringPanel';
+import { AdsMonitoringPanel } from './AdsMonitoringPanel';
 import { TagTypeIcon } from './TagTypeIcon';
 import { gtmTypeLabel } from '../../shared/tag-brand';
 import { auditToCsv, auditToMarkdown } from './audit-export';
@@ -119,7 +120,7 @@ const MODEL_OPTIONS: Record<LlmProvider, Array<{ id: string; label: string }>> =
   ],
 };
 
-type View = 'chat' | 'gtm' | 'ga4' | 'prompts' | 'settings';
+type View = 'chat' | 'gtm' | 'ga4' | 'ads' | 'prompts' | 'settings';
 
 /* ─────────────────────────── Icon rail (primary nav) ─────────────────────────── */
 
@@ -128,6 +129,7 @@ const RAIL_ICON: Record<View, JSX.Element> = {
   chat: <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8z" />,
   gtm: <><path d="M20.6 13.4l-7.2 7.2a2 2 0 0 1-2.8 0L2 12V2h10l8.6 8.6a2 2 0 0 1 0 2.8z" /><circle cx="7" cy="7" r="1.3" /></>,
   ga4: <><path d="M4 20h16" /><path d="M7 20v-6" /><path d="M12 20V9" /><path d="M17 20v-9" /></>,
+  ads: <><path d="M3 11l14-6v14L3 13v-2z" /><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6" /><path d="M17 8a4 4 0 0 1 0 8" /></>,
   prompts: <><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" /><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" /></>,
   settings: <><circle cx="12" cy="12" r="3.2" /><path d="M12 2v3" /><path d="M12 19v3" /><path d="M2 12h3" /><path d="M19 12h3" /><path d="M4.9 4.9L7 7" /><path d="M17 17l2.1 2.1" /><path d="M19.1 4.9L17 7" /><path d="M7 17l-2.1 2.1" /></>,
 };
@@ -779,16 +781,16 @@ export function App(): JSX.Element {
     }
   }
 
-  // Global keyboard shortcuts: Ctrl/Cmd+1..5 switch the primary view (even while typing); "?" toggles
+  // Global keyboard shortcuts: Ctrl/Cmd+1..6 switch the primary view (even while typing); "?" toggles
   // the shortcuts overlay (ignored while typing so "?" still types into inputs).
   useEffect(() => {
-    const VIEWS: View[] = ['chat', 'gtm', 'ga4', 'prompts', 'settings'];
+    const VIEWS: View[] = ['chat', 'gtm', 'ga4', 'ads', 'prompts', 'settings'];
     const isTyping = (el: EventTarget | null): boolean => {
       const t = el as HTMLElement | null;
       return !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
     };
     const onKey = (e: KeyboardEvent): void => {
-      if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key >= '1' && e.key <= '5') {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key >= '1' && e.key <= '6') {
         const v = VIEWS[Number(e.key) - 1];
         if (v) { e.preventDefault(); setView(v); }
         return;
@@ -813,6 +815,7 @@ export function App(): JSX.Element {
             ['chat', 'Chat'],
             ['gtm', 'GTM'],
             ['ga4', 'GA4'],
+            ['ads', 'Ads'],
             ['prompts', 'Prompts'],
           ] as Array<[View, string]>).map(([v, label]) => (
             <RailItem key={v} view={v} label={label} active={view === v} onClick={() => setView(v)} />
@@ -893,6 +896,8 @@ export function App(): JSX.Element {
           <GtmToolsView key={active?.id ?? 'none'} active={active} onError={setError} refresh={refresh} />
         ) : view === 'ga4' ? (
           <Ga4ToolsView key={active?.id ?? 'none'} active={active} onError={setError} tab={ga4Tab} setTab={setGa4Tab} />
+        ) : view === 'ads' ? (
+          <AdsToolsView key={active?.id ?? 'none'} active={active} onError={setError} />
         ) : view === 'prompts' ? (
           <PromptsView
             onUse={(text, product) => {
@@ -925,8 +930,9 @@ export function App(): JSX.Element {
             { keys: ['Ctrl', '1'], label: 'Go to Chat' },
             { keys: ['Ctrl', '2'], label: 'Go to GTM Tools' },
             { keys: ['Ctrl', '3'], label: 'Go to GA4 Tools' },
-            { keys: ['Ctrl', '4'], label: 'Go to Prompts' },
-            { keys: ['Ctrl', '5'], label: 'Go to Settings' },
+            { keys: ['Ctrl', '4'], label: 'Go to Ads Tools' },
+            { keys: ['Ctrl', '5'], label: 'Go to Prompts' },
+            { keys: ['Ctrl', '6'], label: 'Go to Settings' },
             { keys: ['?'], label: 'Show / hide this help' },
             { keys: ['Esc'], label: 'Close dialogs' },
           ]}
@@ -3335,6 +3341,22 @@ function Ga4ToolsView({
       ) : (
         <TagWatchPanel onError={onError} />
       )}
+    </div>
+  );
+}
+
+// Google Ads tools - the Ads sibling of GTM/GA4 Tools. One sub-tab for now (Monitoring: scheduled
+// conversion-health sweeps + Slack alerts); the sub-tab bar keeps the pattern so future Ads
+// surfaces slot in beside it.
+function AdsToolsView({ active, onError }: { active: AccountView | undefined; onError: (m: string) => void }): JSX.Element {
+  return (
+    <div style={styles.gtmWorkspace}>
+      <div style={styles.subTabs} role="tablist">
+        <button style={styles.subTabOn} role="tab" aria-selected>
+          🔔 Ads Monitoring
+        </button>
+      </div>
+      <AdsMonitoringPanel key={(active?.id ?? 'none') + ':adsmon'} active={active} onError={onError} />
     </div>
   );
 }
