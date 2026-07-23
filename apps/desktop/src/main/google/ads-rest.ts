@@ -486,6 +486,104 @@ export const STRUCTURE_GAQL: Record<AdsStructureView, (range: PerfRange) => stri
     "FROM ad_group_ad WHERE ad_group_ad.status != 'REMOVED' LIMIT 500",
 };
 
+/* ── Phase F: reversible account writes (campaign status, budget, negatives, list create,
+ * conversion-action update). Every mutate here supports validateOnly (dry-run first, like the
+ * conversion-action create) and partialFailure:false (transactional - a bad op fails loudly).
+ * The SERVICE reads the previous value before each update so the tool can hand back a ready-made
+ * revert call; a write whose old value was never captured is a write that cannot be undone. */
+
+export function mutateCampaignsUrl(customerId: string): string {
+  return `${ADS_BASE}/${ADS_API_VERSION}/customers/${normalizeCustomerId(customerId)}/campaigns:mutate`;
+}
+export function mutateCampaignBudgetsUrl(customerId: string): string {
+  return `${ADS_BASE}/${ADS_API_VERSION}/customers/${normalizeCustomerId(customerId)}/campaignBudgets:mutate`;
+}
+export function mutateCampaignCriteriaUrl(customerId: string): string {
+  return `${ADS_BASE}/${ADS_API_VERSION}/customers/${normalizeCustomerId(customerId)}/campaignCriteria:mutate`;
+}
+export function mutateUserListsUrl(customerId: string): string {
+  return `${ADS_BASE}/${ADS_API_VERSION}/customers/${normalizeCustomerId(customerId)}/userLists:mutate`;
+}
+
+/** Single-campaign / single-budget lookups - the previous-value read every reversible write does. */
+export function campaignByIdGaql(campaignId: string): string {
+  return `SELECT campaign.id, campaign.name, campaign.status, campaign_budget.id, campaign_budget.amount_micros, campaign_budget.explicitly_shared FROM campaign WHERE campaign.id = ${normalizeCustomerId(campaignId)}`;
+}
+export function budgetByIdGaql(budgetId: string): string {
+  return `SELECT campaign_budget.id, campaign_budget.amount_micros, campaign_budget.explicitly_shared FROM campaign_budget WHERE campaign_budget.id = ${normalizeCustomerId(budgetId)}`;
+}
+
+/** Campaign status flip (ENABLED <-> PAUSED). The mask names ONLY status, so nothing else can drift. */
+export function buildCampaignStatusBody(campaignResource: string, status: 'ENABLED' | 'PAUSED', validateOnly: boolean): Record<string, unknown> {
+  return {
+    operations: [{ update: { resourceName: campaignResource, status }, updateMask: 'status' }],
+    partialFailure: false,
+    validateOnly: Boolean(validateOnly),
+  };
+}
+
+/** Daily budget amount update (micros). */
+export function buildCampaignBudgetBody(budgetResource: string, amountMicros: number, validateOnly: boolean): Record<string, unknown> {
+  return {
+    operations: [{ update: { resourceName: budgetResource, amountMicros: Math.round(amountMicros) }, updateMask: 'amountMicros' }],
+    partialFailure: false,
+    validateOnly: Boolean(validateOnly),
+  };
+}
+
+/** The targeted conversion-action update - EXACTLY the fields our own audit findings tell the user
+ *  to change (primary/secondary, counting, status, default value), nothing else. The mask is built
+ *  from the fields actually supplied, so an omitted field can never be clobbered. */
+export interface ConversionActionPatch {
+  primaryForGoal?: boolean;
+  countingType?: 'ONE_PER_CLICK' | 'MANY_PER_CLICK';
+  status?: 'ENABLED' | 'PAUSED';
+  defaultValue?: number;
+  defaultCurrencyCode?: string;
+}
+export function buildConversionActionUpdateBody(actionResource: string, patch: ConversionActionPatch, validateOnly: boolean): Record<string, unknown> {
+  const update: Record<string, unknown> = { resourceName: actionResource };
+  const mask: string[] = [];
+  if (patch.primaryForGoal !== undefined) { update.primaryForGoal = patch.primaryForGoal; mask.push('primaryForGoal'); }
+  if (patch.countingType) { update.countingType = patch.countingType; mask.push('countingType'); }
+  if (patch.status) { update.status = patch.status; mask.push('status'); }
+  if (patch.defaultValue !== undefined || patch.defaultCurrencyCode) {
+    update.valueSettings = {
+      ...(patch.defaultValue !== undefined ? { defaultValue: patch.defaultValue } : {}),
+      ...(patch.defaultCurrencyCode ? { defaultCurrencyCode: patch.defaultCurrencyCode.trim().toUpperCase() } : {}),
+    };
+    if (patch.defaultValue !== undefined) mask.push('valueSettings.defaultValue');
+    if (patch.defaultCurrencyCode) mask.push('valueSettings.defaultCurrencyCode');
+  }
+  return {
+    operations: [{ update, updateMask: mask.join(',') }],
+    partialFailure: false,
+    validateOnly: Boolean(validateOnly),
+  };
+}
+
+/** Campaign-level negative keywords. Transactional: one bad keyword fails the batch loudly. */
+export function buildNegativeKeywordsBody(campaignResource: string, keywords: Array<{ text: string; matchType: 'BROAD' | 'PHRASE' | 'EXACT' }>, validateOnly: boolean): Record<string, unknown> {
+  return {
+    operations: keywords.map((k) => ({
+      create: { campaign: campaignResource, negative: true, keyword: { text: k.text.trim(), matchType: k.matchType } },
+    })),
+    partialFailure: false,
+    validateOnly: Boolean(validateOnly),
+  };
+}
+
+/** A CRM-based Customer Match list (CONTACT_INFO uploads - emails/phones), the target the
+ *  upload_google_ads_customer_match tool needs when none exists yet. */
+export function buildUserListCreateBody(name: string, membershipLifeSpanDays: number | undefined, validateOnly: boolean): Record<string, unknown> {
+  const days = Number.isFinite(membershipLifeSpanDays) ? Math.min(540, Math.max(0, Math.floor(membershipLifeSpanDays as number))) : 180;
+  return {
+    operations: [{ create: { name: name.trim(), membershipLifeSpan: days, crmBasedUserList: { uploadKeyType: 'CONTACT_INFO' } } }],
+    partialFailure: false,
+    validateOnly: Boolean(validateOnly),
+  };
+}
+
 /** Audiences / user lists - sizes + membership status so remarketing-tag population is verifiable. */
 export const USER_LISTS_GAQL =
   'SELECT user_list.id, user_list.name, user_list.type, user_list.membership_status, user_list.membership_life_span, ' +

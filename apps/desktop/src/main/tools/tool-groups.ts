@@ -310,6 +310,11 @@ const GROUP_MEMBERS: Record<ToolGroup, readonly string[]> = {
     'upload_google_ads_offline_conversions',
     'upload_google_ads_conversion_adjustments',
     'upload_google_ads_customer_match',
+    'update_google_ads_conversion_action',
+    'set_google_ads_campaign_status',
+    'update_google_ads_campaign_budget',
+    'add_google_ads_negative_keywords',
+    'create_google_ads_user_list',
   ],
 };
 

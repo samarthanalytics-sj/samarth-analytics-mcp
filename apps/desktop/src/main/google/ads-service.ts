@@ -31,6 +31,18 @@ import {
   buildCustomerMatchOpsBody,
   STRUCTURE_GAQL,
   USER_LISTS_GAQL,
+  campaignByIdGaql,
+  budgetByIdGaql,
+  mutateCampaignsUrl,
+  mutateCampaignBudgetsUrl,
+  mutateCampaignCriteriaUrl,
+  mutateUserListsUrl,
+  buildCampaignStatusBody,
+  buildCampaignBudgetBody,
+  buildConversionActionUpdateBody,
+  buildNegativeKeywordsBody,
+  buildUserListCreateBody,
+  type ConversionActionPatch,
   type AdsStructureView,
   type AdsConsent,
   type ClickConversionInput,
@@ -389,6 +401,108 @@ export class GoogleAdsService {
     const outcome = parseUploadOutcome(ops, members.length);
     await this.call({ url: offlineUserDataJobOpUrl(jobResourceName, 'run'), method: 'POST', body: {}, loginCustomerId });
     return { jobResourceName, outcome };
+  }
+
+  /** The reversible-write helper: dry-run (validateOnly) then apply the SAME body for real. Any
+   *  validation failure surfaces as the shaped AdsError BEFORE anything lands. */
+  private async mutateWithDryRun(url: string, bodyOf: (validateOnly: boolean) => Record<string, unknown>, loginCustomerId?: string): Promise<unknown> {
+    await this.call({ url, method: 'POST', body: bodyOf(true), loginCustomerId });
+    return this.call({ url, method: 'POST', body: bodyOf(false), loginCustomerId });
+  }
+
+  /** Pause/enable a campaign. Reads the CURRENT status first and returns it, so the tool can hand
+   *  back a ready-made revert call - a write whose old value was never captured cannot be undone. */
+  async setCampaignStatus(
+    customerId: string,
+    campaignId: string,
+    status: 'ENABLED' | 'PAUSED',
+    loginCustomerId?: string,
+  ): Promise<{ name: string; previousStatus: string; status: string }> {
+    const rows = await this.search(customerId, campaignByIdGaql(campaignId), loginCustomerId);
+    const current = rows.map(mapCampaign)[0];
+    if (!current) {
+      throw new AdsError({ code: '', status: 0, retryable: false, message: `Campaign ${campaignId} was not found in account ${normalizeCustomerId(customerId)}.`, remedy: 'List campaigns first and use the id from that list.' });
+    }
+    const resource = `customers/${normalizeCustomerId(customerId)}/campaigns/${normalizeCustomerId(campaignId)}`;
+    await this.mutateWithDryRun(mutateCampaignsUrl(customerId), (v) => buildCampaignStatusBody(resource, status, v), loginCustomerId);
+    return { name: current.name, previousStatus: current.status, status };
+  }
+
+  /** Update a DAILY budget amount (micros). Warns the caller about shared budgets via the flag. */
+  async updateCampaignBudget(
+    customerId: string,
+    budgetId: string,
+    amountMicros: number,
+    loginCustomerId?: string,
+  ): Promise<{ previousAmountMicros: number; amountMicros: number; explicitlyShared: boolean }> {
+    const rows = await this.search(customerId, budgetByIdGaql(budgetId), loginCustomerId);
+    const row = rows[0] as { campaignBudget?: { amountMicros?: unknown; explicitlyShared?: unknown }; campaign_budget?: { amount_micros?: unknown; explicitly_shared?: unknown } } | undefined;
+    const cb = (row?.campaignBudget ?? row?.campaign_budget) as Record<string, unknown> | undefined;
+    if (!cb) {
+      throw new AdsError({ code: '', status: 0, retryable: false, message: `Budget ${budgetId} was not found in account ${normalizeCustomerId(customerId)}.`, remedy: 'list_google_ads_campaigns returns each campaign\'s budgetId.' });
+    }
+    const prevRaw = cb.amountMicros ?? cb.amount_micros;
+    const previousAmountMicros = typeof prevRaw === 'number' ? prevRaw : Number(prevRaw ?? 0) || 0;
+    const sharedRaw = cb.explicitlyShared ?? cb.explicitly_shared;
+    const explicitlyShared = sharedRaw === true || sharedRaw === 'true';
+    const resource = `customers/${normalizeCustomerId(customerId)}/campaignBudgets/${normalizeCustomerId(budgetId)}`;
+    await this.mutateWithDryRun(mutateCampaignBudgetsUrl(customerId), (v) => buildCampaignBudgetBody(resource, amountMicros, v), loginCustomerId);
+    return { previousAmountMicros, amountMicros: Math.round(amountMicros), explicitlyShared };
+  }
+
+  /** Targeted conversion-action update (primary/secondary, counting, status, default value) - the
+   *  fix for the audit's own findings. Returns the previous values of exactly the patched fields. */
+  async updateConversionAction(
+    customerId: string,
+    actionId: string,
+    patch: ConversionActionPatch,
+    loginCustomerId?: string,
+  ): Promise<{ name: string; previous: ConversionActionPatch }> {
+    const rows = await this.search(customerId, `${GAQL.conversionActions} AND conversion_action.id = ${normalizeCustomerId(actionId)}`, loginCustomerId);
+    const current = rows.map(mapConversionAction)[0];
+    if (!current) {
+      throw new AdsError({ code: '', status: 0, retryable: false, message: `Conversion action ${actionId} was not found in account ${normalizeCustomerId(customerId)}.`, remedy: 'list_google_ads_conversion_actions returns each action\'s id.' });
+    }
+    const resource = `customers/${normalizeCustomerId(customerId)}/conversionActions/${normalizeCustomerId(actionId)}`;
+    await this.mutateWithDryRun(mutateConversionActionsUrl(customerId), (v) => buildConversionActionUpdateBody(resource, patch, v), loginCustomerId);
+    const previous: ConversionActionPatch = {
+      ...(patch.primaryForGoal !== undefined ? { primaryForGoal: current.primaryForGoal !== false } : {}),
+      ...(patch.countingType ? { countingType: (current.countingType as 'ONE_PER_CLICK' | 'MANY_PER_CLICK' | undefined) ?? undefined } : {}),
+      ...(patch.status ? { status: (current.status as 'ENABLED' | 'PAUSED' | undefined) ?? undefined } : {}),
+      ...(patch.defaultValue !== undefined ? { defaultValue: current.defaultValue ?? 0 } : {}),
+      ...(patch.defaultCurrencyCode ? { defaultCurrencyCode: current.defaultCurrencyCode } : {}),
+    };
+    return { name: current.name, previous };
+  }
+
+  /** Campaign-level negative keywords (transactional batch). */
+  async addNegativeKeywords(
+    customerId: string,
+    campaignId: string,
+    keywords: Array<{ text: string; matchType: 'BROAD' | 'PHRASE' | 'EXACT' }>,
+    loginCustomerId?: string,
+  ): Promise<{ campaignName: string; added: number }> {
+    const rows = await this.search(customerId, campaignByIdGaql(campaignId), loginCustomerId);
+    const current = rows.map(mapCampaign)[0];
+    if (!current) {
+      throw new AdsError({ code: '', status: 0, retryable: false, message: `Campaign ${campaignId} was not found in account ${normalizeCustomerId(customerId)}.`, remedy: 'List campaigns first and use the id from that list.' });
+    }
+    const resource = `customers/${normalizeCustomerId(customerId)}/campaigns/${normalizeCustomerId(campaignId)}`;
+    await this.mutateWithDryRun(mutateCampaignCriteriaUrl(customerId), (v) => buildNegativeKeywordsBody(resource, keywords, v), loginCustomerId);
+    return { campaignName: current.name, added: keywords.length };
+  }
+
+  /** Create a CRM-based Customer Match list (the upload tool's missing target). */
+  async createUserList(
+    customerId: string,
+    name: string,
+    membershipLifeSpanDays: number | undefined,
+    loginCustomerId?: string,
+  ): Promise<{ resourceName: string; id: string }> {
+    const data = await this.mutateWithDryRun(mutateUserListsUrl(customerId), (v) => buildUserListCreateBody(name, membershipLifeSpanDays, v), loginCustomerId);
+    const resourceName = String((data as { results?: Array<{ resourceName?: string }> } | null)?.results?.[0]?.resourceName ?? '');
+    const id = /userLists\/(\d+)/.exec(resourceName)?.[1] ?? '';
+    return { resourceName, id };
   }
 
   /** Validate a create WITHOUT executing it, so the review UI can surface a name collision or a bad

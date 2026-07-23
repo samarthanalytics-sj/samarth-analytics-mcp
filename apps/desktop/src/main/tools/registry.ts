@@ -1,6 +1,6 @@
 import type { GoogleDataService } from '../google/data-service';
 import { AdsError, type GoogleAdsService } from '../google/ads-service';
-import { CONVERSION_CATEGORIES, isAdsDateTime, type AdsConsent, type ClickConversionInput, type ConversionAdjustmentInput } from '../google/ads-rest';
+import { CONVERSION_CATEGORIES, isAdsDateTime, type AdsConsent, type ClickConversionInput, type ConversionAdjustmentInput, type ConversionActionPatch } from '../google/ads-rest';
 import { conversionSetupWarnings, silentConversionActions, assembleConversionHealth, auditAdsGa4Seam } from '../google/ads-map';
 import type { LlmToolDef, ToolExecutor } from '../llm/types';
 import type { GoogleProduct, GtmContext } from '../../shared/ipc';
@@ -1280,6 +1280,225 @@ function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean, data
             note:
               'The job has been STARTED - Google processes it asynchronously, and list sizes update hours later. ' +
               'Report the job as started, not the list as grown; re-check sizes with list_google_ads_audiences later.',
+          };
+        }),
+    },
+    {
+      name: 'update_google_ads_conversion_action',
+      description:
+        'Fix a conversion action IN PLACE - exactly the fields the health audit\'s findings point at: primaryForGoal ' +
+        '(false = make it SECONDARY, the double-counting fix), countingType, status (pause/enable), defaultValue + ' +
+        'defaultCurrencyCode (the zero-value fix). Only the supplied fields change (field-mask update). LIVE account, ' +
+        'no draft; the result returns the PREVIOUS values with a ready revert call, so always report both. Dry-run ' +
+        'validation runs first - an invalid patch changes nothing.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          customerId: { type: 'string', description: 'Account that owns the action, bare digits.' },
+          conversionActionId: { type: 'string', description: 'Numeric action id (list_google_ads_conversion_actions).' },
+          primaryForGoal: { type: 'boolean', description: 'false = secondary (observed, not bid on): the double-count fix.' },
+          countingType: { type: 'string', enum: ['ONE_PER_CLICK', 'MANY_PER_CLICK'] },
+          status: { type: 'string', enum: ['ENABLED', 'PAUSED'] },
+          defaultValue: { type: 'number', description: 'New default conversion value.' },
+          defaultCurrencyCode: { type: 'string' },
+          loginCustomerId: { type: 'string', description: 'Manager (MCC) id to act through, when reached via a manager.' },
+        },
+        required: ['customerId', 'conversionActionId'],
+        additionalProperties: false,
+      },
+      write: true,
+      destructive: true,
+      summarize: (a) => {
+        const parts = [
+          ...(a.primaryForGoal !== undefined ? [`primaryForGoal=${String(a.primaryForGoal)}`] : []),
+          ...(a.countingType ? [`countingType=${s(a.countingType)}`] : []),
+          ...(a.status ? [`status=${s(a.status)}`] : []),
+          ...(a.defaultValue !== undefined ? [`defaultValue=${String(a.defaultValue)}`] : []),
+        ];
+        return `Update LIVE conversion action ${s(a.conversionActionId)} in account ${s(a.customerId)}: ${parts.join(', ') || 'no fields'}. Changes take effect immediately in reporting and Smart Bidding`;
+      },
+      precheck: () => adsNotReady(ads),
+      handler: (a) =>
+        run(async () => {
+          const countingType = a.countingType === 'ONE_PER_CLICK' || a.countingType === 'MANY_PER_CLICK' ? a.countingType : undefined;
+          const status = a.status === 'ENABLED' || a.status === 'PAUSED' ? a.status : undefined;
+          const patch: ConversionActionPatch = {
+            ...(typeof a.primaryForGoal === 'boolean' ? { primaryForGoal: a.primaryForGoal } : {}),
+            ...(countingType ? { countingType } : {}),
+            ...(status ? { status } : {}),
+            ...(typeof a.defaultValue === 'number' ? { defaultValue: a.defaultValue } : {}),
+            ...(s(a.defaultCurrencyCode).trim() ? { defaultCurrencyCode: s(a.defaultCurrencyCode).trim() } : {}),
+          };
+          if (Object.keys(patch).length === 0) return { ok: false, error: 'Supply at least one field to change (primaryForGoal, countingType, status, defaultValue).' };
+          const r = await ads.updateConversionAction(s(a.customerId), s(a.conversionActionId), patch, login(a));
+          return {
+            ok: true,
+            updated: r.name,
+            applied: patch,
+            previous: r.previous,
+            note: 'To revert, call this tool again with the values from `previous`. Report BOTH the applied change and the previous values to the user.',
+          };
+        }),
+    },
+    {
+      name: 'set_google_ads_campaign_status',
+      description:
+        'Pause or re-enable a LIVE campaign. Pausing stops spend within minutes; the result returns the previous ' +
+        'status with a ready revert call. This is the safe response to "this campaign is burning money with zero ' +
+        'conversions" - but confirm intent first for awareness campaigns, where zero conversions can be by design.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          customerId: { type: 'string', description: 'Account that owns the campaign, bare digits.' },
+          campaignId: { type: 'string', description: 'Numeric campaign id (list_google_ads_campaigns).' },
+          status: { type: 'string', enum: ['ENABLED', 'PAUSED'] },
+          loginCustomerId: { type: 'string', description: 'Manager (MCC) id to act through, when reached via a manager.' },
+        },
+        required: ['customerId', 'campaignId', 'status'],
+        additionalProperties: false,
+      },
+      write: true,
+      destructive: true,
+      summarize: (a) => `${a.status === 'PAUSED' ? 'PAUSE' : 'ENABLE'} campaign ${s(a.campaignId)} in LIVE Google Ads account ${s(a.customerId)}. ${a.status === 'PAUSED' ? 'Spend stops within minutes' : 'Spend resumes within minutes'}`,
+      precheck: () => adsNotReady(ads),
+      handler: (a) =>
+        run(async () => {
+          const status = a.status === 'PAUSED' ? 'PAUSED' : 'ENABLED';
+          const r = await ads.setCampaignStatus(s(a.customerId), s(a.campaignId), status, login(a));
+          return {
+            ok: true,
+            campaign: r.name,
+            status: r.status,
+            previousStatus: r.previousStatus,
+            note: `Was ${r.previousStatus}, now ${r.status}. To revert, call this tool again with status=${r.previousStatus}.`,
+          };
+        }),
+    },
+    {
+      name: 'update_google_ads_campaign_budget',
+      description:
+        'Change a DAILY campaign budget (in MICROS of the account currency: 50 units = 50000000). The result returns ' +
+        'the previous amount with a ready revert call. WARNING the card states: a budget can be SHARED by several ' +
+        'campaigns (explicitlyShared) - changing it changes all of them; the result says whether this one is shared. ' +
+        'Get the budgetId from list_google_ads_campaigns.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          customerId: { type: 'string', description: 'Account that owns the budget, bare digits.' },
+          budgetId: { type: 'string', description: 'Numeric campaign budget id (list_google_ads_campaigns returns it per campaign).' },
+          amountMicros: { type: 'number', description: 'New DAILY amount in micros (1 unit = 1,000,000 micros).' },
+          loginCustomerId: { type: 'string', description: 'Manager (MCC) id to act through, when reached via a manager.' },
+        },
+        required: ['customerId', 'budgetId', 'amountMicros'],
+        additionalProperties: false,
+      },
+      write: true,
+      destructive: true,
+      summarize: (a) => `Set DAILY budget ${s(a.budgetId)} in LIVE Google Ads account ${s(a.customerId)} to ${String(a.amountMicros)} micros (${(Number(a.amountMicros) / 1_000_000).toFixed(2)} account-currency units). If the budget is shared, EVERY campaign using it changes`,
+      precheck: () => adsNotReady(ads),
+      handler: (a) =>
+        run(async () => {
+          const amount = Number(a.amountMicros);
+          if (!Number.isFinite(amount) || amount <= 0) return { ok: false, error: 'amountMicros must be a positive number of micros (1 unit = 1,000,000).' };
+          const r = await ads.updateCampaignBudget(s(a.customerId), s(a.budgetId), amount, login(a));
+          return {
+            ok: true,
+            previousAmountMicros: r.previousAmountMicros,
+            amountMicros: r.amountMicros,
+            explicitlyShared: r.explicitlyShared,
+            note:
+              `Was ${r.previousAmountMicros} micros/day, now ${r.amountMicros}. To revert, call this tool again with amountMicros=${r.previousAmountMicros}.` +
+              (r.explicitlyShared ? ' This budget is SHARED - every campaign using it just changed; say so.' : ''),
+          };
+        }),
+    },
+    {
+      name: 'add_google_ads_negative_keywords',
+      description:
+        'Add campaign-level NEGATIVE keywords to a LIVE campaign - the follow-through after ' +
+        'get_google_ads_structure view=search_terms shows queries spending with no conversions. Negatives take effect ' +
+        'within minutes and silently stop matching traffic, so list the exact terms in the approval. Removing a ' +
+        'negative later is a Google Ads UI action (no delete tool here) - say so when reporting.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          customerId: { type: 'string', description: 'Account that owns the campaign, bare digits.' },
+          campaignId: { type: 'string', description: 'Numeric campaign id.' },
+          keywords: {
+            type: 'array',
+            maxItems: 100,
+            items: {
+              type: 'object',
+              properties: {
+                text: { type: 'string' },
+                matchType: { type: 'string', enum: ['BROAD', 'PHRASE', 'EXACT'] },
+              },
+              required: ['text', 'matchType'],
+              additionalProperties: false,
+            },
+          },
+          loginCustomerId: { type: 'string', description: 'Manager (MCC) id to act through, when reached via a manager.' },
+        },
+        required: ['customerId', 'campaignId', 'keywords'],
+        additionalProperties: false,
+      },
+      write: true,
+      destructive: true,
+      summarize: (a) => {
+        const kws = Array.isArray(a.keywords) ? (a.keywords as Array<{ text?: string }>) : [];
+        const sample = kws.slice(0, 5).map((k) => `"${String(k.text ?? '')}"`).join(', ');
+        return `Add ${kws.length} NEGATIVE keyword(s) to campaign ${s(a.campaignId)} in LIVE account ${s(a.customerId)}: ${sample}${kws.length > 5 ? ` (+${kws.length - 5} more)` : ''}. Matching traffic stops within minutes`;
+      },
+      precheck: () => adsNotReady(ads),
+      handler: (a) =>
+        run(async () => {
+          const raw = Array.isArray(a.keywords) ? (a.keywords as Array<Record<string, unknown>>) : [];
+          const keywords = raw
+            .map((k) => ({ text: String(k.text ?? '').trim(), matchType: (k.matchType === 'PHRASE' || k.matchType === 'EXACT' ? k.matchType : 'BROAD') as 'BROAD' | 'PHRASE' | 'EXACT' }))
+            .filter((k) => k.text.length > 0);
+          if (keywords.length === 0) return { ok: false, error: 'No keywords supplied.' };
+          if (keywords.length > 100) return { ok: false, error: 'Max 100 negatives per call - split the batch.' };
+          const r = await ads.addNegativeKeywords(s(a.customerId), s(a.campaignId), keywords, login(a));
+          return {
+            ok: true,
+            campaign: r.campaignName,
+            added: r.added,
+            note: 'Negatives are live. Removing one later is done in the Google Ads UI (Campaign > Keywords > Negative keywords) - there is no removal tool here.',
+          };
+        }),
+    },
+    {
+      name: 'create_google_ads_user_list',
+      description:
+        'Create a CRM-based Customer Match user list (CONTACT_INFO: emails/phones) - the missing target when ' +
+        'upload_google_ads_customer_match has no list to add members to. LIVE account write. membershipLifeSpanDays ' +
+        'default 180 (max 540; 0 = unlimited is not offered). The new list starts EMPTY - follow with the upload tool.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          customerId: { type: 'string', description: 'Account to own the list, bare digits.' },
+          name: { type: 'string', description: 'List name as it should appear in Google Ads.' },
+          membershipLifeSpanDays: { type: 'number', description: 'How long members stay on the list (default 180, max 540).' },
+          loginCustomerId: { type: 'string', description: 'Manager (MCC) id to act through, when reached via a manager.' },
+        },
+        required: ['customerId', 'name'],
+        additionalProperties: false,
+      },
+      write: true,
+      destructive: true,
+      summarize: (a) => `Create Customer Match user list "${s(a.name)}" in LIVE Google Ads account ${s(a.customerId)}`,
+      precheck: () => adsNotReady(ads),
+      handler: (a) =>
+        run(async () => {
+          const name = s(a.name).trim();
+          if (!name) return { ok: false, error: 'The list needs a name.' };
+          const r = await ads.createUserList(s(a.customerId), name, typeof a.membershipLifeSpanDays === 'number' ? a.membershipLifeSpanDays : undefined, login(a));
+          return {
+            ok: true,
+            created: name,
+            userListId: r.id,
+            resourceName: r.resourceName,
+            note: 'The list exists and is EMPTY. Add members with upload_google_ads_customer_match (userListId above); sizes update hours after an upload runs.',
           };
         }),
     },
