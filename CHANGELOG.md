@@ -1,3 +1,9 @@
+## [1.398.6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.398.5...v1.398.6) (2026-07-23)
+
+### Bug Fixes
+
+* **desktop:** a failed cancel no longer strands the Stop button ([#685](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/685)) ([ff2d620](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/ff2d620540cddadde642c08a129418873977f1fd)), closes [#654](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/654)
+
 ## [1.398.5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.398.4...v1.398.5) (2026-07-23)
 
 ### Bug Fixes
