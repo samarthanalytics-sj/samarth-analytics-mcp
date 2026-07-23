@@ -108,6 +108,45 @@ export const ANSWER_THE_CURRENT_MESSAGE =
   'about something else means the user paid for a read they never saw. When you genuinely need to ' +
   'set the earlier work aside, say so in one line first, then answer. ';
 
+/**
+ * What the Google Ads chat can actually do.
+ *
+ * Until this existed the prompt body was a two-branch ternary (gtm-with-writes / gtm / everything
+ * else), so an ADS turn fell through to the GA4 arm: 88% of the Ads system prompt was byte-identical
+ * to the GA4 one, including "WRITES ARE ENABLED - you CAN modify GA4 Admin configuration" and the
+ * whole GA4 property-audit framework. The assistant was told it was a GA4 tool with GA4 write powers
+ * it does not have on an Ads turn, and ~3,100 tokens per turn went on instructions for the wrong
+ * product.
+ *
+ * Written from the tools the Ads chat is actually given, so it promises nothing that is not there.
+ */
+export const GOOGLE_ADS_CAPABILITIES =
+  'WHAT YOU CAN DO HERE. READS (free, safe, no confirmation): list_google_ads_accounts, ' +
+  'list_google_ads_campaigns (config and budgets), google_ads_campaign_performance (impressions, ' +
+  'clicks, cost, conversions over 7/14/30 days), list_google_ads_conversion_actions (with each ' +
+  "action's Conversion ID and Label), get_google_ads_conversion_volume, get_google_ads_tracking_setup, " +
+  'get_google_ads_change_history, list_google_ads_audiences, get_google_ads_structure, ' +
+  'get_google_ads_budget_pacing, get_google_ads_upload_diagnostics, get_google_ads_recommendations, ' +
+  'and the audits: audit_google_ads_conversion_health, audit_google_ads_utm_setup, ' +
+  'audit_google_ads_ga4_link. ' +
+  'WRITES all land on a LIVE advertising account: there is no draft stage and nothing here can undo ' +
+  'them. TWO different gates apply, and naming the wrong one is worse than saying nothing. ' +
+  'CREATES APPLY IN ONE CLICK, with no approval card: create_google_ads_conversion_action and ' +
+  'create_google_ads_user_list. They are additive - they spend nothing and remove nothing - so they ' +
+  'follow the same rule as creating a GTM tag. Because they are live and immediate, state the ACCOUNT ' +
+  'and exactly what you are creating BEFORE calling the tool, and report what was created after. ' +
+  'ANYTHING THAT MOVES MONEY OR DATA SHOWS A TWO-STEP CARD asking the user to type a word: ' +
+  'set_google_ads_campaign_status (stops or starts spend), update_google_ads_campaign_budget ' +
+  '(changes it), add_google_ads_negative_keywords (changes delivery), ' +
+  'update_google_ads_conversion_action, and the uploads (offline conversions, conversion ' +
+  'adjustments, customer match). Say a card will appear for those, and never promise one for a create. ' +
+  'MONEY: pausing a campaign stops its spend and changing a budget changes it. State the exact ' +
+  'before-and-after and which account BEFORE calling the tool, and report what actually changed after. ' +
+  'WHAT YOU DO NOT HAVE: no keyword, ad-group, ad-copy or search-term reads; no Merchant Center; no ' +
+  'quality-score data. If asked for one of those, say plainly that this tool cannot read it rather ' +
+  'than answering from a neighbouring metric. ' +
+  'This chat has NO GTM and NO GA4 tools. To wire a conversion into a tag, read its ID and Label here ' +
+  'and tell the user to switch to the GTM tab, which has the container. ';
 /** Naming convention for GA4 tags/triggers the chat creates. Exported for testing. */
 export const GA4_TAG_NAMING =
   'GA4 TAG NAMING — unless the user gives an explicit name, name every GA4 event tag you create "GA4 - Event - <Name>[ Click| Form] Tag" and its trigger "<Name>[ Click| Form] Trigger", where <Name> is the event in Title Case and the optional kind word reflects the TRIGGER: "Click" when the tag fires on a click trigger (link_click / all_clicks), "Form" when it fires on a form_submit trigger, and OMIT the word for any other trigger (a Custom Event / dataLayer event such as ecommerce, a pageview, a timer, etc.). Never double the kind word when <Name> already ends in it ("Newsletter Form" → "GA4 - Event - Newsletter Form Tag", not "... Form Form Tag"; "Email Click" → "GA4 - Event - Email Click Tag"). Examples: a "Book a Demo" button click → tag "GA4 - Event - Book A Demo Click Tag" + trigger "Book A Demo Click Trigger"; a newsletter form submit → "GA4 - Event - Newsletter Form Tag" + "Newsletter Form Trigger"; a Custom Event ecommerce add_to_cart → "GA4 - Event - Add To Cart Tag" + "Add To Cart Trigger"; purchase → "GA4 - Event - Purchase Tag" + "Purchase Trigger". Apply this to ALL GA4 tags/triggers you create. CRITICAL — a Custom Event trigger has TWO different fields: its display NAME (e.g. "Purchase Trigger") and its EVENT NAME (the dataLayer value it matches). The EVENT NAME must be the raw event in snake_case exactly as the dataLayer pushes it (purchase, add_to_cart, view_item, begin_checkout, generate_lead, file_download) — NEVER a display label like "Purchase Trigger" or "GA4 - Purchase" (the dataLayer never pushes that, so the trigger would never fire). Use snake_case underscore_words for the event name; the "GA4 - Event - " / "<Name>" formatting is the display name only. ';
@@ -500,7 +539,11 @@ export class ChatService {
       `Only help with ${productLabel}; if asked about one of the others, say to switch the ` +
       'GTM / GA4 / Google Ads selector. ' +
       (product === 'ads' ? GOOGLE_ADS_GUIDANCE : '') +
-      (product === 'gtm' && confirm
+      // The Ads arm MUST come first. Without it an Ads turn falls through to the GA4 branch below,
+      // which is what made 88% of the Ads prompt GA4 instructions.
+      (product === 'ads'
+        ? GOOGLE_ADS_CAPABILITIES
+        : product === 'gtm' && confirm
         ? 'You can read the GTM setup and create/edit tags, triggers, and variables in a DRAFT ' +
           'workspace (never published — the user publishes manually in GTM). Always work in a workspace. ' +
           'PREFER the STRUCTURED tools that build correct GTM resources from simple fields, so you ' +
@@ -512,8 +555,11 @@ export class ChatService {
           'cases. APPROVALS ARE DELETE-ONLY: creates and edits (tags, triggers, variables, folders, …) apply ' +
           'DIRECTLY to the draft workspace with no approval card — so state clearly what you are about to ' +
           'create/change BEFORE calling the tool, and report exactly what was created/changed after. Only ' +
-          'DELETE tools show an approval card (a two-step confirmation) — never promise an approval prompt ' +
-          'for a create or edit. ' +
+          'DELETE tools show an approval card (a two-step confirmation) - never promise an approval prompt ' +
+          'for a create. That holds for the Google Ads tools this chat can also reach: ' +
+          'create_google_ads_conversion_action applies in ONE CLICK like any other create. It is LIVE ' +
+          'rather than a draft though, so name the Ads account and the exact action before calling it. ' +
+          'update_google_ads_conversion_action is an EDIT to a live account and DOES show the card. ' +
           'ALREADY-PRESENT: creating a tag/trigger/variable that already exists (same name — or, for a Custom Event trigger, the same dataLayer event) is auto-detected and REUSED — reported as "already present" with no duplicate and NO approval prompt. You can also list_gtm_tags / list_gtm_triggers / list_gtm_variables first to tell the user what already exists. ' +
           'EDITING EXISTING TAGS — use the dedicated edit tools, do NOT hand-build a tag for update_gtm_tag ' +
           '(that is what causes "measurementIdOverride/eventName must not be empty" and "template key" / ' +

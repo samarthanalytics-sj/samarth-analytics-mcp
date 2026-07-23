@@ -285,14 +285,14 @@ async function main(): Promise<void> {
   {
     const fd = makeFakeData();
     const reg = buildToolRegistry(fd.data, decline, undefined, undefined, undefined, undefined, undefined, fd.ads);
-    // create_google_ads_conversion_action carries destructive:true despite the create_ prefix: it is
-    // the one write that lands on a LIVE Google Ads account with no draft stage and no undo, so it
-    // takes the same two-step card as a delete and must decline the same way.
-    // EVERY google_ads write carries destructive:true regardless of verb: they all land on the LIVE
-    // advertising account with no draft stage (uploads, campaign/budget/action updates, negatives,
-    // list creates). GTM writes stay auto-apply because a draft workspace absorbs them.
+    // Approval is for DELETES, and for the Google Ads writes that move money or push data. Google Ads
+    // CREATES are excluded deliberately (owner's rule, 2026-07-23): a create is additive - it spends
+    // nothing and removes nothing - so it applies in one click exactly like a GTM tag create, even
+    // though it lands live. GTM writes stay auto-apply because a draft workspace absorbs them.
     const isDestructive = (n: string) =>
-      n.startsWith('delete_') || n.startsWith('archive_') || (/google_ads/.test(n) && !n.includes('_ga4_'));
+      n.startsWith('delete_') ||
+      n.startsWith('archive_') ||
+      (/google_ads/.test(n) && !n.includes('_ga4_') && !n.startsWith('create_'));
     const destructiveNames = writeNames.filter(isDestructive);
     let destructiveDeclined = 0;
     let othersApplied = 0;
@@ -306,7 +306,9 @@ async function main(): Promise<void> {
       }
     }
     // No delete/archive should have reached the data layer (GTM deletes + GA4 delete/archive).
-    const destructiveCalls = fd.calls.filter((c) => /^delete|^ga4AdminDelete|^ga4AdminArchive|^ga4DeleteProperty|^ga4DeleteAccount|^createConversionAction/.test(c)).length;
+    // createConversionAction is no longer in this set: a create applies in one click by design, so
+    // seeing the call is the CORRECT outcome here, not a leak past a declined approval.
+    const destructiveCalls = fd.calls.filter((c) => /^delete|^ga4AdminDelete|^ga4AdminArchive|^ga4DeleteProperty|^ga4DeleteAccount/.test(c)).length;
     record(
       'declined confirm → every delete/archive declines (no destructive API call); creates/edits apply without approval',
       destructiveDeclined === destructiveNames.length && othersApplied === writeNames.length - destructiveNames.length && destructiveCalls === 0,

@@ -2481,7 +2481,7 @@ async function main(): Promise<void> {
     assert.ok(fa.calls.includes('listConversionActions:9876543210:'), 'a blank manager id is dropped, not sent');
   });
 
-  await test('create_google_ads_conversion_action is a LIVE write: hidden without confirm, gated like a delete', async () => {
+  await test('create_google_ads_conversion_action is a LIVE write: hidden without confirm, applied in ONE CLICK', async () => {
     // No confirm fn → not registered at all, and calling it cannot reach Google Ads.
     const ro = fakeAds();
     await assert.rejects(
@@ -2490,20 +2490,11 @@ async function main(): Promise<void> {
     );
     assert.equal(ro.calls.length, 0, 'nothing reached Google Ads');
 
-    // Approving only the FIRST card must not write: there is no draft stage on a live Ads account.
-    const once = seqConfirm(true, false);
-    const fa1 = fakeAds();
-    const declined = rec(JSON.parse(
-      await gtmWithAds(fa1.ads, once.fn).execute('create_google_ads_conversion_action', { customerId: '9876543210', name: 'Contact form', category: 'SUBMIT_LEAD_FORM' })
-    ));
-    assert.equal(declined.declined, true);
-    assert.equal(once.calls.length, 2, 'asked twice, exactly like a delete');
-    assert.equal((once.calls[0] as { requireTextConfirm?: string }).requireTextConfirm, undefined, 'first card is a plain approval');
-    assert.equal((once.calls[1] as { requireTextConfirm?: string }).requireTextConfirm, 'delete', 'the final card demands a typed confirmation');
-    assert.equal((once.calls[1] as { destructive?: boolean }).destructive, true, 'flagged destructive so it never auto-applies');
-    assert.equal(fa1.calls.some((c) => c.startsWith('createConversionAction')), false, 'declined → nothing created');
-
-    // Both confirms → dry run FIRST, then the write, and the new label comes back.
+    // CHANGED DELIBERATELY (owner's rule, 2026-07-23): approval is for DELETES. A create applies in
+    // one click, here as in GTM, because it is additive - it spends nothing and removes nothing.
+    // What is NOT relaxed: the tool is still write-gated, so with no confirm fn it is not even
+    // registered (asserted above). The trade accepted is that this create is LIVE with no draft
+    // stage, which is why the prompt requires the account and the exact action to be stated first.
     const twice = seqConfirm(true, true);
     const fa2 = fakeAds();
     const created = rec(JSON.parse(
