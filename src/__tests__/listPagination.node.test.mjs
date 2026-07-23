@@ -12,6 +12,13 @@
  * through `paginate`, or the endpoint genuinely cannot paginate and the source says so. The second
  * case is real - destinations.list accepts only `parent`, with no pageToken - and it has to be
  * expressible, or the honest answer would be indistinguishable from the bug.
+ *
+ * The receiver is NOT assumed to be named `client`. It was in the first version of this test, which
+ * silently skipped 6 of 20 call sites: audit.ts reaches the API through `ws`, serverSide.ts through
+ * `api`, and both were invisible to a guard that claimed to check everything. A coverage test that
+ * quietly under-counts is worse than none, because it converts an unknown into false confidence -
+ * so the match is now any receiver, and the count of inspected calls is asserted against the number
+ * actually present in the tree.
  */
 
 import assert from 'assert';
@@ -42,15 +49,42 @@ const unpaginated = [];
 for (const file of files) {
   const src = readFileSync(join(TOOLS_DIR, file), 'utf-8');
   const usesHelper = src.includes("from '../utils/pagination.js'");
-  // Every `.list(` on a googleapis client resource in this file.
-  const calls = [...src.matchAll(/client\.[A-Za-z0-9_.]*\.([A-Za-z0-9_]+)\.list\(/g)];
+  // Every `.list(` call, however it is written. Two things made the first version of this test
+  // under-count badly, and both are worth stating because a coverage test that silently misses
+  // things is worse than no test - it converts an unknown into false confidence:
+  //   1. It assumed the receiver was named `client`. audit.ts reaches the API through `ws` and
+  //      serverSide.ts through `api`, so 6 of 20 call sites were invisible.
+  //   2. It required an identifier IMMEDIATELY before `.list(`. Formatting splits long chains onto
+  //      their own lines, which is the exact shape the pagination fix produced, so those calls
+  //      matched nothing. The guard was blind to the very files it was written for.
+  // So: find `.list(` anywhere, then walk backwards over whitespace to the nearest identifier.
+  // Comments are stripped first: a prose mention like "these were single .list() calls" is not a
+  // call site, and matching one sends a future reader hunting for code that does not exist.
+  const code = src
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .split('\n')
+    // Drop the // tail of each line, but not the // inside a URL ("https://"). No `$` anchor: these
+    // files are CRLF, and `.` stops at the \r while `$` demands end-of-input, so an anchored
+    // pattern silently matches nothing on Windows checkouts.
+    .map((line) => line.replace(/(^|[^:])\/\/.*/, '$1'))
+    .join('\n');
+  const calls = [];
+  for (const m of code.matchAll(/\.list\(/g)) {
+    const head = code.slice(0, m.index).replace(/\s+$/, '');
+    const id = /([A-Za-z0-9_$]+)$/.exec(head);
+    if (id) calls.push({ index: m.index, 1: id[1] });
+  }
   for (const m of calls) {
     listCalls += 1;
     const resource = m[1];
     // Is this call inside a paginate(...) wrapper? The helper takes the fetch as its first arg, so
     // the call site sits within ~400 chars after a `paginate(`.
-    const before = src.slice(Math.max(0, m.index - 400), m.index);
-    const insidePaginate = /paginate\(\s*$|paginate\(\s*\n\s*\(token\)[^)]*$/.test(before) || /paginate\(/.test(before);
+    const before = code.slice(Math.max(0, m.index - 400), m.index);
+    // `paginate(` or `paginate<...>(`. Deliberately not trying to parse the type arguments: they
+    // nest (`paginate<Record<string, unknown>, unknown>(`), so a [^>]* pattern stops at the inner
+    // `>` and reports a correctly-paginated tool as a violation. Presence of the call within the
+    // window is the signal; the window is what bounds it.
+    const insidePaginate = /\bpaginate\s*[<(]/.test(before);
     if (usesHelper && insidePaginate) {
       paginated += 1;
     } else {
