@@ -76,7 +76,7 @@ import type { SeedCandidate } from '../../shared/memory-seed';
 import { resolveChatInput, slashMenuMatches, type SlashCommand } from '../../shared/chat-commands';
 import { extractReplyTables, shouldOfferExport } from '../../shared/chat-export';
 import { adsStatus, adsStatusLabel, adsUsable, adsNeedsConsent } from '../../shared/ads-status';
-import { ADS_ACCESS_DOCS, ADS_ACCESS_LEVELS, ADS_ACCESS_SUMMARY, ADS_TOKEN_INSTALL_STEPS, ADS_TOKEN_STEPS } from '../../shared/ads-onboarding';
+import { ADS_ACCESS_DOCS, ADS_ACCESS_LEVELS, ADS_ACCESS_SUMMARY, ADS_TOKEN_INSTALL_STEPS, ADS_TOKEN_STEPS, ADS_API_CENTER_PATH } from '../../shared/ads-onboarding';
 import { parseSuggestionEvidence, isProviderFormIdLabel, providerDisplayName } from '../../shared/suggestion-details';
 import { execSummaryHtml } from '../../shared/ga4-exec-html';
 import { stripDuplicateCharts } from '../../shared/ga4-visuals-html';
@@ -2355,10 +2355,16 @@ function AdsContextBar({
   const [loading, setLoading] = useState(false);
   const [query, setQuery] = useState('');
 
+  // Whether the app-level developer token is set on THIS computer. Readiness alone cannot say: it
+  // short-circuits on the first failure, so a "scope missing" status still needs the token fact to
+  // render the setup checklist honestly (the token being separate from consent is the #1 confusion).
+  const [hasToken, setHasToken] = useState<boolean | null>(null);
+
   // Status is checked on every mount and after a re-consent, never cached across accounts: a token
   // granted for one Google account says nothing about another.
   const checkStatus = useCallback(async (): Promise<AdsReadinessView> => {
     const r = active.hasGoogleToken ? await window.desktop.ads.status().catch(() => null) : null;
+    window.desktop.ads.hasDeveloperToken().then(setHasToken).catch(() => setHasToken(null));
     const s = adsStatus(r, active.hasGoogleToken);
     setStatus(s);
     return s;
@@ -2424,40 +2430,83 @@ function AdsContextBar({
     }
   }
 
-  // Not usable: show WHY and the one action that fixes it, instead of an account picker that cannot
-  // populate. Re-consent is offered only for a scope gap - it does not install a developer token.
+  // Not usable: show WHY and the action that fixes it, instead of an account picker that cannot
+  // populate. Two distinct requirements are involved and readiness reports only the FIRST failure,
+  // so the setup states render as a checklist covering BOTH: the app-level developer token (with
+  // where to find it in Google Ads and where to paste it here) and this account's Ads permission.
+  // Re-consent is offered only for a scope gap - it does not install a developer token.
   if (status && !adsUsable(status)) {
-    // A missing developer token is not a one-line problem: nothing works until it is obtained, and
-    // obtaining it is a multi-step process outside this app that people reliably get wrong in the
-    // same two ways (starting from a non-manager account, and stopping at Test access). So that one
-    // case gets the full guide inline, where the user actually hit it, instead of a link to Settings.
     const needsToken = status.state === 'no_developer_token';
+    const isSetupState = needsToken || status.state === 'no_scope';
+    const rowNum = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 18, height: 18, borderRadius: 9, background: 'var(--surface-3)', fontSize: 11, fontWeight: 700, flexShrink: 0, marginTop: 1 } as const;
     return (
       <div style={{ ...styles.ctxBarEdit, borderColor: 'var(--c-amber)', flexDirection: 'column', alignItems: 'stretch', gap: 0 }}>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <span style={{ ...styles.ctxMutedLabel, color: 'var(--c-amber)' }}>Google Ads</span>
           <span style={{ fontSize: 12.5, fontWeight: 600 }}>{adsStatusLabel(status)}</span>
-          <span style={{ fontSize: 12.5, color: 'var(--text-muted)', flex: 1, minWidth: 160 }}>
-            {needsToken ? 'Add a Google Ads developer token to use this tab. It takes a few minutes plus Google\'s review.' : `${status.message} ${status.remedy ?? ''}`}
-          </span>
-          {adsNeedsConsent(status) && (
-            <button
-              style={styles.ctxChangeBtn}
-              onClick={() => {
-                // Re-consent adds the adwords scope to the EXISTING grant (google.connectAds), so
-                // Tag Manager and Analytics access is untouched.
-                void window.desktop.google
-                  .connectAds()
-                  .then(async () => { await refresh(); await checkStatus(); })
-                  .catch((e: unknown) => onError(e instanceof Error ? e.message : String(e)));
-              }}
-            >
-              Connect Google Ads
-            </button>
+          {!isSetupState && (
+            <span style={{ fontSize: 12.5, color: 'var(--text-muted)', flex: 1, minWidth: 160 }}>
+              {status.message} {status.remedy ?? ''}
+            </span>
+          )}
+          {isSetupState && (
+            <span style={{ fontSize: 12.5, color: 'var(--text-muted)', flex: 1, minWidth: 160 }}>
+              Google Ads needs TWO things - a developer token (once per computer) and this account's permission. Both are checked below.
+            </span>
           )}
           <button style={styles.ctxChangeBtn} onClick={() => void checkStatus()}>↻ Recheck</button>
         </div>
-        {needsToken && <AdsTokenGuide />}
+
+        {isSetupState && (
+          <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {/* Requirement 1: the developer token (app-wide, one per computer). */}
+            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+              <span style={rowNum}>1</span>
+              <span style={{ fontSize: 12.5, lineHeight: 1.5, flex: 1 }}>
+                <b>Developer token</b>{' '}
+                <span style={{ fontWeight: 600, color: hasToken ? 'var(--c-green)' : 'var(--c-amber)' }}>
+                  {hasToken === null ? '' : hasToken ? '· added on this computer' : '· missing'}
+                </span>
+                <div style={{ color: 'var(--text-muted)', marginTop: 2 }}>
+                  One token per computer, shared by every account in this app.{' '}
+                  <b>Where to find it:</b> sign in to your Google Ads <b>Manager (MCC)</b> account and open <b>{ADS_API_CENTER_PATH}</b> - the token is on that page, next to its access level (you need at least Basic; Test cannot read real accounts).{' '}
+                  <b>Where to add it:</b> <b>Settings &gt; Providers &gt; Google Ads</b> - paste it into the Dev token field and save. The full walkthrough is below.
+                </div>
+              </span>
+            </div>
+
+            {/* Requirement 2: this Google account's Ads permission (per sign-in). */}
+            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+              <span style={rowNum}>2</span>
+              <span style={{ fontSize: 12.5, lineHeight: 1.5, flex: 1 }}>
+                <b>Google Ads permission for {active.email}</b>{' '}
+                <span style={{ fontWeight: 600, color: 'var(--c-amber)' }}>
+                  {status.state === 'no_scope' ? '· not granted' : '· checked once the token is added'}
+                </span>
+                <div style={{ color: 'var(--text-muted)', marginTop: 2 }}>
+                  The token is app-level, but reading an Ads account is granted per Google sign-in. Connect Google Ads re-consents this account with the Ads scope added; your Tag Manager and Analytics access is unaffected.
+                </div>
+                {adsNeedsConsent(status) && (
+                  <button
+                    style={{ ...styles.ctxChangeBtn, marginTop: 6 }}
+                    onClick={() => {
+                      // Re-consent adds the adwords scope to the EXISTING grant (google.connectAds), so
+                      // Tag Manager and Analytics access is untouched.
+                      void window.desktop.google
+                        .connectAds()
+                        .then(async () => { await refresh(); await checkStatus(); })
+                        .catch((e: unknown) => onError(e instanceof Error ? e.message : String(e)));
+                    }}
+                  >
+                    Connect Google Ads
+                  </button>
+                )}
+              </span>
+            </div>
+
+            <AdsTokenGuide />
+          </div>
+        )}
       </div>
     );
   }
