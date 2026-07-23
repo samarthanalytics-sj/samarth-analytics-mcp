@@ -67,6 +67,10 @@ export const GAQL: {
   conversionActions: string;
   campaigns: string;
   campaignPerformance: (range: PerfRange) => string;
+  changeEvents: (startDate: string, endDate: string, limit: number) => string;
+  conversionVolume: (range: PerfRange) => string;
+  utmCustomer: string;
+  utmCampaigns: string;
 } = {
   // The MCC hierarchy walk. `level <= 1` means "this account plus its direct children": going
   // deeper returns the whole sub-tree of every manager under a large MCC, which is thousands of
@@ -125,7 +129,40 @@ export const GAQL: {
   campaignPerformance: (range: PerfRange): string =>
     'SELECT campaign.id, campaign.name, campaign.status, metrics.impressions, metrics.clicks, metrics.cost_micros, metrics.conversions, metrics.conversions_value, metrics.all_conversions ' +
     `FROM campaign WHERE campaign.status != 'REMOVED' AND ${perfDateClause(range).clause}`,
+
+  // "Who changed what, right before the drop". change_event HARD-REQUIRES a finite date predicate on
+  // change_date_time AND a LIMIT, and only covers the LAST 30 DAYS - all three constraints are
+  // enforced HERE (clamped dates arrive from the service, the limit is clamped below) so a caller
+  // can never assemble the query the API rejects. The end date gets 23:59:59 appended because
+  // change_date_time is a DATETIME: a bare end date would exclude everything after midnight of that
+  // day, silently dropping the most recent (most interesting) changes.
+  changeEvents: (startDate: string, endDate: string, limit: number): string =>
+    'SELECT change_event.change_date_time, change_event.user_email, change_event.client_type, change_event.change_resource_type, change_event.resource_change_operation, change_event.changed_fields, change_event.change_resource_name, campaign.name ' +
+    `FROM change_event WHERE change_event.change_date_time >= '${startDate}' AND change_event.change_date_time <= '${endDate} 23:59:59' ` +
+    `ORDER BY change_event.change_date_time DESC LIMIT ${clampChangeLimit(limit)}`,
+
+  // Conversions per ACTION per DAY. Segmenting by conversion_action means a row exists only where at
+  // least one conversion was recorded - an enabled action with NO row over the range is the "tag may
+  // be dead" signal (or simply no ads ran; the caller must say which it cannot distinguish).
+  conversionVolume: (range: PerfRange): string =>
+    'SELECT segments.date, segments.conversion_action, segments.conversion_action_name, metrics.all_conversions ' +
+    `FROM campaign WHERE ${perfDateClause(range).clause}`,
+
+  // UTM plumbing, account level: auto-tagging + the account-wide tracking template / suffix.
+  utmCustomer:
+    'SELECT customer.id, customer.auto_tagging_enabled, customer.tracking_url_template, customer.final_url_suffix FROM customer',
+
+  // UTM plumbing, campaign level: per-campaign template/suffix overrides. Ad-level templates exist
+  // too but are deliberately NOT read here (thousands of rows on a big account); the audit says so.
+  utmCampaigns:
+    "SELECT campaign.id, campaign.name, campaign.status, campaign.tracking_url_template, campaign.final_url_suffix FROM campaign WHERE campaign.status = 'ENABLED'",
 };
+
+/** change_event refuses LIMIT-less queries and caps at 10000; default is a readable page. */
+export function clampChangeLimit(limit: number): number {
+  const n = Number.isFinite(limit) ? Math.floor(limit) : 200;
+  return Math.min(10_000, Math.max(1, n > 0 ? n : 200));
+}
 
 /** A performance window: either a trailing `days` count, or an explicit inclusive date range. */
 export interface PerfRange {

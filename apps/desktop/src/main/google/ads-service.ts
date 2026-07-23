@@ -20,6 +20,7 @@ import {
   normalizeCustomerId,
   searchStreamUrl,
   perfDateClause,
+  isYmdDate,
   type PerfRange,
   type CreateConversionActionInput,
 } from './ads-rest';
@@ -28,13 +29,22 @@ import {
   mapCampaign,
   mapCampaignPerformance,
   mapConversionAction,
+  mapChangeEvent,
+  mapUtmCustomer,
+  mapUtmCampaign,
+  auditUtmFindings,
+  summarizeConversionVolume,
   resolveConversionCustomer,
   sumCampaignPerformance,
   type AdsAccount,
   type AdsCampaign,
   type AdsCampaignPerformance,
+  type AdsChangeEvent,
   type AdsConversionAction,
   type ConversionCustomer,
+  type ConversionVolumeSummary,
+  type UtmSetup,
+  type UtmFinding,
 } from './ads-map';
 import { adsErrorInfo, isAdsScopeGap, type AdsErrorInfo } from './ads-errors';
 import { hasAdsScope } from './oauth';
@@ -231,6 +241,52 @@ export class GoogleAdsService {
     const { label, custom } = perfDateClause(range);
     const rows = await this.search(customerId, GAQL.campaignPerformance(range), loginCustomerId);
     return { windowLabel: label, custom, campaigns: sumCampaignPerformance(rows.map(mapCampaignPerformance)) };
+  }
+
+  /** Change history: who changed what, when, from which surface. The API only serves the LAST 30
+   *  DAYS and hard-requires a finite date filter + LIMIT; the range is clamped here so a caller can
+   *  ask for anything and still get a legal query. Dates are computed at CALL time (not in the pure
+   *  layer) so ads-rest stays clock-free and testable from literals. */
+  async changeHistory(
+    customerId: string,
+    opts: { startDate?: string; endDate?: string; limit?: number } = {},
+    loginCustomerId?: string,
+  ): Promise<{ startDate: string; endDate: string; events: AdsChangeEvent[] }> {
+    const ymd = (d: Date): string => d.toISOString().slice(0, 10);
+    const today = new Date();
+    const floor = new Date(today.getTime() - 29 * 86_400_000); // API cap: last 30 days incl. today
+    const defStart = new Date(today.getTime() - 13 * 86_400_000);
+    let start = isYmdDate(opts.startDate) ? opts.startDate : ymd(defStart);
+    let end = isYmdDate(opts.endDate) ? opts.endDate : ymd(today);
+    if (start < ymd(floor)) start = ymd(floor);
+    if (end > ymd(today)) end = ymd(today);
+    if (start > end) start = end;
+    const rows = await this.search(customerId, GAQL.changeEvents(start, end, opts.limit ?? 200), loginCustomerId);
+    return { startDate: start, endDate: end, events: rows.map(mapChangeEvent) };
+  }
+
+  /** Conversions per action over a window, summarized busiest-first. Rows only exist where at least
+   *  one conversion was recorded, so an enabled action MISSING from the list is the signal. */
+  async conversionVolume(
+    customerId: string,
+    range: PerfRange = {},
+    loginCustomerId?: string,
+  ): Promise<{ windowLabel: string; custom: boolean; volume: ConversionVolumeSummary[] }> {
+    const { label, custom } = perfDateClause(range);
+    const rows = await this.search(customerId, GAQL.conversionVolume(range), loginCustomerId);
+    return { windowLabel: label, custom, volume: summarizeConversionVolume(rows) };
+  }
+
+  /** Account + campaign UTM plumbing (auto-tagging, tracking templates, final URL suffixes) plus the
+   *  deterministic findings. Ad-level templates are deliberately not read (see GAQL.utmCampaigns). */
+  async utmSetup(
+    customerId: string,
+    loginCustomerId?: string,
+  ): Promise<{ setup: UtmSetup; findings: UtmFinding[] }> {
+    const customerRows = await this.search(customerId, GAQL.utmCustomer, loginCustomerId);
+    const campaignRows = await this.search(customerId, GAQL.utmCampaigns, loginCustomerId);
+    const setup: UtmSetup = { ...mapUtmCustomer(customerRows[0] ?? {}), campaigns: campaignRows.map(mapUtmCampaign) };
+    return { setup, findings: auditUtmFindings(setup) };
   }
 
   /** Validate a create WITHOUT executing it, so the review UI can surface a name collision or a bad

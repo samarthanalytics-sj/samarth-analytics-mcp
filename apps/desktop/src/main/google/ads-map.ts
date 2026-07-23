@@ -586,3 +586,215 @@ export function sumCampaignPerformance(rows: AdsCampaignPerformance[]): AdsCampa
   }
   return [...byId.values()].sort((a, b) => b.costMicros - a.costMicros);
 }
+
+// ── change history (Phase B) ─────────────────────────────────────────────────────────────
+
+export interface AdsChangeEvent {
+  /** 'YYYY-MM-DD HH:mm:ss' as the API reports it (account timezone). */
+  at: string;
+  /** Who made the change - an email, or Google automation. */
+  user: string;
+  /** GOOGLE_ADS_WEB_CLIENT / GOOGLE_ADS_API / GOOGLE_ADS_SCRIPTS ... - the surface it came from. */
+  clientType: string;
+  /** What KIND of resource changed (CAMPAIGN, CAMPAIGN_BUDGET, CONVERSION_ACTION, AD_GROUP, ...). */
+  resourceType: string;
+  /** CREATE / UPDATE / REMOVE. */
+  operation: string;
+  /** The exact fields touched (from the API field mask), e.g. ['status', 'cpc_bid_micros']. */
+  changedFields: string[];
+  resourceName: string;
+  /** The campaign the change belongs to, when the API attributes one. */
+  campaignName?: string;
+}
+
+/** One change_event row → the app DTO. changed_fields is a protobuf FieldMask: REST encodes it as
+ *  {paths:[...]} or as a comma-joined string depending on the transcoder - both are accepted. */
+export function mapChangeEvent(row: unknown): AdsChangeEvent {
+  const ev = asRecord(get(row, 'changeEvent')) ?? asRecord(row) ?? {};
+  const mask = get(ev, 'changedFields');
+  const changedFields = Array.isArray((mask as { paths?: unknown[] } | null)?.paths)
+    ? (mask as { paths: unknown[] }).paths.map((p) => str(p)).filter((p): p is string => p !== null)
+    : typeof mask === 'string'
+      ? mask.split(',').map((x) => x.trim()).filter(Boolean)
+      : [];
+  const campaignName = str(get(asRecord(get(row, 'campaign')), 'name'));
+  return {
+    at: str(get(ev, 'changeDateTime')) ?? '',
+    user: str(get(ev, 'userEmail')) ?? 'unknown',
+    clientType: (str(get(ev, 'clientType')) ?? 'UNKNOWN').toUpperCase(),
+    resourceType: (str(get(ev, 'changeResourceType')) ?? 'UNKNOWN').toUpperCase(),
+    operation: (str(get(ev, 'resourceChangeOperation')) ?? 'UNKNOWN').toUpperCase(),
+    changedFields,
+    resourceName: str(get(ev, 'changeResourceName')) ?? '',
+    ...(campaignName ? { campaignName } : {}),
+  };
+}
+
+// ── conversion volume (Phase B) ──────────────────────────────────────────────────────────
+
+export interface ConversionVolumeSummary {
+  /** Numeric conversion-action id (from segments.conversion_action's resource name). */
+  actionId: string;
+  name: string;
+  total: number;
+  /** First / last day WITH at least one conversion inside the queried range. */
+  firstDate: string;
+  lastDate: string;
+  /** How many distinct days recorded at least one conversion. */
+  activeDays: number;
+}
+
+/** Collapse per-action-per-day rows into one summary per action, busiest first. A row only exists
+ *  where a conversion was recorded, so absence from this list over the range IS the signal. */
+export function summarizeConversionVolume(rows: unknown[]): ConversionVolumeSummary[] {
+  const byId = new Map<string, ConversionVolumeSummary>();
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const seg = asRecord(get(row, 'segments')) ?? {};
+    const m = asRecord(get(row, 'metrics')) ?? {};
+    const resource = str(get(seg, 'conversionAction')) ?? '';
+    const actionId = /conversionActions\/(\d+)/.exec(resource)?.[1] ?? (resource || 'unknown');
+    const date = str(get(seg, 'date')) ?? '';
+    const nRaw = get(m, 'allConversions');
+    const n = typeof nRaw === 'number' ? nRaw : typeof nRaw === 'string' ? Number(nRaw) : 0;
+    const count = Number.isFinite(n) ? n : 0;
+    const prev = byId.get(actionId);
+    if (!prev) {
+      byId.set(actionId, {
+        actionId,
+        name: str(get(seg, 'conversionActionName')) ?? actionId,
+        total: count,
+        firstDate: count > 0 ? date : '',
+        lastDate: count > 0 ? date : '',
+        activeDays: count > 0 ? 1 : 0,
+      });
+      continue;
+    }
+    prev.total += count;
+    if (count > 0) {
+      prev.activeDays += 1;
+      if (date && (prev.firstDate === '' || date < prev.firstDate)) prev.firstDate = date;
+      if (date && date > prev.lastDate) prev.lastDate = date;
+    }
+  }
+  return [...byId.values()].sort((a, b) => b.total - a.total);
+}
+
+/** ENABLED actions that recorded NOTHING over the range - the "tag may be dead" list. The caller
+ *  must present it honestly: zero can also mean no ads ran, which this data cannot distinguish. */
+export function silentConversionActions(
+  actions: AdsConversionAction[],
+  volume: ConversionVolumeSummary[],
+): Array<{ id: string; name: string; type: string }> {
+  const seen = new Set(volume.filter((v) => v.total > 0).map((v) => v.actionId));
+  return actions
+    .filter((a) => a.status === 'ENABLED' && !seen.has(a.id))
+    .map((a) => ({ id: a.id, name: a.name, type: a.type }));
+}
+
+// ── UTM setup audit (Phase B) ────────────────────────────────────────────────────────────
+
+export interface UtmCampaignRow {
+  id: string;
+  name: string;
+  trackingUrlTemplate: string | null;
+  finalUrlSuffix: string | null;
+}
+
+export interface UtmSetup {
+  autoTaggingEnabled?: boolean;
+  trackingUrlTemplate: string | null;
+  finalUrlSuffix: string | null;
+  campaigns: UtmCampaignRow[];
+}
+
+/** customer row → the account-level half of UtmSetup. */
+export function mapUtmCustomer(row: unknown): Omit<UtmSetup, 'campaigns'> {
+  const c = asRecord(get(row, 'customer')) ?? asRecord(row) ?? {};
+  const autoTaggingEnabled = optionalBool(get(c, 'autoTaggingEnabled'));
+  return {
+    ...(autoTaggingEnabled === undefined ? {} : { autoTaggingEnabled }),
+    trackingUrlTemplate: str(get(c, 'trackingUrlTemplate')),
+    finalUrlSuffix: str(get(c, 'finalUrlSuffix')),
+  };
+}
+
+/** campaign row → the per-campaign template/suffix. */
+export function mapUtmCampaign(row: unknown): UtmCampaignRow {
+  const c = asRecord(get(row, 'campaign')) ?? asRecord(row) ?? {};
+  return {
+    id: digits(get(c, 'id')) ?? '',
+    name: str(get(c, 'name')) ?? '',
+    trackingUrlTemplate: str(get(c, 'trackingUrlTemplate')),
+    finalUrlSuffix: str(get(c, 'finalUrlSuffix')),
+  };
+}
+
+export interface UtmFinding {
+  severity: 'critical' | 'warning' | 'info';
+  finding: string;
+}
+
+const hasUtm = (s: string | null): boolean => /utm_/i.test(s ?? '');
+const UTM_LIST_CAP = 5;
+const utmNameList = (rows: UtmCampaignRow[]): string =>
+  rows.slice(0, UTM_LIST_CAP).map((c) => `"${c.name}"`).join(', ') + (rows.length > UTM_LIST_CAP ? ` (+${rows.length - UTM_LIST_CAP} more)` : '');
+
+/**
+ * Deterministic UTM findings from account + campaign tagging config vs auto-tagging. Conservative by
+ * design: every rule is provable from the config alone - anything needing landing-page or GA4
+ * evidence is out of scope here and belongs to the runtime checks.
+ */
+export function auditUtmFindings(setup: UtmSetup): UtmFinding[] {
+  const out: UtmFinding[] = [];
+  const templates = [
+    { where: 'account', tpl: setup.trackingUrlTemplate, suffix: setup.finalUrlSuffix },
+    ...setup.campaigns.map((c) => ({ where: `campaign "${c.name}"`, tpl: c.trackingUrlTemplate, suffix: c.finalUrlSuffix })),
+  ];
+  const anyManualUtm = templates.some((t) => hasUtm(t.tpl) || hasUtm(t.suffix));
+
+  if (setup.autoTaggingEnabled === false && !anyManualUtm) {
+    out.push({
+      severity: 'critical',
+      finding:
+        'Auto-tagging is OFF and no tracking template or final URL suffix carries utm_ parameters anywhere - ad clicks arrive with NO gclid and NO UTMs, so this traffic lands in untagged/direct buckets in GA4. Enable auto-tagging (recommended) or add utm_source/utm_medium/utm_campaign via a tracking template.',
+    });
+  }
+  if (setup.autoTaggingEnabled === false && anyManualUtm) {
+    for (const t of templates) {
+      const joined = `${t.tpl ?? ''} ${t.suffix ?? ''}`;
+      if (!/utm_/i.test(joined)) continue;
+      const missing = ['utm_source', 'utm_medium', 'utm_campaign'].filter((k) => !joined.toLowerCase().includes(k));
+      if (missing.length) {
+        out.push({
+          severity: 'warning',
+          finding: `Manual UTM tagging on the ${t.where} is missing ${missing.join(' + ')} - results without them cannot be tied to a campaign and land in partially-tagged buckets.`,
+        });
+      }
+    }
+  }
+  // A template that never re-emits the landing page URL sends the click into the void: GTM/GA4 never
+  // load. {lpurl} variants ({lpurl}, {unescapedlpurl}, {escapedlpurl+2} ...) all contain "lpurl".
+  const broken = setup.campaigns.filter((c) => c.trackingUrlTemplate && !/lpurl/i.test(c.trackingUrlTemplate));
+  if (broken.length) {
+    out.push({
+      severity: 'critical',
+      finding: `${broken.length} campaign tracking template(s) do not contain an {lpurl} landing-page insert (${utmNameList(broken)}) - clicks are billed but may never reach the landing page with its parameters intact.`,
+    });
+  }
+  if (setup.trackingUrlTemplate && !/lpurl/i.test(setup.trackingUrlTemplate)) {
+    out.push({
+      severity: 'critical',
+      finding: 'The ACCOUNT-level tracking template does not contain an {lpurl} landing-page insert - it applies to every campaign without its own template.',
+    });
+  }
+  if (setup.autoTaggingEnabled === true && templates.some((t) => /gclid=/i.test(`${t.tpl ?? ''} ${t.suffix ?? ''}`))) {
+    out.push({
+      severity: 'warning',
+      finding: 'Auto-tagging is ON but a tracking template/suffix also sets gclid= manually - the two can conflict; remove the manual gclid.',
+    });
+  }
+  if (setup.autoTaggingEnabled === true && out.length === 0 && !anyManualUtm) {
+    out.push({ severity: 'info', finding: 'Auto-tagging is ON with no manual templates - clicks carry a gclid and GA4 attributes them automatically. Nothing to fix at account/campaign level.' });
+  }
+  return out;
+}
