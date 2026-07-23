@@ -1,3 +1,9 @@
+## [1.398.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.397.0...v1.398.0) (2026-07-23)
+
+### Features
+
+* **desktop:** optional per-account Google Ads developer token ([#678](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/678)) ([ba7bf69](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/ba7bf69151b4c22578d10611f1938a8915897ead))
+
 ## [1.397.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.396.0...v1.397.0) (2026-07-23)
 
 ### Features
