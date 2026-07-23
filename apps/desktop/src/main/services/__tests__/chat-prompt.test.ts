@@ -238,4 +238,23 @@ test('house style: no em dashes', () => {
   assert.equal(/[—–]/.test(ANSWER_THE_CURRENT_MESSAGE), false);
 });
 
+
+// Reported from a second real session: the user typed "list the tags", list_gtm_tags succeeded, and
+// the reply was "I've listed all 82 tags in JSON export format" - with no list in it. The model was
+// pointing at an EARLIER message. The user then had to ask a third time.
+test('it forbids CLAIMING to have listed something that is not in this message', () => {
+  assert.match(ANSWER_THE_CURRENT_MESSAGE, /NEVER SAY YOU HAVE LISTED/i);
+  assert.match(ANSWER_THE_CURRENT_MESSAGE, /UNLESS IT IS IN THIS MESSAGE/i);
+});
+
+test('it says an earlier reply does not satisfy a repeated request', () => {
+  // The reason matters: a repeat means they want it AGAIN, not a pointer to where it was.
+  assert.match(ANSWER_THE_CURRENT_MESSAGE, /earlier reply does not count/i);
+  assert.match(ANSWER_THE_CURRENT_MESSAGE, /produce it again in full/i);
+});
+
+test('it ties counts to visible items, so "82 tags" cannot be asserted over nothing', () => {
+  assert.match(ANSWER_THE_CURRENT_MESSAGE, /give a number only when the items you counted are in front of the user/i);
+});
+
 if (failed > 0) process.exit(1);
