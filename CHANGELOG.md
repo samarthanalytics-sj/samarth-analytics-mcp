@@ -1,3 +1,9 @@
+## [1.391.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.390.0...v1.391.0) (2026-07-23)
+
+### Features
+
+* **desktop:** Google Ads phases D+E - uploads behind the strongest gate, audiences, structure reads ([89019ba](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/89019ba1db5cd321d47b5857ceb34df5431ca361))
+
 ## [1.390.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.389.0...v1.390.0) (2026-07-23)
 
 ### Features
