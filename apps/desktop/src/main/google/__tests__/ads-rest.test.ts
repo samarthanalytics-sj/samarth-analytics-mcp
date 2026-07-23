@@ -25,6 +25,13 @@ import {
   buildCustomerMatchOpsBody,
   STRUCTURE_GAQL,
   USER_LISTS_GAQL,
+  buildCampaignStatusBody,
+  buildCampaignBudgetBody,
+  buildConversionActionUpdateBody,
+  buildNegativeKeywordsBody,
+  buildUserListCreateBody,
+  campaignByIdGaql,
+  budgetByIdGaql,
 } from '../ads-rest';
 
 let passed = 0;
@@ -345,6 +352,25 @@ const createOf = (body: Record<string, unknown>): Record<string, unknown> => {
   check('structure landing_pages: unexpanded url + conversions', STRUCTURE_GAQL.landing_pages({}).includes('landing_page_view.unexpanded_final_url'));
   check('structure ads: strength + final urls, removed excluded', STRUCTURE_GAQL.ads({}).includes('ad_group_ad.ad_strength') && STRUCTURE_GAQL.ads({}).includes("!= 'REMOVED'"));
   check('user lists: sizes + membership + match rate', ['size_for_display', 'size_for_search', 'membership_status', 'match_rate_percentage'].every((f) => USER_LISTS_GAQL.includes(f)));
+}
+
+// ── Phase F: reversible writes (status, budget, action patch, negatives, list create) ──
+{
+  const st = buildCampaignStatusBody('customers/1/campaigns/7', 'PAUSED', true);
+  check('campaign status: masked to status only, validateOnly honoured', JSON.stringify(st).includes('"updateMask":"status"') && JSON.stringify(st).includes('"status":"PAUSED"') && (st as { validateOnly?: boolean }).validateOnly === true && (st as { partialFailure?: boolean }).partialFailure === false);
+  const bg = buildCampaignBudgetBody('customers/1/campaignBudgets/9', 50_000_000.4, false);
+  check('budget: amount rounded to integer micros, masked to amountMicros', JSON.stringify(bg).includes('"amountMicros":50000000') && JSON.stringify(bg).includes('"updateMask":"amountMicros"'));
+  const patch = buildConversionActionUpdateBody('customers/1/conversionActions/55', { primaryForGoal: false, defaultValue: 25, defaultCurrencyCode: 'inr' }, false);
+  const pj = JSON.stringify(patch);
+  check('action patch: mask covers EXACTLY the supplied fields', pj.includes('"updateMask":"primaryForGoal,valueSettings.defaultValue,valueSettings.defaultCurrencyCode"'));
+  check('action patch: secondary + value set, currency upper-cased, nothing else touched', pj.includes('"primaryForGoal":false') && pj.includes('"defaultValue":25') && pj.includes('"INR"') && !pj.includes('countingType') && !pj.includes('"status"'));
+  const negs = buildNegativeKeywordsBody('customers/1/campaigns/7', [{ text: ' free stuff ', matchType: 'PHRASE' }], false);
+  const nj = JSON.stringify(negs);
+  check('negatives: negative=true criteria on the campaign, text trimmed', nj.includes('"negative":true') && nj.includes('"text":"free stuff"') && nj.includes('"matchType":"PHRASE"') && nj.includes('customers/1/campaigns/7'));
+  const ul = buildUserListCreateBody('Newsletter leads', 720, false);
+  check('user list: CRM CONTACT_INFO list, lifespan capped at 540', JSON.stringify(ul).includes('CONTACT_INFO') && JSON.stringify(ul).includes('"membershipLifeSpan":540'));
+  check('user list: default lifespan 180', JSON.stringify(buildUserListCreateBody('X', undefined, false)).includes('"membershipLifeSpan":180'));
+  check('by-id lookups embed the bare id', campaignByIdGaql('7-7').includes('campaign.id = 77') && budgetByIdGaql('9').includes('campaign_budget.id = 9'));
 }
 
 console.log(`\ndesktop ads-rest: ${passed} passed, ${failed} failed`);

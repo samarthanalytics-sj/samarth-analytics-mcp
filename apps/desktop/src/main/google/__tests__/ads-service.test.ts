@@ -344,6 +344,50 @@ async function main(): Promise<void> {
     check('customer match: member plaintext never on the wire', !JSON.stringify(calls[1].data).includes('a@b.com'));
   }
 
+  // ── Phase F: reversible writes - previous value read FIRST, dry-run before the real mutate ──
+  {
+    const { s, calls } = svc([
+      { match: 'campaign.id = 7', reply: [{ results: [{ campaign: { id: '7', name: 'Brand', status: 'ENABLED' }, campaignBudget: { id: '9', amountMicros: '10000000' } }] }] },
+      { match: 'campaigns:mutate', reply: { results: [{}] } },
+    ]);
+    const r = await s.setCampaignStatus('1111111111', '7', 'PAUSED');
+    check('campaign status: previous captured, name returned', r.previousStatus === 'ENABLED' && r.status === 'PAUSED' && r.name === 'Brand');
+    const mutates = calls.filter((c) => c.url.includes('campaigns:mutate'));
+    check('campaign status: dry-run FIRST then real (validateOnly true→false)', mutates.length === 2
+      && JSON.stringify(mutates[0].data).includes('"validateOnly":true') && JSON.stringify(mutates[1].data).includes('"validateOnly":false'));
+  }
+  {
+    const { s } = svc([
+      { match: 'campaign_budget.id = 9', reply: [{ results: [{ campaignBudget: { id: '9', amountMicros: '10000000', explicitlyShared: true } }] }] },
+      { match: 'campaignBudgets:mutate', reply: { results: [{}] } },
+    ]);
+    const r = await s.updateCampaignBudget('1111111111', '9', 25_000_000);
+    check('budget: previous amount + shared flag surfaced', r.previousAmountMicros === 10_000_000 && r.amountMicros === 25_000_000 && r.explicitlyShared === true);
+  }
+  {
+    const { s, calls } = svc([
+      { match: 'conversion_action.id = 55', reply: [{ results: [{ conversionAction: { resourceName: 'customers/1111111111/conversionActions/55', id: '55', name: 'Lead', status: 'ENABLED', type: 'WEBPAGE', category: 'SUBMIT_LEAD_FORM', primaryForGoal: true, tagSnippets: [] } }] }] },
+      { match: 'conversionActions:mutate', reply: { results: [{}] } },
+    ]);
+    const r = await s.updateConversionAction('1111111111', '55', { primaryForGoal: false });
+    check('action update: previous primaryForGoal captured for the revert', r.previous.primaryForGoal === true && r.name === 'Lead');
+    const wire = JSON.stringify(calls.filter((c) => c.url.includes('conversionActions:mutate'))[1]?.data ?? {});
+    check('action update: mask limited to primaryForGoal', wire.includes('"updateMask":"primaryForGoal"') && wire.includes('"primaryForGoal":false'));
+  }
+  {
+    const { s, calls } = svc([
+      { match: 'campaign.id = 7', reply: [{ results: [{ campaign: { id: '7', name: 'Brand', status: 'ENABLED' } }] }] },
+      { match: 'campaignCriteria:mutate', reply: { results: [{}] } },
+    ]);
+    const r = await s.addNegativeKeywords('1111111111', '7', [{ text: 'free stuff', matchType: 'EXACT' }]);
+    check('negatives: campaign named, count returned, criteria mutate hit twice (dry-run + real)', r.campaignName === 'Brand' && r.added === 1 && calls.filter((c) => c.url.includes('campaignCriteria:mutate')).length === 2);
+  }
+  {
+    const { s } = svc([{ match: 'userLists:mutate', reply: { results: [{ resourceName: 'customers/1111111111/userLists/321' }] } }]);
+    const r = await s.createUserList('1111111111', 'Newsletter', undefined);
+    check('user list create: id parsed from the resource name', r.id === '321' && r.resourceName.endsWith('/321'));
+  }
+
   // ── Phase A: a custom date range reaches the WIRE as BETWEEN, and the label reports it ──
   {
     const { s, calls } = svc([{ match: 'FROM campaign', reply: [{ results: [] }] }]);
