@@ -1,3 +1,9 @@
+## [1.390.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.389.0...v1.390.0) (2026-07-23)
+
+### Features
+
+* **desktop:** Google Ads phase C - conversion-health composite + Ads-GA4 seam audit ([6ae7b07](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/6ae7b0767793faef20dd827c28d2a3625d95bb6a))
+
 ## [1.389.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.388.1...v1.389.0) (2026-07-23)
 
 ### Features
