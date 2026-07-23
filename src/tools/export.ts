@@ -8,6 +8,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { GtmClient } from '../utils/gtmClient.js';
+import { paginate } from '../utils/pagination.js';
 import { jsonResult, errorResult } from '../utils/toolResponse.js';
 
 export function registerExportTools(server: McpServer, getClient: () => GtmClient): void {
@@ -37,28 +38,41 @@ export function registerExportTools(server: McpServer, getClient: () => GtmClien
         const client = getClient();
         const parent = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`;
 
-        // Fetch everything in parallel
-        const [tagsRes, triggersRes, variablesRes, foldersRes, bivRes, wsRes] = await Promise.all([
-          client.accounts.containers.workspaces.tags.list({ parent }),
-          client.accounts.containers.workspaces.triggers.list({ parent }),
-          client.accounts.containers.workspaces.variables.list({ parent }),
-          client.accounts.containers.workspaces.folders.list({ parent }),
-          client.accounts.containers.workspaces.built_in_variables.list({ parent }),
+        // Fetch everything in parallel, each one PAGINATED. These were single .list() calls, which
+        // is a worse bug here than in a list tool: this output is named an export, so it gets used
+        // as a backup or a migration source, and a silently short one loses entities that nobody
+        // will miss until they are needed.
+        const [tagsP, triggersP, variablesP, foldersP, bivP, wsRes] = await Promise.all([
+          paginate((t) => client.accounts.containers.workspaces.tags.list({ parent, pageToken: t }).then((r) => r.data), (d) => d.tag),
+          paginate((t) => client.accounts.containers.workspaces.triggers.list({ parent, pageToken: t }).then((r) => r.data), (d) => d.trigger),
+          paginate((t) => client.accounts.containers.workspaces.variables.list({ parent, pageToken: t }).then((r) => r.data), (d) => d.variable),
+          paginate((t) => client.accounts.containers.workspaces.folders.list({ parent, pageToken: t }).then((r) => r.data), (d) => d.folder),
+          paginate((t) => client.accounts.containers.workspaces.built_in_variables.list({ parent, pageToken: t }).then((r) => r.data), (d) => d.builtInVariable),
           client.accounts.containers.workspaces.get({ path: parent }),
         ]);
 
-        const tags = tagsRes.data.tag ?? [];
-        const triggers = triggersRes.data.trigger ?? [];
-        const variables = variablesRes.data.variable ?? [];
-        const folders = foldersRes.data.folder ?? [];
-        const builtInVariables = bivRes.data.builtInVariable ?? [];
+        const tags = tagsP.items;
+        const triggers = triggersP.items;
+        const variables = variablesP.items;
+        const folders = foldersP.items;
+        const builtInVariables = bivP.items;
         const workspace = wsRes.data;
+        // If even the 50-page ceiling was not enough, the export is INCOMPLETE and must say so on
+        // the artifact itself. A caller who stores this file will not re-read the tool response.
+        const short = [
+          ['tags', tagsP], ['triggers', triggersP], ['variables', variablesP],
+          ['folders', foldersP], ['builtInVariables', bivP],
+        ].filter(([, r]) => (r as { truncated: boolean }).truncated).map(([k]) => k as string);
+        const incomplete = short.length
+          ? { incomplete: true, truncatedCollections: short, warning: `This export is INCOMPLETE: ${short.join(', ')} hit the page ceiling, so entities are missing. Do not use it as a backup.` }
+          : {};
 
         let exportData: unknown;
 
         if (format === 'full') {
           exportData = {
             exportedAt: new Date().toISOString(),
+            ...incomplete,
             workspace,
             tags,
             triggers,

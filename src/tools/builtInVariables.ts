@@ -7,6 +7,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { GtmClient } from '../utils/gtmClient.js';
 import { checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
+import { paginate, paginationFields, buildListResult } from '../utils/pagination.js';
 import { jsonResult, textResult, errorResult } from '../utils/toolResponse.js';
 import { workspaceScope as wsBase } from '../utils/schemas.js';
 
@@ -37,16 +38,25 @@ export function registerBuiltInVariableTools(server: McpServer, getClient: () =>
     'built_in_variables_list',
     {
       description: 'List all currently enabled built-in variables in a GTM workspace.',
-      inputSchema: wsBase,
+      inputSchema: wsBase.extend(paginationFields),
     },
-    async ({ accountId, containerId, workspaceId }) => {
+    async ({ accountId, containerId, workspaceId, pageToken, maxPages }) => {
       try {
         const client = getClient();
-        const res = await client.accounts.containers.workspaces.built_in_variables.list({
-          parent: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`,
-        });
-        const builtInVariables = res.data.builtInVariable ?? [];
-        return jsonResult({ builtInVariables, count: builtInVariables.length });
+        // GTM enables built-ins one per row, and a mature web container turns on dozens, so this
+        // list is longer than "built-in" suggests. The endpoint takes a pageToken.
+        const result = await paginate(
+          (token) =>
+            client.accounts.containers.workspaces.built_in_variables
+              .list({
+                parent: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`,
+                pageToken: token,
+              })
+              .then((r) => r.data),
+          (data) => data.builtInVariable,
+          { pageToken, maxPages }
+        );
+        return jsonResult(buildListResult('builtInVariables', result));
       } catch (err) {
         return errorResult('built_in_variables_list', err);
       }
