@@ -1,6 +1,6 @@
 {
   "name": "samarth-gtm-mcp",
-  "version": "1.391.0",
+  "version": "1.392.0",
   "description": "Production-ready MCP server for Google Tag Manager API v2 — Samarth Analytics",
   "type": "module",
   "bin": {

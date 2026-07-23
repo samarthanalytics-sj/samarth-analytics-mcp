@@ -1,3 +1,9 @@
+## [1.392.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.391.0...v1.392.0) (2026-07-23)
+
+### Features
+
+* **ga4:** per-finding one-click fix AND how-to-fix docs in the GA4 audit ([#669](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/669)) ([dcdc3c5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/dcdc3c59b0c2c424c241e83da25ad72d684be46c))
+
 ## [1.391.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.390.0...v1.391.0) (2026-07-23)
 
 ### Features
