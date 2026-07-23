@@ -1,3 +1,9 @@
+## [1.393.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.392.0...v1.393.0) (2026-07-23)
+
+### Features
+
+* **desktop:** Google Ads phase F1 - reversible account writes behind the gate ([69cd3dd](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/69cd3ddd590951dec45a0aa5a838c8b2edb81e7a))
+
 ## [1.392.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.391.0...v1.392.0) (2026-07-23)
 
 ### Features
