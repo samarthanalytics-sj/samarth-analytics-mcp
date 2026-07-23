@@ -1,3 +1,9 @@
+## [1.398.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.398.2...v1.398.3) (2026-07-23)
+
+### Bug Fixes
+
+* **mcp:** the pagination guard was blind to most of what it claimed to check ([#682](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/682)) ([2063095](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/2063095b28ace3f3861089aa3301247abcf2d267)), closes [#681](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/681)
+
 ## [1.398.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.398.1...v1.398.2) (2026-07-23)
 
 ### Bug Fixes
