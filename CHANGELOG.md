@@ -1,3 +1,9 @@
+## [1.399.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.399.1...v1.399.2) (2026-07-23)
+
+### Bug Fixes
+
+* **desktop:** the GTM chat gets Google Ads READS only ([#689](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/689)) ([adbea73](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/adbea733794315fd447e6a92833f176c66078c77))
+
 ## [1.399.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.399.0...v1.399.1) (2026-07-23)
 
 ### Bug Fixes
