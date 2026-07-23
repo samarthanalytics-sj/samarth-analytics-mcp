@@ -1,3 +1,9 @@
+## [1.398.5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.398.4...v1.398.5) (2026-07-23)
+
+### Bug Fixes
+
+* **mcp:** HTTP transport refuses to start unauthenticated, and binds loopback ([#684](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/684)) ([36866d9](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/36866d9dbbd9f236a06da027ff64cf6b84055cfb))
+
 ## [1.398.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.398.3...v1.398.4) (2026-07-23)
 
 ### Bug Fixes
