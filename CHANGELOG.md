@@ -1,3 +1,9 @@
+## [1.396.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.395.2...v1.396.0) (2026-07-23)
+
+### Features
+
+* **desktop:** notify when a long tag-suggestion scan finishes ([#672](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/672)) ([8a46a4f](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/8a46a4f43d0abe3f9a7e43b6d29d53a2e17c36e1))
+
 ## [1.395.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.395.1...v1.395.2) (2026-07-23)
 
 ### Bug Fixes
