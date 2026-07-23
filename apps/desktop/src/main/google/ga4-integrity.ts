@@ -14,6 +14,9 @@ const fnum = (n: number): string => Math.round(n).toLocaleString('en-US');
 /* ── Per-event deltas ── */
 
 export interface Ga4EventDeltaInput {
+  /** Set when the comparison could not cover every event (the report hit its row cap). Stated so a
+   *  short findings list is not mistaken for a clean property. */
+  note?: string;
   /** eventName → count this window and the prior equal window. */
   events: Array<{ name: string; count: number; priorCount: number }>;
   /** The property's KEY EVENT names — a key event dropping to 0 is unambiguously serious (high); a
