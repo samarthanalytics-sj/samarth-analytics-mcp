@@ -7,6 +7,7 @@
 // snapshot cannot read are SAID to be unread, not guessed; clean states appear as `ok` rows so the
 // user sees what was verified, not only what is broken.
 
+import { severityFor } from '../../shared/ga4-check-severity';
 import type { Ga4PropertySnapshot } from './ga4-audit';
 
 export interface Ga4PlanItem {
@@ -37,12 +38,12 @@ export function buildGa4Plan(s: Ga4PropertySnapshot): Ga4Plan {
   if (s.dataRetention === null) {
     push({ id: 'retention', category: 'info', status: 'issue', name: 'Data retention (unread)', description: 'Retention settings could not be read - nothing to apply.', requires: [], defaultSelected: false, executable: false });
   } else if (s.dataRetention.eventDataRetention === 'TWO_MONTHS') {
-    push({ id: 'retention_14', category: 'high', status: 'issue', name: 'Extend data retention 2 → 14 months', description: 'Event data currently expires after 2 months (the default), capping every explore/comparison window. 14 months is the free maximum.', requires: [], defaultSelected: true, executable: true });
+    push({ id: 'retention_14', category: severityFor('retention_two_months', 'medium'), status: 'issue', name: 'Extend data retention 2 → 14 months', description: 'Event data currently expires after 2 months (the default), capping every explore/comparison window. 14 months is the free maximum.', requires: [], defaultSelected: true, executable: true });
   } else {
     push({ id: 'retention', category: 'info', status: 'ok', name: `Data retention: ${s.dataRetention.eventDataRetention}`, description: 'Already beyond the 2-month default.', requires: [], defaultSelected: false, executable: false });
   }
   if (s.dataRetention && !s.dataRetention.resetOnNewActivity) {
-    push({ id: 'retention_reset', category: 'low', status: 'issue', name: 'Reset retention on new activity', description: 'Returning users currently age out even while active - enable reset-on-new-activity so active users keep their history.', requires: [], defaultSelected: true, executable: true });
+    push({ id: 'retention_reset', category: severityFor('retention_no_reset', 'low'), status: 'issue', name: 'Reset retention on new activity', description: 'Returning users currently age out even while active - enable reset-on-new-activity so active users keep their history.', requires: [], defaultSelected: true, executable: true });
   }
 
   // ── Enhanced measurement per WEB stream ──
@@ -75,7 +76,7 @@ export function buildGa4Plan(s: Ga4PropertySnapshot): Ga4Plan {
   // ── Attribution ──
   if (s.attribution) {
     if (s.attribution.reportingAttributionModel !== 'PAID_AND_ORGANIC_CHANNELS_DATA_DRIVEN') {
-      push({ id: 'attribution_data_driven', category: 'medium', status: 'issue', name: 'Switch attribution to data-driven', description: `Currently ${s.attribution.reportingAttributionModel}. Data-driven attribution is Google's recommended model - NOTE: changing it re-states historical conversion credit in reports, so select this deliberately.`, requires: [], defaultSelected: false, executable: true });
+      push({ id: 'attribution_data_driven', category: severityFor('attribution_last_click', 'low'), status: 'issue', name: 'Switch attribution to data-driven', description: `Currently ${s.attribution.reportingAttributionModel}. Data-driven attribution is Google's recommended model - NOTE: changing it re-states historical conversion credit in reports, so select this deliberately.`, requires: [], defaultSelected: false, executable: true });
     } else {
       push({ id: 'attribution', category: 'info', status: 'ok', name: 'Attribution: data-driven', description: 'Already on the recommended model.', requires: [], defaultSelected: false, executable: false });
     }
@@ -88,7 +89,7 @@ export function buildGa4Plan(s: Ga4PropertySnapshot): Ga4Plan {
 
   // ── Key events (needs a human choice of WHICH events - advisory only) ──
   if (s.keyEvents !== null && s.keyEvents.length === 0) {
-    push({ id: 'key_events', category: 'high', status: 'issue', name: 'No key events (conversions) marked', description: 'Nothing is marked as a conversion, so Ads bidding and conversion reports are empty. Pick the real conversion events (e.g. purchase, generate_lead) - the chat can mark them (create_ga4_key_event).', requires: [], defaultSelected: false, executable: false });
+    push({ id: 'key_events', category: severityFor('no_key_events', 'medium'), status: 'issue', name: 'No key events (conversions) marked', description: 'Nothing is marked as a conversion, so Ads bidding and conversion reports are empty. Pick the real conversion events (e.g. purchase, generate_lead) - the chat can mark them (create_ga4_key_event).', requires: [], defaultSelected: false, executable: false });
   }
 
   return {
