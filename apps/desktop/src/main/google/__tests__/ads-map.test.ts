@@ -12,6 +12,10 @@ import {
   buildAccountTree,
   resolveConversionCustomer,
   conversionSetupWarnings,
+  mapChangeEvent,
+  summarizeConversionVolume,
+  silentConversionActions,
+  auditUtmFindings,
   type AdsConversionAction,
 } from '../ads-map';
 
@@ -419,6 +423,55 @@ const remember = (note: string | undefined): void => { if (note) notes.push(note
   check('warnings: always-use-default WITH a real value does not fire', conversionSetupWarnings([
     act({ name: 'Valued', alwaysUseDefaultValue: true, defaultValue: 25 }),
   ]).length === 0);
+}
+
+// ── Phase B: change events, conversion volume, UTM findings ──
+{
+  const ev = mapChangeEvent({
+    changeEvent: {
+      changeDateTime: '2026-07-20 14:03:22', userEmail: 'ops@acme.com', clientType: 'GOOGLE_ADS_WEB_CLIENT',
+      changeResourceType: 'CAMPAIGN_BUDGET', resourceChangeOperation: 'UPDATE',
+      changedFields: { paths: ['amount_micros', 'status'] }, changeResourceName: 'customers/1/campaignBudgets/9',
+    },
+    campaign: { name: 'Brand - Search' },
+  });
+  check('change event: who/what/when mapped', ev.at === '2026-07-20 14:03:22' && ev.user === 'ops@acme.com' && ev.resourceType === 'CAMPAIGN_BUDGET' && ev.operation === 'UPDATE' && ev.campaignName === 'Brand - Search');
+  check('change event: FieldMask paths → changedFields', JSON.stringify(ev.changedFields) === JSON.stringify(['amount_micros', 'status']));
+  check('change event: comma-string mask + snake_case row also parse', (() => {
+    const e = mapChangeEvent({ change_event: { change_date_time: 'x', changed_fields: 'status, name', resource_change_operation: 'create' } });
+    return JSON.stringify(e.changedFields) === JSON.stringify(['status', 'name']) && e.operation === 'CREATE';
+  })());
+
+  const volRows = [
+    { segments: { date: '2026-07-19', conversionAction: 'customers/1/conversionActions/55', conversionActionName: 'Lead' }, metrics: { allConversions: '3' } },
+    { segments: { date: '2026-07-20', conversionAction: 'customers/1/conversionActions/55', conversionActionName: 'Lead' }, metrics: { allConversions: 2 } },
+    { segments: { date: '2026-07-20', conversionAction: 'customers/1/conversionActions/77', conversionActionName: 'Purchase' }, metrics: { allConversions: 1 } },
+  ];
+  const vol = summarizeConversionVolume(volRows);
+  check('volume: summed per action, busiest first', vol[0]?.actionId === '55' && vol[0]?.total === 5 && vol[1]?.total === 1);
+  check('volume: first/last active day + activeDays', vol[0]?.firstDate === '2026-07-19' && vol[0]?.lastDate === '2026-07-20' && vol[0]?.activeDays === 2);
+  const act = (id: string, name: string, status = 'ENABLED'): AdsConversionAction => ({
+    resourceName: `customers/1/conversionActions/${id}`, id, name, status, type: 'WEBPAGE', category: 'SUBMIT_LEAD_FORM',
+    conversionId: null, conversionLabel: null, taggable: false,
+  });
+  const silent = silentConversionActions([act('55', 'Lead'), act('88', 'Dead form'), act('99', 'Paused one', 'PAUSED')], vol);
+  check('silent actions: enabled + zero volume only (paused excluded, active excluded)', silent.length === 1 && silent[0].id === '88');
+
+  const noTagging = auditUtmFindings({ autoTaggingEnabled: false, trackingUrlTemplate: null, finalUrlSuffix: null, campaigns: [] });
+  check('utm: auto-tagging off + no manual utm → critical', noTagging.some((f) => f.severity === 'critical' && f.finding.includes('NO gclid and NO UTMs')));
+  const partial = auditUtmFindings({
+    autoTaggingEnabled: false, trackingUrlTemplate: '{lpurl}?utm_source=google&utm_medium=cpc', finalUrlSuffix: null, campaigns: [],
+  });
+  check('utm: manual utm missing utm_campaign → warning naming the gap', partial.some((f) => f.severity === 'warning' && f.finding.includes('utm_campaign')));
+  const noLpurl = auditUtmFindings({
+    autoTaggingEnabled: true, trackingUrlTemplate: null, finalUrlSuffix: null,
+    campaigns: [{ id: '1', name: 'Broken', trackingUrlTemplate: 'https://track.example.com/?x=1', finalUrlSuffix: null }],
+  });
+  check('utm: campaign template without lpurl → critical naming the campaign', noLpurl.some((f) => f.severity === 'critical' && f.finding.includes('"Broken"') && f.finding.includes('{lpurl}')));
+  const clean = auditUtmFindings({ autoTaggingEnabled: true, trackingUrlTemplate: null, finalUrlSuffix: null, campaigns: [] });
+  check('utm: auto-tagging on + nothing manual → single info, no alarms', clean.length === 1 && clean[0].severity === 'info');
+  const manualGclid = auditUtmFindings({ autoTaggingEnabled: true, trackingUrlTemplate: '{lpurl}?gclid={gclid}', finalUrlSuffix: null, campaigns: [] });
+  check('utm: manual gclid with auto-tagging on → conflict warning', manualGclid.some((f) => f.severity === 'warning' && f.finding.includes('gclid')));
 }
 
 console.log(`\nads-map: ${passed} passed, ${failed} failed`);

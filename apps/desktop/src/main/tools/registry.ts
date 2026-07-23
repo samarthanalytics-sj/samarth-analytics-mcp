@@ -1,7 +1,7 @@
 import type { GoogleDataService } from '../google/data-service';
 import { AdsError, type GoogleAdsService } from '../google/ads-service';
 import { CONVERSION_CATEGORIES } from '../google/ads-rest';
-import { conversionSetupWarnings } from '../google/ads-map';
+import { conversionSetupWarnings, silentConversionActions } from '../google/ads-map';
 import type { LlmToolDef, ToolExecutor } from '../llm/types';
 import type { GoogleProduct, GtmContext } from '../../shared/ipc';
 import type { AuditHistoryStore } from '../storage/audit-history';
@@ -630,6 +630,129 @@ function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean): Too
             ...(conversionCustomer.isCrossAccount && conversionCustomer.conversionCustomerId
               ? { note: `Conversion tracking for this account is owned by manager ${conversionCustomer.conversionCustomerId}, so these actions are shared with its other client accounts. Editing one affects all of them.` }
               : {}),
+          };
+        }),
+    },
+    {
+      name: 'get_google_ads_change_history',
+      description:
+        'WHO changed WHAT in the Google Ads account, newest first: timestamp, user email, the surface it came from ' +
+        '(web UI / API / scripts), resource type (campaign, budget, conversion action, ...), operation and the exact ' +
+        'fields touched. THE tool for "what changed right before the drop" - correlate the change dates against the ' +
+        'performance/volume window. Read-only. LIMIT: the API only serves the LAST 30 DAYS; asking for older dates ' +
+        'silently clamps to that floor, so say so if the user wanted more. Optional startDate/endDate (YYYY-MM-DD, ' +
+        'default last 14 days) and limit (default 200, max 10000).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          customerId: { type: 'string', description: 'Google Ads account id, bare digits (strip the dashes).' },
+          startDate: { type: 'string', description: 'YYYY-MM-DD; clamped to the API\'s 30-day floor.' },
+          endDate: { type: 'string', description: 'YYYY-MM-DD; defaults to today.' },
+          limit: { type: 'number', description: 'Max events (default 200, hard cap 10000).' },
+          loginCustomerId: { type: 'string', description: 'Manager (MCC) id to act through, when reached via a manager.' },
+        },
+        required: ['customerId'],
+        additionalProperties: false,
+      },
+      handler: (a) =>
+        run(async () => {
+          const r = await ads.changeHistory(
+            s(a.customerId),
+            {
+              ...(s(a.startDate).trim() ? { startDate: s(a.startDate).trim() } : {}),
+              ...(s(a.endDate).trim() ? { endDate: s(a.endDate).trim() } : {}),
+              ...(typeof a.limit === 'number' ? { limit: a.limit } : {}),
+            },
+            login(a),
+          );
+          return {
+            ok: true,
+            range: `${r.startDate} to ${r.endDate}`,
+            count: r.events.length,
+            events: r.events,
+            note:
+              'Timestamps are in the ACCOUNT\'s timezone. The API serves only the last 30 days of history - a quiet ' +
+              'result for older dates means out-of-window, not "nothing happened". clientType tells you the surface: ' +
+              'GOOGLE_ADS_WEB_CLIENT is a human in the UI, GOOGLE_ADS_API is software (including this app).',
+          };
+        }),
+    },
+    {
+      name: 'get_google_ads_conversion_volume',
+      description:
+        'Conversions per conversion ACTION over a window (default last 30 days; or startDate/endDate YYYY-MM-DD), plus ' +
+        'silentActions: ENABLED actions that recorded NOTHING in the window - the "is this tag dead?" signal from the ' +
+        'Ads side, to cross-check against the GTM container (does the tag still exist / fire?). Read-only. HONESTY: a ' +
+        'silent action can also mean no ads ran or no budget - this data cannot distinguish a dead tag from a paused ' +
+        'account, so present silentActions as "needs a look", never as "broken".',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          customerId: { type: 'string', description: 'Google Ads account id, bare digits (strip the dashes).' },
+          days: { type: 'number', description: 'Trailing window: 7, 14 or 30 (default 30). Ignored when startDate+endDate are given.' },
+          startDate: { type: 'string', description: 'Custom range start, YYYY-MM-DD (inclusive). Requires endDate.' },
+          endDate: { type: 'string', description: 'Custom range end, YYYY-MM-DD (inclusive).' },
+          loginCustomerId: { type: 'string', description: 'Manager (MCC) id to act through, when reached via a manager.' },
+        },
+        required: ['customerId'],
+        additionalProperties: false,
+      },
+      handler: (a) =>
+        run(async () => {
+          const range = {
+            ...(typeof a.days === 'number' ? { days: a.days } : {}),
+            ...(s(a.startDate).trim() ? { startDate: s(a.startDate).trim() } : {}),
+            ...(s(a.endDate).trim() ? { endDate: s(a.endDate).trim() } : {}),
+          };
+          const [vol, list] = await Promise.all([
+            ads.conversionVolume(s(a.customerId), range, login(a)),
+            ads.listConversionActions(s(a.customerId), login(a)),
+          ]);
+          const silent = silentConversionActions(list.actions, vol.volume);
+          return {
+            ok: true,
+            window: vol.windowLabel,
+            volume: vol.volume,
+            ...(silent.length ? { silentActions: silent } : {}),
+            note:
+              'Counts are all_conversions (primary + secondary) attributed to ads. silentActions recorded ZERO in this ' +
+              'window: cross-check each against the GTM container before calling anything broken - and remember zero ' +
+              'also happens when no ads served. lastDate shows when an action last recorded a conversion inside the window.',
+          };
+        }),
+    },
+    {
+      name: 'audit_google_ads_utm_setup',
+      description:
+        'Audit the account\'s click-tagging plumbing: auto-tagging vs tracking templates and final URL suffixes at ' +
+        'ACCOUNT and CAMPAIGN level, with deterministic findings (no gclid AND no UTMs; manual UTMs missing ' +
+        'utm_campaign; templates without an {lpurl} landing-page insert; manual gclid conflicting with auto-tagging). ' +
+        'Broken click-tagging is the root of most "GA4 attribution is wrong / everything is direct" tickets. ' +
+        'Read-only. Ad-level templates are NOT read (too many rows) - say so when reporting.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          customerId: { type: 'string', description: 'Google Ads account id, bare digits (strip the dashes).' },
+          loginCustomerId: { type: 'string', description: 'Manager (MCC) id to act through, when reached via a manager.' },
+        },
+        required: ['customerId'],
+        additionalProperties: false,
+      },
+      handler: (a) =>
+        run(async () => {
+          const { setup, findings } = await ads.utmSetup(s(a.customerId), login(a));
+          return {
+            ok: true,
+            autoTaggingEnabled: setup.autoTaggingEnabled ?? null,
+            account: { trackingUrlTemplate: setup.trackingUrlTemplate, finalUrlSuffix: setup.finalUrlSuffix },
+            // Only campaigns that OVERRIDE something are listed - a campaign with neither template nor
+            // suffix inherits the account level and would just be noise here.
+            campaignOverrides: setup.campaigns.filter((c) => c.trackingUrlTemplate || c.finalUrlSuffix),
+            findings,
+            note:
+              'Findings are provable from the CONFIG alone. Ad-level tracking templates were not read; if campaign and ' +
+              'account levels are clean but attribution still breaks, check ad-level templates and the landing pages ' +
+              'themselves (redirects that strip query parameters).',
           };
         }),
     },

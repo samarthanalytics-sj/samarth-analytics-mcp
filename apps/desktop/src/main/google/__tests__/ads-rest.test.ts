@@ -15,6 +15,7 @@ import {
   CONVERSION_CATEGORIES,
   isYmdDate,
   perfDateClause,
+  clampChangeLimit,
 } from '../ads-rest';
 
 let passed = 0;
@@ -276,6 +277,23 @@ const createOf = (body: Record<string, unknown>): Record<string, unknown> => {
   check('perfDateClause: no range → clamped trailing window with the honest label', perfDateClause({ days: 10 }).clause.includes('DURING LAST_7_DAYS') && perfDateClause({}).label === 'last 30 days, excluding today');
   check('campaignPerformance embeds the BETWEEN clause for a custom range', GAQL.campaignPerformance({ startDate: '2026-04-01', endDate: '2026-06-30' }).includes("BETWEEN '2026-04-01' AND '2026-06-30'"));
   check('campaignPerformance still uses DURING for a days window', GAQL.campaignPerformance({ days: 14 }).includes('DURING LAST_14_DAYS'));
+}
+
+// ── Phase B: change history, conversion volume, UTM setup ──
+{
+  const ce = GAQL.changeEvents('2026-07-10', '2026-07-22', 500);
+  check('changeEvents: selects the who/what/when set', ['change_event.change_date_time', 'change_event.user_email', 'change_event.client_type', 'change_event.change_resource_type', 'change_event.resource_change_operation', 'change_event.changed_fields', 'change_event.change_resource_name'].every((f) => ce.includes(f)));
+  check('changeEvents: finite date predicate on BOTH ends', ce.includes(">= '2026-07-10'") && ce.includes("<= '2026-07-22 23:59:59'"));
+  check('changeEvents: end-of-day suffix keeps the newest changes (datetime field)', ce.includes('23:59:59'));
+  check('changeEvents: ordered newest first WITH a LIMIT', ce.includes('ORDER BY change_event.change_date_time DESC') && ce.endsWith('LIMIT 500'));
+  check('clampChangeLimit: nonsense (NaN/0/negative) → default 200, cap 10000', clampChangeLimit(NaN) === 200 && clampChangeLimit(0) === 200 && clampChangeLimit(-5) === 200 && clampChangeLimit(99999) === 10000 && clampChangeLimit(50) === 50);
+
+  const cv = GAQL.conversionVolume({ startDate: '2026-07-01', endDate: '2026-07-21' });
+  check('conversionVolume: segments by date + action with all_conversions', ['segments.date', 'segments.conversion_action', 'segments.conversion_action_name', 'metrics.all_conversions'].every((f) => cv.includes(f)));
+  check('conversionVolume: reuses the perf date clause (BETWEEN here)', cv.includes("BETWEEN '2026-07-01' AND '2026-07-21'"));
+
+  check('utmCustomer: auto-tagging + account template/suffix', ['customer.auto_tagging_enabled', 'customer.tracking_url_template', 'customer.final_url_suffix'].every((f) => GAQL.utmCustomer.includes(f)));
+  check('utmCampaigns: per-campaign template/suffix, ENABLED only', GAQL.utmCampaigns.includes('campaign.tracking_url_template') && GAQL.utmCampaigns.includes("campaign.status = 'ENABLED'"));
 }
 
 console.log(`\ndesktop ads-rest: ${passed} passed, ${failed} failed`);

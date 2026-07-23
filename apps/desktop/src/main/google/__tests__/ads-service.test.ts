@@ -295,6 +295,32 @@ async function main(): Promise<void> {
     check('no em dashes in the readiness messages', !/[—–]/.test(`${r.reason?.message} ${r.reason?.remedy}`));
   }
 
+  // ── Phase B: change history clamps to the API's 30-day floor; volume + utm plumb through ──
+  {
+    const { s, calls } = svc([{ match: 'FROM change_event', reply: [{ results: [] }] }]);
+    const r = await s.changeHistory('1111111111', { startDate: '2020-01-01', limit: 50 });
+    const query = String((calls[0]?.data as { query?: string } | undefined)?.query ?? '');
+    check('change history: an ancient startDate is clamped INTO the 30-day window', r.startDate >= new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10));
+    check('change history: the clamped range + LIMIT reach the wire', query.includes(`>= '${r.startDate}'`) && query.includes('LIMIT 50'));
+  }
+  {
+    const { s, calls } = svc([{ match: 'segments.conversion_action', reply: [{ results: [
+      { segments: { date: '2026-07-20', conversionAction: 'customers/1/conversionActions/55', conversionActionName: 'Lead' }, metrics: { allConversions: '4' } },
+    ] }] }]);
+    const r = await s.conversionVolume('1111111111', { days: 14 });
+    const query = String((calls[0]?.data as { query?: string } | undefined)?.query ?? '');
+    check('conversion volume: summarized rows + honest label', r.volume[0]?.total === 4 && r.windowLabel === 'last 14 days, excluding today');
+    check('conversion volume: the segmented query reached the wire', query.includes('segments.conversion_action_name'));
+  }
+  {
+    const { s } = svc([
+      { match: 'customer.tracking_url_template', reply: [{ results: [{ customer: { autoTaggingEnabled: false, trackingUrlTemplate: null, finalUrlSuffix: null } }] }] },
+      { match: 'campaign.tracking_url_template', reply: [{ results: [] }] },
+    ]);
+    const r = await s.utmSetup('1111111111');
+    check('utm setup: two reads compose + findings computed', r.setup.autoTaggingEnabled === false && r.findings.some((f) => f.severity === 'critical'));
+  }
+
   // ── Phase A: a custom date range reaches the WIRE as BETWEEN, and the label reports it ──
   {
     const { s, calls } = svc([{ match: 'FROM campaign', reply: [{ results: [] }] }]);
