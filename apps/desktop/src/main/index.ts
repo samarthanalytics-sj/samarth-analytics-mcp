@@ -185,7 +185,10 @@ app.whenReady().then(() => {
       }
       return { request: client.request.bind(client) as unknown as AdsRequest, scope };
     },
-    developerToken: () => providerKeys.getAdsDeveloperToken(),
+    // Resolved per call against the ACTIVE account, not captured once: an account with its own
+    // token (it reaches Ads through a different manager's API access) must be called with that one,
+    // and the active account changes while the app runs. Falls back to the shared token.
+    developerToken: () => providerKeys.getAdsDeveloperToken(registry.getActiveView()?.id),
   });
   const auditHistory = new AuditHistoryStore(join(dataDir, 'audit-history.json'));
   const manifests = new ManifestStore(join(dataDir, 'manifests.json'));
