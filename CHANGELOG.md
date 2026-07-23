@@ -1,3 +1,9 @@
+## [1.399.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.398.7...v1.399.0) (2026-07-23)
+
+### Features
+
+* **desktop:** export a reply's fenced JSON, not just its pipe tables ([#687](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/687)) ([6cbdde4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/6cbdde44790209e16d70b2d96df46521f5bf89d2))
+
 ## [1.398.7](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.398.6...v1.398.7) (2026-07-23)
 
 ### Bug Fixes
