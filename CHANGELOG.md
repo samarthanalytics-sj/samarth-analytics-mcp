@@ -1,3 +1,9 @@
+## [1.399.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.399.2...v1.399.3) (2026-07-23)
+
+### Bug Fixes
+
+* **desktop:** never claim to have listed something that is not in the message ([#690](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/690)) ([1206cd6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/1206cd652f34ff9bd0ace02a9e703d6bd518c995)), closes [#686](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/686) [#686](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/686)
+
 ## [1.399.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.399.1...v1.399.2) (2026-07-23)
 
 ### Bug Fixes
