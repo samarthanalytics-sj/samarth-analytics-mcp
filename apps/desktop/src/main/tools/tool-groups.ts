@@ -305,6 +305,11 @@ const GROUP_MEMBERS: Record<ToolGroup, readonly string[]> = {
     'audit_google_ads_utm_setup',
     'audit_google_ads_conversion_health',
     'audit_google_ads_ga4_link',
+    'list_google_ads_audiences',
+    'get_google_ads_structure',
+    'upload_google_ads_offline_conversions',
+    'upload_google_ads_conversion_adjustments',
+    'upload_google_ads_customer_match',
   ],
 };
 

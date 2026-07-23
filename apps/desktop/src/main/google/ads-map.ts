@@ -998,3 +998,143 @@ export function auditAdsGa4Seam(i: AdsGa4SeamInput): HealthFinding[] {
   }
   return out.sort((a, b) => SEV_RANK[a.severity] - SEV_RANK[b.severity]);
 }
+
+// ── upload results (Phase D) ─────────────────────────────────────────────────────────────
+
+export interface UploadOutcome {
+  /** Rows the API accepted (total minus per-row failures). */
+  accepted: number;
+  total: number;
+  /** Per-row failures parsed from partial_failure_error - index into the submitted batch + reason. */
+  failures: Array<{ index: number; message: string }>;
+}
+
+/**
+ * Parse an upload response's partial_failure_error into per-row outcomes. The upload endpoints run
+ * with partialFailure=true (they REQUIRE it), so a 200 response can still contain per-row rejections
+ * buried in a google.rpc.Status - treating a 200 as "all uploaded" silently loses conversions. The
+ * row index rides in each error's GoogleAdsFailure location fieldPathElements; when it is absent the
+ * failure is reported at index -1 (batch-level) rather than guessed.
+ */
+export function parseUploadOutcome(data: unknown, total: number): UploadOutcome {
+  const status = asRecord(get(asRecord(data), 'partialFailureError'));
+  const failures: Array<{ index: number; message: string }> = [];
+  if (status) {
+    const details = get(status, 'details');
+    for (const d of Array.isArray(details) ? details : []) {
+      const errors = get(asRecord(d), 'errors');
+      for (const e of Array.isArray(errors) ? errors : []) {
+        const rec = asRecord(e) ?? {};
+        const message = str(get(rec, 'message')) ?? 'rejected';
+        const parts = get(asRecord(get(rec, 'location')), 'fieldPathElements');
+        let index = -1;
+        for (const p of Array.isArray(parts) ? parts : []) {
+          const idx = toInt(get(asRecord(p), 'index'));
+          if (idx !== null) { index = idx; break; }
+        }
+        failures.push({ index, message });
+      }
+    }
+    // A status with a message but no parsed details still means SOMETHING failed - report it.
+    if (failures.length === 0) {
+      const msg = str(get(status, 'message'));
+      if (msg) failures.push({ index: -1, message: msg });
+    }
+  }
+  const failedRows = new Set(failures.filter((f) => f.index >= 0).map((f) => f.index)).size;
+  const batchLevel = failures.some((f) => f.index < 0);
+  return { accepted: batchLevel && failedRows === 0 ? 0 : Math.max(0, total - failedRows), total, failures };
+}
+
+// ── audiences / user lists (Phase D) ─────────────────────────────────────────────────────
+
+export interface AdsUserList {
+  id: string;
+  resourceName: string;
+  name: string;
+  type: string;
+  membershipStatus: string;
+  membershipLifeSpanDays: number | null;
+  sizeForDisplay: number | null;
+  sizeForSearch: number | null;
+  readOnly: boolean;
+  matchRatePercentage: number | null;
+}
+
+export function mapUserList(row: unknown): AdsUserList {
+  const u = asRecord(get(row, 'userList')) ?? asRecord(row) ?? {};
+  const id = digits(get(u, 'id')) ?? '';
+  const size = (v: unknown): number | null => toInt(v);
+  return {
+    id,
+    resourceName: str(get(u, 'resourceName')) ?? '',
+    name: str(get(u, 'name')) ?? (id ? `User list ${id}` : 'Unnamed list'),
+    type: (str(get(u, 'type')) ?? 'UNKNOWN').toUpperCase(),
+    membershipStatus: (str(get(u, 'membershipStatus')) ?? 'UNKNOWN').toUpperCase(),
+    membershipLifeSpanDays: toInt(get(u, 'membershipLifeSpan')),
+    sizeForDisplay: size(get(u, 'sizeForDisplay')),
+    sizeForSearch: size(get(u, 'sizeForSearch')),
+    readOnly: optionalBool(get(u, 'readOnly')) ?? false,
+    matchRatePercentage: toInt(get(u, 'matchRatePercentage')),
+  };
+}
+
+// ── structure rows (Phase E) ─────────────────────────────────────────────────────────────
+
+/** One row of get_google_ads_structure, shaped per view; only the fields that view carries. */
+export function mapStructureRow(view: 'keywords' | 'search_terms' | 'landing_pages' | 'ads', row: unknown): Record<string, unknown> {
+  const campaign = str(get(asRecord(get(row, 'campaign')), 'name'));
+  const adGroup = str(get(asRecord(get(row, 'adGroup')), 'name'));
+  const m = asRecord(get(row, 'metrics')) ?? {};
+  const num = (v: unknown): number => {
+    const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : NaN;
+    return Number.isFinite(n) ? n : 0;
+  };
+  if (view === 'keywords') {
+    const crit = asRecord(get(row, 'adGroupCriterion')) ?? {};
+    const kw = asRecord(get(crit, 'keyword')) ?? {};
+    const q = asRecord(get(crit, 'qualityInfo')) ?? {};
+    return {
+      campaign, adGroup,
+      keyword: str(get(kw, 'text')) ?? '',
+      matchType: (str(get(kw, 'matchType')) ?? 'UNKNOWN').toUpperCase(),
+      qualityScore: toInt(get(q, 'qualityScore')),
+      adRelevance: str(get(q, 'creativeQualityScore')) ?? null,
+      landingPageExperience: str(get(q, 'postClickQualityScore')) ?? null,
+      expectedCtr: str(get(q, 'searchPredictedCtr')) ?? null,
+    };
+  }
+  if (view === 'search_terms') {
+    const st = asRecord(get(row, 'searchTermView')) ?? {};
+    return {
+      campaign,
+      searchTerm: str(get(st, 'searchTerm')) ?? '',
+      status: (str(get(st, 'status')) ?? 'UNKNOWN').toUpperCase(),
+      impressions: num(get(m, 'impressions')),
+      clicks: num(get(m, 'clicks')),
+      conversions: num(get(m, 'conversions')),
+      costMicros: num(get(m, 'costMicros')),
+    };
+  }
+  if (view === 'landing_pages') {
+    const lp = asRecord(get(row, 'landingPageView')) ?? {};
+    return {
+      url: str(get(lp, 'unexpandedFinalUrl')) ?? '',
+      clicks: num(get(m, 'clicks')),
+      costMicros: num(get(m, 'costMicros')),
+      conversions: num(get(m, 'conversions')),
+      conversionsValue: num(get(m, 'conversionsValue')),
+    };
+  }
+  const aga = asRecord(get(row, 'adGroupAd')) ?? {};
+  const ad = asRecord(get(aga, 'ad')) ?? {};
+  const finalUrls = get(ad, 'finalUrls');
+  return {
+    campaign, adGroup,
+    adId: digits(get(ad, 'id')) ?? '',
+    type: (str(get(ad, 'type')) ?? 'UNKNOWN').toUpperCase(),
+    status: (str(get(aga, 'status')) ?? 'UNKNOWN').toUpperCase(),
+    adStrength: str(get(aga, 'adStrength')) ?? null,
+    finalUrls: Array.isArray(finalUrls) ? finalUrls.map((u) => str(u)).filter(Boolean) : [],
+  };
+}

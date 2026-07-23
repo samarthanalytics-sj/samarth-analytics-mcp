@@ -321,6 +321,29 @@ async function main(): Promise<void> {
     check('utm setup: two reads compose + findings computed', r.setup.autoTaggingEnabled === false && r.findings.some((f) => f.severity === 'critical'));
   }
 
+  // ── Phase D: uploads - plaintext never on the wire; customer match runs create→add→run ──
+  {
+    const { s, calls } = svc([{ match: 'uploadClickConversions', reply: { results: [{}] } }]);
+    const consent = { adUserData: 'GRANTED', adPersonalization: 'GRANTED' } as const;
+    const r = await s.uploadClickConversions('1111111111', [
+      { email: 'secret.lead@example.com', conversionActionResource: 'customers/1111111111/conversionActions/55', conversionDateTime: '2026-07-23 10:00:00+05:30' },
+    ], consent);
+    const wire = JSON.stringify(calls[0]?.data ?? {});
+    check('upload: partialFailure=true and consent reach the wire', wire.includes('"partialFailure":true') && wire.includes('"adUserData":"GRANTED"'));
+    check('upload: PLAINTEXT email never reaches the wire, only the 64-hex hash', !wire.includes('secret.lead') && /"hashedEmail":"[a-f0-9]{64}"/.test(wire));
+    check('upload: clean response → all accepted', r.accepted === 1 && r.failures.length === 0);
+  }
+  {
+    const { s, calls } = svc([
+      { match: 'offlineUserDataJobs:create', reply: { resourceName: 'customers/1111111111/offlineUserDataJobs/77' } },
+      { match: 'offlineUserDataJobs/77:addOperations', reply: {} },
+      { match: 'offlineUserDataJobs/77:run', reply: {} },
+    ]);
+    const r = await s.uploadCustomerMatch('1111111111', 'customers/1111111111/userLists/9', [{ email: 'a@b.com' }], { adUserData: 'GRANTED', adPersonalization: 'GRANTED' });
+    check('customer match: create → addOperations → run, in order, on the returned job', r.jobResourceName.endsWith('/77') && calls.length === 3 && calls[1].url.includes('/77:addOperations') && calls[2].url.includes('/77:run'));
+    check('customer match: member plaintext never on the wire', !JSON.stringify(calls[1].data).includes('a@b.com'));
+  }
+
   // ── Phase A: a custom date range reaches the WIRE as BETWEEN, and the label reports it ──
   {
     const { s, calls } = svc([{ match: 'FROM campaign', reply: [{ results: [] }] }]);

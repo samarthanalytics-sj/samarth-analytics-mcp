@@ -21,6 +21,20 @@ import {
   searchStreamUrl,
   perfDateClause,
   isYmdDate,
+  uploadClickConversionsUrl,
+  uploadConversionAdjustmentsUrl,
+  offlineUserDataJobsUrl,
+  offlineUserDataJobOpUrl,
+  buildClickConversionsBody,
+  buildConversionAdjustmentsBody,
+  buildCustomerMatchJobBody,
+  buildCustomerMatchOpsBody,
+  STRUCTURE_GAQL,
+  USER_LISTS_GAQL,
+  type AdsStructureView,
+  type AdsConsent,
+  type ClickConversionInput,
+  type ConversionAdjustmentInput,
   type PerfRange,
   type CreateConversionActionInput,
 } from './ads-rest';
@@ -36,6 +50,11 @@ import {
   summarizeConversionVolume,
   resolveConversionCustomer,
   sumCampaignPerformance,
+  parseUploadOutcome,
+  mapUserList,
+  mapStructureRow,
+  type AdsUserList,
+  type UploadOutcome,
   type AdsAccount,
   type AdsCampaign,
   type AdsCampaignPerformance,
@@ -287,6 +306,89 @@ export class GoogleAdsService {
     const campaignRows = await this.search(customerId, GAQL.utmCampaigns, loginCustomerId);
     const setup: UtmSetup = { ...mapUtmCustomer(customerRows[0] ?? {}), campaigns: campaignRows.map(mapUtmCampaign) };
     return { setup, findings: auditUtmFindings(setup) };
+  }
+
+  /** Audiences / user lists with sizes + membership status - verifies remarketing tags are actually
+   *  populating lists, and supplies the target for a Customer Match upload. */
+  async listUserLists(customerId: string, loginCustomerId?: string): Promise<AdsUserList[]> {
+    const rows = await this.search(customerId, USER_LISTS_GAQL, loginCustomerId);
+    return rows.map(mapUserList);
+  }
+
+  /** One structure view (keywords quality / search terms / landing pages / ads). Metric views take
+   *  the shared date range; attribute views ignore it. */
+  async structure(
+    customerId: string,
+    view: AdsStructureView,
+    range: PerfRange = {},
+    loginCustomerId?: string,
+  ): Promise<{ windowLabel: string | null; rows: Array<Record<string, unknown>> }> {
+    const dated = view === 'search_terms' || view === 'landing_pages';
+    const rows = await this.search(customerId, STRUCTURE_GAQL[view](range), loginCustomerId);
+    return { windowLabel: dated ? perfDateClause(range).label : null, rows: rows.map((r) => mapStructureRow(view, r)) };
+  }
+
+  /** LIVE upload of offline/enhanced conversions. partialFailure is forced true (the endpoint
+   *  requires it), so per-row failures come back in the outcome - the caller reports them. */
+  async uploadClickConversions(
+    customerId: string,
+    conversions: ClickConversionInput[],
+    consent: AdsConsent,
+    loginCustomerId?: string,
+  ): Promise<UploadOutcome> {
+    const data = await this.call({
+      url: uploadClickConversionsUrl(customerId),
+      method: 'POST',
+      body: buildClickConversionsBody(conversions, consent),
+      loginCustomerId,
+    });
+    return parseUploadOutcome(data, conversions.length);
+  }
+
+  /** LIVE retractions/restatements of already-recorded conversions. */
+  async uploadConversionAdjustments(
+    customerId: string,
+    adjustments: ConversionAdjustmentInput[],
+    loginCustomerId?: string,
+  ): Promise<UploadOutcome> {
+    const data = await this.call({
+      url: uploadConversionAdjustmentsUrl(customerId),
+      method: 'POST',
+      body: buildConversionAdjustmentsBody(adjustments),
+      loginCustomerId,
+    });
+    return parseUploadOutcome(data, adjustments.length);
+  }
+
+  /** Customer Match upload to an EXISTING user list: create job → add hashed identifiers → run.
+   *  Returns the job resource so the caller can name what was started (processing is async on
+   *  Google's side - list sizes update later, not immediately). */
+  async uploadCustomerMatch(
+    customerId: string,
+    userListResource: string,
+    members: Array<{ email?: string; phone?: string }>,
+    consent: AdsConsent,
+    loginCustomerId?: string,
+  ): Promise<{ jobResourceName: string; outcome: UploadOutcome }> {
+    const created = await this.call({
+      url: offlineUserDataJobsUrl(customerId, 'create'),
+      method: 'POST',
+      body: buildCustomerMatchJobBody(userListResource, consent),
+      loginCustomerId,
+    });
+    const jobResourceName = String((created as { resourceName?: string } | null)?.resourceName ?? '');
+    if (!jobResourceName) {
+      throw new AdsError({ code: '', status: 0, retryable: false, message: 'Google Ads did not return the offline user data job it was asked to create.', remedy: 'Retry; if it persists, check the user list still exists and is a CRM-based list.' });
+    }
+    const ops = await this.call({
+      url: offlineUserDataJobOpUrl(jobResourceName, 'addOperations'),
+      method: 'POST',
+      body: buildCustomerMatchOpsBody(members),
+      loginCustomerId,
+    });
+    const outcome = parseUploadOutcome(ops, members.length);
+    await this.call({ url: offlineUserDataJobOpUrl(jobResourceName, 'run'), method: 'POST', body: {}, loginCustomerId });
+    return { jobResourceName, outcome };
   }
 
   /** Validate a create WITHOUT executing it, so the review UI can surface a name collision or a bad
