@@ -398,6 +398,38 @@ test('all_clicks trigger: {{Click Element}} cssSelector filter (FAQ accordion â€
   assert.deepEqual(triggerBuiltInVars({ name: 'x', kind: 'all_clicks', clickElementValue: '.faq-q, .faq-q *' }), ['clickElement']);
 });
 
+test('link_click trigger: {{Click Classes}} word-boundary regex + {{Click ID}} filters, with their built-in vars', () => {
+  const tr = buildTrigger({
+    name: 'Dealer Phone Trigger',
+    kind: 'link_click',
+    clickClassesValue: '(^|\\s)dealer-phone(\\s|$)',
+    clickClassesOperator: 'matchRegex',
+  });
+  assert.equal(tr.type, 'linkClick');
+  const f = (tr.filter ?? [])[0] as { type: string; parameter: Array<Record<string, unknown>> };
+  assert.equal(f.type, 'matchRegex');
+  assert.equal(f.parameter.find((p) => p.key === 'arg0')?.value, '{{Click Classes}}');
+  assert.equal(f.parameter.find((p) => p.key === 'arg1')?.value, '(^|\\s)dealer-phone(\\s|$)');
+  // {{Click Classes}} is the whole class ATTRIBUTE, so the default operator must be `contains`,
+  // never `equals` â€” an equals on one class of several would never match.
+  const dflt = buildTrigger({ name: 'x', kind: 'all_clicks', clickClassesValue: 'promo' });
+  assert.equal(((dflt.filter ?? [])[0] as { type: string }).type, 'contains');
+  const byId = buildTrigger({ name: 'y', kind: 'link_click', clickIdValue: 'hero-demo-btn' });
+  const fi = (byId.filter ?? [])[0] as { type: string; parameter: Array<Record<string, unknown>> };
+  assert.equal(fi.type, 'equals');
+  assert.equal(fi.parameter.find((p) => p.key === 'arg0')?.value, '{{Click ID}}');
+  // Without the built-in variable the condition reads undefined and the trigger never fires.
+  assert.deepEqual(triggerBuiltInVars({ name: 'x', kind: 'link_click', clickClassesValue: 'promo' }), ['clickClasses']);
+  assert.deepEqual(triggerBuiltInVars({ name: 'x', kind: 'link_click', clickIdValue: 'promo' }), ['clickId']);
+  // Several conditions in one trigger are ANDed by GTM. All of them must survive the build.
+  const multi = buildTrigger({ name: 'z', kind: 'link_click', clickIdValue: 'a', clickClassesValue: 'b', clickTextValue: 'c' });
+  const vars = (multi.filter ?? []).map(
+    (f2) => (f2 as { parameter: Array<Record<string, unknown>> }).parameter.find((p) => p.key === 'arg0')?.value,
+  );
+  assert.equal(vars.length, 3);
+  assert.deepEqual(new Set(vars), new Set(['{{Click ID}}', '{{Click Classes}}', '{{Click Text}}']));
+});
+
 test('builtInVarsForTemplates: maps built-in var refs, ignores user variables', () => {
   const keys = builtInVarsForTemplates(['{{Click URL}}', '{{Click Text}}', '{{Form ID}}', '{{Form URL}}', '{{GA4 Measurement ID}}', 'static']);
   assert.deepEqual(new Set(keys), new Set(['clickUrl', 'clickText', 'formId', 'formUrl']));

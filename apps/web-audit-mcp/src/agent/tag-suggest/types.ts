@@ -99,6 +99,9 @@ export interface DetectedElement {
   /** The element's own class attribute (from the collector) — used to find a shared accordion/FAQ
    *  class so grouped FAQ question rows become ONE tag. */
   className?: string;
+  /** The element's own id attribute, when the author set one. Outranks classes/href/text in the
+   *  trigger-strategy ladder. */
+  elementId?: string;
   /** Set when kind==='cta' — drives the tag/trigger name + the trigger filter. */
   intent?: CtaIntent;
   /** Set when kind==='social' — which network (facebook, linkedin, …). */
@@ -234,6 +237,16 @@ export interface SuggestedTag {
      *  cssSelector) — an FAQ accordion header so a click on the text, the row, or the arrow all fire. */
     clickElementValue?: string;
     clickElementOperator?: FilterOp;
+    /** For link_click: scope to the element's own id via {{Click ID}}. The most durable click signal
+     *  there is. Only used on link_click, where GTM resolves the click up to the anchor; on all_clicks
+     *  the descendant-safe {{Click Element}} CSS form is used instead. See trigger-strategy.ts. */
+    clickIdValue?: string;
+    clickIdOperator?: FilterOp;
+    /** For link_click: scope to a SEMANTIC class via {{Click Classes}}. Matched with a word-boundary
+     *  matchRegex, never `contains`, because {{Click Classes}} is the whole class attribute and a
+     *  `contains "btn-buy"` would also fire on "btn-buy-now". See trigger-strategy.ts. */
+    clickClassesValue?: string;
+    clickClassesOperator?: FilterOp;
     /** For form_submit: scope to ONE form via {{Form ID}} / {{Form Classes}}, so
      *  the tag fires for this form only — not every form on the page. */
     formIdValue?: string;
