@@ -1,3 +1,9 @@
+## [1.405.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.404.0...v1.405.0) (2026-07-24)
+
+### Features
+
+* **desktop:** per-phone-number Google Ads call conversions, end to end ([cab470a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/cab470a0c21bda14b2f59ad89891d5a8b2ce3e90))
+
 ## [1.404.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.403.0...v1.404.0) (2026-07-24)
 
 ### Features
