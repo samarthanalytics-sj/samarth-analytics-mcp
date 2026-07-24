@@ -690,7 +690,12 @@ export function findExistingTrigger(
   );
 }
 
-export type TriggerKind = 'link_click' | 'all_clicks' | 'custom_event' | 'pageview' | 'form_submit' | 'youtube_video' | 'timer';
+export type TriggerKind =
+  | 'link_click' | 'all_clicks' | 'custom_event' | 'pageview' | 'form_submit' | 'youtube_video' | 'timer'
+  // Added after auditing the official EventType enum against the 562-container corpus. Frequencies
+  // there: DOM_READY 425, ELEMENT_VISIBILITY 311, WINDOW_LOADED 183, SCROLL_DEPTH 94,
+  // HISTORY_CHANGE 63 - all common enough that not being able to build them was a real gap.
+  | 'element_visibility' | 'history_change' | 'scroll_depth' | 'dom_ready' | 'window_loaded' | 'js_error';
 
 /** The standard GTM "Video" built-in variables a YouTube Video tag reports. */
 export const VIDEO_BUILT_IN_VARS = [
@@ -751,6 +756,38 @@ export interface TriggerInput {
    *  variable is the only reliable way to scope a data-layer form trigger. Each key auto-provisions its
    *  `dlv - <key>` variable. Operator matches the other *Operator fields (default 'equals'). */
   dataLayerConditions?: Array<{ key: string; value: string; operator?: string }>;
+  /** Page-context scope conditions, ANDed into the filter of ANY filter-capable trigger kind.
+   *  {{Page Hostname}} and {{Referrer}} are GTM built-ins. */
+  pageHostnameValue?: string;
+  pageHostnameOperator?: string;
+  referrerValue?: string;
+  referrerOperator?: string;
+  /** Match the URL's QUERY STRING. Web containers have NO built-in query-string variable (the
+   *  API's `queryString` built-in is server-container only, confirmed against Google's built-in
+   *  variable reference), so this references a {{URL - query}} URL variable with component QUERY,
+   *  auto-provisioned by triggerUrlVarNames the same way dataLayerConditions provision dlv vars. */
+  queryStringValue?: string;
+  queryStringOperator?: string;
+  /** For element_visibility: the element to observe. Give EITHER a CSS selector or an element id;
+   *  selectorType follows whichever was supplied (corpus: CSS 295, ID 16 of 311). */
+  visibilitySelector?: string;
+  visibilityElementId?: string;
+  /** For element_visibility: minimum percent of the element on screen before it fires.
+   *  Corpus default 50 (269/311). */
+  visibilityMinPercent?: number | string;
+  /** For element_visibility: ONCE | ONCE_PER_ELEMENT | MANY_PER_ELEMENT. Corpus default ONCE. */
+  visibilityFiringFrequency?: string;
+  /** For element_visibility: keep watching for elements added to the DOM after page load. ON by
+   *  default (corpus 267/311) - without it an AJAX confirmation message that appears AFTER load is
+   *  never observed, which is the single most common use of this trigger type. */
+  visibilityObserveDomChanges?: boolean;
+  /** For element_visibility: require the element to stay on screen for N ms before firing. */
+  visibilityMinOnScreenMs?: number | string;
+  /** For scroll_depth: vertical thresholds. Percent by default; PIXELS switches units. */
+  scrollPercentages?: string;
+  scrollPixels?: string;
+  /** For scroll_depth: horizontal thresholds (rarely used; off unless supplied). */
+  scrollHorizontalPercentages?: string;
   /** For timer: fire every N milliseconds (required). */
   intervalMs?: number | string;
   /** For timer: max number of times to fire (omit/empty = unlimited). */
@@ -801,6 +838,31 @@ export function planTriggerRetarget(snapshot: ContainerSnapshot, tagName: string
   return { tagId: tag.tagId, tagName: tag.name, triggerId, mode: sharedBy > 1 ? 'rebind' : 'rewrite', built: buildTrigger(corrected), sharedBy };
 }
 
+/** Display name of the user variable a queryString condition references.
+ *  Deliberately NOT of the form `URL - <param>`: that convention means "the value of ONE query
+ *  parameter" and is auto-provisioned with a queryKey. This one is the WHOLE query string (component
+ *  QUERY with no key), and it borrows the name Google itself uses for the equivalent server-container
+ *  built-in, which is what a GTM practitioner will look for. */
+export const URL_QUERY_VAR = 'Query String';
+
+/**
+ * Page-context conditions, ANDed into ANY filter-capable trigger.
+ *
+ * GTM puts no restriction on which variables a trigger's filter reads, so the same page scoping is
+ * valid on a click, a form submit, a scroll, a history change or a visibility trigger. Kept in one
+ * place so a new trigger kind cannot silently lose the ability to be scoped.
+ *
+ * Page Path and Page URL stay with their existing per-kind defaults and are NOT emitted here, so
+ * this addition cannot change any trigger the builder already produced.
+ */
+function pageScopeConditions(o: TriggerInput): Param[] {
+  const out: Param[] = [];
+  if (o.pageHostnameValue) out.push(condition('{{Page Hostname}}', o.pageHostnameOperator ?? 'equals', o.pageHostnameValue));
+  if (o.queryStringValue) out.push(condition(`{{${URL_QUERY_VAR}}}`, o.queryStringOperator ?? 'contains', o.queryStringValue));
+  if (o.referrerValue) out.push(condition('{{Referrer}}', o.referrerOperator ?? 'contains', o.referrerValue));
+  return out;
+}
+
 export function buildTrigger(o: TriggerInput): GtmTriggerResource {
   switch (o.kind) {
     case 'link_click':
@@ -824,6 +886,7 @@ export function buildTrigger(o: TriggerInput): GtmTriggerResource {
       // Page-scoped click trigger (e.g. an FAQ accordion tracked only on its page): a second ANDed
       // {{Page Path}} condition, as real containers do ("Click Text ends with ? AND Page Path contains /faq/").
       if (o.pagePathValue) filters.push(condition('{{Page Path}}', o.pagePathOperator ?? 'contains', o.pagePathValue));
+      filters.push(...pageScopeConditions(o));
       if (filters.length) t.filter = filters;
       return t;
     }
@@ -850,6 +913,7 @@ export function buildTrigger(o: TriggerInput): GtmTriggerResource {
         if (!key || value === '') continue;
         filters.push(condition(`{{dlv - ${key}}}`, c.operator ?? 'equals', value));
       }
+      filters.push(...pageScopeConditions(o));
       if (filters.length) t.filter = filters;
       return t;
     }
@@ -874,6 +938,7 @@ export function buildTrigger(o: TriggerInput): GtmTriggerResource {
       // scopes a shared-form-name tag to ONE page (not only when no id/class scope exists). GTM filters
       // are ANDed, so this narrows firing to the intended form+page.
       if (o.pagePathValue) filters.push(condition('{{Page Path}}', o.pagePathOperator ?? 'equals', o.pagePathValue));
+      filters.push(...pageScopeConditions(o));
       if (filters.length) t.filter = filters;
       return t;
     }
@@ -914,7 +979,83 @@ export function buildTrigger(o: TriggerInput): GtmTriggerResource {
     case 'pageview': {
       // Fires on All Pages by default; a search-results / page-specific Page View scopes on {{Page URL}}.
       const t: GtmTriggerResource = { name: sanitizeName(o.name), type: 'pageview' };
-      if (o.pageUrlValue) t.filter = [condition('{{Page URL}}', o.pageUrlOperator ?? 'contains', o.pageUrlValue)];
+      const pv: Param[] = [];
+      if (o.pageUrlValue) pv.push(condition('{{Page URL}}', o.pageUrlOperator ?? 'contains', o.pageUrlValue));
+      if (o.pagePathValue) pv.push(condition('{{Page Path}}', o.pagePathOperator ?? 'contains', o.pagePathValue));
+      pv.push(...pageScopeConditions(o));
+      if (pv.length) t.filter = pv;
+      return t;
+    }
+    // ── Page-load family. Identical to `pageview` apart from WHEN it fires, and all three take the
+    //    same page-scope filter (corpus: DOM_READY 425 and WINDOW_LOADED 183 carry filter[] only,
+    //    never a parameter[]).
+    case 'dom_ready':
+    case 'window_loaded':
+    case 'history_change':
+    case 'js_error': {
+      const TYPE = { dom_ready: 'domReady', window_loaded: 'windowLoaded', history_change: 'historyChange', js_error: 'jsError' } as const;
+      const t: GtmTriggerResource = { name: sanitizeName(o.name), type: TYPE[o.kind] };
+      const f: Param[] = [];
+      if (o.pageUrlValue) f.push(condition('{{Page URL}}', o.pageUrlOperator ?? 'contains', o.pageUrlValue));
+      if (o.pagePathValue) f.push(condition('{{Page Path}}', o.pagePathOperator ?? 'contains', o.pagePathValue));
+      f.push(...pageScopeConditions(o));
+      if (f.length) t.filter = f;
+      return t;
+    }
+    case 'element_visibility': {
+      // Settings live in parameter[] (corpus: 311/311). selectorType follows which of the two
+      // targeting fields was supplied, and the VALUE key changes with it: CSS -> elementSelector,
+      // ID -> elementId. Getting that pairing wrong leaves the GTM UI's target box empty.
+      const useId = !o.visibilitySelector && !!o.visibilityElementId;
+      const params: Param[] = [
+        tpl('selectorType', useId ? 'ID' : 'CSS'),
+        useId ? tpl('elementId', String(o.visibilityElementId ?? '')) : tpl('elementSelector', String(o.visibilitySelector ?? '')),
+        // 50% is the corpus default (269/311): enough of the element on screen to count as seen,
+        // without requiring a tall element to be fully visible (which on mobile may be impossible).
+        tpl('onScreenRatio', String(o.visibilityMinPercent ?? 50)),
+        tpl('firingFrequency', String(o.visibilityFiringFrequency ?? 'ONCE')),
+        // ON unless explicitly disabled. Without it an element injected AFTER page load - an AJAX
+        // form's confirmation message, the most common use of this trigger - is never observed.
+        boolean('useDomChangeListener', o.visibilityObserveDomChanges !== false),
+      ];
+      const dwell = o.visibilityMinOnScreenMs !== undefined && String(o.visibilityMinOnScreenMs) !== '';
+      params.push(boolean('useOnScreenDuration', dwell));
+      if (dwell) params.push(tpl('onScreenDuration', String(o.visibilityMinOnScreenMs)));
+      const t: GtmTriggerResource = { name: sanitizeName(o.name), type: 'elementVisibility', parameter: params };
+      const f: Param[] = [];
+      if (o.pagePathValue) f.push(condition('{{Page Path}}', o.pagePathOperator ?? 'contains', o.pagePathValue));
+      if (o.pageUrlValue) f.push(condition('{{Page URL}}', o.pageUrlOperator ?? 'contains', o.pageUrlValue));
+      f.push(...pageScopeConditions(o));
+      if (f.length) t.filter = f;
+      return t;
+    }
+    case 'scroll_depth': {
+      // Corpus shape: verticalThresholdOn/Units/sPercent + horizontalThresholdOn + triggerStartOption.
+      // Vertical percent thresholds are the near-universal configuration; pixels and the horizontal
+      // axis are supported but stay off unless asked for.
+      const usePixels = !!o.scrollPixels && !o.scrollPercentages;
+      const horizontal = !!o.scrollHorizontalPercentages;
+      const params: Param[] = [
+        boolean('verticalThresholdOn', true),
+        tpl('verticalThresholdUnits', usePixels ? 'PIXELS' : 'PERCENT'),
+        usePixels
+          ? tpl('verticalThresholdsPixels', String(o.scrollPixels))
+          : tpl('verticalThresholdsPercent', String(o.scrollPercentages ?? '25, 50, 75, 90')),
+        boolean('horizontalThresholdOn', horizontal),
+        // WINDOW_LOAD, so thresholds are measured against the final laid-out page height rather than
+        // a partially-rendered one, which otherwise fires deep-scroll milestones immediately.
+        tpl('triggerStartOption', 'WINDOW_LOAD'),
+      ];
+      if (horizontal) {
+        params.push(tpl('horizontalThresholdUnits', 'PERCENT'));
+        params.push(tpl('horizontalThresholdsPercent', String(o.scrollHorizontalPercentages)));
+      }
+      const t: GtmTriggerResource = { name: sanitizeName(o.name), type: 'scrollDepth', parameter: params };
+      const f: Param[] = [];
+      if (o.pagePathValue) f.push(condition('{{Page Path}}', o.pagePathOperator ?? 'contains', o.pagePathValue));
+      if (o.pageUrlValue) f.push(condition('{{Page URL}}', o.pageUrlOperator ?? 'contains', o.pageUrlValue));
+      f.push(...pageScopeConditions(o));
+      if (f.length) t.filter = f;
       return t;
     }
     default:
@@ -1127,6 +1268,13 @@ export function normalizeTimerTrigger(trigger: Record<string, unknown>): Record<
  *  (from `dataLayerConditions`). Each drives auto-creation of its `dlv - <key>` Data Layer Variable
  *  so the {{dlv - <key>}} the trigger references actually resolves. [] for any non-custom_event kind
  *  (native {{Form ID}} works on form_submit — no dlv needed there). PURE. */
+/** URL variables a trigger references and that must be auto-created for its conditions to resolve.
+ *  Currently just {{URL - query}} for a queryString condition: web containers have NO built-in
+ *  query-string variable, so it has to be a user-defined URL variable with component QUERY. */
+export function triggerUrlVarNames(o: TriggerInput): string[] {
+  return o.queryStringValue ? [URL_QUERY_VAR] : [];
+}
+
 export function triggerDataLayerVarKeys(o: TriggerInput): string[] {
   if (o.kind !== 'custom_event') return [];
   const out: string[] = [];
@@ -1139,6 +1287,22 @@ export function triggerDataLayerVarKeys(o: TriggerInput): string[] {
 
 export function triggerBuiltInVars(o: TriggerInput): string[] {
   const vars: string[] = [];
+  // Page-context conditions are valid on ANY filter-capable kind, so their built-ins are declared
+  // before the per-kind block. Without the variable enabled the condition reads undefined and the
+  // trigger silently never fires. {{URL - query}} is NOT here: it is a USER variable (web
+  // containers have no query-string built-in), provisioned via triggerUrlVarNames.
+  if (o.pageHostnameValue) vars.push('pageHostname');
+  if (o.referrerValue) vars.push('referrer');
+  if (o.kind === 'history_change') {
+    // The History built-ins a historyChange trigger's tags almost always read.
+    vars.push('newHistoryFragment', 'oldHistoryFragment', 'newHistoryUrl', 'oldHistoryUrl', 'historySource');
+  }
+  if (o.kind === 'scroll_depth') vars.push('scrollDepthThreshold', 'scrollDepthUnits', 'scrollDepthDirection');
+  if (o.kind === 'element_visibility') vars.push('elementVisibilityRatio', 'elementVisibilityTime');
+  if (o.kind === 'dom_ready' || o.kind === 'window_loaded' || o.kind === 'history_change' || o.kind === 'js_error' || o.kind === 'scroll_depth' || o.kind === 'element_visibility') {
+    if (o.pagePathValue) vars.push('pagePath');
+    if (o.pageUrlValue) vars.push('pageUrl');
+  }
   if (o.kind === 'link_click' || o.kind === 'all_clicks') {
     if (o.clickUrlValue) vars.push('clickUrl');
     // A lookup-table trigger reads {{Click Text}} through its companion smm variable.
@@ -1181,6 +1345,12 @@ const BUILT_IN_VAR_KEYS: Record<string, string> = {
   'video provider': 'videoProvider', 'video url': 'videoUrl', 'video title': 'videoTitle',
   'video duration': 'videoDuration', 'video current time': 'videoCurrentTime',
   'video percent': 'videoPercent', 'video status': 'videoStatus', 'video visible': 'videoVisible',
+  'history source': 'historySource', 'new history fragment': 'newHistoryFragment',
+  'old history fragment': 'oldHistoryFragment', 'new history state': 'newHistoryState',
+  'old history state': 'oldHistoryState', 'new history url': 'newHistoryUrl', 'old history url': 'oldHistoryUrl',
+  'scroll depth threshold': 'scrollDepthThreshold', 'scroll depth units': 'scrollDepthUnits',
+  'scroll direction': 'scrollDepthDirection',
+  'percent visible': 'elementVisibilityRatio', 'on-screen duration': 'elementVisibilityTime',
 };
 
 /** Built-in variable type keys referenced by {{Name}} tokens in the given values
@@ -1214,6 +1384,13 @@ export interface VariableInput {
 /** A URL variable that reads ONE query-string key: {{URL - <key>}} resolves to the value of ?<key>=…
  *  — the standard way to capture a GA4 search_term from a results URL. Corpus-verified shape (type "u",
  *  component QUERY + queryKey). The name is used verbatim so a {{URL - <key>}} reference resolves to it. */
+/** A URL variable returning the ENTIRE query string (component QUERY, no queryKey). Web containers
+ *  have no built-in for this, so a queryString trigger condition needs it created. Distinct from
+ *  buildUrlQueryVariable, which returns ONE named parameter's value. */
+export function buildQueryStringVariable(name: string = URL_QUERY_VAR): GtmVariableResource {
+  return { name, type: 'u', parameter: [tpl('component', 'QUERY')] };
+}
+
 export function buildUrlQueryVariable(name: string, queryKey: string): GtmVariableResource {
   return { name, type: 'u', parameter: [tpl('component', 'QUERY'), tpl('queryKey', queryKey)] };
 }
