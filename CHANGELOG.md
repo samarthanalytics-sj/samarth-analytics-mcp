@@ -1,3 +1,9 @@
+## [1.399.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.399.3...v1.399.4) (2026-07-24)
+
+### Bug Fixes
+
+* **desktop:** the GTM chat can mint a conversion label again, not just read one ([#691](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/691)) ([eda59f2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/eda59f286509fdc4c48f957b77f636fa891c6c9f)), closes [#689](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/689)
+
 ## [1.399.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.399.2...v1.399.3) (2026-07-23)
 
 ### Bug Fixes
