@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import {
+  buildQueryStringVariable,
+  triggerUrlVarNames,
+  type TriggerKind,
   buildGa4EventTag,
   buildGoogleTag,
   buildGoogleAdsConversionTag,
@@ -428,6 +431,149 @@ test('link_click trigger: {{Click Classes}} word-boundary regex + {{Click ID}} f
   );
   assert.equal(vars.length, 3);
   assert.deepEqual(new Set(vars), new Set(['{{Click ID}}', '{{Click Classes}}', '{{Click Text}}']));
+});
+
+// ── Trigger types added after auditing the official EventType enum ───────────────────────────
+// Shapes verified against real containers in the 562-export corpus, not inferred from the docs.
+
+test('element_visibility: corpus parameter shape, CSS vs ID targeting, and its built-in vars', () => {
+  const css = buildTrigger({ name: 'Thanks Visible', kind: 'element_visibility', visibilitySelector: '#gform_confirmation_message' });
+  assert.equal(css.type, 'elementVisibility');
+  const p = (k: string) => (css.parameter ?? []).find((x) => (x as { key?: string }).key === k) as { value?: string } | undefined;
+  assert.equal(p('selectorType')?.value, 'CSS');
+  assert.equal(p('elementSelector')?.value, '#gform_confirmation_message');
+  assert.equal(p('onScreenRatio')?.value, '50', 'corpus default, 269 of 311');
+  assert.equal(p('firingFrequency')?.value, 'ONCE', 'corpus default, 289 of 311');
+  // ON by default: an AJAX confirmation message appears AFTER load, so without the DOM listener the
+  // most common use of this trigger type never fires.
+  assert.equal(p('useDomChangeListener')?.value, 'true');
+  assert.equal(p('useOnScreenDuration')?.value, 'false');
+  assert.equal(p('onScreenDuration'), undefined, 'no dwell param unless a dwell time was asked for');
+  // ID targeting switches BOTH selectorType and the value key.
+  const byId = buildTrigger({ name: 'x', kind: 'element_visibility', visibilityElementId: 'gform_confirmation_message' });
+  const q = (k: string) => (byId.parameter ?? []).find((x) => (x as { key?: string }).key === k) as { value?: string } | undefined;
+  assert.equal(q('selectorType')?.value, 'ID');
+  assert.equal(q('elementId')?.value, 'gform_confirmation_message');
+  assert.equal(q('elementSelector'), undefined);
+  // A dwell time turns the flag on and adds the duration.
+  const dwell = buildTrigger({ name: 'y', kind: 'element_visibility', visibilitySelector: '.hero', visibilityMinOnScreenMs: 2000, visibilityMinPercent: 75, visibilityFiringFrequency: 'ONCE_PER_ELEMENT', visibilityObserveDomChanges: false });
+  const r = (k: string) => (dwell.parameter ?? []).find((x) => (x as { key?: string }).key === k) as { value?: string } | undefined;
+  assert.equal(r('useOnScreenDuration')?.value, 'true');
+  assert.equal(r('onScreenDuration')?.value, '2000');
+  assert.equal(r('onScreenRatio')?.value, '75');
+  assert.equal(r('firingFrequency')?.value, 'ONCE_PER_ELEMENT');
+  assert.equal(r('useDomChangeListener')?.value, 'false');
+  assert.deepEqual(triggerBuiltInVars({ name: 'x', kind: 'element_visibility', visibilitySelector: '.a' }), ['elementVisibilityRatio', 'elementVisibilityTime']);
+});
+
+test('scroll_depth: percent thresholds by default, pixels and horizontal on request', () => {
+  const t = buildTrigger({ name: 'Scroll', kind: 'scroll_depth' });
+  assert.equal(t.type, 'scrollDepth');
+  const p = (k: string) => (t.parameter ?? []).find((x) => (x as { key?: string }).key === k) as { value?: string } | undefined;
+  assert.equal(p('verticalThresholdOn')?.value, 'true');
+  assert.equal(p('verticalThresholdUnits')?.value, 'PERCENT');
+  assert.equal(p('verticalThresholdsPercent')?.value, '25, 50, 75, 90');
+  assert.equal(p('horizontalThresholdOn')?.value, 'false');
+  // WINDOW_LOAD, so thresholds measure the final page height instead of firing deep milestones
+  // against a partially-rendered page.
+  assert.equal(p('triggerStartOption')?.value, 'WINDOW_LOAD');
+  const px = buildTrigger({ name: 'x', kind: 'scroll_depth', scrollPixels: '300, 600' });
+  const q = (k: string) => (px.parameter ?? []).find((x) => (x as { key?: string }).key === k) as { value?: string } | undefined;
+  assert.equal(q('verticalThresholdUnits')?.value, 'PIXELS');
+  assert.equal(q('verticalThresholdsPixels')?.value, '300, 600');
+  assert.equal(q('verticalThresholdsPercent'), undefined);
+  const hz = buildTrigger({ name: 'y', kind: 'scroll_depth', scrollHorizontalPercentages: '50' });
+  const r = (k: string) => (hz.parameter ?? []).find((x) => (x as { key?: string }).key === k) as { value?: string } | undefined;
+  assert.equal(r('horizontalThresholdOn')?.value, 'true');
+  assert.equal(r('horizontalThresholdsPercent')?.value, '50');
+  assert.deepEqual(triggerBuiltInVars({ name: 'x', kind: 'scroll_depth' }), ['scrollDepthThreshold', 'scrollDepthUnits', 'scrollDepthDirection']);
+});
+
+test('history_change / dom_ready / window_loaded / js_error: filter-only, correct API type', () => {
+  for (const [kind, type] of [['history_change', 'historyChange'], ['dom_ready', 'domReady'], ['window_loaded', 'windowLoaded'], ['js_error', 'jsError']] as const) {
+    const t = buildTrigger({ name: 'x', kind });
+    assert.equal(t.type, type);
+    assert.equal(t.parameter, undefined, kind + ' carries no parameter[] (corpus: filter only)');
+    assert.equal(t.filter, undefined, 'unscoped means no filter at all');
+    const scoped = buildTrigger({ name: 'y', kind, pagePathValue: '/checkout' });
+    assert.equal((scoped.filter ?? []).length, 1);
+  }
+  // A history-change trigger's tags read the History built-ins, so they must be enabled.
+  assert.deepEqual(
+    triggerBuiltInVars({ name: 'x', kind: 'history_change' }),
+    ['newHistoryFragment', 'oldHistoryFragment', 'newHistoryUrl', 'oldHistoryUrl', 'historySource'],
+  );
+});
+
+test('page-scope conditions (Page Hostname / Query String / Referrer) apply to EVERY filter-capable kind', () => {
+  const KINDS = ['link_click', 'all_clicks', 'form_submit', 'custom_event', 'pageview', 'dom_ready', 'window_loaded', 'history_change', 'js_error', 'scroll_depth', 'element_visibility'] as const;
+  for (const kind of KINDS) {
+    const t = buildTrigger({ name: 'x', kind, eventName: 'e', pageHostnameValue: 'shop.example.com', referrerValue: 'google.', queryStringValue: 'utm_source=' });
+    const args = (t.filter ?? []).map((f) => (f as { parameter: Array<Record<string, unknown>> }).parameter.find((p) => p.key === 'arg0')?.value);
+    for (const v of ['{{Page Hostname}}', '{{Query String}}', '{{Referrer}}']) {
+      assert.ok(args.includes(v), kind + ' should support ' + v);
+    }
+  }
+  const vars = triggerBuiltInVars({ name: 'x', kind: 'all_clicks', pageHostnameValue: 'a', referrerValue: 'b' });
+  assert.ok(vars.includes('pageHostname') && vars.includes('referrer'));
+  // Query String is NOT a web built-in: web containers have no such variable, so it is provisioned
+  // as a URL variable rather than silently referencing something that cannot resolve.
+  assert.ok(!vars.includes('queryString'));
+  assert.deepEqual(triggerUrlVarNames({ name: 'x', kind: 'all_clicks', queryStringValue: 'utm_source=' }), ['Query String']);
+  assert.deepEqual(triggerUrlVarNames({ name: 'x', kind: 'all_clicks' }), []);
+  // The variable it provisions must return the ENTIRE query string: component QUERY with NO
+  // queryKey. With a key it would return one named parameter's value instead.
+  const qv = buildQueryStringVariable();
+  assert.equal(qv.name, 'Query String');
+  assert.equal(qv.type, 'u');
+  assert.deepEqual(qv.parameter.map((p) => (p as { key?: string }).key), ['component']);
+  assert.equal((qv.parameter[0] as { value?: string }).value, 'QUERY');
+});
+
+test('coverage: every WEB trigger type in the official EventType enum is buildable or a declared exclusion', () => {
+  // Verbatim from the GTM API v2 Trigger reference (EventType enum).
+  const OFFICIAL = [
+    'pageview', 'domReady', 'windowLoaded', 'customEvent', 'triggerGroup', 'init', 'consentInit',
+    'serverPageview', 'always', 'firebaseAppException', 'firebaseAppUpdate', 'firebaseCampaign',
+    'firebaseFirstOpen', 'firebaseInAppPurchase', 'firebaseNotificationDismiss',
+    'firebaseNotificationForeground', 'firebaseNotificationOpen', 'firebaseNotificationReceive',
+    'firebaseOsUpdate', 'firebaseSessionStart', 'firebaseUserEngagement', 'formSubmission', 'click',
+    'linkClick', 'jsError', 'historyChange', 'timer', 'ampClick', 'ampTimer', 'ampScroll',
+    'ampVisibility', 'youTubeVideo', 'scrollDepth', 'elementVisibility',
+  ];
+  // Deliberate exclusions, each with its reason. Implementing one means deleting it from here.
+  const EXCLUDED: Record<string, string> = {
+    triggerGroup: 'composes OTHER triggers by id; needs name-to-id resolution at the tool layer, not the builder',
+    init: 'Initialization and Consent Initialization are created by GTM itself, not authored per tag',
+    consentInit: 'as above',
+    always: 'the All Pages pseudo-trigger, not separately authorable',
+    serverPageview: 'server containers only',
+    ampClick: 'AMP containers only',
+    ampTimer: 'AMP containers only',
+    ampScroll: 'AMP containers only',
+    ampVisibility: 'AMP containers only',
+  };
+  const BUILDABLE: TriggerKind[] = ['link_click', 'all_clicks', 'custom_event', 'pageview', 'form_submit', 'youtube_video', 'timer', 'element_visibility', 'history_change', 'scroll_depth', 'dom_ready', 'window_loaded', 'js_error'];
+  const built = new Set(BUILDABLE.map((k) => buildTrigger({ name: 'x', kind: k, eventName: 'e' }).type));
+  const missing = OFFICIAL.filter((t) => !t.startsWith('firebase') && !built.has(t) && !(t in EXCLUDED));
+  assert.deepEqual(missing, [], 'unhandled official trigger types: ' + missing.join(', '));
+  // Every kind we claim to build must produce a DISTINCT official type.
+  assert.equal(built.size, BUILDABLE.length, 'two kinds collapsed to the same GTM type');
+  for (const t of built) assert.ok(OFFICIAL.includes(t), 'built a type not in the official enum: ' + t);
+});
+
+test('coverage: every official Condition operator is reachable, and negation uses the negate param', () => {
+  // Verbatim from the GTM API v2 Condition reference.
+  const OFFICIAL_OPS = ['equals', 'contains', 'startsWith', 'endsWith', 'matchRegex', 'greater', 'greaterOrEquals', 'less', 'lessOrEquals', 'cssSelector'];
+  for (const op of OFFICIAL_OPS) {
+    const t = buildTrigger({ name: 'x', kind: 'all_clicks', clickUrlValue: 'v', clickUrlOperator: op });
+    assert.equal(((t.filter ?? [])[0] as { type: string }).type, op, 'operator ' + op + ' must pass through');
+  }
+  // Negation is the base type PLUS a `negate` boolean, never a distinct condition type.
+  const neg = buildTrigger({ name: 'x', kind: 'all_clicks', clickUrlValue: 'v', clickUrlOperator: 'notContains' });
+  const f = (neg.filter ?? [])[0] as { type: string; parameter: Array<Record<string, unknown>> };
+  assert.equal(f.type, 'contains');
+  assert.equal(f.parameter.find((p) => p.key === 'negate')?.value, 'true');
 });
 
 test('builtInVarsForTemplates: maps built-in var refs, ignores user variables', () => {

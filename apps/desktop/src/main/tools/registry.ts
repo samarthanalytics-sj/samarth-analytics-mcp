@@ -36,6 +36,8 @@ import {
   buildTrigger,
   triggerBuiltInVars,
   triggerDataLayerVarKeys,
+  triggerUrlVarNames,
+  buildQueryStringVariable,
   builtInVarsForTemplates,
   buildVariable,
   buildUrlQueryVariable,
@@ -176,6 +178,9 @@ function describeTriggerCondition(t: Record<string, unknown> | undefined): strin
     if (g('clickElementValue')) parts.push(`Click Element matches "${g('clickElementValue')}"`);
     if (g('clickClassesValue')) parts.push(`Click Classes ${op('clickClassesOperator')} "${g('clickClassesValue')}"`);
     if (g('clickIdValue')) parts.push(`Click ID ${op('clickIdOperator')} "${g('clickIdValue')}"`);
+    if (g('pageHostnameValue')) parts.push(`Page Hostname ${op('pageHostnameOperator')} "${g('pageHostnameValue')}"`);
+    if (g('queryStringValue')) parts.push(`Query String ${op('queryStringOperator')} "${g('queryStringValue')}"`);
+    if (g('referrerValue')) parts.push(`Referrer ${op('referrerOperator')} "${g('referrerValue')}"`);
     const base = kind === 'link_click' ? 'link click' : 'click';
     return parts.length ? `${base} where ${parts.join(' AND ')}` : `${base} (any)`;
   }
@@ -2889,7 +2894,7 @@ export function buildToolRegistry(
             type: 'object',
             properties: {
               name: { type: 'string' },
-              kind: { type: 'string', enum: ['link_click', 'all_clicks', 'custom_event', 'pageview', 'form_submit', 'youtube_video', 'timer'] },
+              kind: { type: 'string', enum: ['link_click', 'all_clicks', 'custom_event', 'pageview', 'form_submit', 'youtube_video', 'timer', 'element_visibility', 'history_change', 'scroll_depth', 'dom_ready', 'window_loaded', 'js_error'] },
               clickUrlValue: { type: 'string' },
               clickUrlOperator: { type: 'string' },
               clickUrlIgnoreCase: { type: 'boolean' },
@@ -2902,6 +2907,21 @@ export function buildToolRegistry(
               clickClassesOperator: { type: 'string' },
               clickIdValue: { type: 'string' },
               clickIdOperator: { type: 'string' },
+              pageHostnameValue: { type: 'string' },
+              pageHostnameOperator: { type: 'string' },
+              referrerValue: { type: 'string' },
+              referrerOperator: { type: 'string' },
+              queryStringValue: { type: 'string' },
+              queryStringOperator: { type: 'string' },
+              visibilitySelector: { type: 'string' },
+              visibilityElementId: { type: 'string' },
+              visibilityMinPercent: { type: 'number' },
+              visibilityFiringFrequency: { type: 'string', enum: ['ONCE', 'ONCE_PER_ELEMENT', 'MANY_PER_ELEMENT'] },
+              visibilityObserveDomChanges: { type: 'boolean' },
+              visibilityMinOnScreenMs: { type: 'number' },
+              scrollPercentages: { type: 'string' },
+              scrollPixels: { type: 'string' },
+              scrollHorizontalPercentages: { type: 'string' },
               lookupTable: {
                 type: 'object',
                 properties: { name: { type: 'string' }, texts: { type: 'array', items: { type: 'string' } } },
@@ -3069,6 +3089,21 @@ export function buildToolRegistry(
           clickClassesOperator: ts.clickClassesOperator != null ? s(ts.clickClassesOperator) : undefined,
           clickIdValue: ts.clickIdValue != null ? s(ts.clickIdValue) : undefined,
           clickIdOperator: ts.clickIdOperator != null ? s(ts.clickIdOperator) : undefined,
+          pageHostnameValue: ts.pageHostnameValue != null ? s(ts.pageHostnameValue) : undefined,
+          pageHostnameOperator: ts.pageHostnameOperator != null ? s(ts.pageHostnameOperator) : undefined,
+          referrerValue: ts.referrerValue != null ? s(ts.referrerValue) : undefined,
+          referrerOperator: ts.referrerOperator != null ? s(ts.referrerOperator) : undefined,
+          queryStringValue: ts.queryStringValue != null ? s(ts.queryStringValue) : undefined,
+          queryStringOperator: ts.queryStringOperator != null ? s(ts.queryStringOperator) : undefined,
+          visibilitySelector: ts.visibilitySelector != null ? s(ts.visibilitySelector) : undefined,
+          visibilityElementId: ts.visibilityElementId != null ? s(ts.visibilityElementId) : undefined,
+          visibilityMinPercent: ts.visibilityMinPercent != null ? s(ts.visibilityMinPercent) : undefined,
+          visibilityFiringFrequency: ts.visibilityFiringFrequency != null ? s(ts.visibilityFiringFrequency) : undefined,
+          visibilityObserveDomChanges: typeof ts.visibilityObserveDomChanges === 'boolean' ? ts.visibilityObserveDomChanges : undefined,
+          visibilityMinOnScreenMs: ts.visibilityMinOnScreenMs != null ? s(ts.visibilityMinOnScreenMs) : undefined,
+          scrollPercentages: ts.scrollPercentages != null ? s(ts.scrollPercentages) : undefined,
+          scrollPixels: ts.scrollPixels != null ? s(ts.scrollPixels) : undefined,
+          scrollHorizontalPercentages: ts.scrollHorizontalPercentages != null ? s(ts.scrollHorizontalPercentages) : undefined,
           formIdValue: ts.formIdValue != null ? s(ts.formIdValue) : undefined,
           formIdOperator: ts.formIdOperator != null ? s(ts.formIdOperator) : undefined,
           formClassesValue: ts.formClassesValue != null ? s(ts.formClassesValue) : undefined,
@@ -3161,6 +3196,9 @@ export function buildToolRegistry(
         // A custom_event trigger scoped by pushed dataLayer keys (e.g. form_id) needs a {{dlv - <key>}}
         // Data Layer Variable per key so the trigger condition resolves — auto-create the missing ones.
         const dlvKeys = triggerDataLayerVarKeys(triggerInput);
+        // A queryString trigger condition references {{Query String}}, which web containers do NOT
+        // provide as a built-in, so it must be created as a URL variable or the condition never resolves.
+        const trigUrlVars = triggerUrlVarNames(triggerInput);
         const createdVariables: string[] = [];
         // An ecommerce Meta tag references {{dlv - ecommerce.*}} in its Object Properties — best-effort
         // create those dataLayer variables so they resolve (idempotent; never fails the tag create).
@@ -3171,7 +3209,7 @@ export function buildToolRegistry(
             createdVariables.push(...(await data.createEcommerceDlvVariables(accountId, containerId, workspaceId)).created);
           } catch { /* best-effort: existing containers may already have them; the user can create them in GTM */ }
         }
-        if (urlVarNames.size || ecommerceVarNames.size || triggerInput.lookupTable || paramLookups.length || needsFormName || dlvKeys.length) {
+        if (urlVarNames.size || ecommerceVarNames.size || triggerInput.lookupTable || paramLookups.length || needsFormName || dlvKeys.length || trigUrlVars.length) {
           const existingVarNames = new Set(
             (await data.listGtmVariables(accountId, containerId, workspaceId)).map((v) => v.name.toLowerCase())
           );
@@ -3196,6 +3234,13 @@ export function buildToolRegistry(
               createdVariables.push('Form Name');
               existingVarNames.add('form name');
             } catch { /* best-effort: the tag still references it; the user can create it in GTM */ }
+          }
+          for (const name of trigUrlVars) {
+            if (existingVarNames.has(name.toLowerCase())) continue;
+            try {
+              await data.createGtmVariable(accountId, containerId, workspaceId, buildQueryStringVariable(name) as unknown as Record<string, unknown>);
+              createdVariables.push(name);
+            } catch { /* best-effort: the trigger still references it; the user can create it in GTM */ }
           }
           for (const name of urlVarNames) {
             if (existingVarNames.has(name.toLowerCase())) continue;
