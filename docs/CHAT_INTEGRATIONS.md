@@ -83,6 +83,48 @@ Create GA4 events end to end.
 - "Add a newsletter_signup event to the site and make it a key event."
 - "Score this container together with the property."
 
+### GTM + Google Ads: per-phone-number call conversions
+
+The fully automated version of "track every phone number on this page separately". Requires the
+Google Ads chip in a GTM chat (or the GTM chip in an Ads chat).
+
+1. **Detect.** `detect_page_phone_numbers` scans one or more page URLs and returns every **unique**
+   number, merged across pages and normalized to E.164 where possible. It finds both `tel:` links and
+   numbers printed as visible text, and reports which is which via `clickable`.
+2. **Confirm.** The chat shows the numbers, where each was seen, how many times, and whether it is
+   clickable. Nothing has been created at this point.
+3. **Plan.** `plan_phone_conversion_tracking` reads the page, the Ads account's existing conversion
+   actions and the container's existing tags, then returns a complete per-number plan: reuse an
+   action or create one, the exact tag and trigger, whether the tag is already present, and whether a
+   Conversion Linker is missing. Still read-only.
+4. **Approve.** You review that plan. Then each `create_google_ads_conversion_action` shows its own
+   approval card (see Safety below), and each GTM tag lands in the draft workspace.
+
+**Identity and determinism.** A number written `+1 555 123 4567`, `(555) 123-4567` and
+`tel:+15551234567` is recognised as one line and gets one action, one tag and one trigger. Names are
+derived from the number itself, so a re-scan reuses its own work instead of creating parallel
+duplicates, and `tagExists` marks steps already implemented. Two different lines that share a label
+("Call us") never collide.
+
+**Trigger scoping.** Each tag fires only for its own number: the trigger is `Click URL contains
+tel:<that number>`, not the shared `startsWith tel:` that the generic phone suggestion uses.
+
+**The country is never guessed.** A bare 10-digit number becomes `+1...` only when the same site
+carries explicit `+1` evidence. With no evidence it is returned unnormalized with a note, rather than
+being wired to a number in the wrong country.
+
+**Text-only numbers.** A number that is not a `tel:` link has no click to fire on, so click-to-call
+cannot track it. By default the plan marks it `unsupported` and says why. With
+`allowWebsiteCall: true` (only after you agree to number swapping) it plans a `WEBSITE_CALL`
+conversion action plus the GTM call-conversion tag: Google replaces the displayed number with a
+forwarding number and counts the call itself.
+
+**Example prompts**
+
+- "Scan https://example.com/contact and set up separate Google Ads conversion tracking for every
+  phone number."
+- "What phone numbers are on these three pages?"
+
 ### GTM + GA4 + Ads (both connected)
 
 `audit_google_ads_ga4_link` becomes available: it reports whether the property is linked to the Ads
@@ -125,11 +167,19 @@ The excluded tools are not hidden capabilities; they live in that platform's own
 prompt, context bar and memory scope belong to it. The system prompt tells the model to say so
 rather than attempt a tool it does not have.
 
+**Three approval tiers.** A write falls into exactly one:
+
+| Tier | Behaviour | Applies to |
+| --- | --- | --- |
+| Auto-apply | No card. The write lands in a **draft** GTM workspace, is never published by the app, and the Revert button covers it. | Every GTM create/edit |
+| **Approval card** (`Tool.approval`) | One plain card, no typed word. Args are editable before approving. | `create_google_ads_conversion_action` - additive, but **live** in the ad account and not revertible by this app |
+| Destructive card | Two steps, type "delete" to confirm. | Every `delete_*` / `archive_*` |
+
 Unchanged by integrations:
 
 - **GTM writes are draft-only.** They land in a draft workspace and are never published by the app.
-- **Approvals are delete-only.** Creates and edits apply directly; destructive tools show the
-  two-step card. Ads writes are live and immediate, which the prompt states explicitly.
+- **Deletes still require the two-step card.** The new middle tier only moved a live-account create
+  out of auto-apply; it did not relax anything.
 - **Read-only sessions stay read-only.** With writes off for the chat, a connected platform
   contributes reads and nothing else.
 - **Container-kind scoping still applies.** A server container withholds web-only builders even
@@ -163,12 +213,23 @@ Unchanged by integrations:
 - **GA4 <-> Ads only through GTM.** They are never offered to each other directly.
 - **Config plane only.** Building a tag proves nothing about firing. Runtime evidence comes from the
   GTM tab's tag verification, and the chat never claims collection before publish plus verification.
+- **Phone detection is bounded and heuristic.** Up to 10 URLs per call. Visible-text matching is
+  deliberately conservative (a country code or grouping punctuation is required; dates, prices,
+  percentages and long unpunctuated ids are rejected), so a number written unusually can be missed.
+  A page that returns no readable text is reported as such, so "none found" is never presented as
+  "none exist".
+- **`WEBSITE_CALL` creation depends on the account.** The type is now forwarded to the API and
+  dry-run validated first, but Google may still reject it depending on account eligibility. That
+  rejection is reported verbatim with nothing written.
 
 ## Where the code lives
 
 | Concern | File |
 | --- | --- |
 | Matrix, labels, hints, write allowlist, availability, prompt builder | `apps/desktop/src/shared/chat-integrations.ts` |
+| Phone normalization, merging, naming, plan builder (pure) | `apps/desktop/src/shared/phone-numbers.ts` |
+| Phone scanning I/O (drives the browser, reads the DOM) | `apps/desktop/src/main/suggestions/scan-phones.ts` |
+| Visible-text capture for text-number detection | `apps/web-audit-mcp/src/agent/tag-suggest/collect.ts` (`textSample`), plus the cheerio and multi drivers |
 | Chips, per-account persistence, context bars | `apps/desktop/src/renderer/src/App.tsx` |
 | Wire sanitizing | `apps/desktop/src/main/ipc/chat-ipc.ts` |
 | Availability gating, prompt composition, context + memory + carry-over scoping | `apps/desktop/src/main/services/chat-service.ts` |

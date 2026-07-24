@@ -50,6 +50,11 @@ export interface RawElement {
 export interface PageScanRaw {
   elements: RawElement[];
   signals: PageSignals;
+  /** Bounded sample of the page's VISIBLE text (innerText, whitespace-collapsed, capped).
+   *  OPTIONAL: a driver that cannot produce it simply omits it, and anything reading it degrades to
+   *  finding nothing rather than failing. Consumed by phone-number detection, where a number printed
+   *  as plain text has no element to attach to. */
+  textSample?: string;
 }
 
 /** Serialized by Playwright/Electron and executed IN the page (DOM globals).
@@ -284,8 +289,20 @@ export function collectPageInBrowser(): PageScanRaw {
     /* framework probe threw — leave undefined */
   }
 
+  // A bounded sample of the page's VISIBLE text. Phone-number detection needs it: a number printed
+  // in the footer as plain text carries no href, so element scanning alone can never see it.
+  // innerText (not textContent) so script/style bodies and hidden nodes stay out, and capped so a
+  // long article cannot balloon the scan payload.
+  let textSample = '';
+  try {
+    textSample = String((document.body as HTMLElement | null)?.innerText ?? '').replace(/\s+/g, ' ').slice(0, 20000);
+  } catch {
+    /* innerText unavailable (detached/odd document) - text-based detection simply finds nothing */
+  }
+
   return {
     elements,
+    ...(textSample ? { textSample } : {}),
     signals: {
       scriptSrcs: scriptSrcs.slice(0, 300),
       classNames: Array.from(classNames),

@@ -32,9 +32,14 @@ export function mergeDriven(results: DrivenPage[]): DrivenPage {
   const iframeSrcs = new Set<string>();
   const forms: RawForm[] = [];
   const seenForm = new Set<string>();
+  // Visible text: keep the RICHEST sample any driver produced rather than concatenating. The drivers
+  // render the same page, so joining them would duplicate every number and inflate its occurrence
+  // count; the JS-rendered sample is a superset of the static one, so longest wins.
+  let textSample = '';
 
   for (const r of ok) {
     if (r.raw) {
+      if (r.raw.textSample && r.raw.textSample.length > textSample.length) textSample = r.raw.textSample;
       for (const e of r.raw.elements) {
         const k = elKey(e);
         if (!seenEl.has(k)) {
@@ -64,6 +69,7 @@ export function mergeDriven(results: DrivenPage[]): DrivenPage {
     finalUrl: primary.finalUrl,
     raw: {
       elements,
+      ...(textSample ? { textSample } : {}),
       signals: { scriptSrcs: [...scriptSrcs].slice(0, 300), classNames: [...classNames].slice(0, 600), selectorsPresent: [...selectorsPresent], iframeSrcs: [...iframeSrcs].slice(0, 80) },
     },
     rawForms: forms,

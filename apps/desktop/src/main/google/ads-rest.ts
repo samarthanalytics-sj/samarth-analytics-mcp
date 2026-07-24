@@ -215,6 +215,19 @@ export interface CreateConversionActionInput {
   name: string;
   category: string;
   countingType?: string;
+  /**
+   * WEBPAGE (default) or WEBSITE_CALL.
+   *
+   * WEBSITE_CALL is the "calls from a website" action behind Google's number-swap call reporting:
+   * the page shows a Google forwarding number and Google counts the call itself. It is the ONLY
+   * way to measure a phone number that is printed as text rather than linked, because there is no
+   * click to fire a normal conversion tag on. Its snippet is what the GTM awcc (call conversion)
+   * tag consumes, which is why it is offered here at all.
+   *
+   * Every other type stays out on purpose: upload/app/store types produce an action whose
+   * tag_snippets is permanently empty, so nothing in GTM could ever fire them.
+   */
+  type?: 'WEBPAGE' | 'WEBSITE_CALL';
   valueSettings?: { defaultValue?: number; defaultCurrencyCode?: string; alwaysUseDefaultValue?: boolean };
 }
 
@@ -286,11 +299,13 @@ export function createConversionActionBody(
   const category = String(input.category ?? '').trim().toUpperCase();
   const create: Record<string, unknown> = {
     name: String(input.name ?? '').trim(),
-    // WEBPAGE is the only type that makes Google mint a tag snippet, and the snippet is the entire
-    // point: the GTM awct tag cannot be built without the conversion id and label that only
-    // tag_snippets carries. UPLOAD_CLICKS and the app types produce an action whose tag_snippets is
-    // permanently empty, so nothing in GTM could ever fire it.
-    type: 'WEBPAGE',
+    // WEBPAGE and WEBSITE_CALL are the two types that make Google mint a tag snippet, and the
+    // snippet is the entire point: neither the GTM awct tag nor the awcc call tag can be built
+    // without the conversion id and label that only tag_snippets carries. UPLOAD_CLICKS and the app
+    // types produce an action whose tag_snippets is permanently empty, so nothing in GTM could ever
+    // fire it, and they stay unreachable from here. An unrecognised value falls back to WEBPAGE
+    // rather than being forwarded to the API.
+    type: input.type === 'WEBSITE_CALL' ? 'WEBSITE_CALL' : 'WEBPAGE',
     category,
     status: 'ENABLED',
     countingType: input.countingType

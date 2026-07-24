@@ -466,7 +466,7 @@ function fakeAds(
           {
             resourceName: 'customers/9876543210/conversionActions/111', id: '111', name: 'Contact form',
             status: 'ENABLED', type: 'WEBPAGE', category: 'SUBMIT_LEAD_FORM', primaryForGoal: true,
-            conversionId: 'AW-17667466396', conversionLabel: 'g9RqCLD6kdQcEJzJwOhB', taggable: true,
+            conversionId: 'AW-17867466396', conversionLabel: 'g9RqCLD6kdQcEJzJwOhB', taggable: true,
           },
           {
             resourceName: 'customers/9876543210/conversionActions/222', id: '222', name: 'Offline sale',
@@ -492,7 +492,7 @@ function fakeAds(
       return {
         resourceName: 'customers/9876543210/conversionActions/333', id: '333', name: input.name,
         status: 'ENABLED', type: 'WEBPAGE', category: input.category,
-        conversionId: 'AW-17667466396', conversionLabel: 'NEWLABEL123', taggable: true,
+        conversionId: 'AW-17867466396', conversionLabel: 'NEWLABEL123', taggable: true,
       };
     },
   } as unknown as GoogleAdsService;
@@ -532,6 +532,7 @@ async function main(): Promise<void> {
       'check_ga4_compatibility',
       'check_gtm_measurement_ids',
       'detect_meta_web_tags',
+      'detect_page_phone_numbers',
       'diff_gtm_versions',
       'diff_gtm_workspace_vs_live',
       'discover_site_urls',
@@ -570,6 +571,7 @@ async function main(): Promise<void> {
       'list_unused_gtm_variables',
       'lookup_corpus_patterns',
       'monitor_ga4_property',
+      'plan_phone_conversion_tracking',
       'rank_ga4_campaigns',
       'run_ga4_realtime_report',
       'run_ga4_report',
@@ -599,7 +601,7 @@ async function main(): Promise<void> {
 
   await test('write tools appear ONLY when a confirm function is provided', async () => {
     const readOnly = buildToolRegistry(fakeData().data);
-    assert.equal(readOnly.list().length, 58, 'read-only registry has 58 tools');
+    assert.equal(readOnly.list().length, 60, 'read-only registry has 60 tools');
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
@@ -616,8 +618,9 @@ async function main(): Promise<void> {
     // plus the read-only rank_ga4_campaigns = 106, plus the read-only suggest_tags_from_url = 107,
     // plus the read-only get_form_tracking_recipe = 108, plus the read-only lookup_corpus_patterns = 109,
     // plus the read-only discover_site_urls = 110.
-    // plus the read-only check_ga4_compatibility = 111, plus spy_gtag_config = 112.
-    assert.equal(withWrites.list().length, 112 + 64, 'read + write registry has 112 GTM/GA4-read/context + 64 GA4-write tools');
+    // plus the read-only check_ga4_compatibility = 111, plus spy_gtag_config = 112, plus the two
+    // phone-conversion reads (detect_page_phone_numbers, plan_phone_conversion_tracking) = 114.
+    assert.equal(withWrites.list().length, 114 + 64, 'read + write registry has 114 GTM/GA4-read/context + 64 GA4-write tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_pinterest_capi_server_tag'), true, 'create_pinterest_capi_server_tag present');
     assert.equal(withWrites.list().some((t) => t.name === 'create_reddit_capi_server_tag'), true, 'create_reddit_capi_server_tag present');
     assert.equal(withWrites.list().some((t) => t.name === 'create_amazon_capi_server_tag'), true, 'create_amazon_capi_server_tag present');
@@ -2475,7 +2478,7 @@ async function main(): Promise<void> {
     const list = rec(JSON.parse(await gtm.execute('list_google_ads_conversion_actions', { customerId: '9876543210', loginCustomerId: '1234567890' })));
     assert.ok(fa.calls.includes('listConversionActions:9876543210:1234567890'), 'the manager id is passed through');
     const actions = list.actions as Array<Record<string, unknown>>;
-    assert.equal(actions[0].conversionId, 'AW-17667466396');
+    assert.equal(actions[0].conversionId, 'AW-17867466396');
     assert.equal(actions[0].conversionLabel, 'g9RqCLD6kdQcEJzJwOhB', 'the label is what a GTM awct tag cannot be built without');
     assert.equal(actions[0].taggable, true);
     // An untaggable action reports null + the reason instead of a plausible-looking label.
@@ -2813,6 +2816,69 @@ async function main(): Promise<void> {
     assert.equal(list.actions.some((a: { name: string }) => a.name === 'Deleted action'), false, 'a removed action is absent, not invented');
     const untaggable = list.actions.find((a: { taggable: boolean }) => !a.taggable);
     assert.ok(untaggable?.note, 'an untaggable action carries the reason a tag cannot be built for it');
+  });
+
+  // ── Phone conversions: the LIVE Ads create now shows a real approval card ──
+  // Every GTM create still auto-applies (draft workspace, revertible). The Ads conversion action is
+  // the exception: additive, so the delete wording would be theatre, but live in someone's ad
+  // account and not revertible by this app, so it gets one plain card the user can decline or edit.
+  await test('create_google_ads_conversion_action asks for approval, and DECLINING creates nothing', async () => {
+    const fa = fakeAds();
+    const cards: Array<{ destructive?: boolean; requireTextConfirm?: string; summary: string }> = [];
+    const decline = async (p: { summary: string; details: Record<string, unknown>; destructive?: boolean; requireTextConfirm?: string }) => { cards.push(p); return null; };
+    const reg = buildToolRegistry(fakeData().data, decline, 'gtm', undefined, undefined, undefined, undefined, fa.ads);
+    const out = JSON.parse(await reg.execute('create_google_ads_conversion_action', { customerId: '9876543210', name: 'Phone call - +15551234567', category: 'PHONE_CALL_LEAD' }));
+    assert.equal(out.declined, true, 'a declined card creates nothing');
+    assert.ok(!fa.calls.some((c) => c.startsWith('createConversionAction')), 'the API was never called');
+    assert.equal(cards.length, 1, 'exactly one card was shown');
+    assert.notEqual(cards[0].destructive, true, 'it is NOT the destructive two-step card');
+    assert.equal(cards[0].requireTextConfirm, undefined, 'and it does not demand a typed word');
+    assert.match(cards[0].summary, /LIVE Google Ads conversion action/, 'the card says it is live, not a draft');
+  });
+
+  await test('approving the card applies it, and the user can EDIT the args first', async () => {
+    const fa = fakeAds();
+    const rename = async (p: { details: Record<string, unknown> }) => ({ ...p.details, name: 'Renamed in the card' });
+    const reg = buildToolRegistry(fakeData().data, rename, 'gtm', undefined, undefined, undefined, undefined, fa.ads);
+    const out = JSON.parse(await reg.execute('create_google_ads_conversion_action', { customerId: '9876543210', name: 'Original', category: 'PHONE_CALL_LEAD' }));
+    assert.equal(out.ok, true, JSON.stringify(out));
+    assert.ok(fa.calls.some((c) => c.includes('Renamed in the card')), `the edited name reached the API: ${fa.calls.join(', ')}`);
+  });
+
+  await test('a GTM create still applies directly: the new gate did not leak onto draft writes', async () => {
+    let cards = 0;
+    const count = async (p: { details: Record<string, unknown> }) => { cards += 1; return p.details; };
+    const reg = buildToolRegistry(fakeData().data, count, 'gtm');
+    await reg.execute('create_gtm_tracking_tag', {
+      accountId: '1', containerId: '2', workspaceId: '3', platform: 'ga4_event',
+      tagName: 'GA4 - Event - Test', measurementId: 'G-1', eventName: 'test',
+      trigger: { name: 'T', kind: 'pageview' },
+    });
+    assert.equal(cards, 0, 'no approval card for a draft-workspace create');
+  });
+
+  await test('the phone tools are registered as READS and degrade honestly without Ads', async () => {
+    const names = buildToolRegistry(fakeData().data).list().map((t) => t.name);
+    assert.ok(names.includes('detect_page_phone_numbers'), 'detection is available read-only');
+    assert.ok(names.includes('plan_phone_conversion_tracking'), 'planning is available read-only');
+    // No Ads service wired: the plan tool must say so rather than throwing or half-answering.
+    const out = JSON.parse(await buildToolRegistry(fakeData().data).execute('plan_phone_conversion_tracking', {
+      url: 'https://example.com', customerId: '1', accountId: '1', containerId: '2', workspaceId: '3',
+    }));
+    assert.equal(out.ok, false);
+    assert.match(String(out.error), /Google Ads is not connected/);
+  });
+
+  await test('the phone plan tool reports an Ads readiness problem instead of scanning', async () => {
+    const notReady = fakeAds({ notReady: { code: 'DEVELOPER_TOKEN_MISSING', message: 'No Google Ads developer token is set.', remedy: 'Add it in Settings.' } });
+    const reg = buildToolRegistry(fakeData().data, approveAsIs, 'gtm', undefined, undefined, undefined, undefined, notReady.ads);
+    const out = JSON.parse(await reg.execute('plan_phone_conversion_tracking', {
+      url: 'https://example.com', customerId: '9876543210', accountId: '1', containerId: '2', workspaceId: '3',
+    }));
+    assert.equal(out.ok, false);
+    assert.match(String(out.error ?? out.message), /developer token/i);
+    // The readiness gate must come BEFORE the browser launch: no page was ever fetched.
+    assert.ok(!notReady.calls.some((c) => c.startsWith('listConversionActions')), 'no Ads read either');
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);

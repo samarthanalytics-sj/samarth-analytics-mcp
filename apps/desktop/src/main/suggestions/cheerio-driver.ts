@@ -123,8 +123,22 @@ export function extractWithCheerio(html: string, baseUrl: string): { raw: PageSc
   }
 
   const rawForms = extractFormsCheerio($, abs);
+  // Visible-text sample for phone detection. Cheerio has no layout, so script/style bodies are
+  // removed explicitly - innerText's job in the browser drivers. Same cap as the browser path.
+  let textSample = '';
+  try {
+    const $body = $('body').clone();
+    $body.find('script, style, noscript, template').remove();
+    textSample = $body.text().replace(/\s+/g, ' ').trim().slice(0, 20000);
+  } catch {
+    /* no body / parse quirk - text-based detection simply finds nothing on this driver */
+  }
   return {
-    raw: { elements, signals: { scriptSrcs: scriptSrcs.slice(0, 300), classNames: [...classNames].slice(0, 600), selectorsPresent, iframeSrcs: iframeSrcs.slice(0, 80) } },
+    raw: {
+      elements,
+      ...(textSample ? { textSample } : {}),
+      signals: { scriptSrcs: scriptSrcs.slice(0, 300), classNames: [...classNames].slice(0, 600), selectorsPresent, iframeSrcs: iframeSrcs.slice(0, 80) },
+    },
     rawForms,
   };
 }
