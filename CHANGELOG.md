@@ -1,3 +1,9 @@
+## [1.404.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.403.0...v1.404.0) (2026-07-24)
+
+### Features
+
+* **triggers:** Element Visibility, History Change, Scroll Depth, DOM Ready, Window Loaded and JS Error triggers, plus Page Hostname / Query String / Referrer conditions ([#696](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/696)) ([c5e2a43](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c5e2a43c2428a4f6606247efa495e794f985d2ef))
+
 ## [1.403.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.402.0...v1.403.0) (2026-07-24)
 
 ### Features
