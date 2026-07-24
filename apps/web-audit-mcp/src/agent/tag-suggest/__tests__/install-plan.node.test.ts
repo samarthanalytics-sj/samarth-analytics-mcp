@@ -194,8 +194,10 @@ assert.strictEqual(
     siteHost: 'acme.com',
     forms: [],
     elements: [
-      { page: '/', kind: 'email', text: 'Email us' },        // → link_click (native)
-      { page: '/', kind: 'phone', text: 'Call us' },          // → link_click (native)
+      // The hrefs are what a real scan yields, and they now MATTER: a contact element with no href
+      // is a non-link block, which is triggered on its class rather than on a mailto:/tel: scheme.
+      { page: '/', kind: 'email', text: 'Email us', href: 'mailto:hi@acme.com' },  // → link_click (native)
+      { page: '/', kind: 'phone', text: 'Call us', href: 'tel:+15551234' },        // → link_click (native)
     ],
     videoEmbeds: [{ page: '/', provider: 'youtube' }],        // → youtube_video (native)
     websiteType: 'ecommerce',                                 // → add_to_cart etc. (custom_event, ecommerce)
