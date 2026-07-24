@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { chooseClickConditions, semanticClasses } from '../../../../../web-audit-mcp/src/agent/tag-suggest/trigger-strategy.js';
 import { dateContextLine, buildSituationalContext, ANSWER_THE_CURRENT_MESSAGE, GTM_AUDIT_METHODOLOGY, GA4_TAG_NAMING, GA4_ECOMMERCE_REFERENCE, GTM_CREATION_METHODOLOGY, GTM_TRIGGER_VARIABLE_REFERENCE, GTM_DECISION_RULES, GA4_DATA_FRESHNESS, CORPUS_PROMPT } from '../chat-service';
 import { AUDIT_REPORTING_METHODOLOGY } from '../../../shared/jit-reference';
 
@@ -94,7 +95,8 @@ test('GTM_TRIGGER_VARIABLE_REFERENCE covers trigger/variable types + the Lookup 
   assert.ok(/create_gtm_variable_typed/.test(m) && /create_gtm_variable\b/.test(m) && /create_gtm_trigger\b/.test(m), 'names typed + raw tools');
   assert.ok(/constant \| data_layer \| javascript/.test(m), 'lists the four typed variable kinds');
   // Trigger reference incl. raw-only types.
-  assert.ok(/Element Visibility/.test(m) && /elementVisibility/.test(m), 'Element Visibility trigger (raw)');
+  assert.ok(/Element Visibility/.test(m) && /element_visibility/.test(m), 'Element Visibility is now a TYPED kind, not a raw create');
+  assert.ok(/Only Trigger Group \[triggerGroup\] .*still needs RAW/.test(m), 'triggerGroup is the one remaining raw-only trigger');
   assert.ok(/Scroll Depth/.test(m) && /History Change/.test(m), 'scroll + history triggers');
   // Variable reference incl. DOM Element.
   assert.ok(/DOM Element/.test(m) && /type d\b|\[d\]/.test(m) && /attribute/i.test(m), 'DOM Element variable (text or attribute)');
@@ -110,9 +112,63 @@ test('GTM_DECISION_RULES carries the expert decision rules from the GTM guide (f
   assert.ok(/data layer/i.test(m) && /auto-event/i.test(m) && /PREFER the data layer/i.test(m), 'the data-layer vs auto-event fork');
   assert.ok(/reliability ladder/i.test(m) && /Data Layer Variable[\s\S]*Cookie[\s\S]*DOM Element/i.test(m), 'the value reliability ladder (DLV > cookie/global > DOM)');
   assert.ok(/\{\{Page URL\}\} equals "\/contact" NEVER matches/i.test(m) && /IDENTIFY A PAGE by \{\{Page Path\}\}/i.test(m), 'page path vs page URL rule');
-  assert.ok(/\{\{Click ID\}\}[\s\S]*\{\{Click Text\}\} \/ \{\{Click Classes\}\} LAST/i.test(m), 'click-field stability preference');
+  assert.ok(/\{\{Click ID\}\}[\s\S]*SEMANTIC class[\s\S]*\{\{Click URL\}\}[\s\S]*\{\{Click Text\}\} LAST/i.test(m), 'click-condition durability ladder, most durable first');
+  assert.ok(/build-generated names[\s\S]*runtime STATE names[\s\S]*generic wrappers/i.test(m), 'the three classes of class name that must be rejected');
+  assert.ok(/SAY SO and do not invent a condition/i.test(m), 'no durable signal means no trigger, not a guess');
+  assert.ok(/On Just Links \(link_click\)[\s\S]*ANCHOR[\s\S]*On All Elements \(all_clicks\)[\s\S]*EXACT node/i.test(m), 'click variables mean different things per trigger type');
+  assert.ok(/WHOLE class attribute as ONE string[\s\S]*never `equals`/i.test(m), 'Click Classes is the whole attribute, so equals is wrong');
+  assert.ok(/ONE CONDITION vs MANY[\s\S]*second semantic class[\s\S]*\{\{Page Path\}\}/i.test(m), 'single vs multi condition rule');
+  assert.ok(/Do NOT page-scope a header\/footer\/nav component/i.test(m), 'sitewide components must not be page-scoped');
   assert.ok(/data-layer success event[\s\S]*Element Visibility[\s\S]*native Form Submission/i.test(m), 'form reliability order');
   assert.ok(/MISTAKES TO AVOID/i.test(m) && /no firing trigger/i.test(m), 'the common-mistakes guards');
+});
+
+test('the prompt ladder and the executable ladder agree (they are two copies of one decision)', () => {
+  // GTM_DECISION_RULES tells the chat agent which click condition to pick; trigger-strategy.ts makes
+  // the same choice for the scanner. If they disagree, the same element gets two different triggers
+  // depending on which surface the user came through. This asserts they do not.
+  const link = (o: Record<string, unknown>) => chooseClickConditions({ triggerKind: 'link_click', ...o } as never);
+
+  // Rung 1: an author id wins over everything below it.
+  assert.equal(link({ id: 'book-demo', classes: 'promo-cta', href: 'tel:+61', text: 'Call' }).signal, 'clickId');
+  // Rung 2: a semantic class beats href and text.
+  assert.equal(link({ classes: 'dealer-phone', href: '/contact', text: '03 9999 1234' }).signal, 'clickClasses');
+  // Rung 3: href beats text.
+  assert.equal(link({ href: 'tel:+61399991234', text: '03 9999 1234' }).signal, 'clickUrl');
+  // Rung 4: text is last.
+  assert.equal(link({ text: 'Get a Quote' }).signal, 'clickText');
+  // Nothing durable produces NO conditions, which is what "do not invent a condition" means in code.
+  assert.equal(link({ classes: 'btn btn-primary' }).signal, null);
+
+  // Each rejected class family named in the prompt is genuinely rejected by the engine.
+  for (const cls of ['css-1x2y3z', 'sc-AbCdEfGh', 'jss142', 'button_a1b2c3', 'elementor-element-a1b2c3d', 'ng-tns-c12345678']) {
+    assert.equal(semanticClasses(cls).length, 0, `prompt claims ${cls} is rejected`);
+  }
+  for (const cls of ['is-active', 'collapsed', 'expanded']) {
+    assert.equal(semanticClasses(cls).length, 0, `prompt claims state class ${cls} is rejected`);
+  }
+  for (const cls of ['btn', 'card', 'wrapper', 'elementor-widget']) {
+    assert.equal(semanticClasses(cls).length, 0, `prompt claims generic wrapper ${cls} is rejected`);
+  }
+
+  // The all_clicks rule the prompt states verbatim: a class condition becomes a descendant-safe
+  // CSS selector, because {{Click Classes}} would report the inner element's classes.
+  const nested = chooseClickConditions({ triggerKind: 'all_clicks', classes: 'book-demo' });
+  assert.equal(nested.conditions[0].variable, '{{Click Element}}');
+  assert.equal(nested.conditions[0].value, '.book-demo, .book-demo *');
+
+  // The word-boundary rule the prompt states verbatim.
+  assert.equal(link({ classes: 'checkout-submit' }).conditions[0].operator, 'matchRegex');
+  assert.equal(link({ classes: 'checkout-submit' }).conditions[0].value, '(^|\\s)checkout-submit(\\s|$)');
+  // And the prompt's claim that a btn-* name is a STYLING wrapper, rejected outright rather than
+  // matched precisely, is what the engine actually does.
+  assert.equal(link({ classes: 'btn-buy' }).signal, null);
+
+  // Single vs many, and the sitewide-component exemption.
+  assert.equal(link({ classes: 'dealer-phone', occurrences: 1, page: '/dealers' }).conditions.length, 1);
+  assert.equal(link({ classes: 'dealer-phone au-region', occurrences: 12, page: '/dealers' }).conditions.length, 2);
+  assert.equal(link({ classes: 'dealer-phone', occurrences: 12, page: '/dealers' }).conditions[1].variable, '{{Page Path}}');
+  assert.equal(link({ text: 'Contact', occurrences: 9, page: '/about', sitewide: true }).conditions.length, 1);
 });
 
 test('GA4_DATA_FRESHNESS teaches "when did data last arrive" — widen the window, find the last active day, no over-alarm', () => {
