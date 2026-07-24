@@ -1,3 +1,9 @@
+## [1.403.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.402.0...v1.403.0) (2026-07-24)
+
+### Features
+
+* **scan:** collect non-link contact blocks, decode Cloudflare emails, and split address clicks out of outbound ([#695](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/695)) ([c805a82](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c805a820a54ffb291b9431e9afc9a824c0c87738))
+
 ## [1.402.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.401.0...v1.402.0) (2026-07-24)
 
 ### Features
