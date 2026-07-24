@@ -721,6 +721,16 @@ export interface TriggerInput {
    *  the row padding, OR the arrow icon all fire (they are all inside the matched element). */
   clickElementValue?: string;
   clickElementOperator?: string;
+  /** For clicks: match the element's class ATTRIBUTE via {{Click Classes}}. GTM exposes the whole
+   *  attribute as one string, so a single class is matched with `contains`, never `equals` - an
+   *  `equals` on one class of several silently never fires. Preferred over a CSS selector because it
+   *  keys on the author's own naming rather than on DOM structure. */
+  clickClassesValue?: string;
+  clickClassesOperator?: string;
+  /** For clicks: match the element's id via {{Click ID}}. The most durable click signal there is,
+   *  when the author gave one. */
+  clickIdValue?: string;
+  clickIdOperator?: string;
   /** For form_submit: scope to one form via {{Form ID}} / {{Form Classes}}. */
   formIdValue?: string;
   formIdOperator?: string;
@@ -804,6 +814,10 @@ export function buildTrigger(o: TriggerInput): GtmTriggerResource {
       const filters: Param[] = [];
       if (o.clickUrlValue) filters.push(condition('{{Click URL}}', o.clickUrlOperator ?? 'contains', o.clickUrlValue, o.clickUrlIgnoreCase === true));
       if (o.clickTextValue) filters.push(condition('{{Click Text}}', o.clickTextOperator ?? 'contains', o.clickTextValue, o.clickTextIgnoreCase === true));
+      if (o.clickIdValue) filters.push(condition('{{Click ID}}', o.clickIdOperator ?? 'equals', o.clickIdValue));
+      // `contains` by default: {{Click Classes}} is the entire class attribute, so equals on one
+      // class of several never matches.
+      if (o.clickClassesValue) filters.push(condition('{{Click Classes}}', o.clickClassesOperator ?? 'contains', o.clickClassesValue));
       if (o.clickElementValue) filters.push(condition('{{Click Element}}', o.clickElementOperator ?? 'cssSelector', o.clickElementValue));
       // Lookup-table grouping: the condition reads the companion smm variable, not {{Click Text}}.
       if (o.lookupTable?.name) filters.push(condition(`{{${o.lookupTable.name}}}`, 'equals', 'true'));
@@ -1130,6 +1144,10 @@ export function triggerBuiltInVars(o: TriggerInput): string[] {
     // A lookup-table trigger reads {{Click Text}} through its companion smm variable.
     if (o.clickTextValue || o.lookupTable?.name) vars.push('clickText');
     if (o.clickElementValue) vars.push('clickElement');
+    // Without these the container has no {{Click Classes}} / {{Click ID}} to evaluate, so the
+    // condition reads undefined and the trigger never fires.
+    if (o.clickClassesValue) vars.push('clickClasses');
+    if (o.clickIdValue) vars.push('clickId');
     if (o.pagePathValue) vars.push('pagePath');
   }
   if (o.kind === 'form_submit') {

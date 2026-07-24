@@ -157,7 +157,11 @@ const s = (v: unknown): string => String(v ?? '');
 function describeTriggerCondition(t: Record<string, unknown> | undefined): string {
   const g = (k: string): string | undefined => (t && typeof t[k] === 'string' ? (t[k] as string) : undefined);
   const kind = g('kind') ?? '';
-  const op = (k: string): string => g(k) ?? 'equals';
+  // Must mirror buildTrigger's per-field defaults, or the approval card states an operator GTM will
+  // not actually use. Both CLASS fields default to `contains` there, because {{Click Classes}} /
+  // {{Form Classes}} hold the whole class attribute and an `equals` on one class never matches.
+  const OP_DEFAULT: Record<string, string> = { clickClassesOperator: 'contains', formClassesOperator: 'contains' };
+  const op = (k: string): string => g(k) ?? OP_DEFAULT[k] ?? 'equals';
   if (kind === 'form_submit') {
     if (g('formIdValue')) return `form submit where Form ID ${op('formIdOperator')} "${g('formIdValue')}"`;
     if (g('formClassesValue')) return `form submit where Form Classes ${op('formClassesOperator')} "${g('formClassesValue')}"`;
@@ -169,6 +173,8 @@ function describeTriggerCondition(t: Record<string, unknown> | undefined): strin
     if (g('clickTextValue')) parts.push(`Click Text ${op('clickTextOperator')} "${g('clickTextValue')}"`);
     if (g('clickUrlValue')) parts.push(`Click URL ${op('clickUrlOperator')} "${g('clickUrlValue')}"`);
     if (g('clickElementValue')) parts.push(`Click Element matches "${g('clickElementValue')}"`);
+    if (g('clickClassesValue')) parts.push(`Click Classes ${op('clickClassesOperator')} "${g('clickClassesValue')}"`);
+    if (g('clickIdValue')) parts.push(`Click ID ${op('clickIdOperator')} "${g('clickIdValue')}"`);
     const base = kind === 'link_click' ? 'link click' : 'click';
     return parts.length ? `${base} where ${parts.join(' AND ')}` : `${base} (any)`;
   }
@@ -2891,6 +2897,10 @@ export function buildToolRegistry(
               clickTextIgnoreCase: { type: 'boolean' },
               clickElementValue: { type: 'string' },
               clickElementOperator: { type: 'string' },
+              clickClassesValue: { type: 'string' },
+              clickClassesOperator: { type: 'string' },
+              clickIdValue: { type: 'string' },
+              clickIdOperator: { type: 'string' },
               lookupTable: {
                 type: 'object',
                 properties: { name: { type: 'string' }, texts: { type: 'array', items: { type: 'string' } } },
@@ -3054,6 +3064,10 @@ export function buildToolRegistry(
           })(),
           clickElementValue: ts.clickElementValue != null ? s(ts.clickElementValue) : undefined,
           clickElementOperator: ts.clickElementOperator != null ? s(ts.clickElementOperator) : undefined,
+          clickClassesValue: ts.clickClassesValue != null ? s(ts.clickClassesValue) : undefined,
+          clickClassesOperator: ts.clickClassesOperator != null ? s(ts.clickClassesOperator) : undefined,
+          clickIdValue: ts.clickIdValue != null ? s(ts.clickIdValue) : undefined,
+          clickIdOperator: ts.clickIdOperator != null ? s(ts.clickIdOperator) : undefined,
           formIdValue: ts.formIdValue != null ? s(ts.formIdValue) : undefined,
           formIdOperator: ts.formIdOperator != null ? s(ts.formIdOperator) : undefined,
           formClassesValue: ts.formClassesValue != null ? s(ts.formClassesValue) : undefined,

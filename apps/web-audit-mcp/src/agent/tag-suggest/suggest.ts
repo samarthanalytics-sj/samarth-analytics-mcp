@@ -10,7 +10,8 @@ import { formIdScope, ephemeralFormIdNote, stableFormKey, looksEphemeralFormId }
 import { groupFormIdentity, type ProviderFormIdentity, type FormIdCondition } from './provider-form-id.js';
 import { CTA_BY_INTENT, classifyCtaIntent } from './cta-intents.js';
 import { buildSocialUrlPattern } from './social.js';
-import { buildFormInstallPlan, buildTriggerInstallPlan, type FormMechanism, type InstallRequirement } from './install-plan.js';
+import { buildFormInstallPlan, buildTriggerInstallPlan, type FormMechanism, type InstallRequirement } from './install-plan.js';
+import { chooseClickConditions } from './trigger-strategy.js';
 
 const GA4_VAR = '{{GA4 Measurement ID}}';
 // Event-parameter VALUES are GTM built-in variables, so the tag captures the
@@ -979,11 +980,22 @@ function elementSuggestion(el: DetectedElement, socialPattern: string): Suggeste
       // click-text value and the kind).
       const ctaText = el.text.replace(/\s+/g, ' ').trim();
       const displayLabel = ctaText.slice(0, 60) || def.label;
+      // An author-given id OUTRANKS the click text (trigger-strategy.ts rung 1): the id survives the
+      // copy edits that silently break a text-keyed trigger. Safe to substitute here even though the
+      // tag/event name still comes from the text, because an HTML id is unique within the document -
+      // so this cannot merge two differently-labelled CTAs the way a shared CLASS would. That is why
+      // classes are deliberately NOT substituted on this path: `.hero-cta` on five different CTAs
+      // would collapse them into one tag whose name claims to be just one of them.
+      const idStrategy = el.elementId ? chooseClickConditions({ triggerKind: kind, id: el.elementId }) : null;
+      const idCond = idStrategy?.signal === 'clickId' ? idStrategy.conditions[0] : null;
       const trigger: SuggestedTag['trigger'] = {
         name: trigNameOf(displayLabel, kind),
         kind,
-        clickTextValue: ctaText || def.label,
-        clickTextOperator: 'equals',
+        ...(idCond
+          ? idCond.variable === '{{Click ID}}'
+            ? { clickIdValue: idCond.value, clickIdOperator: 'equals' as const }
+            : { clickElementValue: idCond.value, clickElementOperator: 'cssSelector' as const }
+          : { clickTextValue: ctaText || def.label, clickTextOperator: 'equals' as const }),
       };
       // Event matches the tag name (both derived from the button text), e.g. "Buy Now" → buy_now_click,
       // instead of a shared generic cta_click. The intent still sets confidence (isSpecific).
@@ -1882,7 +1894,7 @@ export function buildSuggestions(
     // one outbound, etc.). The eventParameters are now all GTM-variable refs
     // (identical across instances), so the trigger filter is the discriminator,
     // not the parameter value.
-    const key = `${s.eventName}|${s.trigger.kind}|${s.trigger.clickUrlValue ?? ''}|${s.trigger.clickTextValue ?? ''}|${s.trigger.clickElementValue ?? ''}|${s.trigger.formIdValue ?? ''}|${s.trigger.formClassesValue ?? ''}|${s.trigger.pagePathValue ?? ''}|${s.trigger.pageUrlValue ?? ''}`;
+    const key = `${s.eventName}|${s.trigger.kind}|${s.trigger.clickUrlValue ?? ''}|${s.trigger.clickTextValue ?? ''}|${s.trigger.clickElementValue ?? ''}|${s.trigger.clickIdValue ?? ''}|${s.trigger.clickClassesValue ?? ''}|${s.trigger.formIdValue ?? ''}|${s.trigger.formClassesValue ?? ''}|${s.trigger.pagePathValue ?? ''}|${s.trigger.pageUrlValue ?? ''}`;
     const seen = byKey.get(key);
     if (!seen) byKey.set(key, { ...s });
     else if (seen.page !== s.page) seen.page = 'site-wide';

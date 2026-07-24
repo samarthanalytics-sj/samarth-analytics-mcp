@@ -35,6 +35,9 @@ export interface RawElement {
   /** The element's own class attribute — used to find a shared accordion/FAQ class so grouped FAQ
    *  questions can be tracked by ONE tag scoped to that class via {{Click Element}} matches CSS. */
   className?: string;
+  /** The element's own id attribute - the most durable click signal when an author set one.
+   *  Fed to the trigger-strategy ladder ahead of classes, href and text. */
+  elementId?: string;
 }
 export interface PageScanRaw {
   elements: RawElement[];
@@ -130,7 +133,7 @@ export function collectPageInBrowser(): PageScanRaw {
       seen.add(el);
       const cta = looksCta(el);
       // Only measure the box when the cheap class/role check didn't already flag it (measuring forces layout).
-      elements.push({ tag: 'a', href: el.href || '', text: txt(el), hasDownload: el.hasAttribute('download'), region: regionOf(el), cta, box: cta ? undefined : measureBox(el), className: el.getAttribute('class') || undefined });
+      elements.push({ tag: 'a', href: el.href || '', text: txt(el), hasDownload: el.hasAttribute('download'), region: regionOf(el), cta, box: cta ? undefined : measureBox(el), className: el.getAttribute('class') || undefined, elementId: el.getAttribute('id') || undefined });
     }
     // :not(a) — an <a href role="button"> is already captured (with its href) by
     // the anchor query above; without this it would be emitted again as a hrefless
@@ -138,7 +141,7 @@ export function collectPageInBrowser(): PageScanRaw {
     for (const b of Array.from(doc.querySelectorAll('button, [role="button"]:not(a)')).slice(0, MAX)) {
       if (elements.length >= MAX * 2) break;
       seen.add(b);
-      elements.push({ tag: 'button', href: '', text: txt(b), hasDownload: false, region: regionOf(b), cta: true, className: b.getAttribute('class') || undefined });
+      elements.push({ tag: 'button', href: '', text: txt(b), hasDownload: false, region: regionOf(b), cta: true, className: b.getAttribute('class') || undefined, elementId: b.getAttribute('id') || undefined });
     }
     // Non-semantic clickable controls: a bare <a> (no href, JS-routed), an [onclick], or a
     // btn/button/cta-classed div/span — emitted as a hrefless "button" so a styled CTA that isn't a
@@ -149,7 +152,7 @@ export function collectPageInBrowser(): PageScanRaw {
       const label = txt(c);
       if (!label) continue;
       seen.add(c);
-      elements.push({ tag: 'button', href: '', text: label, hasDownload: false, region: regionOf(c), cta: true, className: c.getAttribute('class') || undefined });
+      elements.push({ tag: 'button', href: '', text: label, hasDownload: false, region: regionOf(c), cta: true, className: c.getAttribute('class') || undefined, elementId: c.getAttribute('id') || undefined });
     }
     for (const s of Array.from(doc.querySelectorAll('script[src]')).slice(0, 200)) scriptSrcs.push((s as HTMLScriptElement).src);
     for (const fr of Array.from(doc.querySelectorAll('iframe[src]')).slice(0, 50)) {
@@ -309,7 +312,7 @@ export function isStyledButton(box: NonNullable<RawElement['box']>): boolean {
 export function classifyElement(raw: RawElement, siteHost: string): DetectedElement | null {
   const href = raw.href || '';
   const region = raw.region || undefined;
-  const make = (kind: DetectedElement['kind']): DetectedElement => ({ page: '', kind, text: raw.text, href: href || undefined, region, className: raw.className });
+  const make = (kind: DetectedElement['kind']): DetectedElement => ({ page: '', kind, text: raw.text, href: href || undefined, region, className: raw.className, elementId: raw.elementId });
   if (/^mailto:/i.test(href)) return make('email');
   if (/^tel:/i.test(href)) return make('phone');
   if (raw.tag === 'a' && /^https?:/i.test(href)) {

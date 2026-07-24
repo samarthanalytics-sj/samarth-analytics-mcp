@@ -482,6 +482,27 @@ check('cta: ALL CTA triggers use a plain "equals" condition (no regex)', ctaInpu
 // The hrefless CTAs above (buttons / JS controls) all pick "Click - All Elements".
 check('cta: a hrefless CTA (button / JS control) uses all_clicks (Click - All Elements)', ctaInput.every((s) => s.trigger.kind === 'all_clicks'));
 
+// ── CTA: an author-given id OUTRANKS the click text (trigger-strategy ladder rung 1) ─────────
+// Copy edits silently break a text-keyed trigger; an id does not. Substituting is safe here only
+// because an HTML id is unique per document, so it cannot merge two differently-labelled CTAs.
+const ctaIds = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [
+  { page: '/', kind: 'cta', text: 'Book a demo', intent: 'book_demo', href: 'https://a.com/demo', elementId: 'hero-demo-btn' }, // <a href> → link_click
+  { page: '/', kind: 'cta', text: 'Buy now', intent: 'generic', elementId: 'checkout-cta' },                                    // button → all_clicks
+  { page: '/', kind: 'cta', text: 'Sign up', intent: 'generic', elementId: ':r7:' },                                            // React useId → rejected
+  { page: '/x', kind: 'cta', text: 'Contact us', intent: 'contact' },                                                           // no id → text as before
+] });
+const byTag = (re: RegExp) => ctaIds.find((s) => re.test(s.tagName));
+check('cta id: a link CTA with an author id uses {{Click ID}} equals, not {{Click Text}}',
+  byTag(/Book A Demo/)?.trigger.clickIdValue === 'hero-demo-btn' && byTag(/Book A Demo/)?.trigger.clickIdOperator === 'equals' && !byTag(/Book A Demo/)?.trigger.clickTextValue);
+check('cta id: a BUTTON with an author id uses the descendant-safe {{Click Element}} CSS form',
+  byTag(/Buy Now/)?.trigger.clickElementValue === '#checkout-cta, #checkout-cta *' && byTag(/Buy Now/)?.trigger.clickElementOperator === 'cssSelector');
+check('cta id: a framework-generated id is REJECTED and the text condition is kept',
+  byTag(/Sign Up/)?.trigger.clickTextValue === 'Sign up' && !byTag(/Sign Up/)?.trigger.clickIdValue && !byTag(/Sign Up/)?.trigger.clickElementValue);
+check('cta id: an element with no id is unchanged (still {{Click Text}} equals)',
+  byTag(/Contact Us/)?.trigger.clickTextValue === 'Contact us' && byTag(/Contact Us/)?.trigger.clickTextOperator === 'equals');
+check('cta id: the tag/event name still comes from the TEXT, not the id',
+  byTag(/Book A Demo/)?.eventName === 'book_a_demo_click');
+
 // ── CTA trigger TYPE follows the element: <a href> → Just Links, button/control → All Elements ──
 const trigType = buildSuggestions({ siteHost: 'shop.example', forms: [], elements: [
   { page: '/', kind: 'cta', text: 'Buy now', intent: 'generic' },                                                    // <button> → all_clicks
