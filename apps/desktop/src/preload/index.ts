@@ -211,12 +211,15 @@ const api = {
 
     // Streaming chat. `onEvent` fires for text chunks + tool calls as they arrive;
     // the returned promise resolves with the final reply (or rejects on error).
+    // `integrations` are the cross-platform chips the user turned on for this thread
+    // (shared/chat-integrations.ts); an empty array means "this product only".
     chatStream: (
       history: ChatTurn[],
       message: string,
       product: GoogleProduct,
       onEvent: (event: ChatStreamEvent) => void,
-      media?: ChatMediaPart[]
+      media?: ChatMediaPart[],
+      integrations?: GoogleProduct[]
     ): Promise<ChatReply> => {
       const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
       activeChatRequestId = requestId;
@@ -230,7 +233,7 @@ const api = {
       };
       ipcRenderer.on('llm:chat:event', listener);
       return ipcRenderer
-        .invoke('llm:chat:start', requestId, history, message, product, media)
+        .invoke('llm:chat:start', requestId, history, message, product, media, integrations)
         .finally(() => {
           ipcRenderer.removeListener('llm:chat:event', listener);
           if (activeChatRequestId === requestId) activeChatRequestId = null;

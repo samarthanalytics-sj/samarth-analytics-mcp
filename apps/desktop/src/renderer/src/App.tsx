@@ -76,6 +76,7 @@ import type { SeedCandidate } from '../../shared/memory-seed';
 import { resolveChatInput, slashMenuMatches, type SlashCommand } from '../../shared/chat-commands';
 import { extractReplyTables, shouldOfferExport } from '../../shared/chat-export';
 import { adsStatus, adsStatusLabel, adsUsable, adsNeedsConsent } from '../../shared/ads-status';
+import { INTEGRATION_OPTIONS, INTEGRATION_LABEL, INTEGRATION_HINT } from '../../shared/chat-integrations';
 import { describeAdsToken } from '../../shared/ads-token-scope';
 import { ADS_ACCESS_DOCS, ADS_ACCESS_LEVELS, ADS_ACCESS_SUMMARY, ADS_TOKEN_INSTALL_STEPS, ADS_TOKEN_STEPS, ADS_API_CENTER_PATH } from '../../shared/ads-onboarding';
 import { parseSuggestionEvidence, isProviderFormIdLabel, providerDisplayName } from '../../shared/suggestion-details';
@@ -1205,6 +1206,29 @@ function ChatView({
   const [attaching, setAttaching] = useState(false);
   const [busy, setBusy] = useState(false);
   const [product, setProduct] = useState<GoogleProduct>('gtm');
+  // OPTIONAL cross-platform integrations for this chat (shared/chat-integrations.ts): which other
+  // platforms the user CONNECTED via the chips under the header. Off by default; persisted per
+  // account + product so a choice survives tab switches and restarts. Purely additive: without a
+  // chip the chat is single-product exactly as before.
+  const integrationsKey = `chatIntegrations:${active?.id ?? 'none'}:${product}`;
+  const [integrations, setIntegrations] = useState<GoogleProduct[]>([]);
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(integrationsKey);
+      const parsed: unknown = raw ? JSON.parse(raw) : [];
+      setIntegrations(Array.isArray(parsed) ? (parsed.filter((p) => (INTEGRATION_OPTIONS[product] as readonly string[]).includes(String(p))) as GoogleProduct[]) : []);
+    } catch {
+      setIntegrations([]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [integrationsKey]);
+  const toggleIntegration = (p: GoogleProduct): void => {
+    setIntegrations((cur) => {
+      const next = cur.includes(p) ? cur.filter((x) => x !== p) : [...cur, p];
+      try { localStorage.setItem(integrationsKey, JSON.stringify(next)); } catch { /* best-effort */ }
+      return next;
+    });
+  };
   // Slash-command autocomplete: highlighted index in the menu; reset whenever the input text changes.
   const [slashIdx, setSlashIdx] = useState(0);
   // One stored conversation per account + product + container; survives tab switches + restarts.
@@ -1417,13 +1441,15 @@ function ChatView({
             requireTextConfirm: ev.requireTextConfirm,
           });
         }
-      }, mediaParts);
+      }, mediaParts, integrations);
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
       setMessages((m) => (m[m.length - 1]?.role === 'assistant' && !m[m.length - 1].text ? m.slice(0, -1) : m));
     } finally {
       setBusy(false);
-      if (product === 'gtm') {
+      // The Revert button reads the GTM change journal, which a GA4/Ads chat now also fills when
+      // the GTM integration is connected (its tag writes are real GTM writes).
+      if (product === 'gtm' || integrations.includes('gtm')) {
         try {
           const change = await window.desktop.data.peekLastChange();
           setRevertable(change.count > 0 ? change : null);
@@ -1492,9 +1518,41 @@ function ChatView({
         </div>
       </div>
 
-      {product === 'gtm' && active && <GtmContextBar key={active.id} active={active} refresh={refresh} onError={onError} />}
-      {product === 'ga4' && active && <Ga4ContextBar key={active.id} active={active} refresh={refresh} onError={onError} />}
-      {product === 'ads' && active && <AdsContextBar key={active.id} active={active} refresh={refresh} onError={onError} />}
+      {/* OPTIONAL cross-platform integrations. Off by default: with nothing selected the chat is
+          single-product exactly as before. Turning one on brings that platform's tools AND its
+          working-context bar into this chat, so a whole workflow (Ads conversion action -> GTM
+          conversion tag, GA4 event -> GTM GA4 tag) finishes in one place. */}
+      {active && INTEGRATION_OPTIONS[product].length > 0 && (
+        <div style={styles.integrationBar}>
+          <span style={styles.integrationLabel}>Connect</span>
+          {INTEGRATION_OPTIONS[product].map((p) => {
+            const on = integrations.includes(p);
+            return (
+              <button
+                key={p}
+                style={on ? styles.integrationChipOn : styles.integrationChip}
+                onClick={() => toggleIntegration(p)}
+                aria-pressed={on}
+                title={INTEGRATION_HINT[product][p]}
+              >
+                <span aria-hidden style={{ ...styles.integrationDot, background: on ? 'var(--primary)' : 'var(--text-faint)' }} />
+                {INTEGRATION_LABEL[p]}
+              </button>
+            );
+          })}
+          <span style={styles.integrationHint}>
+            {integrations.length
+              ? `${integrations.map((p) => INTEGRATION_LABEL[p]).join(' + ')} tools are available in this chat.`
+              : 'Optional: connect another platform to finish cross-platform workflows here.'}
+          </span>
+        </div>
+      )}
+
+      {/* One context bar per platform this chat covers - its own product first, then whatever the
+          user connected, because a connected platform needs a working target just as much. */}
+      {(product === 'gtm' || integrations.includes('gtm')) && active && <GtmContextBar key={active.id} active={active} refresh={refresh} onError={onError} />}
+      {(product === 'ga4' || integrations.includes('ga4')) && active && <Ga4ContextBar key={active.id} active={active} refresh={refresh} onError={onError} />}
+      {(product === 'ads' || integrations.includes('ads')) && active && <AdsContextBar key={active.id} active={active} refresh={refresh} onError={onError} />}
 
       <div style={styles.chatLog}>
         <div style={styles.chatColumn}>
@@ -12088,6 +12146,15 @@ const styles: Record<string, React.CSSProperties> = {
   toggleActive: { background: 'var(--primary)', color: 'var(--on-primary)', border: 'none', padding: '6px 16px', fontSize: 13, fontWeight: 700, cursor: 'pointer', borderRadius: 7, boxShadow: '0 1px 3px var(--ring)' },
   chatTitle: { fontWeight: 600, fontSize: 19, color: 'var(--text)', letterSpacing: -0.3 },
   chatSub: { fontSize: 12.5, color: 'var(--text-muted)', marginTop: 3, lineHeight: 1.5 },
+  // Cross-platform integration chips: a quiet opt-in strip above the context bars. Deliberately
+  // lighter than the product toggle - connecting a platform is an addition to this chat, not a
+  // switch of what the chat IS.
+  integrationBar: { display: 'flex', alignItems: 'center', gap: 8, padding: '7px 20px', background: 'var(--surface)', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' },
+  integrationLabel: { color: 'var(--text-muted)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.4, fontWeight: 600 },
+  integrationChip: { display: 'inline-flex', alignItems: 'center', gap: 6, background: 'transparent', color: 'var(--text-dim)', border: '1px solid var(--border-2)', borderRadius: 20, padding: '3px 12px', fontSize: 12.5, fontWeight: 500, cursor: 'pointer' },
+  integrationChipOn: { display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--c-blue-bg)', color: 'var(--c-blue)', border: '1px solid var(--c-blue-border)', borderRadius: 20, padding: '3px 12px', fontSize: 12.5, fontWeight: 600, cursor: 'pointer' },
+  integrationDot: { width: 6, height: 6, borderRadius: '50%', display: 'inline-block', flexShrink: 0 },
+  integrationHint: { fontSize: 11.5, color: 'var(--text-faint)', flex: 1, minWidth: 160 },
   ctxBar: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '8px 20px', background: 'var(--surface-2)', borderBottom: '1px solid var(--border)', fontSize: 13, color: 'var(--text-dim)' },
   ctxBarEdit: { display: 'flex', alignItems: 'flex-end', gap: 10, padding: '8px 20px', background: 'var(--surface)', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' },
   ctxSelect: { background: 'var(--surface-2)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 6, padding: '6px 8px', fontSize: 13, maxWidth: 220 },

@@ -191,6 +191,47 @@ test('missing context degrades to identity only, never to a broken sentence', ()
   assert.ok(c.includes('CURRENT DATE'), 'the date survives with no container');
 });
 
+// ── Cross-platform integrations in the per-message context ──
+// A CONNECTED platform needs its working target in the prompt, or the model asks the user for an
+// id the app already knows. An UNCONNECTED one must stay out, for the same reason a GA4 turn never
+// sees the GTM container: the other product's saved context can point at a different client.
+test('a connected platform contributes its working context; an unconnected one does not', () => {
+  const withGa4 = buildSituationalContext({
+    ...ctxArgs,
+    integrations: ['ga4'],
+    ga4Context: { property: 'properties/123', propertyName: 'Site' },
+  });
+  assert.ok(withGa4.includes('GTM-ABC'), 'the GTM chat keeps its own container');
+  assert.ok(withGa4.includes('properties/123'), 'and gains the connected property');
+
+  const without = buildSituationalContext({
+    ...ctxArgs,
+    integrations: [],
+    ga4Context: { property: 'properties/123', propertyName: 'Site' },
+  });
+  assert.equal(without.includes('properties/123'), false, 'an unconnected GA4 property stays out');
+  assert.ok(without.includes('GTM-ABC'), 'the chat product itself is unaffected');
+});
+
+test('connecting GTM to a GA4 chat brings the container in, without losing the property', () => {
+  const c = buildSituationalContext({
+    ...ctxArgs,
+    product: 'ga4',
+    integrations: ['gtm'],
+    ga4Context: { property: 'properties/123', propertyName: 'Site' },
+  });
+  assert.ok(c.includes('properties/123'), 'its own property');
+  assert.ok(c.includes('GTM-ABC') && c.includes('workspace 7'), 'plus the container it will write the tag into');
+});
+
+test('integrations do not disturb the cache boundary: same connections, byte-identical block', () => {
+  const a = buildSituationalContext({ ...ctxArgs, integrations: ['ga4'], ga4Context: { property: 'properties/123' } });
+  const b = buildSituationalContext({ ...ctxArgs, integrations: ['ga4'], ga4Context: { property: 'properties/123' } });
+  assert.equal(a, b);
+  // Connecting a platform is a REAL change of what the model may act on, so it must miss the cache.
+  assert.notEqual(a, buildSituationalContext({ ...ctxArgs, integrations: [], ga4Context: { property: 'properties/123' } }));
+});
+
 test('the block ENDS with the most volatile content, so the stable part stays a shared prefix', () => {
   // Two turns differing only in the memories must share everything up to the memory block. If a
   // volatile field ever drifts earlier, this shortens and the cross-turn cache hit shrinks with it.

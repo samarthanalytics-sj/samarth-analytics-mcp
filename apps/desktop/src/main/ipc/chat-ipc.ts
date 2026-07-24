@@ -2,6 +2,7 @@ import { ipcMain, dialog, BrowserWindow } from 'electron';
 import type { ChatService } from '../services/chat-service';
 import type { ChatMediaPart, ChatTurn, GoogleProduct } from '../../shared/ipc';
 import type { WriteProposal } from '../tools/registry';
+import { sanitizeIntegrations } from '../../shared/chat-integrations';
 import { writeFile, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, basename } from 'node:path';
@@ -67,11 +68,20 @@ export function registerChatIpc(service: ChatService): void {
   // Non-streaming, read-only (no confirm → write tools unavailable).
   ipcMain.handle(
     'llm:chat',
-    (_event, history: ChatTurn[], message: string, product: GoogleProduct, media?: ChatMediaPart[]) => {
+    (_event, history: ChatTurn[], message: string, product: GoogleProduct, media?: ChatMediaPart[], integrations?: GoogleProduct[]) => {
       if (typeof message !== 'string' || message.trim().length === 0) {
         throw new Error('Message cannot be empty.');
       }
-      return service.chat(Array.isArray(history) ? history : [], message, asProduct(product), Array.isArray(media) ? media : undefined);
+      const p = asProduct(product);
+      return service.chat(
+        Array.isArray(history) ? history : [],
+        message,
+        p,
+        Array.isArray(media) ? media : undefined,
+        // Sanitized at the boundary: only platforms this product may connect survive, and a caller
+        // that never sent the field keeps the legacy scoping (undefined stays undefined).
+        integrations === undefined ? undefined : sanitizeIntegrations(p, integrations)
+      );
     }
   );
 
@@ -79,7 +89,7 @@ export function registerChatIpc(service: ChatService): void {
   // Write tools pause on a 'confirm' event until the renderer responds.
   ipcMain.handle(
     'llm:chat:start',
-    (event, requestId: string, history: ChatTurn[], message: string, product: GoogleProduct, media?: ChatMediaPart[]) => {
+    (event, requestId: string, history: ChatTurn[], message: string, product: GoogleProduct, media?: ChatMediaPart[], integrations?: GoogleProduct[]) => {
       if (typeof message !== 'string' || message.trim().length === 0) {
         throw new Error('Message cannot be empty.');
       }
@@ -112,7 +122,8 @@ export function registerChatIpc(service: ChatService): void {
           (ev) => send({ requestId, ...ev }),
           confirm,
           controller.signal,
-          Array.isArray(media) ? media : undefined
+          Array.isArray(media) ? media : undefined,
+          integrations === undefined ? undefined : sanitizeIntegrations(scopedProduct, integrations)
         )
         .finally(() => activeChats.delete(requestId));
     }
