@@ -1,3 +1,9 @@
+## [1.402.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.401.0...v1.402.0) (2026-07-24)
+
+### Features
+
+* **desktop:** harden cross-platform chat integrations - workflow-scoped writes, availability gating, isolation and docs ([44d54f1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/44d54f1e199f416cfbc66b43f353eee07f474aa3)), closes [#692](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/692)
+
 ## [1.401.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.400.0...v1.401.0) (2026-07-24)
 
 ### Features
