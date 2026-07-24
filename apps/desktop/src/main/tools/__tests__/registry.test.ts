@@ -2582,7 +2582,7 @@ async function main(): Promise<void> {
     assert.equal(out.code, 'CUSTOMER_NOT_ENABLED');
   });
 
-  await test('the GTM chat gets Ads READS only; every Ads write stays in the Ads chat', async () => {
+  await test('the GTM chat gets Ads reads + the conversion-action create; money movers stay out', async () => {
     // The GTM chat needs Ads reads for ONE job: a conversion action's ID and Label, so a
     // google_ads_conversion tag can be built without the user pasting them. It was also carrying
     // seven money/data movers (campaign status, budget, negative keywords, three uploads) while every
@@ -2593,7 +2593,19 @@ async function main(): Promise<void> {
     const isWrite = (n: string) => /^(create|update|set|add|upload)_/.test(n);
 
     assert.ok(adsInGtm.length > 0, 'the GTM chat still sees Ads tools');
-    assert.deepEqual(adsInGtm.filter(isWrite), [], 'but NO Ads write reaches a GTM turn');
+    // The conversion-action CREATE is the one write GTM keeps: a google_ads_conversion tag for a
+    // form that has never been tracked needs a label that does not exist yet, and the label is
+    // only ever returned by this call. Scoping it out left the chat able to READ a label but not
+    // mint one, which broke the flow the Ads tools are in the GTM chat for.
+    assert.deepEqual(
+      adsInGtm.filter(isWrite),
+      ['create_google_ads_conversion_action'],
+      'GTM keeps the conversion-action create and no other Ads write',
+    );
+    // Everything that moves money or pushes data stays out.
+    for (const n of ['set_google_ads_campaign_status', 'update_google_ads_campaign_budget', 'add_google_ads_negative_keywords', 'upload_google_ads_customer_match', 'update_google_ads_conversion_action']) {
+      assert.equal(adsInGtm.includes(n), false, `${n} must not reach a GTM turn`);
+    }
     // The one read the tag-prefill flow depends on must survive the narrowing.
     assert.ok(adsInGtm.includes('list_google_ads_conversion_actions'), 'the ID/Label read is kept');
     assert.ok(adsInGtm.includes('list_google_ads_accounts'), 'the account read is kept');

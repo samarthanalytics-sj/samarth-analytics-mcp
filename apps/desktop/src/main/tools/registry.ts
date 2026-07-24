@@ -2823,7 +2823,7 @@ export function buildToolRegistry(
         'Fields per platform: ga4_event (measurementId, eventName, optional eventParameters [{name,value}]); google_tag (tagId G-/AW-/GT-XXXX, optional configSettings); meta_pixel (pixelId, or measurementId as the pixel id, plus eventName = the Meta event e.g. PageView/Lead/AddToCart/Purchase/ViewContent; eventParameters become Meta Object Properties); tiktok_pixel (pixelId + eventName Pageview/ViewContent/AddToCart/CompletePayment); linkedin_insight (pixelId = LinkedIn Partner ID); reddit_pixel (pixelId + eventName PageVisit/ViewContent/AddToCart/Purchase/Lead/SignUp/Search; empty or PageVisit emits the full init snippet); pinterest_tag (pixelId + eventName pagevisit/viewcontent/addtocart/checkout/lead); google_ads_conversion (conversionId, conversionLabel); custom_html (html); conversion_linker (none; optional enableCrossDomain + comma-separated linkerDomains); google_ads_call_conversion (phoneNumber exactly as shown on the page, conversionId, conversionLabel); google_ads_remarketing (conversionId); floodlight (advertiserId, groupTag, activityTag; optional countingMethod); custom_image (url). Templated platforms are imported automatically. ' +
         'trigger.kind: link_click / all_clicks (optional clickUrlValue, clickTextValue, each with a *Operator equals|contains|startsWith|matchRegex); custom_event (eventName = the dataLayer event; ANDed scope via formIdValue, pagePathValue/pagePathOperator, pageUrlValue, or dataLayerConditions [{key,value,operator}], which scopes by a pushed dataLayer key through an auto-created {{dlv - <key>}} variable: the only way to scope an AJAX/embed form to ONE form, since {{Form ID}} does NOT work on a pushed event); pageview; timer (REQUIRES trigger.intervalMs in ms, optional trigger.limit); form_submit (formIdValue/formClassesValue with a *Operator scope to ONE form, or pagePathValue/pagePathOperator when the form has no id/class; omit all and it fires on every form submit). ' +
         'eventParameters values may be built-in variables ({{Click URL}}, {{Click Text}}, {{Form ID}}, {{Form URL}}), which are auto-enabled. ' +
-        'WHERE THE ADS VALUES COME FROM: for google_ads_conversion, google_ads_call_conversion and google_ads_remarketing, call list_google_ads_conversion_actions first and take conversionId + conversionLabel straight off the chosen action rather than asking the user to paste them. Both MUST be LITERAL values (e.g. "AW-17667466396" and "g9RqCLD6kdQcEJzJwOhB"), NEVER a {{variable}} or a placeholder: a braced value is passed to the awct template verbatim, so it keeps the "AW-" prefix the template rejects and you get a tag that looks created but records nothing.',
+        'WHERE THE ADS VALUES COME FROM: for google_ads_conversion, google_ads_call_conversion and google_ads_remarketing, call list_google_ads_conversion_actions first and take conversionId + conversionLabel straight off the chosen action rather than asking the user to paste them. IF NO ACTION FITS, create one with create_google_ads_conversion_action and use the conversionId + conversionLabel IT RETURNS - the label exists nowhere else in the API, so it has to come from that response, and this is the whole path for a form that has never been tracked. Do the two in ONE turn: create the action, then build the tag from its returned values, and tell the user both what was created in Google Ads (live, immediately) and what was created in the GTM draft workspace. Both MUST be LITERAL values (e.g. "AW-17667466396" and "g9RqCLD6kdQcEJzJwOhB"), NEVER a {{variable}} or a placeholder: a braced value is passed to the awct template verbatim, so it keeps the "AW-" prefix the template rejects and you get a tag that looks created but records nothing.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -5499,13 +5499,21 @@ export function buildToolRegistry(
   const all = [...readTools, ...(confirm ? [...writeTools, ...buildGa4WriteTools(data)] : []), ...contextTools, ...adsTools];
   const inProduct = (t: Tool): boolean => {
     if (adsToolNames.has(t.name)) {
-      // The GTM chat gets Ads READS only. It needs them for one job: reading a conversion action's
-      // ID and Label so a google_ads_conversion tag can be built without the user pasting them.
-      // It has no reason to pause a campaign or move a budget, and it was carrying seven such
-      // tools with NO prompt guidance about them - every word about money, live accounts and which
-      // gate applies lives in the Ads arm of the system prompt, which a GTM turn never sees. The
-      // writes stay fully available in the Ads chat, where that guidance is.
-      return product === 'ads' || (product === 'gtm' && !t.write);
+      if (product === 'ads') return true;
+      if (product !== 'gtm') return false;
+      // The GTM chat gets Ads reads PLUS the conversion-action create, and nothing else.
+      //
+      // Reads, because a google_ads_conversion tag needs a real Conversion ID and Label rather
+      // than pasted ones. The CREATE, because the whole point of that flow is "there is no action
+      // for this form yet" - scoping it out (as this briefly did) left the chat able to read a
+      // label but not mint one, so a user asking for a conversion tag on a new form had to switch
+      // to the Ads tab, create it, and come back. It is additive, spends nothing, and applies in
+      // one click like every other create.
+      //
+      // Still excluded: everything that MOVES MONEY OR DATA (campaign status, budgets, negative
+      // keywords, the three uploads, and edits to an existing action). All the guidance about
+      // those lives in the Ads arm of the system prompt, which a GTM turn never sees.
+      return !t.write || t.name === 'create_google_ads_conversion_action';
     }
     // An Ads chat gets NO GTM or GA4 tools. Its account scope is a customer id, not a container or a
     // property, so a GTM tool reached from here would act on whatever container was last selected in
