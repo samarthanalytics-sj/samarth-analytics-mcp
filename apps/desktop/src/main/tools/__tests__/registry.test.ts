@@ -2725,6 +2725,96 @@ async function main(): Promise<void> {
     assert.equal(legacyAds.includes('set_google_ads_campaign_status'), true, 'the Ads chat still owns its writes');
   });
 
+  // ── Connected-platform WRITE scoping: a chip grants a workflow, not an admin surface ──
+  await test('integrations: a connected platform contributes its reads + only its workflow writes', async () => {
+    const ads = fakeAds().ads;
+    const ctxControl = { current: () => undefined, set: () => {} };
+    const withIntegrations = (product: 'gtm' | 'ga4' | 'ads', integrations: Array<'gtm' | 'ga4' | 'ads'>): string[] =>
+      buildToolRegistry(fakeData().data, approveAsIs, product, undefined, ctxControl, undefined, undefined, ads, undefined, undefined, integrations)
+        .list().map((t) => t.name);
+
+    // GA4 connected to a GTM chat: the event-measurement creates, NOT the GA4 admin surface. The
+    // irreversible ones matter most - archiving a custom dimension cannot be undone, and deleting a
+    // property or an account from a chat about tags is nobody's intent.
+    const gtmGa4 = withIntegrations('gtm', ['ga4']);
+    for (const n of ['create_ga4_key_event', 'create_ga4_custom_dimension', 'create_ga4_custom_metric']) {
+      assert.equal(gtmGa4.includes(n), true, `${n} is part of the GA4 event workflow`);
+    }
+    for (const n of ['delete_ga4_key_event', 'archive_ga4_custom_dimension', 'archive_ga4_audience', 'delete_ga4_property', 'delete_ga4_account', 'create_ga4_property', 'update_ga4_data_retention', 'create_ga4_property_access_binding']) {
+      assert.equal(gtmGa4.includes(n), false, `${n} must NOT be reachable from a GTM chat`);
+    }
+    assert.equal(gtmGa4.includes('list_ga4_data_streams'), true, 'reads are always granted');
+
+    // GTM connected to a GA4 chat: build and adjust the tag, never destructive container cleanup.
+    const ga4Gtm = withIntegrations('ga4', ['gtm']);
+    for (const n of ['create_gtm_tracking_tag', 'create_gtm_trigger', 'update_gtm_tag', 'set_ga4_measurement_id']) {
+      assert.equal(ga4Gtm.includes(n), true, `${n} is part of the tag workflow`);
+    }
+    for (const n of ['delete_gtm_tag', 'delete_gtm_trigger', 'delete_gtm_variable', 'delete_unused_gtm_triggers', 'delete_unused_gtm_variables']) {
+      assert.equal(ga4Gtm.includes(n), false, `${n} must NOT be reachable from a GA4 chat`);
+    }
+    assert.equal(ga4Gtm.includes('list_gtm_tags'), true, 'GTM reads are always granted');
+
+    // Same rule for the Ads chat.
+    const adsGtm = withIntegrations('ads', ['gtm']);
+    assert.equal(adsGtm.includes('create_gtm_tracking_tag'), true);
+    assert.equal(adsGtm.includes('delete_gtm_tag'), false, 'no destructive GTM cleanup from an Ads chat');
+
+    // A chat's OWN product is never narrowed by the allowlist.
+    const ga4Own = withIntegrations('ga4', []);
+    assert.equal(ga4Own.includes('archive_ga4_custom_dimension'), true, 'the GA4 chat still owns its whole surface');
+    const gtmOwn = withIntegrations('gtm', []);
+    assert.equal(gtmOwn.includes('delete_gtm_tag'), true, 'the GTM chat still owns its whole surface');
+    const adsOwn = withIntegrations('ads', []);
+    assert.equal(adsOwn.includes('update_google_ads_conversion_action'), true, 'the Ads chat still owns its whole surface');
+  });
+
+  // ── Edge cases: the chat must DEGRADE, never mislead or crash ──
+  await test('integrations edge cases: unavailable services, read-only sessions and unknown containers degrade cleanly', async () => {
+    const ctxControl = { current: () => undefined, set: () => {} };
+
+    // (a) Ads chip on, but NO Ads service wired (no developer token in this session): the tools are
+    // simply absent - the chat must not half-exist. The chat service drops the chip from the prompt
+    // too (covered in the chat-integrations suite), so nothing is advertised either.
+    const noAdsService = buildToolRegistry(fakeData().data, approveAsIs, 'gtm', undefined, ctxControl, undefined, undefined, undefined, undefined, undefined, ['ads'])
+      .list().map((t) => t.name);
+    assert.equal(noAdsService.some((n) => n.includes('google_ads')), false, 'no Ads tools without an Ads service');
+    assert.equal(noAdsService.includes('create_gtm_tracking_tag'), true, 'the rest of the chat is unaffected');
+
+    // (b) Ads present but NOT READY (missing developer token / adwords scope): tools are offered,
+    // and calling one returns the shaped, actionable reason instead of a raw 403 or a throw.
+    const notReady = fakeAds({ notReady: { code: 'DEVELOPER_TOKEN_MISSING', message: 'No Google Ads developer token is set.', remedy: 'Add it in Settings.' } });
+    const reg = buildToolRegistry(fakeData().data, approveAsIs, 'gtm', undefined, ctxControl, undefined, undefined, notReady.ads, undefined, undefined, ['ads']);
+    const out = JSON.parse(await reg.execute('list_google_ads_conversion_actions', { customerId: '9876543210' }));
+    assert.equal(out.ok, false, 'reports failure rather than inventing data');
+    assert.ok(/developer token/i.test(String(out.error)), `names the real blocker: ${out.error}`);
+    assert.ok(/Settings/i.test(String(out.remedy ?? out.error)), 'and how to fix it');
+
+    // (c) A read-only session (no confirm fn): connected platforms contribute READS only - no write
+    // can appear through an integration when writes are off for the whole chat.
+    const readOnly = buildToolRegistry(fakeData().data, undefined, 'gtm', undefined, ctxControl, undefined, undefined, fakeAds().ads, undefined, undefined, ['ga4', 'ads'])
+      .list().map((t) => t.name);
+    assert.equal(readOnly.includes('create_google_ads_conversion_action'), false, 'no Ads create without writes');
+    assert.equal(readOnly.includes('create_ga4_key_event'), false, 'no GA4 create without writes');
+    assert.equal(readOnly.includes('list_google_ads_conversion_actions'), true, 'the reads still work');
+
+    // (d) Container-kind scoping composes with integrations: a SERVER container still withholds
+    // web-only builders from a GA4 chat that connected GTM, and vice versa.
+    const serverKind = buildToolRegistry(fakeData().data, approveAsIs, 'ga4', undefined, ctxControl, undefined, undefined, undefined, 'server', undefined, ['gtm'])
+      .list().map((t) => t.name);
+    assert.equal(serverKind.includes('create_gtm_tracking_tag'), false, 'a server container cannot hold a web tag');
+    assert.equal(serverKind.includes('list_ga4_properties'), true, 'the GA4 half is untouched by container kind');
+
+    // (e) An unknown/absent conversion action is a data question, not a crash: the read succeeds and
+    // simply does not contain it, which is what lets the model say so instead of fabricating a label.
+    const list = JSON.parse(await buildToolRegistry(fakeData().data, approveAsIs, 'gtm', undefined, ctxControl, undefined, undefined, fakeAds().ads, undefined, undefined, ['ads'])
+      .execute('list_google_ads_conversion_actions', { customerId: '9876543210' }));
+    assert.equal(list.ok, true);
+    assert.equal(list.actions.some((a: { name: string }) => a.name === 'Deleted action'), false, 'a removed action is absent, not invented');
+    const untaggable = list.actions.find((a: { taggable: boolean }) => !a.taggable);
+    assert.ok(untaggable?.note, 'an untaggable action carries the reason a tag cannot be built for it');
+  });
+
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed > 0) process.exit(1);
 }

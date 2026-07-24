@@ -8,6 +8,7 @@ import type { AuditHistoryStore } from '../storage/audit-history';
 import { ManifestStore } from '../storage/manifest-store';
 import type { MemoryStore } from '../storage/memory-store';
 import { toolAllowedForContainer, type ContainerKind } from '../../shared/tool-scope';
+import { connectedWriteAllowed } from '../../shared/chat-integrations';
 import { fuseRankings } from '../../shared/embeddings';
 import {
   MEMORY_KINDS,
@@ -5527,6 +5528,12 @@ export function buildToolRegistry(
     if (product === 'gtm') return integrations.includes(p);
     return p === 'gtm' && integrations.includes('gtm'); // ga4/ads chats may connect GTM, nothing else
   };
+  // A tool belonging to a CONNECTED (non-primary) platform: reads always, writes only from that
+  // platform's workflow allowlist. See CONNECTED_WRITE_ALLOWLIST for why - in short, a platform was
+  // connected to finish a task, not to be administered from a chat whose prompt, context bar and
+  // memory scope belong to a different product. The primary product is never filtered by this.
+  const connectedOk = (platform: GoogleProduct, t: Tool): boolean =>
+    !t.write || connectedWriteAllowed(platform, t.name);
   const inProduct = (t: Tool): boolean => {
     if (adsToolNames.has(t.name)) {
       if (product === 'ads') return true;
@@ -5544,14 +5551,18 @@ export function buildToolRegistry(
       // Still excluded: everything that MOVES MONEY OR DATA (campaign status, budgets, negative
       // keywords, the three uploads, and edits to an existing action). All the guidance about
       // those lives in the Ads arm of the system prompt, which a GTM turn never sees.
-      return !t.write || t.name === 'create_google_ads_conversion_action';
+      return connectedOk('ads', t);
     }
     // An Ads chat gets GTM tools ONLY when the user connected GTM (its account scope is a customer
     // id, not a container, so an unconnected Ads chat reaching a GTM tool would act on whatever
     // container was last selected in another tab - a different client entirely). GA4 tools never
     // appear in an Ads chat.
-    if (product === 'ads') return integrations !== undefined && integrations.includes('gtm') && productOf(t.name) === 'gtm';
-    return integrated(productOf(t.name));
+    if (product === 'ads') {
+      return integrations !== undefined && integrations.includes('gtm') && productOf(t.name) === 'gtm' && connectedOk('gtm', t);
+    }
+    const owner = productOf(t.name);
+    if (owner === product) return true; // the chat's OWN product keeps its whole surface
+    return integrated(owner) && connectedOk(owner, t);
   };
   const tools = [
     ...(product ? all.filter(inProduct) : all),

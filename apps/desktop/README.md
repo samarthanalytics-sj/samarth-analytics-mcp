@@ -10,6 +10,12 @@ endpoint).
 > Not for Vercel. This is a packaged desktop binary (Phase 6 → Windows
 > installer via electron-builder).
 
+The chat is single-product by default (GTM **or** GA4 **or** Google Ads) and can
+**optionally** connect another platform per chat so a cross-platform workflow
+finishes in one place — see
+[docs/CHAT_INTEGRATIONS.md](../../docs/CHAT_INTEGRATIONS.md) for the matrix,
+the supported workflows, the safety model and the limitations.
+
 ## Architecture
 
 ```
