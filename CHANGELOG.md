@@ -1,3 +1,9 @@
+## [1.401.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.400.0...v1.401.0) (2026-07-24)
+
+### Features
+
+* **triggers:** Click Classes + Click ID conditions and a trigger-selection decision framework ([#693](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/693)) ([fe5232e](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/fe5232e79dfcea64e4c589c8f74dc5a1ea08affb))
+
 ## [1.400.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.399.4...v1.400.0) (2026-07-24)
 
 ### Features
