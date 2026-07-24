@@ -11,6 +11,7 @@ import type { CorpusSemanticIndex } from '../corpus/semantic-index';
 import { getPatternLibrary } from '../corpus/pattern-library';
 import { gtmPromptSections } from '../../shared/gtm-prompt-sections';
 import { boundChatHistory } from '../../shared/context-budget';
+import { sanitizeIntegrations, buildIntegrationPrompt } from '../../shared/chat-integrations';
 import { AUDIT_POINTER } from '../../shared/jit-reference';
 import { MEMORY_EXTRACT_SYSTEM, buildExtractionTranscript, parseMemoryCandidates, type MemoryCandidate } from '../../shared/memory-extract';
 import { buildToolRegistry } from '../tools/registry';
@@ -150,9 +151,13 @@ export const GOOGLE_ADS_CAPABILITIES =
   'before-and-after and which account BEFORE calling the tool, and report what actually changed after. ' +
   'WHAT YOU DO NOT HAVE: no keyword, ad-group, ad-copy or search-term reads; no Merchant Center; no ' +
   'quality-score data. If asked for one of those, say plainly that this tool cannot read it rather ' +
-  'than answering from a neighbouring metric. ' +
+  'than answering from a neighbouring metric. ';
+/** The Ads chat's product boundary WITHOUT the GTM integration - appended only when GTM is not
+ *  connected, because with the chip on the chat really does have the container tools. */
+export const ADS_NO_GTM_BOUNDARY =
   'This chat has NO GTM and NO GA4 tools. To wire a conversion into a tag, read its ID and Label here ' +
-  'and tell the user to switch to the GTM tab, which has the container. ';
+  'and tell the user to either turn on the GTM integration chip above the chat (which brings the ' +
+  'container tools in here) or switch to the GTM tab. ';
 /** Naming convention for GA4 tags/triggers the chat creates. Exported for testing. */
 export const GA4_TAG_NAMING =
   'GA4 TAG NAMING — unless the user gives an explicit name, name every GA4 event tag you create "GA4 - Event - <Name>[ Click| Form] Tag" and its trigger "<Name>[ Click| Form] Trigger", where <Name> is the event in Title Case and the optional kind word reflects the TRIGGER: "Click" when the tag fires on a click trigger (link_click / all_clicks), "Form" when it fires on a form_submit trigger, and OMIT the word for any other trigger (a Custom Event / dataLayer event such as ecommerce, a pageview, a timer, etc.). Never double the kind word when <Name> already ends in it ("Newsletter Form" → "GA4 - Event - Newsletter Form Tag", not "... Form Form Tag"; "Email Click" → "GA4 - Event - Email Click Tag"). Examples: a "Book a Demo" button click → tag "GA4 - Event - Book A Demo Click Tag" + trigger "Book A Demo Click Trigger"; a newsletter form submit → "GA4 - Event - Newsletter Form Tag" + "Newsletter Form Trigger"; a Custom Event ecommerce add_to_cart → "GA4 - Event - Add To Cart Tag" + "Add To Cart Trigger"; purchase → "GA4 - Event - Purchase Tag" + "Purchase Trigger". Apply this to ALL GA4 tags/triggers you create. CRITICAL — a Custom Event trigger has TWO different fields: its display NAME (e.g. "Purchase Trigger") and its EVENT NAME (the dataLayer value it matches). The EVENT NAME must be the raw event in snake_case exactly as the dataLayer pushes it (purchase, add_to_cart, view_item, begin_checkout, generate_lead, file_download) — NEVER a display label like "Purchase Trigger" or "GA4 - Purchase" (the dataLayer never pushes that, so the trigger would never fire). Use snake_case underscore_words for the event name; the "GA4 - Event - " / "<Name>" formatting is the display name only. ';
@@ -241,10 +246,15 @@ export function buildSituationalContext(input: {
   now: Date;
   memoryBlock: string;
   toolMemoryBlock: string;
+  /** Platforms the user CONNECTED to this chat (shared/chat-integrations.ts): a connected
+   *  platform's working context is included alongside the product's own, so a GTM chat with GA4
+   *  connected knows WHICH property supplies the Measurement ID without asking. */
+  integrations?: readonly GoogleProduct[];
 }): string {
-  const gtm = input.product === 'gtm' ? input.gtmContext : undefined;
-  const ga4 = input.product === 'ga4' ? input.ga4Context : undefined;
-  const ads = input.product === 'ads' ? input.adsContext : undefined;
+  const covers = (p: GoogleProduct): boolean => input.product === p || (input.integrations?.includes(p) ?? false);
+  const gtm = covers('gtm') ? input.gtmContext : undefined;
+  const ga4 = covers('ga4') ? input.ga4Context : undefined;
+  const ads = covers('ads') ? input.adsContext : undefined;
   return (
     'CURRENT CONTEXT (this section changes between messages; the instructions above it are fixed). ' +
     `You are acting as the Google account ${input.email}. ` +
@@ -367,14 +377,16 @@ export class ChatService {
   }
 
   /** Non-streaming: returns the final reply only. */
-  chat(history: ChatTurn[], message: string, product: GoogleProduct, media?: ChatMediaPart[]): Promise<ChatReply> {
-    return this.run(history, message, product, undefined, undefined, undefined, media);
+  chat(history: ChatTurn[], message: string, product: GoogleProduct, media?: ChatMediaPart[], integrations?: GoogleProduct[]): Promise<ChatReply> {
+    return this.run(history, message, product, undefined, undefined, undefined, media, integrations);
   }
 
   /**
    * Streaming: `emit` fires for text chunks + tool calls; resolves with the final
    * reply. `product` scopes the available tools to GTM or GA4. When `confirm` is
    * provided (GTM only), write tools become available and each calls `confirm`.
+   * `integrations` are the platforms the user CONNECTED to this thread (opt-in chips):
+   * their tools and working contexts join the turn (shared/chat-integrations.ts).
    */
   chatStream(
     history: ChatTurn[],
@@ -383,9 +395,10 @@ export class ChatService {
     emit: (event: ChatStreamEvent) => void,
     confirm?: ConfirmFn,
     signal?: AbortSignal,
-    media?: ChatMediaPart[]
+    media?: ChatMediaPart[],
+    integrations?: GoogleProduct[]
   ): Promise<ChatReply> {
-    return this.run(history, message, product, emit, confirm, signal, media);
+    return this.run(history, message, product, emit, confirm, signal, media, integrations);
   }
 
   /** Phase 2b: propose durable memories from a conversation. Runs ONE plain LLM completion (no tools) with
@@ -415,7 +428,8 @@ export class ChatService {
     emit?: (event: ChatStreamEvent) => void,
     confirm?: ConfirmFn,
     signal?: AbortSignal,
-    media?: ChatMediaPart[]
+    media?: ChatMediaPart[],
+    integrationsRaw?: GoogleProduct[]
   ): Promise<ChatReply> {
     const active = this.registry.getActiveView();
     if (!active) throw new Error('No active account. Connect and activate a Google account.');
@@ -426,12 +440,20 @@ export class ChatService {
       throw new Error(`Add an API key for ${active.llm.provider} in Settings → Providers.`);
     }
 
+    // The user's opt-in cross-platform connections, coerced to what THIS product may connect.
+    // UNDEFINED (an older caller that never heard of integrations) keeps the registry's legacy
+    // scoping; the renderer always sends an array, so its chats are strictly chip-driven.
+    const integrations = integrationsRaw === undefined ? undefined : sanitizeIntegrations(product, integrationsRaw);
+    const covers = (p: GoogleProduct): boolean =>
+      product === p || (integrations !== undefined ? integrations.includes(p) : product === 'gtm' && p === 'ads');
+
     const client = createProvider(active.llm.provider);
-    // GTM-only: let the model switch the active workspace/container, persisting it to the
-    // account and notifying the UI so the GTM-bar dropdown follows. Mutating `active` too
+    // Available when the chat covers GTM (natively or via the GTM integration chip): lets the model
+    // switch the active workspace/container, persisting it to the account and notifying the UI so
+    // the GTM-bar dropdown follows. Mutating `active` too
     // keeps later tool calls in the same turn consistent.
     const ctxControl =
-      product === 'gtm'
+      covers('gtm')
         ? {
             current: () => active.gtmContext,
             set: (ctx: GtmContext): void => {
@@ -484,7 +506,7 @@ export class ChatService {
     // GA4 turn (no GTM container in play). ONE lookup, ONE cache: this same kind is the server signal
     // the tool-group gate reads below, so there is a single source of truth for "what kind of
     // container is this".
-    const containerKind = product === 'gtm'
+    const containerKind = covers('gtm')
       ? await this.activeContainerKind(active.gtmContext?.accountId, active.gtmContext?.containerId)
       : undefined;
     // Opt-in semantic corpus search. Supplied ONLY when the user enabled it and the provider can
@@ -501,7 +523,7 @@ export class ChatService {
         return semanticIndex.search(lib, semanticProvider, key, query);
       }
       : undefined;
-    const tools = buildToolRegistry(this.data, confirm, product, this.history, ctxControl, this.manifests, memoryCtx, this.ads, containerKind, semantic);
+    const tools = buildToolRegistry(this.data, confirm, product, this.history, ctxControl, this.manifests, memoryCtx, this.ads, containerKind, semantic, integrations);
 
     // PROGRESSIVE TOOL DISCLOSURE, composed with the container-kind scoping above. The two filters
     // are DIFFERENT AXES and both apply, in this order:
@@ -536,19 +558,26 @@ export class ChatService {
     const mem = this.memoryBlock(active, product, message);
 
     const productLabel = PRODUCT_LABEL[product];
-    // The FIXED half: identical for every turn with the same product, permissions and container
-    // kind, so it stays byte-identical across turns and can be served from the provider's cache.
+    // Whether this chat carries the Ads flow tools (natively, via the chip, or via the legacy
+    // implicit GTM pairing) - the prompt sentences promising them must track tool availability.
+    const adsConnected = covers('ads');
+    const integrationBlock = integrations !== undefined ? buildIntegrationPrompt(product, integrations, Boolean(confirm)) : '';
+    // The FIXED half: identical for every turn with the same product, permissions, container
+    // kind and connected integrations, so it stays byte-identical across turns and can be served
+    // from the provider's cache.
     // Nothing account-specific belongs here - the email moved to the situational section below,
     // which also means two accounts on the same product share one cached prefix.
     const staticSystem =
       `You are a ${productLabel} assistant. ` +
-      `Only help with ${productLabel}; if asked about one of the others, say to switch the ` +
-      'GTM / GA4 / Google Ads selector. ' +
+      (integrationBlock
+        ? 'Your PRIMARY product is ' + productLabel + '; the user has also CONNECTED the platforms named in the CROSS-PLATFORM INTEGRATIONS section below, and those you handle here too. For anything else, say to switch the GTM / GA4 / Google Ads selector. '
+        : `Only help with ${productLabel}; if asked about one of the others, say to switch the ` +
+          'GTM / GA4 / Google Ads selector. ') +
       (product === 'ads' ? GOOGLE_ADS_GUIDANCE : '') +
       // The Ads arm MUST come first. Without it an Ads turn falls through to the GA4 branch below,
       // which is what made 88% of the Ads prompt GA4 instructions.
       (product === 'ads'
-        ? GOOGLE_ADS_CAPABILITIES
+        ? GOOGLE_ADS_CAPABILITIES + (covers('gtm') ? '' : ADS_NO_GTM_BOUNDARY)
         : product === 'gtm' && confirm
         ? 'You can read the GTM setup and create/edit tags, triggers, and variables in a DRAFT ' +
           'workspace (never published — the user publishes manually in GTM). Always work in a workspace. ' +
@@ -562,10 +591,15 @@ export class ChatService {
           'DIRECTLY to the draft workspace with no approval card — so state clearly what you are about to ' +
           'create/change BEFORE calling the tool, and report exactly what was created/changed after. Only ' +
           'DELETE tools show an approval card (a two-step confirmation) - never promise an approval prompt ' +
-          'for a create. That holds for the Google Ads tools this chat can also reach: ' +
-          'create_google_ads_conversion_action applies in ONE CLICK like any other create. It is LIVE ' +
-          'rather than a draft though, so name the Ads account and the exact action before calling it. ' +
-          'update_google_ads_conversion_action is an EDIT to a live account and DOES show the card. ' +
+          'for a create. ' +
+          (adsConnected
+            ? 'That holds for the Google Ads tools this chat can also reach: ' +
+              'create_google_ads_conversion_action applies in ONE CLICK like any other create. It is LIVE ' +
+              'rather than a draft though, so name the Ads account and the exact action before calling it. ' +
+              'update_google_ads_conversion_action is an EDIT to a live account and DOES show the card. '
+            : 'This chat has NO Google Ads tools: to build a Google Ads conversion tag with a real Conversion ' +
+              'ID and Label fetched for the user, tell them to turn on the Google Ads integration chip above ' +
+              'the chat; otherwise ask them to paste the Conversion ID (AW-...) and Label and build the tag from those. ') +
           'ALREADY-PRESENT: creating a tag/trigger/variable that already exists (same name — or, for a Custom Event trigger, the same dataLayer event) is auto-detected and REUSED — reported as "already present" with no duplicate and NO approval prompt. You can also list_gtm_tags / list_gtm_triggers / list_gtm_variables first to tell the user what already exists. ' +
           'EDITING EXISTING TAGS — use the dedicated edit tools, do NOT hand-build a tag for update_gtm_tag ' +
           '(that is what causes "measurementIdOverride/eventName must not be empty" and "template key" / ' +
@@ -646,6 +680,7 @@ export class ChatService {
               : 'GA4 is READ-ONLY — you cannot apply fixes; give the user ' +
                 'the exact change to make in the GA4 Admin UI. ') +
             GA4_PROPERTY_AUDIT) +
+      integrationBlock +
       (this.memory
         ? 'MEMORY: you have a persistent, per-client memory (any saved notes appear in the CURRENT CONTEXT section at the end of this prompt, under REMEMBERED CONTEXT). ' +
           'When the user tells you to REMEMBER something, or states a durable preference, correction, or decision ' +
@@ -672,12 +707,17 @@ export class ChatService {
     const system = staticSystem + buildSituationalContext({
       email: active.email,
       product,
-      gtmContext: product === 'gtm' ? active.gtmContext : undefined,
-      ga4Context: product === 'ga4' ? active.ga4Context : undefined,
-      adsContext: product === 'ads' ? active.adsContext : undefined,
+      // A CONNECTED platform's working context rides along too (covers() below re-gates), so a GTM
+      // chat with GA4 connected knows which property supplies the Measurement ID without asking.
+      gtmContext: covers('gtm') ? active.gtmContext : undefined,
+      ga4Context: covers('ga4') ? active.ga4Context : undefined,
+      // NOT covers(): the legacy implicit GTM+Ads pairing never injected the Ads account context,
+      // and keeping that byte-identical protects older callers' prompt cache. The explicit chip does.
+      adsContext: product === 'ads' || (integrations !== undefined && integrations.includes('ads')) ? active.adsContext : undefined,
       now: new Date(),
       memoryBlock: mem.block,
       toolMemoryBlock,
+      ...(integrations !== undefined ? { integrations } : {}),
     });
 
     // Replayed history is bounded: every prior turn used to be re-sent in full on EVERY request, and
@@ -699,8 +739,9 @@ export class ChatService {
     ];
 
     const toolCalls: ChatToolCall[] = [];
-    // Open a fresh change-journal turn so the user can revert this query's GTM writes.
-    if (product === 'gtm') changeJournal.beginTurn();
+    // Open a fresh change-journal turn so the user can revert this query's GTM writes. A GA4 or Ads
+    // chat with GTM CONNECTED writes to a container too, so it needs the journal just as much.
+    if (covers('gtm')) changeJournal.beginTurn();
     // A real build is many tool calls: e.g. a Meta Pixel tag = list reads + a trigger + ~8 ecommerce
     // variables + import template + the tag (~13-16). Reasoning models (o4-mini) issue ONE tool call
     // per step, so a low cap truncated multi-item builds mid-flow ("stopped after N steps"). This is a

@@ -1633,7 +1633,13 @@ export function buildToolRegistry(
   /** Opt-in semantic search over the corpus vocabulary: query -> related terms. Omitted when the
    *  feature is off, unsupported by the provider, or still building, in which case corpus lookup
    *  behaves exactly as it always has. */
-  semantic?: (query: string) => Promise<string[] | null>
+  semantic?: (query: string) => Promise<string[] | null>,
+  /** Cross-platform integrations the USER connected to this chat (shared/chat-integrations.ts).
+   *  UNDEFINED preserves the legacy scoping (the GTM chat always carries the Ads reads + the
+   *  conversion-action create) for every non-chat caller. An EXPLICIT array - what the chat service
+   *  now always sends - makes cross-platform tools strictly opt-in: an empty array means a GTM chat
+   *  with NO Ads tools, and ['gtm'] on a GA4/Ads chat pulls the GTM toolset in alongside. */
+  integrations?: readonly GoogleProduct[]
 ): ToolExecutor {
   const readTools: Tool[] = [
     {
@@ -5497,11 +5503,22 @@ export function buildToolRegistry(
   // GA4 Admin write tools (product 'ga4') live in a separate catalog; included
   // only when a confirm function is provided, exactly like the GTM write tools.
   const all = [...readTools, ...(confirm ? [...writeTools, ...buildGa4WriteTools(data)] : []), ...contextTools, ...adsTools];
+  // Which platforms this chat covers beyond its own product. UNDEFINED integrations = the legacy
+  // behavior (GTM implicitly carries the Ads flow tools); an explicit array is the user's opt-in
+  // chips and is honored exactly. Only combinations shared/chat-integrations.ts offers can occur -
+  // the chat service sanitizes - but re-check here so a stray caller cannot widen a chat.
+  const integrated = (p: GoogleProduct): boolean => {
+    if (!product || product === p) return true;
+    if (integrations === undefined) return product === 'gtm' && p === 'ads'; // legacy implicit pairing
+    if (product === 'gtm') return integrations.includes(p);
+    return p === 'gtm' && integrations.includes('gtm'); // ga4/ads chats may connect GTM, nothing else
+  };
   const inProduct = (t: Tool): boolean => {
     if (adsToolNames.has(t.name)) {
       if (product === 'ads') return true;
-      if (product !== 'gtm') return false;
-      // The GTM chat gets Ads reads PLUS the conversion-action create, and nothing else.
+      if (product !== 'gtm' || !integrated('ads')) return false;
+      // A GTM chat with Google Ads connected gets Ads reads PLUS the conversion-action create, and
+      // nothing else.
       //
       // Reads, because a google_ads_conversion tag needs a real Conversion ID and Label rather
       // than pasted ones. The CREATE, because the whole point of that flow is "there is no action
@@ -5515,19 +5532,20 @@ export function buildToolRegistry(
       // those lives in the Ads arm of the system prompt, which a GTM turn never sees.
       return !t.write || t.name === 'create_google_ads_conversion_action';
     }
-    // An Ads chat gets NO GTM or GA4 tools. Its account scope is a customer id, not a container or a
-    // property, so a GTM tool reached from here would act on whatever container was last selected in
-    // another tab - a different client entirely.
-    if (product === 'ads') return false;
-    return productOf(t.name) === product;
+    // An Ads chat gets GTM tools ONLY when the user connected GTM (its account scope is a customer
+    // id, not a container, so an unconnected Ads chat reaching a GTM tool would act on whatever
+    // container was last selected in another tab - a different client entirely). GA4 tools never
+    // appear in an Ads chat.
+    if (product === 'ads') return integrations !== undefined && integrations.includes('gtm') && productOf(t.name) === 'gtm';
+    return integrated(productOf(t.name));
   };
   const tools = [
     ...(product ? all.filter(inProduct) : all),
     ...memoryTools,
     // The corpus is a library of past GTM CONTAINER patterns, so it has nothing to say about an Ads
-    // account. Offering it there would invite the model to cite container conventions as if they
-    // described the advertiser's campaigns.
-    ...(product === 'ads' ? [] : corpusTools),
+    // account - unless the user connected GTM to this Ads chat, in which case container patterns
+    // are exactly what the GTM half of the conversation is about.
+    ...(product === 'ads' && !(integrations !== undefined && integrations.includes('gtm')) ? [] : corpusTools),
   ];
 
   return {

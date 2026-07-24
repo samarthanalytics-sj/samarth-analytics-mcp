@@ -2649,6 +2649,82 @@ async function main(): Promise<void> {
     assert.ok(!/Unknown tool/i.test(out), 'a withheld tool is still executable');
   });
 
+  // ── Cross-platform integrations: the OPT-IN tool scoping (shared/chat-integrations.ts) ──
+  // The whole guarantee is that a chat carries another platform's tools ONLY when the user
+  // connected it. These pin both halves: nothing leaks in when off, everything needed is there
+  // when on, and the legacy (undefined) call shape is untouched for every non-chat caller.
+  await test('integrations: an explicit EMPTY list keeps each chat strictly single-product', async () => {
+    const ads = fakeAds().ads;
+    // ctxControl is wired exactly as the chat service wires it for any chat that COVERS GTM, so
+    // set_gtm_container / set_gtm_workspace are in play for the connected-GTM cases.
+    const ctxControl = { current: () => undefined, set: () => {} };
+    const withIntegrations = (product: 'gtm' | 'ga4' | 'ads', integrations: Array<'gtm' | 'ga4' | 'ads'>): string[] =>
+      buildToolRegistry(fakeData().data, approveAsIs, product, undefined, ctxControl, undefined, undefined, ads, undefined, undefined, integrations)
+        .list().map((t) => t.name);
+
+    const gtm = withIntegrations('gtm', []);
+    assert.equal(gtm.some((n) => n.startsWith('list_google_ads')), false, 'a GTM chat with no chip has NO Ads tools');
+    assert.equal(gtm.includes('create_google_ads_conversion_action'), false, 'nor the Ads create');
+    assert.equal(gtm.includes('list_gtm_tags'), true, 'its own GTM tools are untouched');
+
+    const ga4 = withIntegrations('ga4', []);
+    assert.equal(ga4.some((n) => n.startsWith('list_gtm_')), false, 'a GA4 chat with no chip has NO GTM tools');
+    assert.equal(ga4.includes('list_ga4_properties'), true, 'its own GA4 tools are untouched');
+
+    const adsChatOnly = withIntegrations('ads', []);
+    assert.equal(adsChatOnly.some((n) => n.startsWith('list_gtm_')), false, 'an Ads chat with no chip has NO GTM tools');
+    assert.equal(adsChatOnly.includes('list_google_ads_accounts'), true, 'its own Ads tools are untouched');
+  });
+
+  await test('integrations: connecting a platform brings EXACTLY its tools, and no third product', async () => {
+    const ads = fakeAds().ads;
+    // ctxControl is wired exactly as the chat service wires it for any chat that COVERS GTM, so
+    // set_gtm_container / set_gtm_workspace are in play for the connected-GTM cases.
+    const ctxControl = { current: () => undefined, set: () => {} };
+    const withIntegrations = (product: 'gtm' | 'ga4' | 'ads', integrations: Array<'gtm' | 'ga4' | 'ads'>): string[] =>
+      buildToolRegistry(fakeData().data, approveAsIs, product, undefined, ctxControl, undefined, undefined, ads, undefined, undefined, integrations)
+        .list().map((t) => t.name);
+
+    // GTM + Google Ads: the reads that supply a real Conversion ID/Label, plus the create.
+    const gtmAds = withIntegrations('gtm', ['ads']);
+    assert.equal(gtmAds.includes('list_google_ads_conversion_actions'), true, 'the id/label read');
+    assert.equal(gtmAds.includes('create_google_ads_conversion_action'), true, 'minting a new action');
+    assert.equal(gtmAds.includes('list_ga4_properties'), false, 'GA4 was not connected, so it stays out');
+    // Money/data movers stay out even with the chip on - that scoping is unchanged.
+    for (const n of ['set_google_ads_campaign_status', 'update_google_ads_campaign_budget', 'upload_google_ads_offline_conversions', 'update_google_ads_conversion_action']) {
+      assert.equal(gtmAds.includes(n), false, `${n} must never reach a GTM chat`);
+    }
+
+    // GTM + GA4: the property/stream reads that supply the Measurement ID.
+    const gtmGa4 = withIntegrations('gtm', ['ga4']);
+    assert.equal(gtmGa4.includes('list_ga4_data_streams'), true, 'the Measurement ID read');
+    assert.equal(gtmGa4.includes('list_ga4_properties'), true);
+    assert.equal(gtmGa4.some((n) => n.startsWith('list_google_ads')), false, 'Ads was not connected');
+
+    // GA4 chat + GTM: the container tools needed to build the tag.
+    const ga4Gtm = withIntegrations('ga4', ['gtm']);
+    assert.equal(ga4Gtm.includes('create_gtm_tracking_tag'), true, 'builds the GA4 tag here');
+    assert.equal(ga4Gtm.includes('set_gtm_container'), true, 'and can pick the working container');
+    assert.equal(ga4Gtm.some((n) => n.startsWith('list_google_ads')), false, 'a GA4 chat can never reach Ads');
+
+    // Ads chat + GTM: same, for the conversion tag.
+    const adsGtm = withIntegrations('ads', ['gtm']);
+    assert.equal(adsGtm.includes('create_gtm_tracking_tag'), true, 'builds the conversion tag here');
+    assert.equal(adsGtm.includes('list_google_ads_conversion_actions'), true, 'still has its own Ads tools');
+    assert.equal(adsGtm.includes('list_ga4_properties'), false, 'an Ads chat can never reach GA4');
+  });
+
+  await test('integrations: OMITTING the argument preserves the legacy scoping for every non-chat caller', async () => {
+    const ads = fakeAds().ads;
+    // The pre-integration call shape: the GTM chat implicitly carried the Ads flow tools.
+    const legacy = buildToolRegistry(fakeData().data, approveAsIs, 'gtm', undefined, undefined, undefined, undefined, ads).list().map((t) => t.name);
+    assert.equal(legacy.includes('list_google_ads_conversion_actions'), true, 'legacy GTM chat keeps the Ads reads');
+    assert.equal(legacy.includes('create_google_ads_conversion_action'), true, 'and the create');
+    // An Ads chat is unaffected by the new parameter either way.
+    const legacyAds = buildToolRegistry(fakeData().data, approveAsIs, 'ads', undefined, undefined, undefined, undefined, ads).list().map((t) => t.name);
+    assert.equal(legacyAds.includes('set_google_ads_campaign_status'), true, 'the Ads chat still owns its writes');
+  });
+
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed > 0) process.exit(1);
 }
