@@ -298,4 +298,50 @@ test('it ties counts to visible items, so "82 tags" cannot be asserted over noth
   assert.match(ANSWER_THE_CURRENT_MESSAGE, /give a number only when the items you counted are in front of the user/i);
 });
 
+// ── Cross-platform integrations: context ISOLATION between threads ──
+// The rule the whole feature rests on: a chat sees the targets it was pointed at, and nothing else.
+// A connected platform is an explicit per-thread choice (its own context bar is shown), so its
+// target belongs here; an unconnected one must stay out even though the account holds it.
+console.log('\nChat system prompt - integration context isolation:');
+
+const isoArgs = {
+  ...ctxArgs,
+  ga4Context: { property: 'properties/123', propertyName: 'Site' },
+  adsContext: { customerId: '9876543210', customerName: 'Acme Store' },
+};
+
+test('each platform appears only when the chat covers it: 8 combinations, no leakage', () => {
+  const has = (c: string) => ({ gtm: c.includes('GTM-ABC'), ga4: c.includes('properties/123'), ads: c.includes('9876543210') });
+  const cases: Array<{ product: 'gtm' | 'ga4' | 'ads'; integrations: Array<'gtm' | 'ga4' | 'ads'>; want: { gtm: boolean; ga4: boolean; ads: boolean } }> = [
+    { product: 'gtm', integrations: [], want: { gtm: true, ga4: false, ads: false } },
+    { product: 'gtm', integrations: ['ga4'], want: { gtm: true, ga4: true, ads: false } },
+    { product: 'gtm', integrations: ['ads'], want: { gtm: true, ga4: false, ads: true } },
+    { product: 'gtm', integrations: ['ga4', 'ads'], want: { gtm: true, ga4: true, ads: true } },
+    { product: 'ga4', integrations: [], want: { gtm: false, ga4: true, ads: false } },
+    { product: 'ga4', integrations: ['gtm'], want: { gtm: true, ga4: true, ads: false } },
+    { product: 'ads', integrations: [], want: { gtm: false, ga4: false, ads: true } },
+    { product: 'ads', integrations: ['gtm'], want: { gtm: true, ga4: false, ads: true } },
+  ];
+  for (const c of cases) {
+    const got = has(buildSituationalContext({ ...isoArgs, product: c.product, integrations: c.integrations }));
+    assert.deepEqual(got, c.want, `${c.product} + [${c.integrations.join(',')}]`);
+  }
+});
+
+test('a GA4 chat NEVER sees the Ads account and an Ads chat NEVER sees the property, connected or not', () => {
+  // The matrix forbids the pairing, and sanitizing inside the prompt builder is what enforces it,
+  // but the CONTEXT must independently refuse to carry the other product's client.
+  const ga4 = buildSituationalContext({ ...isoArgs, product: 'ga4', integrations: ['gtm'] });
+  assert.equal(ga4.includes('9876543210'), false, 'no Ads customer in a GA4 chat');
+  const ads = buildSituationalContext({ ...isoArgs, product: 'ads', integrations: ['gtm'] });
+  assert.equal(ads.includes('properties/123'), false, 'no GA4 property in an Ads chat');
+});
+
+test('switching the connected platform\'s TARGET changes the block, so no stale id survives', () => {
+  const a = buildSituationalContext({ ...isoArgs, integrations: ['ga4'] });
+  const b = buildSituationalContext({ ...isoArgs, integrations: ['ga4'], ga4Context: { property: 'properties/999', propertyName: 'Other' } });
+  assert.notEqual(a, b, 'a different connected property is a different context');
+  assert.equal(b.includes('properties/123'), false, 'the previous property is gone, not merged');
+});
+
 if (failed > 0) process.exit(1);

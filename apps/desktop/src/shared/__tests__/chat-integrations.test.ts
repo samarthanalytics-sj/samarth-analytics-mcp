@@ -1,7 +1,7 @@
 // Pure tests for the cross-platform chat integrations (no Electron, no network).
 // Run: tsx apps/desktop/src/shared/__tests__/chat-integrations.test.ts
 
-import { INTEGRATION_OPTIONS, INTEGRATION_LABEL, INTEGRATION_HINT, sanitizeIntegrations, buildIntegrationPrompt } from '../chat-integrations';
+import { INTEGRATION_OPTIONS, INTEGRATION_LABEL, INTEGRATION_HINT, CONNECTED_WRITE_ALLOWLIST, connectedWriteAllowed, availableIntegrations, sanitizeIntegrations, buildIntegrationPrompt } from '../chat-integrations';
 
 let passed = 0;
 let failed = 0;
@@ -68,6 +68,55 @@ function check(name: string, ok: boolean, detail?: string): void {
   check('no em dashes in any generated block (house style)', [gtmAds, gtmGa4, ga4Gtm, adsGtm, both, gtmAdsRead].every((b) => !/[—–]/.test(b)));
 }
 
+// ── the connected-platform write allowlist (a chip grants a workflow, not an admin surface) ──
+{
+  check('allowlist: GA4 contributes the event-measurement creates', ['create_ga4_key_event', 'create_ga4_custom_dimension', 'create_ga4_custom_metric'].every((n) => connectedWriteAllowed('ga4', n)));
+  check('allowlist: GA4 contributes NOTHING destructive or account-level', ['delete_ga4_key_event', 'archive_ga4_custom_dimension', 'delete_ga4_property', 'delete_ga4_account', 'create_ga4_property', 'update_ga4_data_retention', 'create_ga4_property_access_binding'].every((n) => !connectedWriteAllowed('ga4', n)));
+  check('allowlist: GTM contributes tag/trigger/variable building, never deletes', ['create_gtm_tracking_tag', 'create_gtm_trigger', 'update_gtm_tag'].every((n) => connectedWriteAllowed('gtm', n)) && ['delete_gtm_tag', 'delete_gtm_trigger', 'delete_unused_gtm_variables'].every((n) => !connectedWriteAllowed('gtm', n)));
+  check('allowlist: Ads contributes ONLY the conversion-action create', CONNECTED_WRITE_ALLOWLIST.ads.length === 1 && connectedWriteAllowed('ads', 'create_google_ads_conversion_action'));
+  check('allowlist: Ads contributes nothing that moves money or data', ['set_google_ads_campaign_status', 'update_google_ads_campaign_budget', 'add_google_ads_negative_keywords', 'upload_google_ads_offline_conversions', 'upload_google_ads_customer_match', 'update_google_ads_conversion_action'].every((n) => !connectedWriteAllowed('ads', n)));
+  check('allowlist: no entry is a delete/archive/upload, by construction', (['gtm', 'ga4', 'ads'] as const).every((p) => CONNECTED_WRITE_ALLOWLIST[p].every((n) => !/^(delete|archive|upload)_/.test(n))));
+  check('allowlist: an unknown tool name is never allowed', !connectedWriteAllowed('gtm', 'some_future_tool') && !connectedWriteAllowed('ga4', ''));
+}
+
+// ── availability: the prompt must never advertise a platform this session cannot honor ──
+{
+  check('an Ads chip is DROPPED when no Ads service is wired', JSON.stringify(availableIntegrations(['ga4', 'ads'], { ads: false })) === JSON.stringify(['ga4']));
+  check('and kept when it is', JSON.stringify(availableIntegrations(['ga4', 'ads'], { ads: true })) === JSON.stringify(['ga4', 'ads']));
+  check('GTM and GA4 need no extra service, so they are never dropped', JSON.stringify(availableIntegrations(['gtm'], { ads: false })) === JSON.stringify(['gtm']));
+  // The composition that matters: chip on + service missing = no workflow text at all, matching a
+  // registry that has no Ads tools. Advertising it here is what produces a mid-task "Unknown tool".
+  check('dropping the chip also removes its whole workflow from the prompt', buildIntegrationPrompt('gtm', availableIntegrations(['ads'], { ads: false }), true) === '');
+  check('a surviving chip still gets its workflow', /list_google_ads_conversion_actions/.test(buildIntegrationPrompt('gtm', availableIntegrations(['ads'], { ads: true }), true)));
+}
+
+// ── the prompt states the scope limit, so the model does not offer what it lacks ──
+{
+  const blocks = [buildIntegrationPrompt('gtm', ['ga4'], true), buildIntegrationPrompt('gtm', ['ads'], true), buildIntegrationPrompt('ga4', ['gtm'], true), buildIntegrationPrompt('ads', ['gtm'], true)];
+  check('every block states that a connected platform\'s destructive/admin tools are absent', blocks.every((b) => /SCOPE OF A CONNECTED PLATFORM/.test(b) && /NOT\s+available in this chat by design/.test(b)));
+  check('and tells the model to say so rather than attempt a missing tool', blocks.every((b) => /rather than attempting a tool you do not have/.test(b)));
+}
+
+// ── automation the pairing unlocks (item 2): the cross-platform tools are actually named ──
+{
+  const gtmGa4 = buildIntegrationPrompt('gtm', ['ga4'], true);
+  check('GTM+GA4 names the reportability trap (custom dimension for event parameters)', /create_ga4_custom_dimension/.test(gtmGa4) && /not reportable/.test(gtmGa4));
+  check('GTM+GA4 offers the measurement-id verification read', /check_gtm_measurement_ids/.test(gtmGa4));
+  check('GTM+GA4 offers ONE combined score/report via ga4Property', /analytics_scorecard/.test(gtmGa4) && /generate_analytics_report/.test(gtmGa4) && /ga4Property/.test(gtmGa4));
+
+  const gtmAds = buildIntegrationPrompt('gtm', ['ads'], true);
+  check('GTM+Ads guards the untaggable action instead of building a dead tag', /taggable=false/.test(gtmAds));
+  check('GTM+Ads checks for an existing tag with the same id+label (double-count guard)', /double-count/.test(gtmAds));
+  check('GTM+Ads offers the conversion-health audit as the follow-up', /audit_google_ads_conversion_health/.test(gtmAds));
+
+  const bothOn = buildIntegrationPrompt('gtm', ['ga4', 'ads'], true);
+  check('BOTH connected unlocks the GA4-Ads seam audit, which neither pairing alone can run', /audit_google_ads_ga4_link/.test(bothOn));
+  check('the seam audit is NOT offered when only one side is connected', !/audit_google_ads_ga4_link/.test(gtmGa4) && !/audit_google_ads_ga4_link/.test(gtmAds));
+
+  const adsGtm = buildIntegrationPrompt('ads', ['gtm'], true);
+  check('Ads+GTM carries the same untaggable and double-count guards', /taggable=false/.test(adsGtm) && /double-count/.test(adsGtm));
+}
+
 console.log(`\nchat-integrations: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }
-if (passed < 25) { console.error(`expected >= 25 checks, got ${passed}`); process.exit(1); }
+if (passed < 45) { console.error(`expected >= 45 checks, got ${passed}`); process.exit(1); }

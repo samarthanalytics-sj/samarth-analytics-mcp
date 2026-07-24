@@ -11,7 +11,7 @@ import type { CorpusSemanticIndex } from '../corpus/semantic-index';
 import { getPatternLibrary } from '../corpus/pattern-library';
 import { gtmPromptSections } from '../../shared/gtm-prompt-sections';
 import { boundChatHistory } from '../../shared/context-budget';
-import { sanitizeIntegrations, buildIntegrationPrompt } from '../../shared/chat-integrations';
+import { sanitizeIntegrations, availableIntegrations, buildIntegrationPrompt } from '../../shared/chat-integrations';
 import { AUDIT_POINTER } from '../../shared/jit-reference';
 import { MEMORY_EXTRACT_SYSTEM, buildExtractionTranscript, parseMemoryCandidates, type MemoryCandidate } from '../../shared/memory-extract';
 import { buildToolRegistry } from '../tools/registry';
@@ -351,26 +351,50 @@ export class ChatService {
   /** Thread identity for the tool-result carry-over: the same account + product + working-client
    *  scoping the renderer uses to key a conversation, so one container's results never leak into
    *  another container's chat. */
-  private threadKey(active: { id: string; gtmContext?: GtmContext; ga4Context?: { property?: string }; adsContext?: AdsContext }, product: GoogleProduct): string {
+  private threadKey(
+    active: { id: string; gtmContext?: GtmContext; ga4Context?: { property?: string }; adsContext?: AdsContext },
+    product: GoogleProduct,
+    /** Connected platforms: part of the key so a disconnected platform's cached READ results cannot
+     *  carry into a turn that no longer has its tools (the results would inform an answer the chat
+     *  can no longer verify or act on). Same account + product + target + connections = same key. */
+    integrations?: readonly GoogleProduct[]
+  ): string {
     const scope = product === 'gtm' ? active.gtmContext?.containerId
       : product === 'ga4' ? active.ga4Context?.property
       : active.adsContext?.customerId;
-    return `${active.id}|${product}|${scope ?? 'na'}`;
+    // A connected platform's own target joins the key too: a GTM chat with GA4 connected must not
+    // reuse carry-over gathered while a DIFFERENT property was selected.
+    const extra = (integrations ?? [])
+      .map((p) => (p === 'gtm' ? active.gtmContext?.containerId : p === 'ga4' ? active.ga4Context?.property : active.adsContext?.customerId))
+      .map((v) => v ?? 'na')
+      .join(',');
+    return `${active.id}|${product}|${scope ?? 'na'}${extra ? `|+${extra}` : ''}`;
   }
 
   /** The REMEMBERED-CONTEXT block for this turn: the account's memories scoped to the active client
    *  (GTM container / GA4 property) and ranked against the message. Empty when there are none.
    *  PRODUCT-GATED: a container-scoped memory only applies in a GTM turn and a property-scoped one only in a
    *  GA4 turn (gtmContext / ga4Context are independent per-account fields, so the inactive product's context
-   *  can be stale and point at a DIFFERENT client — using it would leak one client's notes into another's chat). */
-  private memoryBlock(active: { id: string; gtmContext?: GtmContext; ga4Context?: { property?: string }; adsContext?: AdsContext }, product: GoogleProduct, message: string): { block: string; used: Memory[] } {
+   *  can be stale and point at a DIFFERENT client — using it would leak one client's notes into another's chat).
+   *
+   *  A CONNECTED platform is the one exception, and it is not a leak: connecting it displays that
+   *  platform's own context bar, so its target is explicitly chosen and visible for this thread
+   *  rather than inherited from whatever another tab was last pointed at. Its notes are then part of
+   *  the working set - a container naming rule must apply while building the tag from a GA4 chat. */
+  private memoryBlock(
+    active: { id: string; gtmContext?: GtmContext; ga4Context?: { property?: string }; adsContext?: AdsContext },
+    product: GoogleProduct,
+    message: string,
+    integrations?: readonly GoogleProduct[]
+  ): { block: string; used: Memory[] } {
     if (!this.memory) return { block: '', used: [] };
     const all = this.memory.list(active.id);
     if (!all.length) return { block: '', used: [] };
+    const covers = (p: GoogleProduct): boolean => product === p || (integrations?.includes(p) ?? false);
     const ctx = {
-      containerId: product === 'gtm' ? active.gtmContext?.containerId : undefined,
-      property: product === 'ga4' ? active.ga4Context?.property : undefined,
-      customerId: product === 'ads' ? active.adsContext?.customerId : undefined,
+      containerId: covers('gtm') ? active.gtmContext?.containerId : undefined,
+      property: covers('ga4') ? active.ga4Context?.property : undefined,
+      customerId: covers('ads') ? active.adsContext?.customerId : undefined,
     };
     const used = selectRelevantMemories(all, ctx, message);
     return { block: formatMemoriesForPrompt(used), used };
@@ -443,9 +467,24 @@ export class ChatService {
     // The user's opt-in cross-platform connections, coerced to what THIS product may connect.
     // UNDEFINED (an older caller that never heard of integrations) keeps the registry's legacy
     // scoping; the renderer always sends an array, so its chats are strictly chip-driven.
-    const integrations = integrationsRaw === undefined ? undefined : sanitizeIntegrations(product, integrationsRaw);
+    // Two filters, in order, because a chip the app cannot honor must never reach the prompt:
+    //   1. sanitize  - only platforms this product may connect at all (the matrix).
+    //   2. AVAILABLE - only platforms this session actually wired. Google Ads is optional in the
+    //      constructor (no developer token, older callers), and without the service its tools are
+    //      simply absent from the registry. Letting the chip through anyway would print a whole
+    //      Ads workflow into the system prompt for tools that do not exist, which is precisely the
+    //      "advertises a capability it does not have" failure the prompt must never produce.
+    const requested = integrationsRaw === undefined ? undefined : sanitizeIntegrations(product, integrationsRaw);
+    const integrations = requested === undefined ? undefined : availableIntegrations(requested, { ads: Boolean(this.ads) });
     const covers = (p: GoogleProduct): boolean =>
       product === p || (integrations !== undefined ? integrations.includes(p) : product === 'gtm' && p === 'ads');
+    // Same question, but WITHOUT the legacy implicit GTM+Ads pairing. Used everywhere a chip is the
+    // user's explicit statement that a platform belongs to this thread (memory scope, context bars):
+    // the legacy pairing granted tools only, and must not retroactively widen anything else.
+    const chosen = (p: GoogleProduct): boolean => product === p || (integrations?.includes(p) ?? false);
+    if (requested && integrations && requested.length !== integrations.length) {
+      console.error(`[chat] integration(s) requested but unavailable in this session, dropped: ${requested.filter((p) => !integrations.includes(p)).join(', ')}`);
+    }
 
     const client = createProvider(active.llm.provider);
     // Available when the chat covers GTM (natively or via the GTM integration chip): lets the model
@@ -487,10 +526,12 @@ export class ChatService {
           accountId: active.id,
           // A THUNK, not a snapshot: set_gtm_container can switch the active container mid-turn, and a
           // frozen scope would then recall (and file new notes under) the previous client.
+          // covers() so a CONNECTED platform's client is in scope too: its context bar is displayed
+          // for this thread, so a note filed while building the tag belongs to that container.
           scope: (): { containerId?: string; property?: string; customerId?: string } => ({
-            ...(product === 'gtm' && active.gtmContext?.containerId ? { containerId: active.gtmContext.containerId } : {}),
-            ...(product === 'ga4' && active.ga4Context?.property ? { property: active.ga4Context.property } : {}),
-            ...(product === 'ads' && active.adsContext?.customerId ? { customerId: active.adsContext.customerId } : {}),
+            ...(chosen('gtm') && active.gtmContext?.containerId ? { containerId: active.gtmContext.containerId } : {}),
+            ...(chosen('ga4') && active.ga4Context?.property ? { property: active.ga4Context.property } : {}),
+            ...(chosen('ads') && active.adsContext?.customerId ? { customerId: active.adsContext.customerId } : {}),
           }),
           // A mid-turn recall counts as provenance too: re-emit the FULL ledger (the renderer replaces
           // the list on each event) so "N memories used" covers injected + recalled.
@@ -549,13 +590,13 @@ export class ChatService {
 
     // Tool-result carry-over. An EMPTY history means a brand-new conversation (the user cleared the
     // thread or switched target), so nothing may carry over into it.
-    const threadKey = this.threadKey(active, product);
+    const threadKey = this.threadKey(active, product, integrations);
     if (!history.length) this.toolMemory.clear(threadKey);
     const toolMemoryBlock = formatToolMemory(this.toolMemory.get(threadKey));
 
     // The memories injected into THIS turn — kept for provenance: streamed to the UI ("why did you say
     // that"), recorded in the usage log, and returned on the reply.
-    const mem = this.memoryBlock(active, product, message);
+    const mem = this.memoryBlock(active, product, message, integrations);
 
     const productLabel = PRODUCT_LABEL[product];
     // Whether this chat carries the Ads flow tools (natively, via the chip, or via the legacy
@@ -709,11 +750,12 @@ export class ChatService {
       product,
       // A CONNECTED platform's working context rides along too (covers() below re-gates), so a GTM
       // chat with GA4 connected knows which property supplies the Measurement ID without asking.
-      gtmContext: covers('gtm') ? active.gtmContext : undefined,
-      ga4Context: covers('ga4') ? active.ga4Context : undefined,
-      // NOT covers(): the legacy implicit GTM+Ads pairing never injected the Ads account context,
-      // and keeping that byte-identical protects older callers' prompt cache. The explicit chip does.
-      adsContext: product === 'ads' || (integrations !== undefined && integrations.includes('ads')) ? active.adsContext : undefined,
+      // chosen(), not covers(): the legacy implicit GTM+Ads pairing granted TOOLS only and never
+      // injected the Ads account context, and keeping that byte-identical protects older callers'
+      // prompt cache. An explicit chip does inject it.
+      gtmContext: chosen('gtm') ? active.gtmContext : undefined,
+      ga4Context: chosen('ga4') ? active.ga4Context : undefined,
+      adsContext: chosen('ads') ? active.adsContext : undefined,
       now: new Date(),
       memoryBlock: mem.block,
       toolMemoryBlock,
