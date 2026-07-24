@@ -10,7 +10,7 @@ import { formIdScope, ephemeralFormIdNote, stableFormKey, looksEphemeralFormId }
 import { groupFormIdentity, type ProviderFormIdentity, type FormIdCondition } from './provider-form-id.js';
 import { CTA_BY_INTENT, classifyCtaIntent } from './cta-intents.js';
 import { buildSocialUrlPattern } from './social.js';
-import { buildFormInstallPlan, buildTriggerInstallPlan, type FormMechanism, type InstallRequirement } from './install-plan.js';
+import { buildFormInstallPlan, buildTriggerInstallPlan, type FormMechanism, type InstallRequirement } from './install-plan.js';
 import { chooseClickConditions } from './trigger-strategy.js';
 
 const GA4_VAR = '{{GA4 Measurement ID}}';
@@ -870,23 +870,72 @@ function elementSuggestion(el: DetectedElement, socialPattern: string): Suggeste
     measurementId: GA4_VAR,
     eventName,
   });
+  // A contact element with NO href (a <div class="dealer-phone">, an address block) cannot be
+  // triggered on a tel:/mailto: scheme, so the ladder keys it on its class instead. Returns null
+  // when the class carries nothing durable, in which case no tag is offered at all.
+  const classTrigger = (label: string): SuggestedTag['trigger'] | null => {
+    const r = chooseClickConditions({ triggerKind: 'all_clicks', classes: el.className, id: el.elementId, text: el.text, page: el.page });
+    // Only an id or a semantic class is accepted here. The ladder's text rung is a reasonable last
+    // resort for a CTA, whose label IS the thing being tracked, but not for a contact block: the
+    // text is a phone number or a street address that differs on every instance, so a text-keyed
+    // trigger would fire for exactly one dealer and look like it covered them all.
+    if (r.signal !== 'clickId' && r.signal !== 'clickClasses') return null;
+    const t: SuggestedTag['trigger'] = { name: trigNameOf(label, 'all_clicks'), kind: 'all_clicks' };
+    for (const c of r.conditions) {
+      if (c.variable === '{{Click Element}}') { t.clickElementValue = c.value; t.clickElementOperator = 'cssSelector'; }
+      else if (c.variable === '{{Click Classes}}') { t.clickClassesValue = c.value; t.clickClassesOperator = c.operator as 'matchRegex'; }
+      else if (c.variable === '{{Click ID}}') { t.clickIdValue = c.value; t.clickIdOperator = 'equals'; }
+      else if (c.variable === '{{Click Text}}') { t.clickTextValue = c.value; t.clickTextOperator = 'equals'; }
+      else if (c.variable === '{{Page Path}}') { t.pagePathValue = c.value; t.pagePathOperator = c.operator as 'contains' | 'equals'; }
+    }
+    return t;
+  };
   switch (el.kind) {
-    case 'email':
+    case 'email': {
+      const hasHref = /^mailto:/i.test(el.href ?? '');
+      const trigger = hasHref
+        ? { name: trigNameOf('Email', 'link_click'), kind: 'link_click' as const, clickUrlValue: 'mailto:', clickUrlOperator: 'startsWith' as const }
+        : classTrigger('Email');
+      if (!trigger) return null;
       return {
         ...base('email_click', 'high', false),
         label: 'Email link (mailto) → GA4 "email_click"',
-        evidence: `mailto link${el.region ? ' in ' + el.region : ''}`,
+        evidence: hasHref ? `mailto link${el.region ? ' in ' + el.region : ''}` : `email block with no mailto href${el.region ? ' in ' + el.region : ''}, tracked by its class`,
         eventParameters: CLICK_PARAMS,
-        trigger: { name: trigNameOf('Email', 'link_click'), kind: 'link_click', clickUrlValue: 'mailto:', clickUrlOperator: 'startsWith' },
+        trigger,
       };
-    case 'phone':
+    }
+    case 'phone': {
+      const hasHref = /^tel:/i.test(el.href ?? '');
+      const trigger = hasHref
+        ? { name: trigNameOf('Phone', 'link_click'), kind: 'link_click' as const, clickUrlValue: 'tel:', clickUrlOperator: 'startsWith' as const }
+        : classTrigger('Phone');
+      if (!trigger) return null;
       return {
         ...base('phone_click', 'high', false),
         label: 'Phone link (tel) → GA4 "phone_click"',
-        evidence: `tel link${el.region ? ' in ' + el.region : ''}`,
+        evidence: hasHref ? `tel link${el.region ? ' in ' + el.region : ''}` : `phone block with no tel href${el.region ? ' in ' + el.region : ''}, tracked by its class`,
         eventParameters: CLICK_PARAMS,
-        trigger: { name: trigNameOf('Phone', 'link_click'), kind: 'link_click', clickUrlValue: 'tel:', clickUrlOperator: 'startsWith' },
+        trigger,
       };
+    }
+    case 'address': {
+      // Two shapes: an <a> opening a map/directions view, and a non-link address block. The maps
+      // link is keyed on its destination (durable, and it is what makes it an address click); the
+      // block falls to the class ladder.
+      const mapsLink = /^https?:/i.test(el.href ?? '');
+      const trigger = mapsLink
+        ? { name: trigNameOf('Address', 'link_click'), kind: 'link_click' as const, clickUrlValue: '(google\\.[a-z.]+/maps|maps\\.(google|apple)\\.|goo\\.gl/maps|waze\\.com|bing\\.com/maps|openstreetmap\\.org)', clickUrlOperator: 'matchRegex' as const, clickUrlIgnoreCase: true }
+        : classTrigger('Address');
+      if (!trigger) return null;
+      return {
+        ...base('address_click', 'high', false),
+        label: 'Address / directions → GA4 "address_click"',
+        evidence: mapsLink ? `link opening a map or directions view${el.region ? ' in ' + el.region : ''}` : `address block with no link${el.region ? ' in ' + el.region : ''}, tracked by its class`,
+        eventParameters: CLICK_PARAMS,
+        trigger,
+      };
+    }
     case 'download': {
       // A download link with a MEANINGFUL label ("Download brochure", "Datasheet") surfaces as its OWN
       // selectable suggestion, scoped to its {{Click Text}}, instead of folding into the generic
@@ -1870,7 +1919,16 @@ export function buildSuggestions(
   // "Share this article" widget → ONE GA4 `share` tag (twitter/linkedin/facebook/copy_link); the share
   // controls are consumed so they aren't also emitted individually.
   const { shareTags, consumed: shareConsumed } = extractShareControls(input.elements);
-  const skip = (e: DetectedElement): boolean => consumed.has(e) || ctaConsumed.has(e) || shareConsumed.has(e);
+  // A non-link contact block is chrome AROUND a real link as often as it is a standalone element:
+  // `<p class="dealer-phone-button"><a href="tel:…" class="dealer-phone">` yields both, and offering
+  // a class-keyed tag beside the tel: one is a duplicate of the same interaction. So a non-link block
+  // is kept ONLY when no real link of that kind exists on its page. Scoped per page, because a site
+  // can legitimately link phones on one page and render them as plain text on another.
+  const linkedContactKinds = new Set(
+    input.elements.filter((e) => !e.nonLink && e.href).map((e) => `${e.page}|${e.kind}`),
+  );
+  const redundantBlock = (e: DetectedElement): boolean => !!e.nonLink && linkedContactKinds.has(`${e.page}|${e.kind}`);
+  const skip = (e: DetectedElement): boolean => consumed.has(e) || ctaConsumed.has(e) || shareConsumed.has(e) || redundantBlock(e);
   const raw: SuggestedTag[] = [
     ...input.forms.map((f) => formSuggestion(f, scopeCtx)),
     ...faqTags,

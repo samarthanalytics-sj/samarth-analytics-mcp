@@ -12,6 +12,7 @@ import { classifyCtaIntent } from './cta-intents.js';
 import { socialNetworkOf, socialDomainOf } from './social.js';
 import { hasYouTubeEmbed } from './video.js';
 import { DOWNLOAD_EXT } from './suggest.js';
+import { isMapsUrl, resolveEmailHref, contactKindOf, looksLikeAddress } from './element-signals.js';
 
 // Re-exported so callers/tests have one import site for the classifier.
 export { classifyCtaIntent };
@@ -38,6 +39,13 @@ export interface RawElement {
   /** The element's own id attribute - the most durable click signal when an author set one.
    *  Fed to the trigger-strategy ladder ahead of classes, href and text. */
   elementId?: string;
+  /** A Cloudflare `data-cfemail` hex payload, when the origin obfuscated a mailto link. Decoded
+   *  by resolveEmailHref so a no-JS scan agrees with a JS scan of the same page. */
+  cfEmail?: string;
+  /** A contact/location block that is NOT a link or button (a <div>/<p>/<span> with a meaningful
+   *  class). GTM can still fire on it via All Elements + a CSS selector, but it has no href, so the
+   *  trigger must key on the class rather than on a tel:/mailto: scheme. */
+  nonLink?: boolean;
 }
 export interface PageScanRaw {
   elements: RawElement[];
@@ -133,7 +141,7 @@ export function collectPageInBrowser(): PageScanRaw {
       seen.add(el);
       const cta = looksCta(el);
       // Only measure the box when the cheap class/role check didn't already flag it (measuring forces layout).
-      elements.push({ tag: 'a', href: el.href || '', text: txt(el), hasDownload: el.hasAttribute('download'), region: regionOf(el), cta, box: cta ? undefined : measureBox(el), className: el.getAttribute('class') || undefined, elementId: el.getAttribute('id') || undefined });
+      elements.push({ tag: 'a', href: el.href || '', text: txt(el), hasDownload: el.hasAttribute('download'), region: regionOf(el), cta, box: cta ? undefined : measureBox(el), className: el.getAttribute('class') || undefined, elementId: el.getAttribute('id') || undefined, cfEmail: el.getAttribute('data-cfemail') || undefined });
     }
     // :not(a) — an <a href role="button"> is already captured (with its href) by
     // the anchor query above; without this it would be emitted again as a hrefless
@@ -153,6 +161,31 @@ export function collectPageInBrowser(): PageScanRaw {
       if (!label) continue;
       seen.add(c);
       elements.push({ tag: 'button', href: '', text: label, hasDownload: false, region: regionOf(c), cta: true, className: c.getAttribute('class') || undefined, elementId: c.getAttribute('id') || undefined });
+    }
+    // Contact/location blocks that are NOT links or buttons: a phone number or a postal address
+    // rendered as a <div>/<p>/<span> with a meaningful class and no href. GTM can still fire on one
+    // (All Elements + a CSS selector), but every loop above only looks at links, buttons and
+    // [onclick], so these were never even seen. The selector list is deliberately narrow - matching
+    // every classed <div> would bury the real interactions - and the element must carry short,
+    // leaf-level text so a whole section wrapper is not captured as "the address".
+    const CONTACT_SEL = '[class*="address" i], [class*="location" i], [class*="phone" i], [class*="tel" i], [class*="email" i], [class*="hours" i], [class*="directions" i]';
+    for (const c of Array.from(doc.querySelectorAll(CONTACT_SEL)).slice(0, MAX)) {
+      if (elements.length >= MAX * 2) break;
+      if (seen.has(c)) continue;
+      // Skip anything inside an already-captured link/button: the anchor is the better target, and
+      // GTM would resolve the click to it anyway on a Just Links trigger.
+      if (c.closest('a[href], button, [role="button"]')) continue;
+      // Leaf-ish only. A wrapper holding several contact rows has element children with their own
+      // text; capturing it would produce one tag covering everything inside it.
+      if (c.querySelector('a[href], button')) continue;
+      const label = txt(c);
+      if (!label || label.length > 200) continue;
+      seen.add(c);
+      elements.push({
+        tag: 'button', href: '', text: label, hasDownload: false, region: regionOf(c), cta: false,
+        className: c.getAttribute('class') || undefined, elementId: c.getAttribute('id') || undefined,
+        nonLink: true,
+      });
     }
     for (const s of Array.from(doc.querySelectorAll('script[src]')).slice(0, 200)) scriptSrcs.push((s as HTMLScriptElement).src);
     for (const fr of Array.from(doc.querySelectorAll('iframe[src]')).slice(0, 50)) {
@@ -312,9 +345,16 @@ export function isStyledButton(box: NonNullable<RawElement['box']>): boolean {
 export function classifyElement(raw: RawElement, siteHost: string): DetectedElement | null {
   const href = raw.href || '';
   const region = raw.region || undefined;
-  const make = (kind: DetectedElement['kind']): DetectedElement => ({ page: '', kind, text: raw.text, href: href || undefined, region, className: raw.className, elementId: raw.elementId });
+  const make = (kind: DetectedElement['kind']): DetectedElement => ({ page: '', kind, text: raw.text, href: href || undefined, region, className: raw.className, elementId: raw.elementId, nonLink: raw.nonLink || undefined });
   if (/^mailto:/i.test(href)) return make('email');
+  // A Cloudflare-obfuscated mailto. The origin serves `/cdn-cgi/l/email-protection#HEX` and CF's own
+  // script restores the real mailto in the browser, so without decoding here a JS scan finds the
+  // email and a no-JS scan of the SAME page finds nothing.
+  if (resolveEmailHref(href, raw.cfEmail)) return { ...make('email'), href: resolveEmailHref(href, raw.cfEmail) as string };
   if (/^tel:/i.test(href)) return make('phone');
+  // An address / "get directions" link. Checked BEFORE the outbound branch, which would otherwise
+  // file it under the generic third-party-domain bucket and lose the interaction entirely.
+  if (raw.tag === 'a' && isMapsUrl(href)) return make('address');
   if (raw.tag === 'a' && /^https?:/i.test(href)) {
     if (raw.hasDownload || DOWNLOAD_RE.test(href)) return make('download');
     let host = '';
@@ -338,6 +378,20 @@ export function classifyElement(raw: RawElement, siteHost: string): DetectedElem
       }
       return make('outbound');
     }
+  }
+  // A contact/location block with no href. Its CLASS is the only signal for what it is, and the
+  // trigger-strategy ladder will key on that class rather than on a tel:/mailto: scheme. Handled
+  // BEFORE the CTA branch, which would otherwise file an address block as a generic CTA named after
+  // the street name. Anything whose class does not name a contact purpose is dropped: a bare
+  // "location" wrapper is not worth a tag.
+  if (raw.nonLink) {
+    const ck = contactKindOf(raw.className);
+    if (ck === 'phone') return make('phone');
+    if (ck === 'email') return make('email');
+    // Guarded: a heading like "Our Locations" also carries a location-ish class, so the text must
+    // actually read like a postal address before we call it one.
+    if (ck === 'address' && looksLikeAddress(raw.text)) return make('address');
+    return null;
   }
   // A "Copy link" clipboard control (a <button>/JS <a> with no social URL) is part of a share widget →
   // the copy_link method. Checked before the CTA branch so it isn't mis-read as a generic CTA.

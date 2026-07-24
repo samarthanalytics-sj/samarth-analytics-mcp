@@ -482,6 +482,63 @@ check('cta: ALL CTA triggers use a plain "equals" condition (no regex)', ctaInpu
 // The hrefless CTAs above (buttons / JS controls) all pick "Click - All Elements".
 check('cta: a hrefless CTA (button / JS control) uses all_clicks (Click - All Elements)', ctaInput.every((s) => s.trigger.kind === 'all_clicks'));
 
+// ── Dealer locator: phone / email / address as THREE separate tags ───────────────────────────
+// Shape taken from a real WP Grid Builder dealer page: 12 tel: links, 11 mailto: links and 9
+// Google-Maps address links, each repeated per dealer card, all carrying a generated positional
+// class (wpgb-block-N) beside the semantic one.
+const dealerEls: DetectedElement[] = [];
+for (let i = 0; i < 9; i++) {
+  dealerEls.push({ page: '/locate-a-dealer', kind: 'phone', text: `03 9999 ${1000 + i}`, href: `tel:03 9999 ${1000 + i}`, className: `wpgb-block-3 dealer-phone` });
+  dealerEls.push({ page: '/locate-a-dealer', kind: 'email', text: `d${i}@example.com`, href: `mailto:d${i}@example.com`, className: `wpgb-block-4 dealer-email` });
+  dealerEls.push({ page: '/locate-a-dealer', kind: 'address', text: `${i} Rovan Place, Bairnsdale VIC 3875`, href: `https://www.google.com/maps/search/?api=1&query=${i}%20Rovan%20Place`, className: `wpgb-block-5 dealer-address` });
+  dealerEls.push({ page: '/locate-a-dealer', kind: 'outbound', text: `dealer${i}.com`, href: `https://dealer${i}.com/`, className: `wpgb-block-6 dealer-website` });
+}
+const dealer = buildSuggestions({ siteHost: 'augertorque.com.au', forms: [], elements: dealerEls });
+const dealerOf = (ev: string) => dealer.filter((s) => s.eventName === ev);
+check('dealer: phone, email and address are three DISTINCT tags', dealerOf('phone_click').length === 1 && dealerOf('email_click').length === 1 && dealerOf('address_click').length === 1);
+check('dealer: the address tag exists at all (was previously swallowed as a generic outbound click)', dealerOf('address_click').length === 1);
+check('dealer: repeated cards collapse to ONE tag each, not one per dealer', dealer.filter((s) => /Phone|Email|Address/.test(s.tagName)).length === 3);
+check('dealer: the address trigger keys on the MAP destination, not on the street text',
+  /google\\\.\[a-z\.\]\+\/maps/.test(dealerOf('address_click')[0]?.trigger.clickUrlValue ?? '') && dealerOf('address_click')[0]?.trigger.clickUrlOperator === 'matchRegex');
+check('dealer: phone/email keep their durable scheme triggers',
+  dealerOf('phone_click')[0]?.trigger.clickUrlValue === 'tel:' && dealerOf('email_click')[0]?.trigger.clickUrlValue === 'mailto:');
+check('dealer: the dealer WEBSITE links stay outbound, not folded into address', dealer.some((s) => s.eventName === 'outbound_click' || /Outbound/i.test(s.tagName)));
+
+// A non-link contact block (no href anywhere) falls to the class ladder rather than being dropped.
+const blockEls: DetectedElement[] = [
+  { page: '/contact', kind: 'address', text: '12 Example Street, Melbourne VIC 3000', className: 'contact-address' },
+  { page: '/contact', kind: 'phone', text: '03 9999 0000', className: 'contact-phone' },
+];
+const blocks = buildSuggestions({ siteHost: 'x.com', forms: [], elements: blockEls });
+check('non-link address block: triggers on its CLASS via the descendant-safe CSS form',
+  blocks.find((s) => s.eventName === 'address_click')?.trigger.clickElementValue === '.contact-address, .contact-address *');
+check('non-link block: uses all_clicks, the only type that fires on a non-link element',
+  blocks.every((s) => s.trigger.kind === 'all_clicks'));
+check('non-link phone block: does NOT claim a tel: trigger it has no href for',
+  !blocks.find((s) => s.eventName === 'phone_click')?.trigger.clickUrlValue);
+// A contact block with no href and no durable class yields NO tag. The ladder's text rung is fine
+// for a CTA, whose label is the thing being tracked, but a contact block's text is a phone number
+// or a street address that differs per instance, so it would fire for exactly one of them.
+const weakBlocks = buildSuggestions({ siteHost: 'x.com', forms: [], elements: [
+  { page: '/contact', kind: 'phone', text: '03 9999 0000' },                          // nothing to key on
+  { page: '/contact', kind: 'address', text: '12 Example St', className: 'wrapper' }, // generic class only
+] });
+check('contact block with no href and no semantic class → no tag at all (not a text-keyed guess)', weakBlocks.length === 0);
+// A wrapper AROUND a real link (`<p class="dealer-phone-button"><a href="tel:…">`) must not produce a
+// second, class-keyed tag for the same interaction.
+const wrapped = buildSuggestions({ siteHost: 'x.com', forms: [], elements: [
+  { page: '/dealers', kind: 'phone', text: '03 9999 0000', href: 'tel:0399990000', className: 'dealer-phone' },
+  { page: '/dealers', kind: 'phone', text: '03 9999 0000', className: 'dealer-phone-button', nonLink: true },
+] });
+check('a non-link wrapper around a real link does not duplicate that link\'s tag',
+  wrapped.filter((s) => s.eventName === 'phone_click').length === 1 && wrapped.find((s) => s.eventName === 'phone_click')?.trigger.clickUrlValue === 'tel:');
+// But on a page with NO phone link, the block is the only signal and must still be offered.
+const blockOnly = buildSuggestions({ siteHost: 'x.com', forms: [], elements: [
+  { page: '/branches', kind: 'phone', text: '03 9999 0000', className: 'branch-phone', nonLink: true },
+] });
+check('a non-link block on a page with no link of that kind IS still offered',
+  blockOnly.filter((s) => s.eventName === 'phone_click').length === 1 && blockOnly[0].trigger.kind === 'all_clicks');
+
 // ── CTA: an author-given id OUTRANKS the click text (trigger-strategy ladder rung 1) ─────────
 // Copy edits silently break a text-keyed trigger; an id does not. Substituting is safe here only
 // because an HTML id is unique per document, so it cannot merge two differently-labelled CTAs.
@@ -579,7 +636,8 @@ check('video: no embed → no video tag', buildSuggestions({ siteHost: 'a.com', 
 // ── generalized "How to install": every non-form suggestion carries an install plan ──────────────
 {
   // A mailto (link_click) element → a NATIVE plan ("nothing to install").
-  const mailto = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [{ page: '/', kind: 'email', text: 'Email us' }] });
+  // The href matters now: an email element WITHOUT one is a non-link block, keyed on its class.
+  const mailto = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [{ page: '/', kind: 'email', text: 'Email us', href: 'mailto:hi@a.com' }] });
   check('install: mailto/link_click element → install.requires[0].kind === "native"',
     !!mailto[0].install && mailto[0].install.requires[0].kind === 'native' && /nothing to install/i.test(mailto[0].install.summary));
   // A YouTube video (youtube_video) suggestion → NATIVE.

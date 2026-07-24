@@ -77,7 +77,10 @@ export interface DetectedForm {
   hidden?: boolean;
 }
 
-export type ElementKind = 'email' | 'phone' | 'download' | 'outbound' | 'social' | 'share' | 'cta';
+/** `address` is an address interaction: a link that opens a map/directions view (Google/Apple/
+ *  Waze/OSM), or a non-link address block with no href. Split out from `outbound` because an
+ *  address click is its own interaction, not a generic click on a third-party domain. */
+export type ElementKind = 'email' | 'phone' | 'download' | 'outbound' | 'social' | 'share' | 'cta' | 'address';
 
 /** For kind==='cta': the inferred purpose of the call-to-action, so each one is
  *  named + triggered by what it actually does ("Subscribe", "Add to Cart", …)
@@ -102,6 +105,10 @@ export interface DetectedElement {
   /** The element's own id attribute, when the author set one. Outranks classes/href/text in the
    *  trigger-strategy ladder. */
   elementId?: string;
+  /** A contact/location block with no href (a <div>/<p> carrying a meaningful class). Triggered on
+   *  its class rather than a tel:/mailto: scheme, and SUPPRESSED when a real link of the same kind
+   *  exists on the page - the wrapper would otherwise duplicate the link's own tag. */
+  nonLink?: boolean;
   /** Set when kind==='cta' — drives the tag/trigger name + the trigger filter. */
   intent?: CtaIntent;
   /** Set when kind==='social' — which network (facebook, linkedin, …). */

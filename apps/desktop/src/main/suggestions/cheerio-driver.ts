@@ -45,13 +45,36 @@ export function extractWithCheerio(html: string, baseUrl: string): { raw: PageSc
   };
 
   const elements: RawElement[] = [];
+  // class/id are carried through so the trigger-strategy ladder has the same signals here as in the
+  // browser drivers; without them a no-JS scan could only ever key a trigger on link text.
   $('a[href]').slice(0, 400).each((_i, el) => {
     const $el = $(el);
-    elements.push({ tag: 'a', href: abs($el.attr('href') || ''), text: txt($el), hasDownload: $el.attr('download') !== undefined, region: regionOf($el), cta: looksCta($el) });
+    elements.push({
+      tag: 'a', href: abs($el.attr('href') || ''), text: txt($el), hasDownload: $el.attr('download') !== undefined,
+      region: regionOf($el), cta: looksCta($el),
+      className: $el.attr('class') || undefined, elementId: $el.attr('id') || undefined,
+      // Cloudflare Email Obfuscation: the ORIGIN serves the encoded form and CF's own script restores
+      // the mailto in the browser. This path never runs that script, so without the payload a
+      // no-JS scan finds zero emails on a page a browser scan reads normally.
+      cfEmail: $el.attr('data-cfemail') || undefined,
+    });
   });
   $('button, [role="button"]:not(a)').slice(0, 400).each((_i, el) => {
     const $el = $(el);
-    elements.push({ tag: 'button', href: '', text: txt($el), hasDownload: false, region: regionOf($el) });
+    elements.push({ tag: 'button', href: '', text: txt($el), hasDownload: false, region: regionOf($el), className: $el.attr('class') || undefined, elementId: $el.attr('id') || undefined });
+  });
+  // Non-link contact/location blocks. Mirrors the browser collector's CONTACT_SEL pass.
+  const CONTACT_SEL = '[class*="address" i], [class*="location" i], [class*="phone" i], [class*="tel" i], [class*="email" i], [class*="hours" i], [class*="directions" i]';
+  $(CONTACT_SEL).slice(0, 400).each((_i, el) => {
+    const $el = $(el);
+    if ($el.closest('a[href], button, [role="button"]').length) return;
+    if ($el.find('a[href], button').length) return;
+    const label = txt($el);
+    if (!label || label.length > 200) return;
+    elements.push({
+      tag: 'button', href: '', text: label, hasDownload: false, region: regionOf($el), cta: false,
+      className: $el.attr('class') || undefined, elementId: $el.attr('id') || undefined, nonLink: true,
+    });
   });
 
   const scriptSrcs: string[] = [];
