@@ -142,6 +142,17 @@ export interface Tool extends LlmToolDef {
   write?: boolean;
   /** Deletes data — requires a SECOND confirmation before applying. */
   destructive?: boolean;
+  /**
+   * Shows a plain approval card before applying: one click to approve, no typed word.
+   *
+   * The middle rung between "applies directly" (every GTM create, which lands in a reversible draft
+   * workspace) and `destructive` (the two-step type-a-word card). It exists for writes that are
+   * NON-destructive but IMMEDIATELY LIVE and not revertible by this app - the Google Ads
+   * conversion-action create is the case it was added for. Nothing is deleted, so demanding the
+   * delete wording would be theatre, but "additive and live in someone's ad account" still deserves
+   * an explicit yes rather than appearing in a tool trace after the fact.
+   */
+  approval?: boolean;
   /** Human-readable one-liner shown in the approval prompt. */
   summarize?: (args: Record<string, unknown>) => string;
   /** Runs BEFORE the approval prompt. If it returns a value, that's an "already present"
@@ -1084,19 +1095,27 @@ function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean, data
             enum: ['ONE_PER_CLICK', 'MANY_PER_CLICK'],
             description: 'Omit to take Google\'s guidance for the category (one per click for leads, many for purchases).',
           },
+          actionType: {
+            type: 'string',
+            enum: ['WEBPAGE', 'WEBSITE_CALL'],
+            description:
+              'WEBPAGE (default) is the normal website conversion, including a CLICK on a tel: link. ' +
+              'WEBSITE_CALL is a "calls from a website" action for NUMBER SWAPPING: Google replaces the number shown on the page with a forwarding number and counts the call itself. Only use it for a number that is NOT a clickable tel: link, and say what number swapping does before creating one.',
+          },
           loginCustomerId: { type: 'string', description: 'Manager (MCC) id to act through, when reached via a manager.' },
         },
         required: ['customerId', 'name', 'category'],
         additionalProperties: false,
       },
       write: true,
-      // NO approval card: CREATES apply in one click, deletes are what get gated. A conversion action
-      // is additive - it spends nothing and takes nothing away - so it follows the same rule as a GTM
-      // tag create. It IS live rather than a draft, which is why the prompt requires the assistant to
-      // state the account and the exact action BEFORE calling, and the summarize line below still
-      // spells that out wherever a write is echoed.
+      // ONE approval card, no typed word (Tool.approval). A conversion action is ADDITIVE - it spends
+      // nothing and takes nothing away - so the delete wording would be theatre. But unlike every GTM
+      // create it is LIVE in the advertiser's account the moment it applies and this app cannot revert
+      // it, so it does not belong in the auto-apply bucket either. The user can edit the name,
+      // category or type in the card before approving.
+      approval: true,
       summarize: (a) =>
-        `Create a LIVE Google Ads conversion action "${s(a.name)}" (${s(a.category)}) in account ${s(a.customerId)}. This is not a draft: it exists in Google Ads the moment it is created`,
+        `Create a LIVE Google Ads conversion action "${s(a.name)}" (${s(a.category)}${s(a.actionType).toUpperCase() === 'WEBSITE_CALL' ? ', website call / number swap' : ''}) in account ${s(a.customerId)}. This is not a draft: it exists in Google Ads the moment it is created`,
       // Readiness is checked HERE, not only in the handler: precheck runs before the approval card, so
       // a missing developer token or scope never makes the user type "delete" to authorize a write that
       // could not have been attempted. adsNotReady swallows its own errors, which matters because a
@@ -1104,10 +1123,12 @@ function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean, data
       precheck: () => adsNotReady(ads),
       handler: (a) =>
         run(async () => {
+          const wantsCall = s(a.actionType).trim().toUpperCase() === 'WEBSITE_CALL';
           const input = {
             name: s(a.name).trim(),
             category: s(a.category).trim().toUpperCase(),
             ...(s(a.countingType).trim() ? { countingType: s(a.countingType).trim().toUpperCase() } : {}),
+            ...(wantsCall ? { type: 'WEBSITE_CALL' as const } : {}),
           };
           // Dry run first. validateOnly is the same mutate call with the write suppressed, so a duplicate
           // name or a category the API refuses is reported with nothing landing in the live account.
@@ -1756,6 +1777,119 @@ export function buildToolRegistry(
           installed: res.installed,
           ...(res.note ? { note: res.note } : {}),
           next: 'Call suggest_tags_from_url on the specific pages worth tracking (it scans ONE page per call). Forms and CTAs differ per page, so a homepage scan does not describe the site.',
+        };
+      },
+    },
+    {
+      name: 'detect_page_phone_numbers',
+      description:
+        'Scan one or more live page URLs and return every UNIQUE phone number on them, merged across pages and normalized to E.164 where possible. Read-only. ' +
+        'Finds BOTH clickable tel: links AND numbers printed as visible text, and reports which is which: `clickable: true` means a tel: link exists, so a GTM click trigger can fire on exactly that number; `clickable: false` means the number is text only, so there is NO click event and a normal conversion tag cannot track it (that needs a website-call / number-swap action). ' +
+        'The same line written several ways ("+1 555 123 4567", "(555) 123-4567", "tel:+15551234567") merges into ONE entry with its pages and occurrence count. ' +
+        'A number whose country code cannot be established is returned with e164 null and a note - report that honestly, never invent a country code. ' +
+        'USE THIS FIRST for anything per-phone-number, then plan_phone_conversion_tracking to turn the numbers into an implementation plan.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: 'A page URL to scan, e.g. https://example.com/contact' },
+          urls: { type: 'array', items: { type: 'string' }, description: 'Several page URLs to scan together (numbers are merged across them). Use discover_site_urls first for a whole site.' },
+        },
+        additionalProperties: false,
+      },
+      handler: async (a) => {
+        const { scanUrlsForPhones } = await import('../suggestions/scan-phones');
+        const list = Array.isArray(a.urls) ? (a.urls as unknown[]).map((u) => s(u)) : [];
+        const urls = [...(s(a.url).trim() ? [s(a.url).trim()] : []), ...list.filter(Boolean)];
+        if (!urls.length) return { ok: false, error: 'Give a url (or urls) to scan.' };
+        // A whole-site sweep is a browser launch per page; cap it so a chat turn cannot walk 300 pages.
+        const CAP = 10;
+        const res = await scanUrlsForPhones(urls.slice(0, CAP));
+        if (!res.pagesScanned.length) {
+          return { ok: false, error: 'No page could be scanned.', failedPages: res.failedPages, note: 'Report the reason for each url verbatim; do not retry the same url unchanged.' };
+        }
+        return {
+          ok: true,
+          pagesScanned: res.pagesScanned,
+          ...(urls.length > CAP ? { warning: `Only the first ${CAP} of ${urls.length} urls were scanned.` } : {}),
+          ...(res.failedPages.length ? { failedPages: res.failedPages } : {}),
+          count: res.phones.length,
+          phones: res.phones,
+          note:
+            'Present EVERY number to the user for confirmation BEFORE creating anything: show the number, whether it is clickable, where it was seen and how many times. ' +
+            (res.textUnavailable ? 'At least one page returned no readable text, so numbers printed as plain text on it could not be seen - say so rather than implying the list is complete. ' : '') +
+            (res.failedPages.length ? 'Some pages could not be read; their numbers are missing from this list. ' : '') +
+            'A text-only number (clickable false) cannot be tracked by a click tag - say what it would take instead of planning a tag that can never fire.',
+        };
+      },
+    },
+    {
+      name: 'plan_phone_conversion_tracking',
+      description:
+        'Build the COMPLETE, reviewable implementation plan for tracking every phone number on a page as its own Google Ads conversion: one conversion action, one GTM tag and one trigger PER NUMBER. Read-only - it creates nothing. ' +
+        'It scans the page, reads the Google Ads account\'s existing conversion actions and the GTM container\'s existing tags, then decides per number whether to REUSE an existing action or create one, whether the tag is already present (so a re-run is idempotent), and whether a Conversion Linker is missing. ' +
+        'Requires url, customerId (Google Ads) and the GTM accountId/containerId/workspaceId. ' +
+        'SHOW THE RETURNED PLAN TO THE USER AND GET THEIR APPROVAL BEFORE CALLING ANY CREATE TOOL. Then execute it step by step with create_google_ads_conversion_action (which shows its own approval card, since it is live in the Ads account) and create_gtm_tracking_tag (draft workspace). ' +
+        'Set allowWebsiteCall only when the user has explicitly agreed to number swapping for text-only numbers.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: 'Page URL to scan for phone numbers.' },
+          urls: { type: 'array', items: { type: 'string' }, description: 'Several pages to scan together.' },
+          customerId: { type: 'string', description: 'Google Ads account id, bare digits.' },
+          loginCustomerId: { type: 'string', description: 'Manager (MCC) id, when reached via a manager.' },
+          accountId: { type: 'string', description: 'GTM account id.' },
+          containerId: { type: 'string', description: 'GTM container id.' },
+          workspaceId: { type: 'string', description: 'GTM workspace id.' },
+          allowWebsiteCall: {
+            type: 'boolean',
+            description: 'Allow website-call (number swap) actions for numbers that are text only. Default false. Only set it after telling the user that Google will replace the displayed number with a forwarding number.',
+          },
+        },
+        required: ['url', 'customerId', 'accountId', 'containerId', 'workspaceId'],
+        additionalProperties: false,
+      },
+      handler: async (a) => {
+        if (!ads) return { ok: false, error: 'Google Ads is not connected in this chat, so a conversion plan cannot be built. Turn on the Google Ads integration chip.' };
+        const notReady = await adsNotReady(ads);
+        if (notReady) return notReady;
+        const { scanUrlsForPhones } = await import('../suggestions/scan-phones');
+        const { buildPhoneConversionPlan } = await import('../../shared/phone-numbers');
+        const list = Array.isArray(a.urls) ? (a.urls as unknown[]).map((u) => s(u)) : [];
+        const urls = [...(s(a.url).trim() ? [s(a.url).trim()] : []), ...list.filter(Boolean)].slice(0, 10);
+        // The three reads that make the plan real rather than a guess: what is on the page, what the
+        // Ads account already has, and what the container already has.
+        // An empty login-customer-id is not the same as an absent one (the API rejects a blank
+        // header), so a model that sends "" must be read as "no manager".
+        const loginCid = s(a.loginCustomerId).trim() || undefined;
+        const [scan, actions, tags] = await Promise.all([
+          scanUrlsForPhones(urls),
+          ads.listConversionActions(s(a.customerId), loginCid),
+          data.listGtmTags(s(a.accountId), s(a.containerId), s(a.workspaceId)),
+        ]);
+        if (!scan.pagesScanned.length) {
+          return { ok: false, error: 'No page could be scanned, so there is nothing to plan.', failedPages: scan.failedPages };
+        }
+        const tagList = (tags ?? []) as Array<{ name?: string; type?: string }>;
+        const plan = buildPhoneConversionPlan({
+          phones: scan.phones,
+          existingActions: actions.actions.map((x) => ({ id: x.id, name: x.name, type: x.type, category: x.category, taggable: x.taggable, conversionId: x.conversionId, conversionLabel: x.conversionLabel })),
+          existingTagNames: tagList.map((t) => s(t.name)),
+          hasConversionLinker: tagList.some((t) => s(t.type) === 'gclidw'),
+          allowWebsiteCall: a.allowWebsiteCall === true,
+        });
+        return {
+          ok: true,
+          pagesScanned: scan.pagesScanned,
+          ...(scan.failedPages.length ? { failedPages: scan.failedPages } : {}),
+          summary: plan.summary,
+          createConversionLinker: plan.createConversionLinker,
+          steps: plan.steps,
+          note:
+            'This is a PLAN. Nothing has been created. Present it as a table (number, clickable, action to reuse or create, tag name, trigger condition) plus the Conversion Linker line, then ASK the user to approve before calling any create tool. ' +
+            'Execute approved steps in this order per number: the conversion action first (create_google_ads_conversion_action - it is LIVE in the Ads account and shows its own approval card), then read back its conversionId and conversionLabel, then create_gtm_tracking_tag with those LITERAL values and the step\'s trigger. ' +
+            'Steps with tagExists true are already implemented: say so and skip them rather than creating a duplicate. ' +
+            'Steps with method "unsupported" cannot be implemented as described - report the reason verbatim, never substitute a tag that would not fire. ' +
+            'Report at the end that the GTM side is a DRAFT the user must publish, while every Ads action created is already live.',
         };
       },
     },
@@ -5669,6 +5803,20 @@ export function buildToolRegistry(
             console.error(`[tool] ${name}: user DECLINED final confirmation`);
             return declined;
           }
+        } else if (tool.approval) {
+          // ONE approval card, no typed word: the write is additive, but it is live in an external
+          // account the moment it applies and this app cannot revert it. The user may still edit the
+          // args in the card, exactly like the destructive path.
+          const summary = tool.summarize ? tool.summarize(effectiveArgs) : tool.name;
+          const edited = await confirm({ tool: tool.name, summary, details: effectiveArgs });
+          if (!edited) {
+            console.error(`[tool] ${name}: user DECLINED in approval card`);
+            return JSON.stringify({ declined: true, message: 'The user declined this change. Nothing was created.' });
+          }
+          if (JSON.stringify(edited) !== JSON.stringify(effectiveArgs)) {
+            console.error(`[tool] ${name}: args EDITED in approval card → ${truncForLog(JSON.stringify(edited))}`);
+          }
+          effectiveArgs = edited;
         } else {
           console.error(`[tool] ${name}: write auto-applied (approval is delete-only)`);
         }

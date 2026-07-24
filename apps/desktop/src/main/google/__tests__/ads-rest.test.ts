@@ -383,7 +383,19 @@ const createOf = (body: Record<string, unknown>): Record<string, unknown> => {
   check('EC-for-leads probe is its OWN query (degrades alone if the field is unsupported)', EC_LEADS_GAQL.includes('enhanced_conversions_for_leads_enabled') && EC_LEADS_GAQL.trim().startsWith('SELECT'));
 }
 
+// ── Phase G: WEBSITE_CALL conversion actions (number swap) ──
+{
+  const web = createConversionActionBody({ name: 'Lead', category: 'SUBMIT_LEAD_FORM' }, false);
+  check('type still defaults to WEBPAGE when nothing is asked for', JSON.stringify(web).includes('"type":"WEBPAGE"'));
+  const call = createConversionActionBody({ name: 'Calls', category: 'PHONE_CALL_LEAD', type: 'WEBSITE_CALL' }, false);
+  check('WEBSITE_CALL is forwarded so a number-swap action can be created', JSON.stringify(call).includes('"type":"WEBSITE_CALL"'));
+  check('WEBSITE_CALL keeps the lead counting default', JSON.stringify(call).includes('"countingType":"ONE_PER_CLICK"'));
+  const bogus = createConversionActionBody({ name: 'X', category: 'CONTACT', type: 'UPLOAD_CLICKS' as unknown as 'WEBPAGE' }, false);
+  check('an untaggable type is NOT forwarded, it falls back to WEBPAGE', JSON.stringify(bogus).includes('"type":"WEBPAGE"'));
+  check('the dry-run flag still rides along for a call action', createConversionActionBody({ name: 'X', category: 'PHONE_CALL_LEAD', type: 'WEBSITE_CALL' }, true).validateOnly === true);
+}
+
 console.log(`\ndesktop ads-rest: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }
 // Count floor: guards against an import or a whole block being silently dropped.
-if (passed < 140) { console.error(`expected at least 140 assertions, ran ${passed}`); process.exit(1); }
+if (passed < 150) { console.error(`expected at least 140 assertions, ran ${passed}`); process.exit(1); }

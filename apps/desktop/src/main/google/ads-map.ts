@@ -236,8 +236,13 @@ const UNTAGGABLE_TYPES: ReadonlyArray<{ match: RegExp; note: string }> = [
     note: 'App conversion: it is measured by the mobile app SDK, not on the website.',
   },
   {
-    match: /^(AD_CALL|CLICK_TO_CALL|WEBSITE_CALL|SMART_CAMPAIGN_)/,
-    note: 'Call conversion: it is counted by Google from the call itself, not by a Google Ads conversion tag you can fire from GTM.',
+    // WEBSITE_CALL is deliberately NOT here. The other call types are counted by Google from the ad
+    // itself and have no website snippet, but a "calls from a website" action DOES publish one: the
+    // call-reporting snippet carrying send_to, which is exactly what the GTM awcc (Google Ads Call
+    // Conversion) tag consumes to swap the displayed number. Excluding it made the two halves of
+    // this app unable to meet - the tag builder existed while the reader refused to hand it a label.
+    match: /^(AD_CALL|CLICK_TO_CALL|SMART_CAMPAIGN_)/,
+    note: 'Call conversion from ads: it is counted by Google from the call itself, not by a Google Ads conversion tag you can fire from GTM.',
   },
   {
     // FLOODLIGHT_ is spelled out as a prefix WITH a trailing wildcard on purpose. The real enum

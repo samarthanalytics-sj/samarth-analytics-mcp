@@ -275,8 +275,9 @@ async function main(): Promise<void> {
     // 56 GTM/GA4 read tools (55 plus discover_site_urls, the sitemap/crawl site lister) + the
     // read-only Google Ads tools (accounts, tracking setup, conversion actions, campaigns,
     // performance, change history, volume, UTM/health/GA4-link audits, audiences, structure,
-    // upload diagnostics, budget pacing, recommendations).
-    record('read-only registry exposes the 73 read tools', readOnlyNames.size === 73, `${readOnlyNames.size} tools`);
+    // upload diagnostics, budget pacing, recommendations), plus the two phone-conversion reads
+    // (detect_page_phone_numbers, plan_phone_conversion_tracking).
+    record('read-only registry exposes the 75 read tools', readOnlyNames.size === 75, `${readOnlyNames.size} tools`);
   }
 
   // ── B. Approval is DELETE-ONLY: a declining confirm blocks every destructive
@@ -285,15 +286,21 @@ async function main(): Promise<void> {
   {
     const fd = makeFakeData();
     const reg = buildToolRegistry(fd.data, decline, undefined, undefined, undefined, undefined, undefined, fd.ads);
-    // Approval is for DELETES, and for the Google Ads writes that move money or push data. Google Ads
-    // CREATES are excluded deliberately (owner's rule, 2026-07-23): a create is additive - it spends
-    // nothing and removes nothing - so it applies in one click exactly like a GTM tag create, even
-    // though it lands live. GTM writes stay auto-apply because a draft workspace absorbs them.
+    // Approval is for DELETES, and for the Google Ads writes that move money or push data. GTM
+    // writes stay auto-apply because a draft workspace absorbs them.
     const isDestructive = (n: string) =>
       n.startsWith('delete_') ||
       n.startsWith('archive_') ||
       (/google_ads/.test(n) && !n.includes('_ga4_') && !n.startsWith('create_'));
+    // GATED-BUT-NOT-DESTRUCTIVE (Tool.approval, 2026-07-24): additive writes that are nonetheless
+    // LIVE in an external account and not revertible by this app. They show ONE plain card with no
+    // typed word, so under a DECLINING confirm they decline like a delete - which is the point - but
+    // they must never be counted as destructive, because nothing is deleted and no delete API call
+    // may result. create_google_ads_conversion_action is the only member today.
+    const isApprovalGated = (n: string) => n === 'create_google_ads_conversion_action';
     const destructiveNames = writeNames.filter(isDestructive);
+    const gatedNames = writeNames.filter((n) => !isDestructive(n) && isApprovalGated(n));
+    let gatedDeclined = 0;
     let destructiveDeclined = 0;
     let othersApplied = 0;
     for (const name of writeNames) {
@@ -301,6 +308,8 @@ async function main(): Promise<void> {
       const out = JSON.parse(await reg.execute(name, synthesize(schema) as Record<string, unknown>));
       if (isDestructive(name)) {
         if (out?.declined === true) destructiveDeclined++;
+      } else if (isApprovalGated(name)) {
+        if (out?.declined === true) gatedDeclined++;
       } else if (out?.declined !== true) {
         othersApplied++;
       }
@@ -309,10 +318,20 @@ async function main(): Promise<void> {
     // createConversionAction is no longer in this set: a create applies in one click by design, so
     // seeing the call is the CORRECT outcome here, not a leak past a declined approval.
     const destructiveCalls = fd.calls.filter((c) => /^delete|^ga4AdminDelete|^ga4AdminArchive|^ga4DeleteProperty|^ga4DeleteAccount/.test(c)).length;
+    const plainWrites = writeNames.length - destructiveNames.length - gatedNames.length;
     record(
-      'declined confirm → every delete/archive declines (no destructive API call); creates/edits apply without approval',
-      destructiveDeclined === destructiveNames.length && othersApplied === writeNames.length - destructiveNames.length && destructiveCalls === 0,
-      `${destructiveDeclined}/${destructiveNames.length} destructive declined, ${othersApplied}/${writeNames.length - destructiveNames.length} non-destructive applied, ${destructiveCalls} destructive API calls`
+      'declined confirm → deletes/archives AND the live-account create decline; every draft write still applies',
+      destructiveDeclined === destructiveNames.length &&
+        gatedDeclined === gatedNames.length &&
+        othersApplied === plainWrites &&
+        destructiveCalls === 0,
+      `${destructiveDeclined}/${destructiveNames.length} destructive declined, ${gatedDeclined}/${gatedNames.length} approval-gated declined, ${othersApplied}/${plainWrites} draft writes applied, ${destructiveCalls} destructive API calls`
+    );
+    // The gate must be REAL: a declined card means the live Ads account was never touched.
+    record(
+      'a declined approval card never reaches the Google Ads API',
+      !fd.calls.some((c) => c.startsWith('createConversionAction')),
+      fd.calls.filter((c) => c.startsWith('createConversionAction')).join(',') || 'no create call'
     );
   }
 

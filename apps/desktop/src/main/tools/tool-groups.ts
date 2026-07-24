@@ -74,6 +74,9 @@ const GROUP_MEMBERS: Record<ToolGroup, readonly string[]> = {
     // cannot even begin on "what pages does this site have", which carries no audit vocabulary. It is
     // 251 tokens, the cheapest way to stop a whole class of question failing silently.
     'discover_site_urls',
+    // Same reasoning as discover_site_urls: this is the ENTRY POINT for anything per-phone-number.
+    // Behind a keyword gate the model cannot even begin on "track the phone numbers on this page".
+    'detect_page_phone_numbers',
     'spy_gtag_config',
     // GTM reads
     'list_gtm_accounts',
@@ -318,6 +321,8 @@ const GROUP_MEMBERS: Record<ToolGroup, readonly string[]> = {
     'get_google_ads_upload_diagnostics',
     'get_google_ads_budget_pacing',
     'get_google_ads_recommendations',
+    // Needs an Ads account AND a GTM container, but its subject is the conversion actions.
+    'plan_phone_conversion_tracking',
   ],
 };
 
@@ -624,7 +629,7 @@ export const GROUP_KEYWORDS: Record<Exclude<ToolGroup, 'core'>, readonly string[
     'keep data',
     'months of data',
   ],
-  'google-ads': ['ads', 'adword', 'google ads', 'conversion', 'campaign', 'customer id', 'mcc', 'gclid', 'aw-', 'remarketing'],
+  'google-ads': ['ads', 'adword', 'google ads', 'conversion', 'campaign', 'customer id', 'mcc', 'gclid', 'aw-', 'remarketing', 'phone number', 'call tracking', 'tel:'],
 };
 
 const escapeRe = (v: string): string => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

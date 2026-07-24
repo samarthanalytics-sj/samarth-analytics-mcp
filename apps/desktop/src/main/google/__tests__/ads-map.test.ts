@@ -656,6 +656,25 @@ const remember = (note: string | undefined): void => { if (note) notes.push(note
   check('health: userLists omitted → no audience finding (probe optional)', !assembleConversionHealth(baseHealth).some((f) => f.area === 'audience'));
 }
 
+// ── Phase G: a website-call action IS taggable (its snippet drives the GTM call tag) ──
+{
+  const snippet = "gtag('config', 'AW-123456789/CallLabel_9');";
+  const callAction = mapConversionAction({
+    conversionAction: {
+      resourceName: 'customers/1/conversionActions/77', id: '77', name: 'Calls from website',
+      status: 'ENABLED', type: 'WEBSITE_CALL', category: 'PHONE_CALL_LEAD',
+      tagSnippets: [{ type: 'WEBPAGE', eventSnippet: snippet, globalSiteTag: '' }],
+    },
+  });
+  check('WEBSITE_CALL is taggable: the number-swap tag needs exactly this snippet', callAction.taggable === true && !callAction.note);
+  check('and its id + label are readable', callAction.conversionId === 'AW-123456789' && callAction.conversionLabel === 'CallLabel_9');
+
+  for (const t of ['AD_CALL', 'CLICK_TO_CALL']) {
+    const fromAds = mapConversionAction({ conversionAction: { resourceName: 'r', id: '1', name: t, type: t, category: 'PHONE_CALL_LEAD', tagSnippets: [] } });
+    check(`${t} stays untaggable: Google counts it from the ad, there is nothing to fire`, fromAds.taggable === false && /counted by Google from the call itself/.test(fromAds.note ?? ''));
+  }
+}
+
 console.log(`\nads-map: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }
 if (passed < 60) { console.error(`expected >= 60 checks, got ${passed}`); process.exit(1); }
