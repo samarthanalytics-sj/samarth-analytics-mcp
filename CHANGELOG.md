@@ -1,3 +1,9 @@
+## [1.400.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.399.4...v1.400.0) (2026-07-24)
+
+### Features
+
+* **desktop:** optional cross-platform chat integrations (GTM + GA4 + Google Ads) ([48e5041](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/48e504132517bebf5131873726c042caab8a8b31))
+
 ## [1.399.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.399.3...v1.399.4) (2026-07-24)
 
 ### Bug Fixes
