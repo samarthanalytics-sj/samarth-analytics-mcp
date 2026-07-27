@@ -40,7 +40,6 @@ import type { MonitorAlert, Ga4MonitorRun, AdsMonitorRun } from '../shared/ipc';
 import { EmbeddingStore } from './storage/embedding-store';
 import { CorpusSemanticIndex } from './corpus/semantic-index';
 import { readFileSync } from 'node:fs';
-import { type as osType, release as osRelease, version as osVersion } from 'node:os';
 import { installReadableConsole } from '../shared/log-format';
 import { log } from './logger';
 
@@ -71,14 +70,6 @@ function appVersion(): string {
 }
 
 /** A friendly OS label ("Windows 10 Pro"), falling back to type + kernel release. */
-function osLabel(): string {
-  try {
-    const v = osVersion();
-    if (v) return v;
-  } catch { /* fall through */ }
-  return `${osType()} ${osRelease()}`;
-}
-
 /** Local wall-clock timestamp "YYYY-MM-DD HH:mm:ss" for the banner. */
 function nowStamp(): string {
   const d = new Date();
@@ -136,7 +127,9 @@ function createWindow(): void {
 
   if (isDev && process.env['ELECTRON_RENDERER_URL']) {
     void win.loadURL(process.env['ELECTRON_RENDERER_URL']);
-    win.webContents.openDevTools({ mode: 'detach' });
+    // DevTools is opt-in: auto-opening it spams the terminal with Chrome's unimplemented
+    // Autofill.enable / setAddresses protocol errors. Set OPEN_DEVTOOLS=1 to bring it back.
+    if (process.env['OPEN_DEVTOOLS'] === '1') win.webContents.openDevTools({ mode: 'detach' });
   } else {
     void win.loadFile(join(__dirname, '../renderer/index.html'));
   }
@@ -182,15 +175,11 @@ app.whenReady().then(() => {
     ['Environment', app.isPackaged ? 'Production' : 'Development'],
     ['Started At', nowStamp()],
   ]);
-  log.section('System');
-  log.info('Data directory', dataDir);
-  log.info('Platform', osLabel(), `Node ${process.versions.node}`, `Electron ${process.versions.electron}`, `Chrome ${process.versions.chrome}`);
   const accounts = new AccountRepository(join(dataDir, 'registry.json'));
   const secrets = new SecretStore(join(dataDir, 'secrets.json'), new SafeStorageCryptor());
   const providerKeys = new ProviderKeyStore(join(dataDir, 'app-settings.json'), secrets);
   const registry = new RegistryService(accounts, secrets, providerKeys);
-  if (secrets.available()) log.success('Secret store ready', 'Encrypted at rest via safeStorage / OS keychain');
-  else log.warn('safeStorage encryption unavailable', 'Secret writes will fail on this machine');
+  if (!secrets.available()) log.warn('safeStorage encryption unavailable', 'Secret writes will fail on this machine');
 
   // Per-account Google sign-in (loopback OAuth) + the auto-refreshing client
   // manager + read-only GTM/GA4 data fetches. Client id/secret come from env or
@@ -256,17 +245,14 @@ app.whenReady().then(() => {
   // Startup diagnostic — proves THIS running process loaded the current build. If the
   // GA4-edit tools are missing here, the main process is stale (electron-vite did not
   // reload it): fully quit and `npm run dev` again. See [[desktop-dev-restart-gotcha]].
-  log.section('Loading Modules');
-  log.success('Google services initialized', 'GTM, GA4 and Google Ads clients ready');
+  // Tool diagnostic proves THIS process loaded the current build; only SPEAK UP when it's broken.
   let toolCount = 0;
   try {
     const names = buildToolRegistry(dataService, async () => null).list().map((t) => t.name);
     toolCount = names.length;
-    log.success('GTM/GA4 tools loaded', `Total tools: ${toolCount}`);
     const ga4Edit = ['set_ga4_measurement_id', 'set_ga4_measurement_id_on_all_tags', 'add_ga4_event_parameters', 'add_ga4_event_parameters_to_all_tags'];
     const missing = ga4Edit.filter((n) => !names.includes(n));
-    if (missing.length === 0) log.success('GA4 edit tools present', ...ga4Edit.map((n) => `[ok] ${n}`));
-    else log.warn('GA4 edit tools MISSING - STALE BUILD, fully restart npm run dev', ...missing.map((n) => `[missing] ${n}`));
+    if (missing.length) log.warn('GA4 edit tools MISSING - STALE BUILD, fully restart npm run dev', ...missing.map((n) => `[missing] ${n}`));
   } catch (e) {
     log.error('Tool diagnostic failed', e instanceof Error ? e.message : String(e));
   }
@@ -346,21 +332,30 @@ app.whenReady().then(() => {
   registerTagWatchIpc(tagWatch);
   registerNetworkIpc({ configPath: join(dataDir, 'network-config.json') });
 
-  log.section('Application Startup');
-  log.success('IPC handlers registered');
-  log.success('Tool registry ready');
   createWindow();
-  log.success('Main window created');
-  log.success('MCP services ready');
-  log.success('Application ready');
-  log.summary([
-    '[ok] Build successful',
-    '[ok] Electron started',
-    '[ok] Renderer running',
-    `[ok] ${toolCount} tools loaded`,
-    '[ok] GTM / GA4 / Ads services ready',
-    '[ok] MCP ready',
-  ]);
+  // One compact readiness line + the working context (account/container/workspace SELECTED), instead
+  // of the old multi-section banner. Runtime work (tags created/failed) logs as it happens.
+  log.success('Ready', `${toolCount} tools \u00b7 GTM / GA4 / Ads clients`);
+  const active = registry.getActiveView();
+  if (!active) {
+    log.info('No active account', 'connect a Google account to begin');
+  } else {
+    log.info('Active account', `${active.email}${active.hasGoogleToken ? ' (Google connected)' : ' (not signed in)'}`);
+    const c = active.gtmContext;
+    if (c && (c.accountName || c.containerName)) {
+      const parts = [
+        c.accountName ? `account "${c.accountName}"` : '',
+        c.containerName ? `container ${c.containerPublicId ? `${c.containerPublicId} ` : ''}"${c.containerName}"` : '',
+        c.workspaceName ? `workspace "${c.workspaceName}"` : '',
+      ].filter(Boolean);
+      log.info('GTM context', parts.join(' \u00b7 '));
+    } else {
+      log.info('GTM context', 'none selected - pick a container in the GTM bar');
+    }
+    if (active.ga4Context?.propertyName || active.ga4Context?.property) {
+      log.info('GA4 property', `${active.ga4Context.propertyName ?? active.ga4Context.property}${active.ga4Context.property ? ` (${active.ga4Context.property})` : ''}`);
+    }
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

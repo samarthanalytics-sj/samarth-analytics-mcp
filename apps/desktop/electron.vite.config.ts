@@ -55,6 +55,8 @@ export default defineConfig({
         input: { index: resolve(__dirname, 'src/renderer/index.html') },
       },
     },
-    plugins: [react()],
+    // compact:false silences Babel's "code generator has deoptimised ... exceeds 500KB" note that
+    // App.tsx triggers; it's a cosmetic dev-server log, not a real problem.
+    plugins: [react({ babel: { compact: false } })],
   },
 });
