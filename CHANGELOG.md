@@ -1,3 +1,9 @@
+## [1.412.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.411.0...v1.412.0) (2026-07-27)
+
+### Features
+
+* **desktop:** auto-retry GTM write-quota (429) on the bulk-create path + build-throughput stats ([2076b94](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/2076b944927acecc1a31e41e2f1083cfaf86f147))
+
 ## [1.411.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.410.0...v1.411.0) (2026-07-27)
 
 ### Features
