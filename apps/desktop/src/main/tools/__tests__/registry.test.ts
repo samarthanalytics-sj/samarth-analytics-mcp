@@ -1235,6 +1235,39 @@ async function main(): Promise<void> {
     assert.ok(fd.calls.some((c) => c.startsWith('createTag') && c.includes('T9')), 'tag linked to existing trigger');
   });
 
+  await test('create_tracking_tag rejects a PLACEHOLDER measurement id before writing anything', async () => {
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data, approveAsIs);
+    // The exact placeholder observed in the wild (G-123456789) and the X-form both fire to nothing.
+    for (const bad of ['G-123456789', 'G-XXXXXXXXXX', 'G-0000000000']) {
+      await assert.rejects(
+        () => reg.execute('create_gtm_tracking_tag', {
+          accountId: '1', containerId: '2', workspaceId: '3',
+          platform: 'ga4_event', tagName: 'GA4 - Event - X', measurementId: bad, eventName: 'x',
+          trigger: { name: 'X', kind: 'custom_event', eventName: 'x' },
+        }),
+        /placeholder/i,
+        `${bad} should be rejected`
+      );
+    }
+    assert.ok(!fd.calls.some((c) => c.startsWith('createTag')), 'no tag was created for any placeholder id');
+    assert.ok(!fd.calls.some((c) => c.startsWith('createTrigger')), 'and no trigger either - it failed before the write');
+
+    // A real id and a {{variable}} both pass the guard (the variable has no G-/AW- prefix).
+    const ok = JSON.parse(await reg.execute('create_gtm_tracking_tag', {
+      accountId: '1', containerId: '2', workspaceId: '3',
+      platform: 'ga4_event', tagName: 'GA4 - Event - Real', measurementId: 'G-ABC1234DEF', eventName: 'x',
+      trigger: { name: 'Y', kind: 'custom_event', eventName: 'x' },
+    }));
+    assert.ok(ok.tag, 'a real measurement id creates the tag');
+    const okVar = JSON.parse(await reg.execute('create_gtm_tracking_tag', {
+      accountId: '1', containerId: '2', workspaceId: '3',
+      platform: 'ga4_event', tagName: 'GA4 - Event - Var', measurementId: '{{GA4 Measurement ID}}', eventName: 'x',
+      trigger: { name: 'Z', kind: 'custom_event', eventName: 'x' },
+    }));
+    assert.ok(okVar.tag, 'a {{variable}} measurement id is allowed');
+  });
+
   await test('create_tracking_tag (google_tag) builds a googtag and creates its trigger', async () => {
     const fd = fakeData();
     const reg = buildToolRegistry(fd.data, approveAsIs);

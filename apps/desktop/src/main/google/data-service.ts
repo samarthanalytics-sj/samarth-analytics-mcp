@@ -7,7 +7,7 @@ import type { RegistryService } from '../services/registry-service';
 import type { ContainerSnapshot, ServerContainerSnapshot } from './gtm-builders';
 import { applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, normalizeTriggerType, setCustomEventName, customEventNameOf, buildGa4Client, buildGa4ServerTag, buildMetaCapiServerTag, buildTikTokCapiServerTag, buildStapeDataTag, buildServerAllEventsTrigger, buildServerEventTrigger, buildAdsConversionServerTag, buildMetaEmqVariables, buildTikTokEmqVariables, buildEcommerceDlvVariables, buildGa4EventTag, buildTrigger, planTriggerRetarget, type TriggerInput, buildGtmClient, buildVariable, sanitizeName, matchesServerContainer, customTemplateType, upsertGoogleTagConfig, triggerUsageBreakdown, detectMetaTags, evaluateTrackingSetup, GA4_ECOMMERCE_FUNNEL_EVENTS, type TrackingSetupReport, type TrackingSetupCheck } from './gtm-builders';
 import { resolveGa4MeasurementIds } from './gtm-ga4-check';
-import { withQuotaRetry } from './quota-retry';
+import { withQuotaRetry, withRetry, QUOTA_RE, TRANSIENT_5XX_RE, NOT_FOUND_OR_PERMISSION_RE } from './quota-retry';
 
 import type { Ga4PropertySnapshot } from './ga4-audit';
 import type { DataQualityCounts } from './ga4-data-quality';
@@ -287,21 +287,34 @@ export class GoogleDataService {
    *  reset") instead of a silent pause. Set by the chat service around a turn, cleared after. */
   onQuotaBackoff?: (info: { attempt: number; delayMs: number }) => void;
 
-  /** Quota-window retry for the INDIVIDUAL chat create path (tags/triggers/variables/built-ins). A
-   *  429 there is the per-user-per-minute write limit; rather than a short exponential guess, wait the
-   *  reset (honoring Retry-After) and resume the SAME create automatically, across a window long
-   *  enough to outlast a per-minute reset. So a 40-tag build pauses on the throttled tag and finishes
-   *  all 40 with no human interaction. Retrying a create after a 429 is safe: the 429 means nothing
-   *  was written, so there is no duplicate risk. */
+  /** Resilient retry for the INDIVIDUAL chat create path (tags/triggers/variables/built-ins). Three
+   *  classes of transient GTM error, each with its own budget:
+   *   - QUOTA (429 per-user-per-minute): wait the reset - honoring Retry-After - and resume the SAME
+   *     create automatically across a window that outlasts a per-minute reset, so a 40-tag build
+   *     pauses on the throttled tag and finishes all 40 with no human interaction.
+   *   - SERVER (5xx backend blips): a few short retries.
+   *   - PROPAGATION (GTM's conflated "Not found or permission denied" on a FRESH container/workspace,
+   *     where the WRITE path briefly lags the READ path - observed: identical args fail then succeed
+   *     seconds later): a SHORT bounded retry to ride out the window. A genuinely wrong id / no-access
+   *     still fails fast (after ~4 short waits) with the honest message rather than looping forever.
+   *  Retrying a create after any of these is safe: the request did not write, so there is no duplicate. */
   private qCreate<T>(fn: () => Promise<T>): Promise<T> {
-    return withQuotaRetry(fn, {
-      maxRetries: 8,
-      baseDelayMs: 2_000,
-      maxDelayMs: 65_000,
-      onBackoff: ({ attempt, delayMs }) => {
-        this.quotaBackoffs += 1;
-        console.error(`[gtm] write quota hit - waiting ${Math.round(delayMs / 1000)}s for the per-minute limit to reset (retry ${attempt}/8)`);
-        this.onQuotaBackoff?.({ attempt, delayMs });
+    return withRetry(fn, {
+      rules: [
+        { label: 'quota', match: (_e, m) => QUOTA_RE.test(m), maxRetries: 8, baseDelayMs: 2_000, maxDelayMs: 65_000, honorRetryAfter: true },
+        { label: 'server', match: (_e, m) => TRANSIENT_5XX_RE.test(m), maxRetries: 4, baseDelayMs: 1_000, maxDelayMs: 8_000 },
+        { label: 'propagation', match: (_e, m) => NOT_FOUND_OR_PERMISSION_RE.test(m), maxRetries: 4, baseDelayMs: 1_500, maxDelayMs: 5_000 },
+      ],
+      onBackoff: ({ rule, attempt, delayMs }) => {
+        if (rule === 'quota') {
+          this.quotaBackoffs += 1;
+          this.onQuotaBackoff?.({ attempt, delayMs });
+        }
+        const why =
+          rule === 'quota' ? 'write quota reached - waiting for the per-minute limit to reset'
+          : rule === 'server' ? 'transient GTM server error'
+          : 'a fresh container/workspace is not visible to the write path yet';
+        console.error(`[gtm] ${rule} retry: waiting ${Math.round(delayMs / 1000)}s (${why}, attempt ${attempt})`);
       },
     });
   }

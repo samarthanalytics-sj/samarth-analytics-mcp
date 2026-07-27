@@ -260,6 +260,28 @@ async function findExistingByName(
   return { alreadyExists: true, [kind]: match, message: `${label} "${match.name}" already exists (ID ${id}) — not created.` };
 }
 
+/** True when a GA4/Google-tag/Ads id is an obvious PLACEHOLDER (G-123456789, G-XXXXXXXXXX, all zeros,
+ *  "example"/"test"/…), not a real property/tag id. A tag built with one is created fine by GTM but
+ *  fires to nothing, so a bulk build can silently produce dozens of dead tags. We reject it and make
+ *  the model resolve the real id first. A {{variable}} reference is NOT a placeholder (it has no
+ *  prefix), so it passes through untouched. */
+export function isPlaceholderTrackingId(raw: string): boolean {
+  const id = String(raw ?? '').trim();
+  if (!id) return false;
+  const m = /^(G|AW|GT|DC|UA)-?(.+)$/i.exec(id);
+  if (!m) return false; // no known prefix (e.g. a {{variable}}) -> not our concern here
+  const body = m[2];
+  // Whole-body markers only: a REAL id is a random alphanumeric string, so prefix-matching words
+  // (e.g. "abc") would wrongly reject a legitimate id like G-ABC1234DEF. Match the obvious dummies.
+  return (
+    /^x+$/i.test(body) || // G-XXXXXXXXXX
+    /^0+$/.test(body) || // G-0000000000
+    /123456789/.test(body) || // the canonical dummy G-123456789 / any 123456789 run
+    /^(test|dummy|example|placeholder|sample)$/i.test(body) || // G-EXAMPLE etc.
+    /^your[-_]?id$/i.test(body)
+  );
+}
+
 /** Cheap similarity for "did you mean" on an unknown tool name: common-prefix length,
  *  heavily boosted when one name contains the other (catches near-miss/hallucinated
  *  names like set_ga4_measurement_id_for_all_tags → ..._on_all_tags). */
@@ -3307,6 +3329,21 @@ export function buildToolRegistry(
         const containerId = s(a.containerId);
         const workspaceId = s(a.workspaceId);
         const platform = s(a.platform);
+
+        // Refuse an obvious PLACEHOLDER measurement/tag id: GTM would create the tag happily, but it
+        // fires to nothing, so a bulk build silently produces dozens of dead tags. Make the model
+        // resolve the REAL id first instead of guessing one. A {{variable}} passes (no prefix).
+        if (platform === 'ga4_event' && isPlaceholderTrackingId(s(a.measurementId))) {
+          throw new Error(
+            `measurementId "${s(a.measurementId)}" is a placeholder, not a real GA4 Measurement ID - a tag built with it would fire to nothing. ` +
+              `Resolve the REAL "G-XXXXXXXXXX" first (read the container's existing GA4 config/Google tag with list_gtm_tags, or the property's data stream with list_ga4_data_streams), then retry with that value.`
+          );
+        }
+        if (platform === 'google_tag' && isPlaceholderTrackingId(s(a.tagId))) {
+          throw new Error(
+            `tagId "${s(a.tagId)}" is a placeholder, not a real Google tag id (G-/AW-/GT-XXXX). Resolve the real one (list_gtm_tags for the existing Google tag, or the GA4 data stream) and retry.`
+          );
+        }
 
         let tag;
         // Set by the meta_pixel branch when the tag's Object Properties reference {{dlv - ecommerce.*}} —
