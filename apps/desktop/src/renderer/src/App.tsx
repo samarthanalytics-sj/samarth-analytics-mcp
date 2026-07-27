@@ -3724,12 +3724,25 @@ function GtmToolsView({
   );
 }
 
-// Sample prompts grouped by task - a quick reference + launcher for the chat. Replace the
-// placeholder ids/names/URLs (G-…, container names, https URLs) with the user's own.
-const PROMPT_GROUPS: Array<{ title: string; icon: string; product?: 'gtm' | 'ga4'; prompts: string[] }> = [
+// Per-product display metadata for the Prompts tab: the dropdown label, the short badge, and the
+// accent tokens (GTM blue, GA4 amber, Ads green) already defined in the theme.
+const PROMPT_PRODUCTS: GoogleProduct[] = ['gtm', 'ga4', 'ads'];
+const PRODUCT_META: Record<GoogleProduct, { label: string; short: string; color: string; bg: string; border: string }> = {
+  gtm: { label: 'Google Tag Manager', short: 'GTM', color: 'var(--c-blue)', bg: 'var(--c-blue-bg)', border: 'var(--c-blue-border)' },
+  ga4: { label: 'Google Analytics 4', short: 'GA4', color: 'var(--c-amber)', bg: 'var(--c-amber-bg)', border: 'var(--c-amber-border)' },
+  ads: { label: 'Google Ads', short: 'Ads', color: 'var(--c-green)', bg: 'var(--c-green-bg)', border: 'var(--c-green-border)' },
+};
+
+// Sample prompts grouped by product, then task - a quick reference + launcher for the chat. Each
+// group carries the PRODUCT it runs against, so "Use in chat" flips the chat to the right tab (GTM /
+// GA4 / Google Ads) and the Prompts tab can filter by product. Replace the placeholder ids/names/URLs
+// (G-…, AW-…, container names, https URLs) with the user's own.
+const PROMPT_GROUPS: Array<{ title: string; icon: string; product: GoogleProduct; prompts: string[] }> = [
+  // ── Google Tag Manager ──────────────────────────────────────────────────────
   {
     title: 'Audit & health',
     icon: '🔍',
+    product: 'gtm',
     prompts: [
       'Audit my GTM container and list the findings by severity, worst first.',
       'What changed in my container since the last audit - any regressions?',
@@ -3742,8 +3755,40 @@ const PROMPT_GROUPS: Array<{ title: string; icon: string; product?: 'gtm' | 'ga4
     ],
   },
   {
+    title: 'New trigger types & conditions',
+    icon: '✨',
+    product: 'gtm',
+    prompts: [
+      'Track my AJAX form: fire a GA4 generate_lead tag when the thank-you message ".form-success" becomes 50% visible (Element Visibility).',
+      'Create an Element Visibility trigger for the sticky "Book a demo" bar and a GA4 view_promotion tag on it.',
+      'Create a History Change trigger for my single-page app and a GA4 page_view tag for the virtual pageviews.',
+      'Create a Scroll Depth trigger at 25/50/75/90% and a GA4 scroll tag.',
+      'Create a Window Loaded trigger for my late-loading chat widget.',
+      'Create a JavaScript Error trigger and a GA4 exception tag.',
+      'Track clicks on the element with id "book-demo-btn" as a GA4 book_demo_click event (Click ID).',
+      'Track clicks on any element with the class "btn-quote" as a GA4 request_quote_click event (Click Classes).',
+      'Fire this tag only when the query string contains utm_source=newsletter.',
+      'Scope this trigger to the hostname www.example.com so it never fires on staging.',
+      'Only fire this tag when the Referrer contains google.',
+    ],
+  },
+  {
+    title: 'Contact & interaction tracking',
+    icon: '📇',
+    product: 'gtm',
+    prompts: [
+      'Track phone, email and address clicks on my contact page as three separate GA4 events: phone_click, email_click and address_click.',
+      'Create a GA4 phone_click tag for my tel: links.',
+      'Create a GA4 email_click tag for my mailto: links.',
+      'Create a GA4 address_click tag for my Google Maps "get directions" links.',
+      'Track my "dealer-phone" and "dealer-email" links on the store-locator page, one GA4 tag each, keyed on the class so all dealer cards are covered by one tag.',
+      'Create an FAQ accordion tracking tag that fires when a question row is clicked.',
+    ],
+  },
+  {
     title: 'Scope, filter & batch fixes',
     icon: '🎯',
+    product: 'gtm',
     prompts: [
       'List all tags that fire on the purchase event.',
       'Show only the GA4 event tags in my container.',
@@ -3759,6 +3804,7 @@ const PROMPT_GROUPS: Array<{ title: string; icon: string; product?: 'gtm' | 'ga4
   {
     title: 'GA4 ecommerce tags',
     icon: '🛒',
+    product: 'gtm',
     prompts: [
       'Create a GA4 event tag for add_to_cart with items, value and currency, firing on the add_to_cart custom event.',
       'Create a GA4 purchase tag with items, transaction_id, value, tax, shipping, currency and coupon.',
@@ -3772,6 +3818,7 @@ const PROMPT_GROUPS: Array<{ title: string; icon: string; product?: 'gtm' | 'ga4
   {
     title: 'GA4 engagement events',
     icon: '📈',
+    product: 'gtm',
     prompts: [
       'Create a GA4 generate_lead tag firing on form submissions.',
       'Create a GA4 scroll event tag firing at 90% scroll depth.',
@@ -3783,6 +3830,7 @@ const PROMPT_GROUPS: Array<{ title: string; icon: string; product?: 'gtm' | 'ga4
   {
     title: 'Triggers & variables',
     icon: '⚡',
+    product: 'gtm',
     prompts: [
       'Create a Custom Event trigger for purchase.',
       'Create a timer trigger that fires every 30 seconds.',
@@ -3792,12 +3840,14 @@ const PROMPT_GROUPS: Array<{ title: string; icon: string; product?: 'gtm' | 'ga4
       'Create a Data Layer variable for ecommerce.value.',
       'Create a Constant variable named GA4 ID with value G-XXXXXXX.',
       'Create a Custom JavaScript variable that returns the page title.',
+      'Create a URL variable that reads the utm_source query parameter.',
       'List all variables in my container.',
     ],
   },
   {
     title: 'Consent Mode v2',
     icon: '🛡',
+    product: 'gtm',
     prompts: [
       'Set Consent Mode v2 on all ad/analytics tags (ad_storage, analytics_storage, ad_user_data, ad_personalization).',
       'Which tags are missing Consent Mode v2 settings?',
@@ -3808,6 +3858,7 @@ const PROMPT_GROUPS: Array<{ title: string; icon: string; product?: 'gtm' | 'ga4
   {
     title: 'Tag management',
     icon: '🏷',
+    product: 'gtm',
     prompts: [
       'Pause the GA4 - Config tag.',
       'Unpause the GA4 - Purchase tag.',
@@ -3818,6 +3869,7 @@ const PROMPT_GROUPS: Array<{ title: string; icon: string; product?: 'gtm' | 'ga4
   {
     title: 'Folders, environments & workspaces',
     icon: '🗂',
+    product: 'gtm',
     prompts: [
       'Create a folder called Ecommerce and move all GA4 event tags into it.',
       'Organize my container: make a folder per platform and move the tags in.',
@@ -3831,6 +3883,7 @@ const PROMPT_GROUPS: Array<{ title: string; icon: string; product?: 'gtm' | 'ga4
   {
     title: 'Server-side GTM',
     icon: '🖥',
+    product: 'gtm',
     prompts: [
       'Set up a server container for this web container.',
       'Create a GA4 server tag forwarding to G-XXXXXXX, firing on all events.',
@@ -3847,6 +3900,7 @@ const PROMPT_GROUPS: Array<{ title: string; icon: string; product?: 'gtm' | 'ga4
   {
     title: 'Community templates (Meta / TikTok / LinkedIn / Pinterest / Snap)',
     icon: '🧩',
+    product: 'gtm',
     prompts: [
       'Import the Meta Pixel community template and create a Meta pixel tag with my Pixel ID.',
       'Import the TikTok Pixel template and create the tag.',
@@ -3861,6 +3915,7 @@ const PROMPT_GROUPS: Array<{ title: string; icon: string; product?: 'gtm' | 'ga4
   {
     title: 'Meta - Pixel, CAPI & advanced matching',
     icon: '📘',
+    product: 'gtm',
     prompts: [
       'Import the Meta Pixel community template and create a Meta pixel base tag with my Pixel ID.',
       'Create a Meta Purchase event tag with value, currency and content_ids.',
@@ -3879,6 +3934,7 @@ const PROMPT_GROUPS: Array<{ title: string; icon: string; product?: 'gtm' | 'ga4
   {
     title: 'Test & verify a new tag',
     icon: '🧪',
+    product: 'gtm',
     prompts: [
       "List the community templates imported into my container and show each one's tag type.",
       'Audit my container and confirm the new tag has a firing trigger and Consent Mode v2 settings.',
@@ -3894,9 +3950,22 @@ const PROMPT_GROUPS: Array<{ title: string; icon: string; product?: 'gtm' | 'ga4
     ],
   },
   {
+    title: 'Look up proven patterns',
+    icon: '📚',
+    product: 'gtm',
+    prompts: [
+      'Look up common GTM tagging patterns for a lead-gen site.',
+      'What trigger conditions do real containers use for ecommerce purchase tracking?',
+      'Show me proven naming conventions for GA4 event tags and triggers.',
+      'What is the reliable way to track an AJAX form that has no page reload?',
+    ],
+  },
+
+  // ── Google Analytics 4 ──────────────────────────────────────────────────────
+  {
     title: 'GA4 property audit (read-only)',
     icon: '🔬',
-    product: 'ga4', // runs the evidence-based GA4 audit framework via the read-only GA4 tools
+    product: 'ga4',
     prompts: [
       'Run a full GA4 property audit of this property. Gather the real config + last-90-days data via the GA4 tools, then output the templated audit: area-status table (Pass / Partial / Fail / Not Verified), property baseline, decision readiness, parameter-coverage bars, and findings sorted by severity with evidence, business risk and the exact fix.',
       "Audit this GA4 property's data quality for the last 28 days - (not set) / Unassigned / (direct) bloat and any anomalies - with real values and a Pass / Partial / Fail / Not Verified status, worst first.",
@@ -3906,18 +3975,138 @@ const PROMPT_GROUPS: Array<{ title: string; icon: string; product?: 'gtm' | 'ga4
     ],
   },
   {
+    title: 'GA4 data quality & event hygiene',
+    icon: '🧹',
+    product: 'ga4',
+    prompts: [
+      'Check my GA4 event names for hygiene issues: reserved-prefix clashes, casing inconsistencies, near-duplicate names and events over the parameter cap.',
+      'Show my event-to-parameter coverage matrix and flag events missing the parameters they should carry.',
+      'Audit my custom dimension and custom metric naming and usage - any unused or inconsistently named definitions?',
+      'Find events that dropped to zero or spiked recently, and any duplicate transaction_ids.',
+      'List my (not set) / Unassigned / (direct) share by dimension for the last 28 days.',
+    ],
+  },
+  {
     title: 'GA4 reporting & settings (read-only)',
     icon: '📊',
-    product: 'ga4', // these query the GA4 Admin/Data API → open the chat's GA4 toggle, not GTM
+    product: 'ga4',
     prompts: [
       'Run a GA4 report of sessions by default channel group for the last 28 days.',
       'Run a realtime GA4 report of active users by page.',
       'List my GA4 key events (conversions).',
       'List my GA4 custom dimensions and custom metrics.',
       'Show my GA4 data streams.',
-      'Audit my GA4 property for data-quality issues.',
       'Show my GA4 property data retention and Google Signals settings.',
-      'Score my GA4 property setup.',
+      'Show my GA4 attribution settings.',
+      'List my GA4 audiences.',
+    ],
+  },
+  {
+    title: 'GA4 monitoring & alerts',
+    icon: '🔔',
+    product: 'ga4',
+    prompts: [
+      'Set up GA4 monitoring for this property and alert me on Slack when key events drop or traffic collapses.',
+      'Show my GA4 monitoring dashboard, health score and recent alerts.',
+      'Run a monitoring check on this property now and tell me if anything looks off.',
+      'Add a second property to my GA4 monitoring and monitor them both.',
+    ],
+  },
+  {
+    title: 'gtag.js inspection & Tag Watch',
+    icon: '🛰',
+    product: 'ga4',
+    prompts: [
+      'Spy on the public gtag.js config for G-XXXXXXX and show me what events and parameters it sends.',
+      "Compare my gtag.js configuration against a competitor's measurement ID.",
+      'Explain what my gtag.js setup is doing: linked Ads conversion IDs, custom parameters and any consent defaults.',
+      'Watch this measurement ID for gtag.js config changes over time.',
+    ],
+  },
+  {
+    title: 'GA4 settings changes (writes - enable in config)',
+    icon: '⚙️',
+    product: 'ga4',
+    prompts: [
+      'Set my GA4 data retention to 14 months.',
+      'Turn on Google Signals for this property.',
+      'Update my enhanced measurement settings (scrolls, outbound clicks, site search, file downloads).',
+      'Update my attribution settings to data-driven with a 90-day lookback.',
+      'Update my data redaction settings for this web stream.',
+    ],
+  },
+
+  // ── Google Ads ──────────────────────────────────────────────────────────────
+  {
+    title: 'Accounts, campaigns & performance',
+    icon: '📣',
+    product: 'ads',
+    prompts: [
+      'List my Google Ads accounts.',
+      'List my campaigns with their status and daily budgets.',
+      'Show campaign performance (impressions, clicks, cost, conversions) for the last 30 days.',
+      'Show my account structure: campaigns, ad groups and budgets.',
+      'Show budget pacing for this month - which campaigns are over- or under-spending.',
+      'Show the recent change history for this account.',
+      'Show Google Ads recommendations for this account.',
+      'List my Google Ads audiences (user lists) and their sizes.',
+    ],
+  },
+  {
+    title: 'Conversions & tracking',
+    icon: '🎯',
+    product: 'ads',
+    prompts: [
+      "List my conversion actions with each one's Conversion ID and Label.",
+      'Show conversion volume by action for the last 30 days.',
+      'Show my Google Ads conversion tracking setup.',
+      'Create a new conversion action called "Lead - Contact Form".',
+      'Update the "Purchase" conversion action to count every conversion with a 30-day window.',
+      'Show upload diagnostics for my offline conversion imports.',
+    ],
+  },
+  {
+    title: 'Audits & GA4 alignment',
+    icon: '🔍',
+    product: 'ads',
+    prompts: [
+      'Audit my Google Ads conversion tracking health and list the issues worst first.',
+      'Check my UTM tagging setup for Google Ads (auto-tagging, gclid, campaign parameters).',
+      'Audit how my Google Ads conversions line up with my GA4 key events.',
+      'Which of my conversion actions have had no conversions recently?',
+    ],
+  },
+  {
+    title: 'Campaign & budget changes (approval card)',
+    icon: '⚠️',
+    product: 'ads',
+    prompts: [
+      'Pause my "Brand - Search" campaign.',
+      'Resume my paused "Retargeting" campaign.',
+      'Increase the daily budget on "Prospecting" to $75.',
+      'Add these negative keywords to my Search campaign: free, cheap, jobs.',
+      'Create a customer-match user list called "Newsletter Subscribers".',
+    ],
+  },
+  {
+    title: 'Offline & customer-match uploads (approval card)',
+    icon: '📤',
+    product: 'ads',
+    prompts: [
+      'Upload offline conversions for "Qualified Lead" from my CRM export (the tool hashes emails/phones for me).',
+      'Upload a conversion adjustment to restate the value of a refunded order.',
+      'Add hashed customer emails to my "Past Purchasers" customer-match list.',
+      'Walk me through the EEA consent fields I need to include with a customer-match upload.',
+    ],
+  },
+  {
+    title: 'Wire a conversion into GTM',
+    icon: '🔗',
+    product: 'ads',
+    prompts: [
+      'Read the Conversion ID and Label for my "Purchase" action and create the Google Ads conversion tag in my selected GTM container (turn on the GTM integration above the chat first).',
+      'Create a conversion action "Book a Demo", then build its Google Ads conversion tag plus a Conversion Linker in GTM.',
+      'Wire my "Lead" conversion action into a GTM tag firing on my form_submit trigger.',
     ],
   },
 ];
@@ -3927,10 +4116,11 @@ function shortLabel(title: string): string {
   return title.split(/ \(| & |, /)[0];
 }
 
-function PromptsView({ onUse }: { onUse: (text: string, product: 'gtm' | 'ga4') => void }): JSX.Element {
+function PromptsView({ onUse }: { onUse: (text: string, product: GoogleProduct) => void }): JSX.Element {
   const [copied, setCopied] = useState('');
   const [query, setQuery] = useState('');
-  const [cat, setCat] = useState('all'); // group title, or 'all'
+  const [prod, setProd] = useState<'all' | GoogleProduct>('all'); // product dropdown
+  const [cat, setCat] = useState('all'); // group title, or 'all', scoped to the selected product
 
   function copy(text: string): void {
     if (navigator.clipboard?.writeText) {
@@ -3944,8 +4134,16 @@ function PromptsView({ onUse }: { onUse: (text: string, product: 'gtm' | 'ga4') 
     }
   }
 
+  // Prompt counts per product for the dropdown labels (from the full, unfiltered set).
+  const productCount = (p: GoogleProduct): number =>
+    PROMPT_GROUPS.filter((g) => g.product === p).reduce((n, g) => n + g.prompts.length, 0);
+  const totalCount = PROMPT_GROUPS.reduce((n, g) => n + g.prompts.length, 0);
+
+  // Category chips are scoped to the selected product, so switching product resets the category.
+  const inProduct = PROMPT_GROUPS.filter((g) => prod === 'all' || g.product === prod);
   const q = query.trim().toLowerCase();
-  const groups = PROMPT_GROUPS.filter((g) => cat === 'all' || g.title === cat)
+  const groups = inProduct
+    .filter((g) => cat === 'all' || g.title === cat)
     .map((g) => ({ ...g, prompts: q ? g.prompts.filter((p) => p.toLowerCase().includes(q)) : g.prompts }))
     .filter((g) => g.prompts.length > 0);
   const total = groups.reduce((n, g) => n + g.prompts.length, 0);
@@ -3955,61 +4153,92 @@ function PromptsView({ onUse }: { onUse: (text: string, product: 'gtm' | 'ga4') 
       <div style={styles.promptsHead}>
         <div style={styles.chatTitle}>Sample prompts</div>
         <div style={styles.chatSub}>
-          “Use in chat” drops a prompt into the chat box; “Copy” copies it. Replace placeholders (G-…, IDs, names, https URLs) with yours.
+          Filter by product, then “Use in chat” drops a prompt into the chat box (and opens the matching tab); “Copy” copies it. Replace placeholders (G-…, AW-…, IDs, names, https URLs) with yours.
         </div>
-        <input
-          style={styles.promptSearch}
-          placeholder="Search prompts…  (e.g. meta, email, purchase, consent, server)"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
-        <div style={styles.promptFilters}>
-          <button style={cat === 'all' ? styles.promptChipOn : styles.promptChip} onClick={() => setCat('all')}>
-            All
-          </button>
-          {PROMPT_GROUPS.map((g) => (
-            <button
-              key={g.title}
-              title={g.title}
-              style={cat === g.title ? styles.promptChipOn : styles.promptChip}
-              onClick={() => setCat(g.title)}
-            >
-              {g.icon} {shortLabel(g.title)}
+        <div style={styles.promptControls}>
+          <select
+            style={styles.promptSelect}
+            value={prod}
+            onChange={(e) => {
+              setProd(e.target.value as 'all' | GoogleProduct);
+              setCat('all');
+            }}
+            aria-label="Filter prompts by product"
+          >
+            <option value="all">All products ({totalCount})</option>
+            {PROMPT_PRODUCTS.map((p) => (
+              <option key={p} value={p}>
+                {PRODUCT_META[p].label} ({productCount(p)})
+              </option>
+            ))}
+          </select>
+          <input
+            style={{ ...styles.promptSearch, marginTop: 0, flex: 1, minWidth: 180 }}
+            placeholder="Search prompts…  (e.g. purchase, element visibility, conversion, budget, consent)"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        </div>
+        {prod !== 'all' && (
+          <div style={styles.promptFilters}>
+            <button style={cat === 'all' ? styles.promptChipOn : styles.promptChip} onClick={() => setCat('all')}>
+              All {PRODUCT_META[prod].short}
             </button>
-          ))}
-        </div>
+            {inProduct.map((g) => (
+              <button
+                key={g.title}
+                title={g.title}
+                style={cat === g.title ? styles.promptChipOn : styles.promptChip}
+                onClick={() => setCat(g.title)}
+              >
+                {g.icon} {shortLabel(g.title)}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
       <div style={styles.promptsBody}>
         {total === 0 ? (
-          <div style={styles.sideMuted}>No prompts match “{query}”. Try a different word or clear the filter.</div>
+          <div style={styles.sideMuted}>
+            No prompts match {query ? `“${query}”` : 'this filter'}. Try a different word, product, or clear the filter.
+          </div>
         ) : (
-          groups.map((g) => (
-            <div key={g.title}>
-              <div style={styles.promptGroupTitle}>
-                {g.icon} {g.title}
-              </div>
-              <div style={styles.promptList}>
-                {g.prompts.map((p) => (
-                  <div key={p} style={styles.promptCard}>
-                    <div style={styles.promptText}>{p}</div>
-                    <div style={styles.promptActions}>
-                      <button style={styles.promptUse} onClick={() => onUse(p, g.product ?? 'gtm')}>
-                        Use in chat
-                      </button>
-                      <button style={styles.promptCopy} onClick={() => copy(p)}>
-                        {copied === p ? 'Copied' : 'Copy'}
-                      </button>
+          groups.map((g) => {
+            const meta = PRODUCT_META[g.product];
+            return (
+              <div key={g.product + g.title}>
+                <div style={styles.promptGroupTitle}>
+                  <span style={{ color: meta.color }}>
+                    {g.icon} {g.title}
+                  </span>
+                  <span style={{ ...styles.promptBadge, color: meta.color, background: meta.bg, borderColor: meta.border }}>
+                    {meta.short}
+                  </span>
+                </div>
+                <div style={styles.promptList}>
+                  {g.prompts.map((p) => (
+                    <div key={p} style={styles.promptCard}>
+                      <div style={styles.promptText}>{p}</div>
+                      <div style={styles.promptActions}>
+                        <button style={styles.promptUse} onClick={() => onUse(p, g.product)}>
+                          Use in chat
+                        </button>
+                        <button style={styles.promptCopy} onClick={() => copy(p)}>
+                          {copied === p ? 'Copied' : 'Copy'}
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  ))}
+                </div>
               </div>
-            </div>
-          ))
+            );
+          })
         )}
       </div>
     </div>
   );
 }
+
 
 function TagReviewPanel({
   active,
@@ -12209,11 +12438,14 @@ const styles: Record<string, React.CSSProperties> = {
   promptsWrap: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 },
   promptsHead: { padding: '14px 20px', borderBottom: '1px solid var(--border)', flexShrink: 0 },
   promptSearch: { width: '100%', boxSizing: 'border-box', marginTop: 10, background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 8, padding: '8px 12px', fontSize: 13, fontFamily: 'inherit' },
+  promptControls: { display: 'flex', gap: 8, marginTop: 10, alignItems: 'center', flexWrap: 'wrap' },
+  promptSelect: { background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 8, padding: '8px 12px', fontSize: 13, fontFamily: 'inherit', cursor: 'pointer', minWidth: 210 },
   promptFilters: { display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 10 },
   promptChip: { background: 'transparent', color: 'var(--c-blue)', border: '1px solid var(--border-2)', borderRadius: 999, padding: '4px 10px', fontSize: 12, cursor: 'pointer' },
   promptChipOn: { background: 'var(--c-blue-bg)', color: 'var(--text)', border: '1px solid var(--c-blue-bg)', borderRadius: 999, padding: '4px 10px', fontSize: 12, cursor: 'pointer', fontWeight: 600 },
   promptsBody: { flex: 1, overflowY: 'auto', padding: 20, display: 'flex', flexDirection: 'column', gap: 18 },
-  promptGroupTitle: { fontSize: 12, fontWeight: 700, color: 'var(--c-blue)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 },
+  promptGroupTitle: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, fontSize: 12, fontWeight: 700, marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 },
+  promptBadge: { fontSize: 10, fontWeight: 700, letterSpacing: 0.3, padding: '2px 7px', borderRadius: 999, border: '1px solid', textTransform: 'none', flexShrink: 0 },
   promptList: { display: 'flex', flexDirection: 'column', gap: 8 },
   promptCard: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 10, padding: '10px 12px' },
   promptText: { fontSize: 13, color: 'var(--text)', lineHeight: 1.45 },
