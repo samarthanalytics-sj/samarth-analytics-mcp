@@ -1,3 +1,9 @@
+## [1.418.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.417.0...v1.418.0) (2026-07-27)
+
+### Features
+
+* **desktop:** one-click bulk Google Ads conversion tags (actions + tags + linker, one approval) ([#732](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/732)) ([330183e](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/330183eb21a41c4dc3a1b6f815b96f1e2cc27b24))
+
 ## [1.417.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.416.5...v1.417.0) (2026-07-27)
 
 ### Features
