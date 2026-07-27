@@ -76,6 +76,19 @@ function stableStringify(v: unknown): string {
  *  never terminates. Two lets an accidental retry through; the third+ is refused. */
 const MAX_IDENTICAL_WRITES = 2;
 
+/** True when a write tool's result says it changed NOTHING - an idempotent no-op (the target was
+ *  already in the requested state), an already-exists skip, or a declined write. Such a "write" must
+ *  not count as forward progress, otherwise a model re-touching already-satisfied items (distinct
+ *  enough to dodge the identical-write guard) keeps the step budget alive and never stalls out. */
+function isNoOpWriteResult(content: string): boolean {
+  try {
+    const r = JSON.parse(content) as { noChange?: unknown; alreadyExists?: unknown; declined?: unknown };
+    return r?.noChange === true || r?.alreadyExists === true || r?.declined === true;
+  } catch {
+    return false; // a non-JSON result is a real write
+  }
+}
+
 /** Progress-aware extension of the step budget (see runChat). */
 export interface StepBudgetOptions {
   /** Absolute cap on steps even while making progress — a runaway-loop backstop. Defaults to
@@ -236,7 +249,10 @@ export async function runChat(
           // methodology that tells the model how to report it.
           const forModel = attachReference(capped.content, referenceForResult(call.name));
           results.push({ id: call.id, name: call.name, content: forModel });
-          if (executor.isWrite?.(call.name)) stepHadWrite = true;
+          // A write is forward progress ONLY if it actually changed something. A no-op (noChange /
+          // alreadyExists / declined) does not reset the stall detector, so a model churning
+          // already-satisfied writes stalls out instead of running to the hard cap.
+          if (executor.isWrite?.(call.name) && !isNoOpWriteResult(content)) stepHadWrite = true;
           callbacks.onToolResult?.({ name: call.name, ok: true, args: call.args, content });
         } catch (e) {
           const message = e instanceof Error ? e.message : String(e);
