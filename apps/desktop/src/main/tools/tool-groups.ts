@@ -302,6 +302,7 @@ const GROUP_MEMBERS: Record<ToolGroup, readonly string[]> = {
     'get_google_ads_tracking_setup',
     'list_google_ads_conversion_actions',
     'create_google_ads_conversion_action',
+    'create_google_ads_conversion_actions_for_tags',
     'list_google_ads_campaigns',
     'google_ads_campaign_performance',
     'get_google_ads_change_history',

@@ -24,6 +24,7 @@ import { getPatternLibrary } from '../corpus/pattern-library';
 import { fingerprintResource, diffManifest, type ManifestResource } from '../../shared/install-manifest';
 import { buildTrackingStatus } from '../../shared/tracking-status';
 import { resolveDeletions, summarizeGtmBatch, type GtmBatchItem, type DeleteRequest } from '../../shared/gtm-batch-plan';
+import { planAdsConversionActions } from '../../shared/ads-conversion-batch';
 import {
   buildGa4EventTag,
   buildGoogleTag,
@@ -460,6 +461,11 @@ function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean, data
   // An empty login-customer-id is not the same as an absent one (the API rejects a blank header), so a
   // model that sends "" must be read as "no manager", not as a manager named nothing.
   const login = (a: Record<string, unknown>): string | undefined => s(a.loginCustomerId).trim() || undefined;
+
+  // create_google_ads_conversion_actions_for_tags: the single approval card needs the RESOLVED plan
+  // text (the derived names), but summarize() is synchronous. precheck builds it and stashes it here
+  // keyed by the args object; summarize reads it back. Per-registry (per-turn) WeakMap.
+  const adsBatchPlanCache = new WeakMap<object, string>();
 
   const readTools: Tool[] = [
     {
@@ -1189,6 +1195,119 @@ function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean, data
               ...(action.note ? { note: action.note } : {}),
             },
             note: 'This conversion action is LIVE in Google Ads now. Pass its conversionId and conversionLabel as LITERAL values to create_gtm_tracking_tag (platform google_ads_conversion), never as a {{variable}}. The label exists nowhere else in the API, so if it came back null, read the action in Google Ads rather than guessing.',
+          };
+        }),
+    },
+    {
+      name: 'create_google_ads_conversion_actions_for_tags',
+      description:
+        'BATCH: create ONE Google Ads conversion action per GTM tag, in the selected Ads account, behind a SINGLE approval, and return each one\'s Conversion ID + Label so you can build the tags. ' +
+        'Use this when the user is making SEVERAL Google Ads conversion tags at once and gives the tag names (and triggers) - it replaces calling create_google_ads_conversion_action once per tag (which would show one live-write card each). ' +
+        'NAMING: each conversion action is named from the tag name with the affixes you pass STRIPPED off - pass stripPrefix and stripSuffix exactly as the user specifies (e.g. stripPrefix "GA4 - Event -", stripSuffix "Click Tag" turns "GA4 - Event - Book A Demo Click Tag" into "Book A Demo"). Pass an entry\'s conversionName to override the derived name. If a name strips to empty, that entry is skipped and reported. ' +
+        'Every action is a LIVE, irreversible write to the ad account (no draft, no undo). One approval card lists them all; on approval they are created, then their Conversion IDs and Labels come back. ' +
+        'NEXT: for each returned entry, call create_gtm_tracking_tag (platform google_ads_conversion) with its conversionId and conversionLabel as LITERAL values and the trigger the user gave, so the tag lands in the GTM draft workspace. Also check list_gtm_tags for a Conversion Linker (gclidw) and add one if missing.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          customerId: { type: 'string', description: 'The Ads account that will OWN the actions, bare digits.' },
+          loginCustomerId: { type: 'string', description: 'Manager (MCC) id to act through, when reached via a manager.' },
+          stripPrefix: { type: 'string', description: 'Exact prefix to remove from each tag name to get the conversion name (e.g. "GA4 - Event -"). Optional.' },
+          stripSuffix: { type: 'string', description: 'Exact suffix to remove from each tag name (e.g. "Click Tag"). Optional.' },
+          defaultCategory: {
+            type: 'string',
+            enum: CONVERSION_CATEGORIES.map((c) => c.value),
+            description: 'Category for actions with no per-entry category (default SUBMIT_LEAD_FORM).',
+          },
+          entries: {
+            type: 'array',
+            description: 'One per tag: { tagName, optional conversionName, optional category }.',
+            items: {
+              type: 'object',
+              properties: {
+                tagName: { type: 'string' },
+                conversionName: { type: 'string', description: 'Override the name derived from tagName.' },
+                category: { type: 'string', enum: CONVERSION_CATEGORIES.map((c) => c.value) },
+              },
+              required: ['tagName'],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ['customerId', 'entries'],
+        additionalProperties: false,
+      },
+      write: true,
+      // ONE approval card for the WHOLE batch of LIVE conversion-action creates (user decision): each is
+      // additive but immediately live and not revertible here, so it is gated - but as a single card
+      // listing them all, not one per action.
+      approval: true,
+      summarize: (a) => adsBatchPlanCache.get(a) ?? 'Create Google Ads conversion actions for the listed tags.',
+      // Readiness + the derived plan are resolved BEFORE the card, so a missing token never makes the
+      // user approve a write that could not run, and the card shows the real names.
+      precheck: async (a) => {
+        const notReady = await adsNotReady(ads);
+        if (notReady) return notReady;
+        const rawEntries = Array.isArray(a.entries) ? (a.entries as Array<Record<string, unknown>>) : [];
+        const entries = rawEntries
+          .map((e) => ({ tagName: s(e.tagName).trim(), conversionName: s(e.conversionName).trim() || undefined, category: s(e.category).trim() || undefined }))
+          .filter((e) => e.tagName);
+        const plan = planAdsConversionActions(entries, {
+          prefix: s(a.stripPrefix).trim() || undefined,
+          suffix: s(a.stripSuffix).trim() || undefined,
+          defaultCategory: s(a.defaultCategory).trim().toUpperCase() || 'SUBMIT_LEAD_FORM',
+        });
+        adsBatchPlanCache.set(a, plan.text);
+        if (plan.empty) {
+          return { ok: true, created: 0, message: 'No conversion actions could be derived from these tag names.', plan: plan.text };
+        }
+        return null;
+      },
+      handler: (a) =>
+        run(async () => {
+          const rawEntries = Array.isArray(a.entries) ? (a.entries as Array<Record<string, unknown>>) : [];
+          const entries = rawEntries
+            .map((e) => ({ tagName: s(e.tagName).trim(), conversionName: s(e.conversionName).trim() || undefined, category: s(e.category).trim() || undefined }))
+            .filter((e) => e.tagName);
+          const plan = planAdsConversionActions(entries, {
+            prefix: s(a.stripPrefix).trim() || undefined,
+            suffix: s(a.stripSuffix).trim() || undefined,
+            defaultCategory: s(a.defaultCategory).trim().toUpperCase() || 'SUBMIT_LEAD_FORM',
+          });
+          const created: Array<{ tagName: string; conversionName: string; category: string; conversionId: string | null; conversionLabel: string | null }> = [];
+          const failed: Array<{ tagName: string; conversionName: string; error: string }> = [];
+          const skipped = plan.steps.filter((st) => st.blocked).map((st) => ({ tagName: st.tagName, reason: st.blocked! }));
+          for (const step of plan.steps) {
+            if (step.blocked) continue;
+            const input = { name: step.conversionName, category: step.category };
+            try {
+              // Dry-run first, exactly like the single create: a duplicate name or bad category fails
+              // BEFORE anything lands, and one bad entry never aborts the rest of the batch.
+              const invalid = await ads.validateConversionAction(s(a.customerId), input, login(a));
+              if (invalid) {
+                failed.push({ tagName: step.tagName, conversionName: step.conversionName, error: invalid.remedy ? `${invalid.message} ${invalid.remedy}` : invalid.message });
+                continue;
+              }
+              const action = await ads.createConversionAction(s(a.customerId), input, login(a));
+              created.push({ tagName: step.tagName, conversionName: step.conversionName, category: step.category, conversionId: action.conversionId, conversionLabel: action.conversionLabel });
+            } catch (e) {
+              failed.push({ tagName: step.tagName, conversionName: step.conversionName, error: e instanceof Error ? e.message : String(e) });
+            }
+          }
+          return {
+            ok: failed.length === 0,
+            createdCount: created.length,
+            customerId: s(a.customerId),
+            // The verification table: one row per tag with the values that will go INTO its tag. The
+            // conversionId + conversionLabel were read back from the Google Ads account after creation
+            // (that read is where the label comes from - it exists nowhere else), so this is the real,
+            // account-verified pairing, not an echo of the request.
+            created,
+            ...(skipped.length ? { skipped } : {}),
+            ...(failed.length ? { failed } : {}),
+            note:
+              'FIRST show the user a table of every created entry - tag name | conversion name | Conversion ID | Conversion Label - and say the ID and Label were read back FROM the Google Ads account (so they are verified, not guessed), so the user can confirm each conversion is correct BEFORE the tags are built. ' +
+              'THEN, for each entry, build its GTM tag: create_gtm_tracking_tag (platform google_ads_conversion) with that entry\'s conversionId and conversionLabel as LITERAL values (never a {{variable}}) and the trigger the user gave for that tag; it lands in the DRAFT workspace, so a wrong one is revertible before publish. A null conversionLabel means Google published no snippet - report that row instead of building a tag that records nothing. ' +
+              'Also check list_gtm_tags for a Conversion Linker (gclidw) and add one if missing. Report anything skipped or failed with its reason. These conversion actions are LIVE in Google Ads now.',
           };
         }),
     },
