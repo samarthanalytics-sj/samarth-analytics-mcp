@@ -79,4 +79,8 @@ export interface StreamAccumulator {
 export interface ToolExecutor {
   list(): LlmToolDef[];
   execute(name: string, args: Record<string, unknown>): Promise<string>;
+  /** Whether a tool mutates state (create/update/delete), so the loop can tell an in-progress
+   *  build (writes still landing) from a stalled read-loop and decide whether to keep going past
+   *  the normal step budget. Optional: when absent, nothing counts as forward progress. */
+  isWrite?(name: string): boolean;
 }

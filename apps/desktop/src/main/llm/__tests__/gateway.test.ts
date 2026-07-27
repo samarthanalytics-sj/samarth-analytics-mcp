@@ -42,6 +42,19 @@ function executor(execute: ToolExecutor['execute']): ToolExecutor {
   return { list: () => [{ name: 't', description: 'test tool', inputSchema: {} }], execute };
 }
 
+/** Executor whose isWrite verdict is decided by a predicate — for the progress-aware step budget. */
+function writeExecutor(execute: ToolExecutor['execute'], isWrite: (name: string) => boolean): ToolExecutor {
+  return { list: () => [{ name: 't', description: 'test tool', inputSchema: {} }], execute, isWrite };
+}
+
+/** Client that replays a fixed list of tool-call names, one call per step, then a final answer. */
+function callsThenAnswer(names: string[], answer = 'done'): ScriptedClient {
+  return new ScriptedClient([
+    ...names.map((name, i) => ({ toolCalls: [{ id: String(i + 1), name, args: {} }] })),
+    { text: answer },
+  ]);
+}
+
 async function main(): Promise<void> {
 console.log('\nLLM gateway (runChat):');
 
@@ -145,6 +158,79 @@ await test('at the tool-call limit, surfaces the real tool error + names the too
   assert.match(res.text, /NOT done/i, 'states the task did not complete');
   assert.match(res.text, /customEventFilter: must have exactly one/, 'quotes the real error');
   assert.match(res.text, /`t`/, 'names the failing tool');
+});
+
+await test('progress budget: a build that keeps landing writes runs PAST the soft ceiling to completion', async () => {
+  // Soft ceiling 3, but the model needs 5 write steps (a 5-item build). Because every step lands a
+  // write, the loop extends past 3 up to the hard cap and reaches the final answer — no "proceed".
+  const client = callsThenAnswer(['t', 't', 't', 't', 't'], 'all created');
+  const exec = writeExecutor(async () => 'created', () => true);
+  const res = await runChat(
+    client,
+    { system: 's', model: 'm', apiKey: 'k', messages: [{ role: 'user', text: 'create 5' }] },
+    exec,
+    {},
+    3,
+    { hardMaxSteps: 20 }
+  );
+  assert.equal(res.text, 'all created', 'the build completed under one turn');
+  assert.equal(res.steps, 6, 'ran all 5 write steps + the final answer, past the soft ceiling of 3');
+});
+
+await test('progress budget: a read-only loop still STOPS at the soft ceiling (no runaway to hardMax)', async () => {
+  // Never writes → never earns an extension → stops at the soft ceiling, not the hard cap.
+  let executed = 0;
+  const client = new ScriptedClient([{ toolCalls: [{ id: '1', name: 't', args: {} }] }]); // always a tool call
+  const exec = writeExecutor(async () => { executed += 1; return 'read'; }, () => false);
+  const res = await runChat(
+    client,
+    { system: 's', model: 'm', apiKey: 'k', messages: [{ role: 'user', text: 'loop' }] },
+    exec,
+    {},
+    2,
+    { hardMaxSteps: 50, stallSteps: 2 }
+  );
+  assert.match(res.text, /NOT done/i, 'a stalled loop still surfaces the honest not-done message');
+  assert.equal(executed, 2, 'ran exactly the soft-ceiling steps, never entered the extended zone');
+});
+
+await test('progress budget: an occasional read between writes does NOT trip the stall stop', async () => {
+  // Past the soft ceiling, writes interleaved with single reads keep the build alive to the end.
+  const client = callsThenAnswer(['w', 'r', 'w', 'r', 'w'], 'built');
+  const exec = writeExecutor(async () => 'ok', (n) => n === 'w');
+  const res = await runChat(
+    client,
+    { system: 's', model: 'm', apiKey: 'k', messages: [{ role: 'user', text: 'build' }] },
+    exec,
+    {},
+    2,
+    { hardMaxSteps: 20, stallSteps: 3 }
+  );
+  assert.equal(res.text, 'built', 'reads between writes did not end the build early');
+  assert.equal(res.steps, 6);
+});
+
+await test('progress budget: writes stopping past the ceiling ends the loop after stallSteps', async () => {
+  // Two writes get it into the extended zone, then it goes quiet (reads only) → stops without a
+  // final answer once stallSteps writeless steps pass, instead of burning the whole hard cap.
+  let executed = 0;
+  const client = new ScriptedClient([
+    { toolCalls: [{ id: '1', name: 'w', args: {} }] },
+    { toolCalls: [{ id: '2', name: 'w', args: {} }] },
+    { toolCalls: [{ id: '3', name: 'r', args: {} }] }, // step 3+: reads only from here (clamped)
+  ]);
+  const exec = writeExecutor(async () => { executed += 1; return 'ok'; }, (n) => n === 'w');
+  const res = await runChat(
+    client,
+    { system: 's', model: 'm', apiKey: 'k', messages: [{ role: 'user', text: 'go' }] },
+    exec,
+    {},
+    2,
+    { hardMaxSteps: 100, stallSteps: 2 }
+  );
+  assert.match(res.text, /NOT done/i);
+  // steps 1,2 (writes) + steps 3,4 (reads, stall counter climbs to 2) then step 5 breaks: 4 executes.
+  assert.equal(executed, 4, `stopped a few steps into the extended zone, not at the hard cap (ran ${executed})`);
 });
 
 await test('onToolResult fires with ok=false + the error message when a tool fails', async () => {

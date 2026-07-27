@@ -801,6 +801,15 @@ export class ChatService {
     // SAFETY ceiling, not a target — a normal turn returns a final answer well before it; it only bites
     // pathological loops. Idempotent precheck (findExistingByName) means a re-run safely resumes.
     const MAX_TOOL_STEPS = 40;
+    // Soft ceiling above. But a bulk build ("create these 40 tags") legitimately needs far more steps
+    // than 40 (each tag = trigger + variables + tag, and a reasoning model does one call per step), so
+    // it used to stop partway and force the user to type "proceed" for the next batch. Instead, let the
+    // loop run PAST the soft ceiling while writes are still landing (an in-flight build), up to this
+    // hard cap, so the whole batch completes under one turn and reports once at the end. A turn that
+    // stops writing (finished, stalled, or looping on reads) still stops at MAX_TOOL_STEPS. Creates are
+    // draft-workspace writes with no approval card, and GTM's per-minute write quota is absorbed by
+    // withQuotaRetry (backoff on 429/RESOURCE_EXHAUSTED), so running to the end is safe and smooth.
+    const HARD_MAX_TOOL_STEPS = 300;
     // Provenance: tell the UI which memories are in this turn's context (before the answer streams), and
     // log the use on each memory.
     {
@@ -846,7 +855,7 @@ export class ChatService {
                 ...(n.reason ? { reason: n.reason } : {}),
               })
           : undefined,
-      }, MAX_TOOL_STEPS);
+      }, MAX_TOOL_STEPS, { hardMaxSteps: HARD_MAX_TOOL_STEPS });
     } finally {
       // In a finally so a turn that DIED on a rate limit still keeps what it already read: that is
       // exactly the turn whose reads we least want repeated. The key is recomputed because

@@ -796,6 +796,8 @@ export function createGatedExecutor(base: ToolExecutor, options: ToolGateOptions
   return {
     enabledGroups: () => [...enabled],
     availableGroups: () => [...available],
+    // enable_tool_group is a control tool, never a write; everything else defers to the base registry.
+    isWrite: (name: string): boolean => name !== ENABLE_TOOL_GROUP && Boolean(base.isWrite?.(name)),
     list: (): LlmToolDef[] => [...filterToolDefs(all, enabled), gateDef],
     execute: async (name, args): Promise<string> => {
       if (name === ENABLE_TOOL_GROUP) {
