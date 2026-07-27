@@ -3138,6 +3138,101 @@ async function main(): Promise<void> {
     assert.ok(fa.calls.some((c) => c.startsWith('createConversionAction:9876543210:Contact form')), 'the duplicate was created');
   });
 
+  await test('ONE-CLICK: with GTM ids + a trigger per entry, the SAME approval also builds the tags and a Conversion Linker', async () => {
+    const fa = fakeAds();
+    const fd = fakeData();
+    let cards = 0;
+    let cardText = '';
+    const approve: ConfirmFn = async (p) => { cards += 1; cardText = p.summary; return p.details; };
+    const reg = buildToolRegistry(fd.data, approve, 'gtm', undefined, undefined, undefined, undefined, fa.ads);
+    const out = JSON.parse(await reg.execute('create_google_ads_conversion_actions_for_tags', {
+      customerId: '9876543210',
+      accountId: '1', containerId: '2', workspaceId: '3',
+      stripPrefix: 'GA4 - Event -', stripSuffix: 'Click Tag',
+      entries: [
+        { tagName: 'GA4 - Event - Book A Demo Click Tag', trigger: { name: 'Book A Demo Click', kind: 'link_click', clickTextValue: 'Book A Demo' } },
+        { tagName: 'GA4 - Event - Contact Us Click Tag', category: 'CONTACT', trigger: { name: 'Contact Us Click', kind: 'link_click', clickTextValue: 'Contact Us' } },
+      ],
+    }));
+    // ONE card, and it discloses BOTH the live Ads writes AND the draft tag build (mixed reversibility).
+    assert.equal(cards, 1, 'exactly one approval card for the whole run');
+    assert.match(cardText, /2 LIVE Google Ads conversion actions will be created/, cardText);
+    assert.match(cardText, /2 Google Ads conversion tags will be built on their triggers in the GTM DRAFT workspace/, cardText);
+    // Actions created live, then tags built, then one linker ensured.
+    assert.equal(out.ok, true, JSON.stringify(out));
+    assert.equal(out.createdCount, 2, 'two live conversion actions');
+    assert.equal(out.tagsCreatedCount, 2, 'two conversion tags built');
+    assert.equal(out.conversionLinker, 'created', 'a Conversion Linker was added (the container had none)');
+    assert.equal(out.tagsCreated.length, 2);
+    assert.ok(out.tagsCreated.every((t: { reusedTrigger: boolean }) => t.reusedTrigger === false), 'both triggers were newly created');
+    // Three GTM tag writes: the two awct tags (on their new triggers) + the linker on All Pages.
+    const tagWrites = fd.calls.filter((c) => c.startsWith('createTag:'));
+    assert.equal(tagWrites.length, 3, `two tags + one linker: ${tagWrites.join(' | ')}`);
+    assert.equal(tagWrites.filter((c) => c.includes('["2147479553"]')).length, 1, 'exactly one tag (the linker) fires on the built-in All Pages trigger');
+    assert.equal(fa.calls.filter((c) => c.startsWith('createConversionAction')).length, 2, 'both live actions were created before their tags');
+  });
+
+  await test('ONE-CLICK idempotency: an existing trigger is REUSED and an existing linker is not duplicated', async () => {
+    const fa = fakeAds();
+    const fd = fakeData({ existingTriggers: [{ triggerId: 'T9', name: 'Book Demo Click', type: 'linkClick' }] });
+    // The container already has a Conversion Linker.
+    (fd.data as unknown as { listGtmTags: unknown }).listGtmTags = async () => [{ tagId: '9', name: 'Conversion Linker', type: 'gclidw' }];
+    const approve: ConfirmFn = async (p) => p.details;
+    const reg = buildToolRegistry(fd.data, approve, 'gtm', undefined, undefined, undefined, undefined, fa.ads);
+    const out = JSON.parse(await reg.execute('create_google_ads_conversion_actions_for_tags', {
+      customerId: '9876543210',
+      accountId: '1', containerId: '2', workspaceId: '3',
+      stripPrefix: 'GA4 - Event -', stripSuffix: 'Click Tag',
+      entries: [{ tagName: 'GA4 - Event - Book A Demo Click Tag', trigger: { name: 'Book Demo Click', kind: 'link_click', clickTextValue: 'Book A Demo' } }],
+    }));
+    assert.equal(out.tagsCreatedCount, 1);
+    assert.equal(out.tagsCreated[0].reusedTrigger, true, 'the same-named trigger was reused, not re-created');
+    assert.equal(out.conversionLinker, 'existing', 'the existing linker was left alone');
+    assert.ok(!fd.calls.some((c) => c.startsWith('createTrigger:')), 'no trigger was created');
+    const tagWrites = fd.calls.filter((c) => c.startsWith('createTag:'));
+    assert.equal(tagWrites.length, 1, 'only the awct tag was written, no second linker');
+    assert.equal(tagWrites[0], 'createTag:1:2:3:["T9"]', 'the tag fires on the reused trigger id');
+  });
+
+  await test('ONE-CLICK: an entry with no trigger gets its conversion action but no tag (reported, not failed)', async () => {
+    const fa = fakeAds();
+    const fd = fakeData();
+    const approve: ConfirmFn = async (p) => p.details;
+    const reg = buildToolRegistry(fd.data, approve, 'gtm', undefined, undefined, undefined, undefined, fa.ads);
+    const out = JSON.parse(await reg.execute('create_google_ads_conversion_actions_for_tags', {
+      customerId: '9876543210',
+      accountId: '1', containerId: '2', workspaceId: '3',
+      entries: [
+        { tagName: 'Book A Demo', trigger: { name: 'Demo Click', kind: 'link_click', clickTextValue: 'Book A Demo' } },
+        { tagName: 'Newsletter' }, // no trigger -> action only
+      ],
+    }));
+    assert.equal(out.ok, true, JSON.stringify(out));
+    assert.equal(out.createdCount, 2, 'both conversion actions were created');
+    assert.equal(out.tagsCreatedCount, 1, 'only the entry with a trigger got a tag');
+    assert.equal(out.tagsSkipped.length, 1);
+    assert.match(out.tagsSkipped[0].reason, /no trigger/i);
+    assert.equal(out.conversionLinker, 'created', 'the one tag still warrants a linker');
+  });
+
+  await test('ONE-CLICK partial failure: a conversion action that fails validation builds NO tag and no linker for that entry', async () => {
+    const fa = fakeAds({ invalid: { message: 'Duplicate conversion action name.', remedy: 'Pick another name.' } });
+    const fd = fakeData();
+    const approve: ConfirmFn = async (p) => p.details;
+    const reg = buildToolRegistry(fd.data, approve, 'gtm', undefined, undefined, undefined, undefined, fa.ads);
+    const out = JSON.parse(await reg.execute('create_google_ads_conversion_actions_for_tags', {
+      customerId: '9876543210',
+      accountId: '1', containerId: '2', workspaceId: '3',
+      entries: [{ tagName: 'Book A Demo', trigger: { name: 'Demo Click', kind: 'link_click' } }],
+    }));
+    assert.equal(out.ok, false, 'the run is not ok when an action failed');
+    assert.equal(out.failed.length, 1, 'the failed action is reported');
+    assert.equal(out.tagsCreatedCount, 0, 'no tag was built on top of a failed action');
+    assert.equal(out.conversionLinker, undefined, 'no linker without any tag');
+    assert.ok(!fd.calls.some((c) => c.startsWith('createTag:')), 'nothing was written to the GTM container');
+    assert.ok(!fa.calls.some((c) => c.startsWith('createConversionAction')), 'the dry run failed, so no live create happened');
+  });
+
   await test('a GTM create still applies directly: the new gate did not leak onto draft writes', async () => {
     let cards = 0;
     const count = async (p: { details: Record<string, unknown> }) => { cards += 1; return p.details; };
