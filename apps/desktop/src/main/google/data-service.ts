@@ -291,6 +291,20 @@ export class GoogleDataService {
     private readonly clients: AccountClientManager
   ) {}
 
+  /** Short-lived cache of the container list per (signed-in account, GTM account). Container lists
+   *  barely change, but a single audit / chat turn re-lists them many times (once per container
+   *  resolution, snapshot, workspace lookup...), which wastes calls and spams the log. A brief TTL
+   *  collapses those to one fetch; container-creating writes clear it so a new container shows at once.
+   *  Keyed by the active desktop-account identity so switching Google accounts never returns another
+   *  account's list. */
+  private containerCache = new Map<string, { at: number; views: GtmContainerView[] }>();
+  private static readonly CONTAINER_CACHE_TTL_MS = 60_000;
+
+  /** Drop the cached container lists (call after creating a container). */
+  private invalidateContainerCache(): void {
+    this.containerCache.clear();
+  }
+
   /** Count of GTM write-quota backoffs (429s waited out) since it was last reset. The chat turn resets
    *  it at the start of a build and reads it for the build-stats line, so the user can see whether a
    *  slow bulk build was quota-limited. Incremented by qCreate's onBackoff. */
@@ -374,6 +388,11 @@ export class GoogleDataService {
 
   async listGtmContainers(accountId: string): Promise<GtmContainerView[]> {
     const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    // Serve a recent list from cache: the same turn re-lists containers many times, and the result
+    // barely changes. A hit returns silently (no re-fetch, no repeated log line).
+    const key = `${this.activeAccountIdentity()?.id ?? 'none'}:${accountId}`;
+    const cached = this.containerCache.get(key);
+    if (cached && Date.now() - cached.at < GoogleDataService.CONTAINER_CACHE_TTL_MS) return cached.views;
     const gtm = tagmanager({ version: 'v2', auth });
     try {
       const containers = await collectPages(
@@ -388,7 +407,8 @@ export class GoogleDataService {
         path: c.path ?? '',
         usageContext: (c.usageContext ?? []).map(String),
       }));
-      console.log('[gtm-containers] account %s: %d container(s): %s', accountId, views.length, views.map((c) => `${c.name}${c.publicId ? ' ' + c.publicId : ''}`).join(', ') || '—');
+      this.containerCache.set(key, { at: Date.now(), views });
+      console.log('[gtm-containers] account %s: %d container(s): %s', accountId, views.length, views.map((c) => `${c.name}${c.publicId ? ' ' + c.publicId : ''}`).join(', ') || '-');
       return views;
     } catch (e) {
       console.error('[gtm-containers] account %s FAILED: %s', accountId, e instanceof Error ? e.message : String(e));
@@ -1614,6 +1634,7 @@ export class GoogleDataService {
       parent: `accounts/${accountId}`,
       requestBody: { name, usageContext: ['server'] },
     });
+    this.invalidateContainerCache(); // a new container exists - the cached list is now stale
     return {
       containerId: res.data.containerId ?? '',
       publicId: res.data.publicId ?? '',
