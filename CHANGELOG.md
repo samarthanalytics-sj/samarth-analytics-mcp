@@ -1,3 +1,9 @@
+## [1.411.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.410.0...v1.411.0) (2026-07-27)
+
+### Features
+
+* **desktop:** run bulk builds to completion in one turn instead of pausing for "proceed" between batches ([9e0668f](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/9e0668f256351c51f904c073279c6baf5d445285))
+
 ## [1.410.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.409.0...v1.410.0) (2026-07-27)
 
 ### Features
