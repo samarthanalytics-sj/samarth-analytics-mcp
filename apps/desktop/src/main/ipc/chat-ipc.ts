@@ -110,6 +110,7 @@ export function registerChatIpc(service: ChatService): void {
             details: proposal.details,
             destructive: proposal.destructive,
             requireTextConfirm: proposal.requireTextConfirm,
+            platform: proposal.platform,
           });
         });
       const controller = new AbortController();

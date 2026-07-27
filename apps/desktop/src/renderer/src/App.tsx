@@ -600,6 +600,8 @@ interface PendingConfirm {
   details: Record<string, unknown>;
   destructive?: boolean;
   requireTextConfirm?: string;
+  /** Live surface the write lands on, so the card tells the truth about reversibility. */
+  platform?: 'gtm' | 'ga4' | 'ads';
 }
 
 function ConfirmCard({
@@ -628,10 +630,20 @@ function ConfirmCard({
 
   const rows = summarizeProposal(proposal.tool, proposal.details);
 
+  // The card must state reversibility honestly per surface: a GTM write lands in a DRAFT workspace and
+  // is revertible; GA4 and Google Ads writes are LIVE and immediate with no undo here. Falling back to
+  // a neutral line (never the GTM "draft" claim) if an older main process sends no platform.
+  const target = proposal.platform === 'ga4' ? 'GA4 property' : proposal.platform === 'ads' ? 'Google Ads account' : 'GTM';
+  const liveNote =
+    proposal.platform === 'ga4' ? 'Applies immediately to the live GA4 property. This cannot be undone here.'
+      : proposal.platform === 'ads' ? 'Applies immediately to the live Google Ads account. This cannot be undone here.'
+        : proposal.platform === 'gtm' ? 'Applies to a draft workspace - not published.'
+          : 'Review the details above before approving.';
+
   return (
     <div style={proposal.destructive ? styles.confirmDanger : styles.confirm}>
       <div style={styles.confirmHead}>
-        {proposal.destructive ? '🗑 Delete - approve this action?' : '⚠ Approve this change to your GTM?'}
+        {proposal.destructive ? '🗑 Delete - approve this action?' : `⚠ Approve this change to your ${target}?`}
       </div>
 
       {fields.length > 0 ? (
@@ -690,10 +702,10 @@ function ConfirmCard({
       </div>
       <div style={styles.confirmNote}>
         {needType
-          ? `Type “${needType}” above to enable this - the final confirmation. Applies to a draft workspace - not published.`
+          ? `Type “${needType}” above to enable this - the final confirmation. ${liveNote}`
           : proposal.destructive
-            ? 'Delete needs two approvals. Applies to a draft workspace - not published.'
-            : 'Edit any field above if needed. Applies to a draft workspace only - not published.'}
+            ? `Delete needs two approvals. ${liveNote}`
+            : `Edit any field above if needed. ${liveNote}`}
       </div>
     </div>
   );
@@ -1072,7 +1084,10 @@ const CHAT_THREADS_KEY = 'samarth.chatThreads.v1';
 /** Thread id: one conversation per account + product + (for GTM) container. */
 function chatThreadKey(accountId: string | undefined, product: GoogleProduct, scopeId: string | undefined): string {
   // GTM threads key on the selected container, GA4 threads on the selected property - switching the
-  // working target switches to (or starts) that target's own conversation.
+  // working target switches to (or starts) that target's own conversation. Deliberately NOT keyed on
+  // the connected-platform chips or their targets: toggling a chip must not blank the visible
+  // conversation. The server-side tool-result carry-over IS keyed on the connected targets (see
+  // ChatService.threadKey), so a stale connected target can never inform the next answer.
   return `${accountId ?? 'none'}|${product}|${scopeId ?? 'na'}`;
 }
 function loadChatThread(key: string): ChatMessage[] {
@@ -1252,16 +1267,7 @@ function ChatView({
     const id = setTimeout(() => saveChatThread(threadKeyRef.current, messages), 400);
     return () => clearTimeout(id);
   }, [messages]);
-  const [pendingConfirm, setPendingConfirm] = useState<
-    {
-      confirmId: string;
-      tool: string;
-      summary: string;
-      details: Record<string, unknown>;
-      destructive?: boolean;
-      requireTextConfirm?: string;
-    } | null
-  >(null);
+  const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null);
   // What the previous query changed in GTM (for the Revert button).
   const [revertable, setRevertable] = useState<{ count: number; labels: string[] } | null>(null);
   const [reverting, setReverting] = useState(false);
@@ -1439,6 +1445,7 @@ function ChatView({
             details: ev.details,
             destructive: ev.destructive,
             requireTextConfirm: ev.requireTextConfirm,
+            platform: ev.platform,
           });
         }
       }, mediaParts, integrations);

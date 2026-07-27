@@ -122,6 +122,8 @@ export type ChatStreamEvent =
       destructive?: boolean;
       /** When set, the approval card requires typing this word (e.g. "delete") to approve. */
       requireTextConfirm?: string;
+      /** The live surface the write lands on, so the card can state reversibility honestly. */
+      platform?: 'gtm' | 'ga4' | 'ads';
     };
 
 export interface GtmAccountView {
