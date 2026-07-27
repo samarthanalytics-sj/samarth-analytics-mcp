@@ -1548,11 +1548,10 @@ function ChatView({
         </div>
       )}
 
-      {/* One context bar per platform this chat covers - its own product first, then whatever the
-          user connected, because a connected platform needs a working target just as much. */}
-      {(product === 'gtm' || integrations.includes('gtm')) && active && <GtmContextBar key={active.id} active={active} refresh={refresh} onError={onError} />}
-      {(product === 'ga4' || integrations.includes('ga4')) && active && <Ga4ContextBar key={active.id} active={active} refresh={refresh} onError={onError} />}
-      {(product === 'ads' || integrations.includes('ads')) && active && <AdsContextBar key={active.id} active={active} refresh={refresh} onError={onError} />}
+      {/* ONE labeled card per platform this chat covers (its own product + connected integrations),
+          deduped and in a fixed order, so no account is ever shown twice and a GA4 chat never shows
+          Ads (nor an Ads chat GA4). */}
+      {active && <ChatContextPanel key={active.id} active={active} product={product} integrations={integrations} refresh={refresh} onError={onError} />}
 
       <div style={styles.chatLog}>
         <div style={styles.chatColumn}>
@@ -1957,6 +1956,88 @@ function SearchableSelect({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/* ─────────────────── Chat context panel (one labeled card per platform) ─────────────────── */
+
+// Full platform names for the card headers (the toggle uses the short GTM/GA4/Ads).
+const PLATFORM_FULL: Record<GoogleProduct, string> = {
+  gtm: 'Google Tag Manager',
+  ga4: 'Google Analytics 4',
+  ads: 'Google Ads',
+};
+// One accent per platform, so each card is recognisable at a glance. Tint background + coloured
+// glyph (never white-on-accent) so it reads in both themes - see [[desktop-theme-accents]].
+const PLATFORM_ACCENT: Record<GoogleProduct, { fg: string; bg: string; border: string }> = {
+  gtm: { fg: 'var(--c-blue)', bg: 'var(--c-blue-bg)', border: 'var(--c-blue-border)' },
+  ga4: { fg: 'var(--c-amber)', bg: 'var(--c-amber-bg)', border: 'var(--c-amber-border)' },
+  ads: { fg: 'var(--c-green)', bg: 'var(--c-green-bg)', border: 'var(--c-green-border)' },
+};
+const CONTEXT_ORDER: readonly GoogleProduct[] = ['gtm', 'ga4', 'ads'];
+
+/** The platform glyph, drawn from the same rail icon set so the card and the sidebar agree. */
+function PlatformGlyph({ platform, size = 14 }: { platform: GoogleProduct; size?: number }): JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round" aria-hidden style={{ display: 'block', flexShrink: 0 }}>
+      {RAIL_ICON[platform]}
+    </svg>
+  );
+}
+
+/**
+ * The account/context section of the chat. Renders EXACTLY ONE labeled card per platform the current
+ * chat covers - its own product, plus any connected integration - in a fixed order (GTM, GA4, Ads).
+ * Building the list from a deduped ordered set is what guarantees a platform can never appear twice,
+ * and scoping it to `covered` is what keeps a GA4 chat from ever showing Ads (and vice versa).
+ *
+ * Each card carries the platform icon, its full name, and a badge (Primary for the chat's own
+ * product, Connected for an integration). The existing per-platform editor (target picker + Change)
+ * renders inside the card, so all the selection logic is reused unchanged.
+ */
+function ChatContextPanel({
+  active,
+  product,
+  integrations,
+  refresh,
+  onError,
+}: {
+  active: AccountView;
+  product: GoogleProduct;
+  integrations: GoogleProduct[];
+  refresh: () => Promise<void>;
+  onError: (m: string) => void;
+}): JSX.Element {
+  const covered = CONTEXT_ORDER.filter((p) => product === p || integrations.includes(p));
+  // The section key is the PLATFORM (unique among siblings - identical keys were what duplicated the
+  // old bars). The editor keeps key={active.id} so it still REMOUNTS on an account switch, resetting
+  // its picker to the new account's saved context; as the sole child of its section that key collides
+  // with nothing.
+  const editorFor = (p: GoogleProduct): JSX.Element =>
+    p === 'gtm' ? <GtmContextBar key={active.id} active={active} refresh={refresh} onError={onError} />
+      : p === 'ga4' ? <Ga4ContextBar key={active.id} active={active} refresh={refresh} onError={onError} />
+        : <AdsContextBar key={active.id} active={active} refresh={refresh} onError={onError} />;
+  return (
+    <div style={styles.ctxPanel}>
+      {covered.map((p) => {
+        const accent = PLATFORM_ACCENT[p];
+        const primary = product === p;
+        return (
+          <section key={p} style={styles.platformCard} aria-label={PLATFORM_FULL[p]}>
+            <div style={styles.platformCardHead}>
+              <span style={{ ...styles.platformIconChip, background: accent.bg, borderColor: accent.border, color: accent.fg }}>
+                <PlatformGlyph platform={p} />
+              </span>
+              <span style={styles.platformName}>{PLATFORM_FULL[p]}</span>
+              <span style={primary ? styles.platformBadgePrimary : styles.platformBadgeConnected}>
+                {primary ? 'Primary' : 'Connected'}
+              </span>
+            </div>
+            {editorFor(p)}
+          </section>
+        );
+      })}
     </div>
   );
 }
@@ -12155,6 +12236,17 @@ const styles: Record<string, React.CSSProperties> = {
   integrationChipOn: { display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--c-blue-bg)', color: 'var(--c-blue)', border: '1px solid var(--c-blue-border)', borderRadius: 20, padding: '3px 12px', fontSize: 12.5, fontWeight: 600, cursor: 'pointer' },
   integrationDot: { width: 6, height: 6, borderRadius: '50%', display: 'inline-block', flexShrink: 0 },
   integrationHint: { fontSize: 11.5, color: 'var(--text-faint)', flex: 1, minWidth: 160 },
+  // Context panel: a stack of labeled per-platform cards. The last card's bar carries the divider to
+  // the chat log (ctxBar has its own borderBottom), so the panel adds none of its own.
+  ctxPanel: { display: 'flex', flexDirection: 'column' },
+  platformCard: { display: 'flex', flexDirection: 'column' },
+  // A quiet header strip above each platform's target row: icon chip + full name + role badge.
+  platformCardHead: { display: 'flex', alignItems: 'center', gap: 8, padding: '7px 20px 3px', background: 'var(--surface)' },
+  platformIconChip: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22, borderRadius: 6, border: '1px solid transparent', flexShrink: 0 },
+  platformName: { fontSize: 12.5, fontWeight: 600, color: 'var(--text)', letterSpacing: -0.1 },
+  // "Primary" = the chat's own product (filled accent); "Connected" = an opt-in integration (outline).
+  platformBadgePrimary: { fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--on-primary)', background: 'var(--primary)', borderRadius: 5, padding: '1px 7px' },
+  platformBadgeConnected: { fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--text-muted)', background: 'transparent', border: '1px solid var(--border-2)', borderRadius: 5, padding: '1px 7px' },
   ctxBar: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '8px 20px', background: 'var(--surface-2)', borderBottom: '1px solid var(--border)', fontSize: 13, color: 'var(--text-dim)' },
   ctxBarEdit: { display: 'flex', alignItems: 'flex-end', gap: 10, padding: '8px 20px', background: 'var(--surface)', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' },
   ctxSelect: { background: 'var(--surface-2)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 6, padding: '6px 8px', fontSize: 13, maxWidth: 220 },
