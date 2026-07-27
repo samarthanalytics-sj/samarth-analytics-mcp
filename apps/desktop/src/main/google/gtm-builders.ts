@@ -1594,6 +1594,27 @@ function tagParam(tag: Record<string, unknown>, key: string): string {
   return hit && hit.value != null ? String(hit.value) : '';
 }
 
+/** The identifying fields worth surfacing when LISTING tags, so "what event does this tag send?" is
+ *  answerable without confusing the tag's own GA4 event name with its firing trigger's custom event
+ *  name. For a GA4 Event tag (gaawe): its eventName (the "Event Name" field) + measurement id; for a
+ *  Google tag (googtag): its tagId. Empty object for other tag types. */
+export function ga4TagFields(tag: Record<string, unknown>): { eventName?: string; measurementId?: string } {
+  const type = String(tag.type ?? '');
+  if (type === 'gaawe') {
+    const out: { eventName?: string; measurementId?: string } = {};
+    const ev = tagParam(tag, 'eventName');
+    if (ev) out.eventName = ev;
+    const mid = tagParam(tag, 'measurementIdOverride') || tagParam(tag, 'measurementId');
+    if (mid) out.measurementId = mid;
+    return out;
+  }
+  if (type === 'googtag') {
+    const mid = tagParam(tag, 'tagId');
+    return mid ? { measurementId: mid } : {};
+  }
+  return {};
+}
+
 /** Read one setting (e.g. server_container_url) out of a Google tag's configSettingsTable —
  *  the list-of-maps shape upsertGoogleTagConfig writes. */
 export function googleTagConfigValue(tag: Record<string, unknown>, configKey: string): string {

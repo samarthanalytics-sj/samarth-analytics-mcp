@@ -5,7 +5,7 @@ import type { OAuth2Client } from 'google-auth-library';
 import type { AccountClientManager } from './account-clients';
 import type { RegistryService } from '../services/registry-service';
 import type { ContainerSnapshot, ServerContainerSnapshot } from './gtm-builders';
-import { applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, normalizeTriggerType, setCustomEventName, customEventNameOf, buildGa4Client, buildGa4ServerTag, buildMetaCapiServerTag, buildTikTokCapiServerTag, buildStapeDataTag, buildServerAllEventsTrigger, buildServerEventTrigger, buildAdsConversionServerTag, buildMetaEmqVariables, buildTikTokEmqVariables, buildEcommerceDlvVariables, buildGa4EventTag, buildTrigger, planTriggerRetarget, type TriggerInput, buildGtmClient, buildVariable, sanitizeName, matchesServerContainer, customTemplateType, upsertGoogleTagConfig, triggerUsageBreakdown, detectMetaTags, evaluateTrackingSetup, GA4_ECOMMERCE_FUNNEL_EVENTS, type TrackingSetupReport, type TrackingSetupCheck } from './gtm-builders';
+import { ga4TagFields, applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, normalizeTriggerType, setCustomEventName, customEventNameOf, buildGa4Client, buildGa4ServerTag, buildMetaCapiServerTag, buildTikTokCapiServerTag, buildStapeDataTag, buildServerAllEventsTrigger, buildServerEventTrigger, buildAdsConversionServerTag, buildMetaEmqVariables, buildTikTokEmqVariables, buildEcommerceDlvVariables, buildGa4EventTag, buildTrigger, planTriggerRetarget, type TriggerInput, buildGtmClient, buildVariable, sanitizeName, matchesServerContainer, customTemplateType, upsertGoogleTagConfig, triggerUsageBreakdown, detectMetaTags, evaluateTrackingSetup, GA4_ECOMMERCE_FUNNEL_EVENTS, type TrackingSetupReport, type TrackingSetupCheck } from './gtm-builders';
 import { resolveGa4MeasurementIds } from './gtm-ga4-check';
 import { withQuotaRetry, withRetry, QUOTA_RE, TRANSIENT_5XX_RE, NOT_FOUND_OR_PERMISSION_RE } from './quota-retry';
 
@@ -252,6 +252,11 @@ export interface GtmTagView {
   tagId: string;
   name: string;
   type: string;
+  /** For a GA4 Event tag (gaawe): the GA4 EVENT NAME the tag sends (its "Event Name" field). This is
+   *  DISTINCT from the firing trigger's Custom Event name (the dataLayer event that fires the tag). */
+  eventName?: string;
+  /** For a GA4 Event tag (measurementIdOverride) or Google tag (tagId): the G-/AW-/GT- id it uses. */
+  measurementId?: string;
 }
 
 export interface Ga4DataStreamView {
@@ -709,10 +714,13 @@ export class GoogleDataService {
       (r) => r.data.tag,
       (r) => r.data.nextPageToken
     );
+    // Surface the GA4 EVENT NAME (and measurement id) for GA4 tags so "what event does this tag send?"
+    // is answerable WITHOUT confusing it with the firing trigger's custom event name.
     return tags.map((t) => ({
       tagId: t.tagId ?? '',
       name: t.name ?? '(unnamed)',
       type: t.type ?? '',
+      ...ga4TagFields(t as unknown as Record<string, unknown>),
     }));
   }
 
