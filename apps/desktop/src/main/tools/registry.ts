@@ -23,6 +23,7 @@ import { lookupCorpusPatterns, LOOKUP_DEFAULT_LIMIT, LOOKUP_MAX_LIMIT, type Corp
 import { getPatternLibrary } from '../corpus/pattern-library';
 import { fingerprintResource, diffManifest, type ManifestResource } from '../../shared/install-manifest';
 import { buildTrackingStatus } from '../../shared/tracking-status';
+import { resolveDeletions, summarizeGtmBatch, type GtmBatchItem, type DeleteRequest } from '../../shared/gtm-batch-plan';
 import {
   buildGa4EventTag,
   buildGoogleTag,
@@ -1674,6 +1675,29 @@ export function buildToolRegistry(
    *  with NO Ads tools, and ['gtm'] on a GA4/Ads chat pulls the GTM toolset in alongside. */
   integrations?: readonly GoogleProduct[]
 ): ToolExecutor {
+  // batch_delete_gtm_entities: the approval card needs the RESOLVED plan text, but summarize() is
+  // synchronous. precheck (async) resolves and stashes it here keyed by the exact args object;
+  // summarize reads it back. Per-registry (per-turn) and a WeakMap, so nothing leaks across turns.
+  const batchDeletePlanCache = new WeakMap<object, string>();
+  const asDeleteRequests = (v: unknown): DeleteRequest[] =>
+    Array.isArray(v)
+      ? v
+          .map((x) => (x && typeof x === 'object' ? { id: s((x as Record<string, unknown>).id).trim() || undefined, name: s((x as Record<string, unknown>).name).trim() || undefined } : {}))
+          .filter((r) => r.id || r.name)
+      : [];
+  /** Fetch the workspace snapshot and resolve the requested deletions to concrete, validated items. */
+  const resolveBatchDeletions = async (a: Record<string, unknown>): Promise<GtmBatchItem[]> => {
+    const snap = await data.getGtmContainerSnapshot(s(a.accountId), s(a.containerId), s(a.workspaceId));
+    return resolveDeletions(
+      { tags: asDeleteRequests(a.tags), triggers: asDeleteRequests(a.triggers), variables: asDeleteRequests(a.variables) },
+      {
+        tags: snap.tags.map((t) => ({ tagId: t.tagId, name: t.name, firingTriggerId: t.firingTriggerId, blockingTriggerId: t.blockingTriggerId })),
+        triggers: snap.triggers.map((t) => ({ triggerId: t.triggerId, name: t.name })),
+        variables: snap.variables.map((v) => ({ variableId: v.variableId, name: v.name })),
+      }
+    );
+  };
+
   const readTools: Tool[] = [
     {
       name: 'list_gtm_accounts',
@@ -5211,6 +5235,85 @@ export function buildToolRegistry(
       summarize: (a) =>
         `Delete variable ${a.name ? `"${s(a.name)}" (${s(a.variableId)})` : s(a.variableId)} from workspace ${s(a.workspaceId)}`,
       handler: (a) => data.deleteGtmVariable(s(a.accountId), s(a.containerId), s(a.workspaceId), s(a.variableId)),
+    },
+    {
+      name: 'batch_delete_gtm_entities',
+      description:
+        'Delete a SPECIFIC SET of tags, triggers AND variables in ONE approval, instead of one card per item. ' +
+        'Pass the entities to remove as tags/triggers/variables arrays (each item is {id} or {name}; id is safest, a name is resolved against the workspace and an ambiguous name is refused). ' +
+        'Use this whenever the user wants to delete MORE THAN ONE entity - never loop delete_gtm_tag / delete_gtm_trigger / delete_gtm_variable, which would prompt for every single item. ' +
+        'The approval card shows the COMPLETE categorized plan (how many tags, triggers and variables will be deleted, each by name, with a note when deleting a trigger will unlink a tag that still uses it) so the user reviews everything once. On approval the whole batch runs with no further prompts, deleting tags first, then triggers, then variables (so nothing is referenced when it is removed). ' +
+        'Built-in triggers and not-found or ambiguous names are reported as skipped, never deleted. This is the DELETE half of a batch; creates and edits already apply directly to the draft workspace with no card, so present those in the same plan message but you do not route them through this tool. Draft only, never published. Destructive, confirms twice.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          tags: { type: 'array', description: 'Tags to delete: [{id} or {name}].', items: { type: 'object', properties: { id: { type: 'string' }, name: { type: 'string' } }, additionalProperties: false } },
+          triggers: { type: 'array', description: 'Triggers to delete: [{id} or {name}].', items: { type: 'object', properties: { id: { type: 'string' }, name: { type: 'string' } }, additionalProperties: false } },
+          variables: { type: 'array', description: 'Variables to delete: [{id} or {name}].', items: { type: 'object', properties: { id: { type: 'string' }, name: { type: 'string' } }, additionalProperties: false } },
+        },
+        required: ['accountId', 'containerId', 'workspaceId'],
+        additionalProperties: false,
+      },
+      write: true,
+      destructive: true,
+      // The approval card must show the RESOLVED plan (real names, ids, blocked items), which needs
+      // the live snapshot - but summarize() is synchronous. So precheck (async, runs before the card)
+      // resolves and stashes the plan keyed by this exact args object; summarize reads it back. The
+      // handler re-resolves from a fresh snapshot so an edited card or a container that changed
+      // between the card and execution is still handled correctly.
+      precheck: async (a) => {
+        const items = await resolveBatchDeletions(a);
+        const plan = summarizeGtmBatch(items);
+        batchDeletePlanCache.set(a, plan.text);
+        // Short-circuit with NO card only when NOTHING was requested (empty lists) - there is nothing
+        // to approve. When entities WERE requested but none resolved, the card still shows, listing
+        // them as skipped, so the user sees their names were wrong rather than a silent no-op.
+        if (!items.length) {
+          return { ok: true, deletedCount: 0, message: 'No entities were specified to delete.' };
+        }
+        return null;
+      },
+      summarize: (a) => batchDeletePlanCache.get(a) ?? 'Delete the requested tags, triggers and variables.',
+      handler: async (a) => {
+        {
+          const items = await resolveBatchDeletions(a);
+          const applicable = items.filter((i) => !i.blocked);
+          const skipped = items.filter((i) => i.blocked).map((i) => ({ entity: i.entity, name: i.name, ...(i.id ? { id: i.id } : {}), reason: i.blocked! }));
+          const deleted: Array<{ entity: string; name: string; id: string }> = [];
+          const failed: Array<{ entity: string; name: string; id?: string; error: string }> = [];
+          // Delete order: tags first, then triggers, then variables. A trigger or variable a tag
+          // still uses must not be removed while that tag exists, or GTM rejects it (triggers) or the
+          // reference silently breaks (variables).
+          const order: Record<string, number> = { tag: 0, trigger: 1, variable: 2 };
+          for (const i of [...applicable].sort((x, y) => order[x.entity] - order[y.entity])) {
+            const id = i.id!;
+            try {
+              if (i.entity === 'tag') await withQuotaRetry(() => data.deleteGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), id));
+              else if (i.entity === 'trigger') await withQuotaRetry(() => data.deleteGtmTrigger(s(a.accountId), s(a.containerId), s(a.workspaceId), id));
+              else await withQuotaRetry(() => data.deleteGtmVariable(s(a.accountId), s(a.containerId), s(a.workspaceId), id));
+              deleted.push({ entity: i.entity, name: i.name, id });
+            } catch (e) {
+              failed.push({ entity: i.entity, name: i.name, id, error: e instanceof Error ? e.message : String(e) });
+            }
+          }
+          return {
+            ok: failed.length === 0,
+            deletedCount: deleted.length,
+            counts: {
+              tags: deleted.filter((d) => d.entity === 'tag').length,
+              triggers: deleted.filter((d) => d.entity === 'trigger').length,
+              variables: deleted.filter((d) => d.entity === 'variable').length,
+            },
+            deleted,
+            ...(skipped.length ? { skipped } : {}),
+            ...(failed.length ? { failed } : {}),
+            note: 'These deletions are in the DRAFT workspace and are not published until the user publishes in GTM. Report the counts, then anything skipped (with the reason) and anything that failed.',
+          };
+        }
+      },
     },
     {
       name: 'enable_gtm_builtin_variables',

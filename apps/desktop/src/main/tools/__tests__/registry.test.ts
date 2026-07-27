@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildToolRegistry, type GtmContextControl } from '../registry';
+import { buildToolRegistry, type GtmContextControl, type ConfirmFn } from '../registry';
 import { buildGa4WriteTools } from '../ga4-write-tools';
 import { AuditHistoryStore } from '../../storage/audit-history';
 import { ManifestStore } from '../../storage/manifest-store';
@@ -619,8 +619,9 @@ async function main(): Promise<void> {
     // plus the read-only get_form_tracking_recipe = 108, plus the read-only lookup_corpus_patterns = 109,
     // plus the read-only discover_site_urls = 110.
     // plus the read-only check_ga4_compatibility = 111, plus spy_gtag_config = 112, plus the two
-    // phone-conversion reads (detect_page_phone_numbers, plan_phone_conversion_tracking) = 114.
-    assert.equal(withWrites.list().length, 114 + 64, 'read + write registry has 114 GTM/GA4-read/context + 64 GA4-write tools');
+    // phone-conversion reads (detect_page_phone_numbers, plan_phone_conversion_tracking) = 114,
+    // plus the GTM write batch_delete_gtm_entities = 115.
+    assert.equal(withWrites.list().length, 115 + 64, 'read + write registry has 115 GTM/GA4-read/context/write + 64 GA4-write tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_pinterest_capi_server_tag'), true, 'create_pinterest_capi_server_tag present');
     assert.equal(withWrites.list().some((t) => t.name === 'create_reddit_capi_server_tag'), true, 'create_reddit_capi_server_tag present');
     assert.equal(withWrites.list().some((t) => t.name === 'create_amazon_capi_server_tag'), true, 'create_amazon_capi_server_tag present');
@@ -2879,6 +2880,90 @@ async function main(): Promise<void> {
     assert.match(String(out.error ?? out.message), /developer token/i);
     // The readiness gate must come BEFORE the browser launch: no page was ever fetched.
     assert.ok(!notReady.calls.some((c) => c.startsWith('listConversionActions')), 'no Ads read either');
+  });
+
+  // ── batch_delete_gtm_entities: one approval for a whole delete set ──
+  const batchSnap = {
+    tags: [
+      { tagId: '10', name: 'Old Meta Pixel', type: 'html', firingTriggerId: ['t2'], paused: false, parameter: [] },
+      { tagId: '11', name: 'Legacy UA', type: 'ua', firingTriggerId: [], paused: false, parameter: [] },
+      { tagId: '12', name: 'Keep Me', type: 'gaawe', firingTriggerId: ['t2'], paused: false, parameter: [] },
+    ],
+    triggers: [
+      { triggerId: 't2', name: 'Meta Trigger', type: 'click' },
+      { triggerId: 't3', name: 'Orphan Trigger', type: 'click' },
+    ],
+    variables: [{ variableId: 'v1', name: 'Old Var', type: 'c' }],
+  };
+
+  await test('batch_delete_gtm_entities: ONE card shows the whole categorized plan; approving runs it in safe order', async () => {
+    const fd = fakeData({ snapshot: batchSnap });
+    let cardCount = 0;
+    let cardText = '';
+    // Destructive → two confirms; capture the first card's summary (the plan the user reviews).
+    const approve: ConfirmFn = async (p) => { cardCount += 1; if (cardCount === 1) cardText = p.summary; return p.details; };
+    const reg = buildToolRegistry(fd.data, approve);
+    const out = JSON.parse(await reg.execute('batch_delete_gtm_entities', {
+      accountId: '1', containerId: '2', workspaceId: '3',
+      tags: [{ id: '10' }, { name: 'Legacy UA' }],
+      triggers: [{ id: 't3' }],
+      variables: [{ name: 'Old Var' }],
+    }));
+    // The card content: categorized, named, counted.
+    assert.match(cardText, /This batch will change 2 Tags, 1 Trigger, 1 Variable\./);
+    assert.match(cardText, /2 Tags will be deleted:/);
+    assert.ok(cardText.includes('Old Meta Pixel') && cardText.includes('Legacy UA') && cardText.includes('Orphan Trigger') && cardText.includes('Old Var'), 'every item named');
+    // Applied: 2 tags + 1 trigger + 1 variable, all four resolved.
+    assert.equal(out.ok, true);
+    assert.deepEqual(out.counts, { tags: 2, triggers: 1, variables: 1 });
+    // Safe order: both tags before the trigger before the variable.
+    const seq = fd.calls.filter((c) => c.startsWith('deleteTag:') || c.startsWith('deleteTrigger:') || c.startsWith('deleteVar:'));
+    assert.deepEqual(seq, ['deleteTag:1:2:3:10', 'deleteTag:1:2:3:11', 'deleteTrigger:1:2:3:t3', 'deleteVar:1:2:3:v1'], `order was ${seq.join(', ')}`);
+  });
+
+  await test('batch_delete: not-found and ambiguous names are skipped, never deleted', async () => {
+    const dupSnap = { ...batchSnap, tags: [...batchSnap.tags, { tagId: '13', name: 'Legacy UA', type: 'ua', firingTriggerId: [], paused: false, parameter: [] }] };
+    const fd = fakeData({ snapshot: dupSnap });
+    const reg = buildToolRegistry(fd.data, approveAsIs);
+    const out = JSON.parse(await reg.execute('batch_delete_gtm_entities', {
+      accountId: '1', containerId: '2', workspaceId: '3',
+      tags: [{ name: 'Nonexistent' }, { name: 'Legacy UA' }],
+    }));
+    assert.equal(out.deletedCount, 0, 'nothing deleted');
+    assert.ok(!fd.calls.some((c) => c.startsWith('deleteTag:')), 'no delete API call for unresolved targets');
+    assert.equal(out.skipped.length, 2);
+    assert.ok(out.skipped.some((x: { reason: string }) => /not found/.test(x.reason)) && out.skipped.some((x: { reason: string }) => /ambiguous/.test(x.reason)));
+  });
+
+  await test('batch_delete: a declined card deletes nothing', async () => {
+    const fd = fakeData({ snapshot: batchSnap });
+    const decline: ConfirmFn = async () => null;
+    const reg = buildToolRegistry(fd.data, decline);
+    const out = JSON.parse(await reg.execute('batch_delete_gtm_entities', {
+      accountId: '1', containerId: '2', workspaceId: '3', tags: [{ id: '10' }],
+    }));
+    assert.equal(out.declined, true);
+    assert.ok(!fd.calls.some((c) => c.startsWith('deleteTag:')), 'the delete never reached the API');
+  });
+
+  await test('batch_delete: an empty request needs no card and deletes nothing', async () => {
+    const fd = fakeData({ snapshot: batchSnap });
+    let cards = 0;
+    const reg = buildToolRegistry(fd.data, (async (p) => { cards += 1; return p.details; }) as ConfirmFn);
+    const out = JSON.parse(await reg.execute('batch_delete_gtm_entities', { accountId: '1', containerId: '2', workspaceId: '3' }));
+    assert.equal(cards, 0, 'no approval card for a no-op');
+    assert.equal(out.deletedCount, 0);
+  });
+
+  await test('batch_delete: withheld without a confirm fn (read-only session), like every write', async () => {
+    const reg = buildToolRegistry(fakeData({ snapshot: batchSnap }).data);
+    assert.equal(reg.list().some((t) => t.name === 'batch_delete_gtm_entities'), false, 'not offered read-only');
+    // A write tool is not registered at all without a confirm fn, so calling it rejects like any
+    // unknown name - never a silent partial delete.
+    await assert.rejects(
+      () => reg.execute('batch_delete_gtm_entities', { accountId: '1', containerId: '2', workspaceId: '3', tags: [{ id: '10' }] }),
+      /Unknown tool/,
+    );
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);
