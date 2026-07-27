@@ -1,3 +1,9 @@
+## [1.414.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.413.1...v1.414.0) (2026-07-27)
+
+### Features
+
+* **desktop:** add in-place update tools for GTM client, transformation, and environment ([115f153](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/115f153ea729aed4a8f76a53a030cf13f27cbc1d))
+
 ## [1.413.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.413.0...v1.413.1) (2026-07-27)
 
 ### Bug Fixes
