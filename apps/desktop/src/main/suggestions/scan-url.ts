@@ -7,7 +7,13 @@
 
 import os from 'node:os';
 import { scanUrls, type PageDriver } from './scan-core';
-import { createElectronDriver } from './electron-driver';
+// NOTE: the Electron driver is imported LAZILY inside makeDriver (like the cheerio/playwright drivers
+// below), NOT at module scope. electron-driver.ts does `import { BrowserWindow } from 'electron'`,
+// which runs `require('electron')` at load — that throws "Electron failed to install correctly" in a
+// plain Node/CI process with no Electron binary. A static import here would drag that into every
+// module that imports scan-url for its pure helpers (e.g. scan-phones.ts and its unit test), breaking
+// the desktop test suite in CI. Keeping it lazy means Electron only loads when a driver is built,
+// which only ever happens at runtime inside the real app.
 import { createMultiDriver } from './multi-driver';
 import { makePageCache } from './page-cache';
 import { urlAllowed } from '../../../../web-audit-mcp/src/utils/urlGuard.js';
@@ -41,6 +47,9 @@ const sharedPageCache = makePageCache();
  */
 export async function makeDriver(opts: TagScanOptions & { cachePages?: boolean } = {}): Promise<PageDriver> {
   const settleMs = clampSettle(opts.settleMs);
+  // Lazy so a plain Node/CI process (no Electron binary) can import scan-url's pure helpers without
+  // evaluating electron-driver's top-level `require('electron')`. See the import note above.
+  const { createElectronDriver } = await import('./electron-driver');
   const drivers: PageDriver[] = [createElectronDriver(settleMs !== undefined ? { settleMs } : {})];
   try {
     const { createCheerioDriver } = await import('./cheerio-driver');
