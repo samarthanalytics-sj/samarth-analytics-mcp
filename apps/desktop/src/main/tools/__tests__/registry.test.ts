@@ -3077,6 +3077,27 @@ async function main(): Promise<void> {
     assert.equal(out.deletedCount, 0);
   });
 
+  await test('batch_delete: the approval card warns when deleting a variable a surviving tag still uses', async () => {
+    // A container where a surviving tag reads {{GA4 Measurement ID}} via a real parameter value, and
+    // that variable is in the delete set - the reference is extracted from the tag's config, not hinted.
+    const refSnap = {
+      tags: [{ tagId: '20', name: 'GA4 Purchase', type: 'gaawe', firingTriggerId: [], paused: false, parameter: [{ type: 'template', key: 'measurementId', value: '{{GA4 Measurement ID}}' }] }],
+      triggers: [],
+      variables: [{ variableId: 'w1', name: 'GA4 Measurement ID', type: 'c', parameter: [] }],
+    };
+    const fd = fakeData({ snapshot: refSnap });
+    let cardText = '';
+    const approve: ConfirmFn = async (p) => { cardText = p.summary; return p.details; };
+    const reg = buildToolRegistry(fd.data, approve);
+    const out = JSON.parse(await reg.execute('batch_delete_gtm_entities', { accountId: '1', containerId: '2', workspaceId: '3', variables: [{ id: 'w1' }] }));
+    assert.match(cardText, /still referenced by 1 surviving item/);
+    assert.ok(cardText.includes('tag "GA4 Purchase"') && cardText.includes('{{GA4 Measurement ID}}'), `warning names the tag + variable: ${cardText}`);
+    assert.match(cardText, /references will break/);
+    // It still deletes (a warning, not a block): the user reviewed and approved.
+    assert.equal(out.deletedCount, 1);
+    assert.ok(fd.calls.some((c) => c.startsWith('deleteVar:1:2:3:w1')), 'the variable was deleted after approval');
+  });
+
   await test('batch_delete: withheld without a confirm fn (read-only session), like every write', async () => {
     const reg = buildToolRegistry(fakeData({ snapshot: batchSnap }).data);
     assert.equal(reg.list().some((t) => t.name === 'batch_delete_gtm_entities'), false, 'not offered read-only');

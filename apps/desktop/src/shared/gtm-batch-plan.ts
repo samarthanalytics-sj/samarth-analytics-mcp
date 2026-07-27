@@ -115,10 +115,12 @@ export function summarizeGtmBatch(items: readonly GtmBatchItem[]): GtmBatchSumma
 // ── Deletion resolution against the live container ─────────────────────────────────────────────
 
 /** Minimal shapes the resolver needs from the container snapshot (a subset of the audit types, kept
- *  local so this module stays framework-free and unit-testable without the whole snapshot). */
-export interface SnapTag { tagId: string; name: string; firingTriggerId?: string[]; blockingTriggerId?: string[] }
-export interface SnapTrigger { triggerId: string; name: string }
-export interface SnapVariable { variableId: string; name: string }
+ *  local so this module stays framework-free and unit-testable without the whole snapshot).
+ *  `references` is the list of {{variable}} names this entity uses (extracted by the caller); it
+ *  powers the referenced-variable warning below. */
+export interface SnapTag { tagId: string; name: string; firingTriggerId?: string[]; blockingTriggerId?: string[]; references?: readonly string[] }
+export interface SnapTrigger { triggerId: string; name: string; references?: readonly string[] }
+export interface SnapVariable { variableId: string; name: string; references?: readonly string[] }
 export interface DeletionSnapshot { tags: SnapTag[]; triggers: SnapTrigger[]; variables: SnapVariable[] }
 
 /** One requested deletion: an id, or a name to resolve, or both. */
@@ -129,22 +131,30 @@ export type DeleteRequestList = readonly DeleteRequest[];
  *  attempting a doomed API call. Mirrors isBuiltinTriggerId in gtm-builders (kept in sync by test). */
 export const isBuiltinTriggerId = (id: string): boolean => /^2147479\d{3}$/.test(id);
 
+/** "3 tags: A, B, C" style, capped so a huge fan-in stays one readable line. */
+const listWithCap = (names: readonly string[], cap = 3): string =>
+  `${names.slice(0, cap).join(', ')}${names.length > cap ? `, ...` : ''}`;
+
 /**
  * Resolve a requested delete set into concrete items, matching by id first, then by exact
  * (case-insensitive) name. Produces GtmBatchItems ready for summarizeGtmBatch: found targets carry
- * their id and (for triggers) a warning when still referenced by a tag; unresolved or reserved ones
- * are marked blocked with the reason.
+ * their id and a warning when deleting them will break something that SURVIVES the batch; unresolved
+ * or reserved ones are marked blocked with the reason.
  *
- * A trigger still referenced by a tag is NOT auto-blocked (GTM allows deleting it, which then
- * unlinks the tag), but the change note says so, because that is a consequence the user must see
- * before approving.
+ * Referenced targets are NOT auto-blocked (deleting is the user's call), but the change note names the
+ * consequence, because it must be visible before approving:
+ *   - a TRIGGER still referenced by a surviving tag: GTM unlinks it from that tag;
+ *   - a VARIABLE still referenced by a surviving tag / trigger / other variable: GTM does NOT refuse
+ *     the delete, so the {{reference}} silently breaks. This is the dangerous case, and the reason
+ *     this check exists.
+ *
+ * "Surviving" = not itself in the delete set: a variable used only by a tag that is ALSO being
+ * deleted is not really orphaning anything, so it earns no warning.
  */
 export function resolveDeletions(
   requests: { tags?: DeleteRequestList; triggers?: DeleteRequestList; variables?: DeleteRequestList },
   snap: DeletionSnapshot
 ): GtmBatchItem[] {
-  const items: GtmBatchItem[] = [];
-
   const match = <T extends { name: string }>(list: T[], req: DeleteRequest, idOf: (t: T) => string): T | undefined => {
     if (req.id) {
       const byId = list.find((t) => idOf(t) === String(req.id));
@@ -158,32 +168,63 @@ export function resolveDeletions(
     }
     return undefined;
   };
+  const nameExists = (list: { name: string }[], req: DeleteRequest): boolean =>
+    list.some((x) => x.name.trim().toLowerCase() === (req.name ?? '').trim().toLowerCase());
 
-  for (const req of requests.tags ?? []) {
-    const t = match(snap.tags, req, (x) => x.tagId);
+  // Pass 1: resolve every request to a matched entity (or nothing), so the FULL delete set is known
+  // before any note is worded. The surviving-reference checks below need that set up front.
+  const tagRes = (requests.tags ?? []).map((req) => ({ req, m: match(snap.tags, req, (x) => x.tagId) }));
+  const trigRes = (requests.triggers ?? []).map((req) => ({ req, builtin: Boolean(req.id && isBuiltinTriggerId(String(req.id))), m: match(snap.triggers, req, (x) => x.triggerId) }));
+  const varRes = (requests.variables ?? []).map((req) => ({ req, m: match(snap.variables, req, (x) => x.variableId) }));
+
+  const deletedTagIds = new Set(tagRes.filter((r) => r.m).map((r) => r.m!.tagId));
+  const deletedTriggerIds = new Set(trigRes.filter((r) => !r.builtin && r.m).map((r) => r.m!.triggerId));
+  const deletedVarIds = new Set(varRes.filter((r) => r.m).map((r) => r.m!.variableId));
+
+  // Every entity that will STILL EXIST after the batch, labelled for the warning message.
+  const survivors: Array<{ kind: GtmEntityKind; name: string; references: readonly string[] }> = [
+    ...snap.tags.filter((t) => !deletedTagIds.has(t.tagId)).map((t) => ({ kind: 'tag' as const, name: t.name, references: t.references ?? [] })),
+    ...snap.triggers.filter((t) => !deletedTriggerIds.has(t.triggerId)).map((t) => ({ kind: 'trigger' as const, name: t.name, references: t.references ?? [] })),
+    ...snap.variables.filter((v) => !deletedVarIds.has(v.variableId)).map((v) => ({ kind: 'variable' as const, name: v.name, references: v.references ?? [] })),
+  ];
+  /** Surviving entities that reference variable `varName` by {{varName}}, labelled kind + name. */
+  const survivingReferrersOf = (varName: string): string[] =>
+    survivors.filter((s) => s.references.includes(varName)).map((s) => `${s.kind} "${s.name}"`);
+
+  const items: GtmBatchItem[] = [];
+
+  for (const { req, m: t } of tagRes) {
     if (t) items.push({ action: 'delete', entity: 'tag', name: t.name, id: t.tagId, change: 'tag deleted' });
-    else items.push({ action: 'delete', entity: 'tag', name: req.name ?? req.id ?? '(unspecified)', ...(req.id ? { id: String(req.id) } : {}), blocked: blockReason(req, snap.tags.some((x) => x.name.trim().toLowerCase() === (req.name ?? '').trim().toLowerCase())) });
+    else items.push({ action: 'delete', entity: 'tag', name: req.name ?? req.id ?? '(unspecified)', ...(req.id ? { id: String(req.id) } : {}), blocked: blockReason(req, nameExists(snap.tags, req)) });
   }
-  for (const req of requests.triggers ?? []) {
-    if (req.id && isBuiltinTriggerId(String(req.id))) {
+  for (const { req, builtin, m: tr } of trigRes) {
+    if (builtin) {
       items.push({ action: 'delete', entity: 'trigger', name: req.name ?? String(req.id), id: String(req.id), blocked: 'built-in trigger, cannot be deleted' });
       continue;
     }
-    const tr = match(snap.triggers, req, (x) => x.triggerId);
     if (tr) {
-      const referencedBy = snap.tags.filter((tg) => [...(tg.firingTriggerId ?? []), ...(tg.blockingTriggerId ?? [])].includes(tr.triggerId)).map((tg) => tg.name);
+      // Only SURVIVING tags matter: a tag also being deleted will not be left with a dangling trigger.
+      const referencedBy = snap.tags.filter((tg) => !deletedTagIds.has(tg.tagId) && [...(tg.firingTriggerId ?? []), ...(tg.blockingTriggerId ?? [])].includes(tr.triggerId)).map((tg) => tg.name);
       items.push({
         action: 'delete', entity: 'trigger', name: tr.name, id: tr.triggerId,
-        change: referencedBy.length ? `trigger deleted (still referenced by ${referencedBy.length} tag${referencedBy.length === 1 ? '' : 's'}: ${referencedBy.slice(0, 3).join(', ')}${referencedBy.length > 3 ? ', ...' : ''}; those tags will lose this trigger)` : 'trigger deleted',
+        change: referencedBy.length ? `trigger deleted (still referenced by ${referencedBy.length} surviving tag${referencedBy.length === 1 ? '' : 's'}: ${listWithCap(referencedBy)}; those tags will lose this trigger)` : 'trigger deleted',
       });
     } else {
-      items.push({ action: 'delete', entity: 'trigger', name: req.name ?? req.id ?? '(unspecified)', ...(req.id ? { id: String(req.id) } : {}), blocked: blockReason(req, snap.triggers.some((x) => x.name.trim().toLowerCase() === (req.name ?? '').trim().toLowerCase())) });
+      items.push({ action: 'delete', entity: 'trigger', name: req.name ?? req.id ?? '(unspecified)', ...(req.id ? { id: String(req.id) } : {}), blocked: blockReason(req, nameExists(snap.triggers, req)) });
     }
   }
-  for (const req of requests.variables ?? []) {
-    const v = match(snap.variables, req, (x) => x.variableId);
-    if (v) items.push({ action: 'delete', entity: 'variable', name: v.name, id: v.variableId, change: 'variable deleted' });
-    else items.push({ action: 'delete', entity: 'variable', name: req.name ?? req.id ?? '(unspecified)', ...(req.id ? { id: String(req.id) } : {}), blocked: blockReason(req, snap.variables.some((x) => x.name.trim().toLowerCase() === (req.name ?? '').trim().toLowerCase())) });
+  for (const { req, m: v } of varRes) {
+    if (v) {
+      const referencedBy = survivingReferrersOf(v.name);
+      items.push({
+        action: 'delete', entity: 'variable', name: v.name, id: v.variableId,
+        change: referencedBy.length
+          ? `variable deleted (still referenced by ${referencedBy.length} surviving item${referencedBy.length === 1 ? '' : 's'}: ${listWithCap(referencedBy)}; GTM does not block deleting a used variable, so those {{${v.name}}} references will break)`
+          : 'variable deleted',
+      });
+    } else {
+      items.push({ action: 'delete', entity: 'variable', name: req.name ?? req.id ?? '(unspecified)', ...(req.id ? { id: String(req.id) } : {}), blocked: blockReason(req, nameExists(snap.variables, req)) });
+    }
   }
   return items;
 }
