@@ -228,6 +228,15 @@ async function main(): Promise<void> {
     }
   })();
 
+  check('gated executor forwards isWrite from the base registry, and never for the control tool', (() => {
+    const gated = createGatedExecutor(gtmReg, { messages: ['hello'] });
+    return (
+      gated.isWrite?.('create_gtm_tag') === true &&
+      gated.isWrite?.('list_gtm_tags') === false &&
+      gated.isWrite?.(ENABLE_TOOL_GROUP) === false
+    );
+  })());
+
   check('safety net: no em or en dash reaches the model from this module', (() => {
     const all = [
       buildToolGroupPrompt([...REQUESTABLE_GROUPS]),

@@ -48,7 +48,13 @@ export const GTM_CREATION_METHODOLOGY =
   'names; (3) create missing variables, then the trigger, then the tag (or one create_gtm_tracking_tag call); (4) report EXACTLY ' +
   'what was created and that nothing is published; (5) if a trigger cannot reliably fire (iframe/AJAX form, SPA route), say so and ' +
   'give the dataLayer / Custom-Event alternative rather than a tag that silently will not fire. Name tags/triggers per the GA4 ' +
-  'naming convention already specified above. ';
+  'naming convention already specified above. ' +
+  'BULK BUILDS — when the user asks to create MANY entities at once (e.g. "create these 40 tags"), build ALL of them in this SAME ' +
+  'turn without stopping to ask "shall I proceed?" between them: every create lands in the DRAFT workspace and is reversible, so ' +
+  'there is nothing to gate on mid-way, and pausing after each batch just wastes the user\'s time. Keep issuing the create calls ' +
+  'until the whole list is done, then give ONE final summary of everything created (and anything skipped/failed). Do NOT split the ' +
+  'work across multiple replies or ask the user to say "continue" unless a genuine BLOCKER stops you (a tool error, a missing ' +
+  'account/measurement id, or ambiguous input you cannot resolve) — in which case stop and say exactly what you need. ';
 
 // Full GTM trigger + variable reference for the chat brain: which type to use, and which TOOL creates
 // it (the typed builders cover the common cases; everything else uses the raw create_gtm_variable /

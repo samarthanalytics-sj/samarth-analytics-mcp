@@ -622,6 +622,13 @@ async function main(): Promise<void> {
     // phone-conversion reads (detect_page_phone_numbers, plan_phone_conversion_tracking) = 114,
     // plus the GTM write batch_delete_gtm_entities = 115.
     assert.equal(withWrites.list().length, 115 + 64, 'read + write registry has 115 GTM/GA4-read/context/write + 64 GA4-write tools');
+    // isWrite() reflects the registry's write flag, so the agentic loop can tell a landed write
+    // (forward progress on a build) from a read and decide whether to run past the step budget.
+    assert.equal(withWrites.isWrite?.('create_gtm_tag'), true, 'a create is a write');
+    assert.equal(withWrites.isWrite?.('batch_delete_gtm_entities'), true, 'a batch delete is a write');
+    assert.equal(withWrites.isWrite?.('list_gtm_tags'), false, 'a list is not a write');
+    assert.equal(withWrites.isWrite?.('audit_gtm_container'), false, 'an audit is not a write');
+    assert.equal(withWrites.isWrite?.('no_such_tool'), false, 'an unknown name is not a write');
     assert.equal(withWrites.list().some((t) => t.name === 'create_pinterest_capi_server_tag'), true, 'create_pinterest_capi_server_tag present');
     assert.equal(withWrites.list().some((t) => t.name === 'create_reddit_capi_server_tag'), true, 'create_reddit_capi_server_tag present');
     assert.equal(withWrites.list().some((t) => t.name === 'create_amazon_capi_server_tag'), true, 'create_amazon_capi_server_tag present');

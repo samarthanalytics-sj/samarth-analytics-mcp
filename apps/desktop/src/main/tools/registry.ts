@@ -6057,6 +6057,10 @@ export function buildToolRegistry(
       tools
         .filter((t) => toolAllowedForContainer(t.name, containerKind))
         .map(({ name, description, inputSchema }) => ({ name, description, inputSchema })),
+    // A tool is a "write" if the registry marked it so. Lets the agentic loop treat a landed write as
+    // forward progress (so a large multi-tag build runs to completion instead of stopping at the step
+    // budget) while a read-only loop still stops at the normal ceiling.
+    isWrite: (name: string): boolean => Boolean(tools.find((t) => t.name === name)?.write),
     execute: async (name, args): Promise<string> => {
       // Pin the turn to its account BEFORE anything else: if the user switched Google accounts mid-turn,
       // abort here so no read or write runs against a different account's token than the prompt/journal

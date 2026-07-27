@@ -61,23 +61,54 @@ export interface RunChatCallbacks {
   onRetry?: (notice: RetryNotice) => void;
 }
 
+/** Progress-aware extension of the step budget (see runChat). */
+export interface StepBudgetOptions {
+  /** Absolute cap on steps even while making progress — a runaway-loop backstop. Defaults to
+   *  `maxSteps` (no extension). A large multi-item build (e.g. 40 GTM tags = trigger + variables +
+   *  tag each) legitimately needs far more than the soft ceiling, so the caller raises this. */
+  hardMaxSteps?: number;
+  /** In the extended zone (past `maxSteps`), stop if this many consecutive steps land NO successful
+   *  write — the build has stalled or turned into a read-loop, so re-prompting the user is right.
+   *  Tolerates the occasional read/plan step between writes. Default 6. */
+  stallSteps?: number;
+}
+
 /**
  * Agentic loop: stream a model turn; if it asks for tools, execute them, feed the
- * results back, and repeat until it produces a final text answer (or hits
- * maxSteps). Provider-agnostic — works for any LlmClient.
+ * results back, and repeat until it produces a final text answer (or hits the step
+ * budget). Provider-agnostic — works for any LlmClient.
+ *
+ * The step budget is progress-aware. `maxSteps` is the SOFT ceiling that a normal turn returns well
+ * before. Past it, the loop keeps going only while the model is still landing writes (a genuine
+ * in-flight build), up to `opts.hardMaxSteps`. This is what lets "create these 40 tags" run all 40
+ * to completion under ONE user turn instead of stopping partway to ask the user to say "proceed".
+ * A turn that stops writing (finished, stalled, or looping on reads) still stops at the soft ceiling.
  */
 export async function runChat(
   client: LlmClient,
   input: RunChatInput,
   executor: ToolExecutor,
   callbacks: RunChatCallbacks = {},
-  maxSteps = 6
+  maxSteps = 6,
+  opts: StepBudgetOptions = {}
 ): Promise<RunChatResult> {
   const messages: LlmTurn[] = [...input.messages];
   let usage: CacheUsage | undefined;
   let lastToolError: { name: string; message: string } | null = null;
 
-  for (let step = 1; step <= maxSteps; step++) {
+  const hardMaxSteps = Math.max(maxSteps, opts.hardMaxSteps ?? maxSteps);
+  const stallSteps = Math.max(1, opts.stallSteps ?? 6);
+  // Steps since the last landed write. Starts high so a turn that never writes never enters the
+  // extended zone — it stops exactly at the soft ceiling, as before.
+  let stepsSinceWrite = Number.MAX_SAFE_INTEGER;
+
+  for (let step = 1; step <= hardMaxSteps; step++) {
+    // Past the soft ceiling, only continue while writes are still landing. Otherwise fall through to
+    // the "not done" message so the user is asked how to proceed rather than looping silently.
+    if (step > maxSteps && stepsSinceWrite >= stallSteps) {
+      console.error(`[chat] soft step budget (${maxSteps}) reached and no write in the last ${stallSteps} steps - stopping`);
+      break;
+    }
     if (input.signal?.aborted) {
       console.error('[chat] stopped by user');
       return { text: 'Stopped.', steps: step - 1, usage };
@@ -124,6 +155,9 @@ export async function runChat(
       // already failed). We still push a result for every call so the provider's
       // tool_use/tool_result pairing stays valid; the skipped ones report why.
       let batchFailed = false;
+      // Did this step land at least one successful write? That is the "still building" signal that
+      // lets the loop continue past the soft ceiling.
+      let stepHadWrite = false;
       for (const call of reply.toolCalls) {
         // Stop must halt the batch BETWEEN tool calls. With delete-only approvals,
         // creates/edits no longer pause at a confirm card, so this check is the only
@@ -161,6 +195,7 @@ export async function runChat(
           // methodology that tells the model how to report it.
           const forModel = attachReference(capped.content, referenceForResult(call.name));
           results.push({ id: call.id, name: call.name, content: forModel });
+          if (executor.isWrite?.(call.name)) stepHadWrite = true;
           callbacks.onToolResult?.({ name: call.name, ok: true, args: call.args, content });
         } catch (e) {
           const message = e instanceof Error ? e.message : String(e);
@@ -173,6 +208,9 @@ export async function runChat(
         }
       }
       messages.push({ role: 'tool', results });
+      // Forward-progress accounting: a step that landed a write resets the stall counter (the build
+      // is alive and may run past the soft ceiling); a writeless step ages it toward the stall stop.
+      stepsSinceWrite = stepHadWrite ? 0 : stepsSinceWrite === Number.MAX_SAFE_INTEGER ? 1 : stepsSinceWrite + 1;
       continue;
     }
 
@@ -181,14 +219,15 @@ export async function runChat(
     return { text: reply.text ?? '', steps: step, usage };
   }
 
-  // Ran out of steps without the model giving a final answer — surface WHY (the real tool
-  // error) and make clear the task did NOT complete, instead of a vague "stopped".
-  console.error(`[chat] stopped after ${maxSteps} steps without a final answer (tool-call limit)`);
+  // Ran out of budget without the model giving a final answer — surface WHY (the real tool error)
+  // and make clear the task did NOT complete, instead of a vague "stopped". The reported ceiling is
+  // whatever actually bit: the soft budget for a stalled turn, the hard cap for a runaway one.
+  console.error(`[chat] stopped without a final answer (soft ${maxSteps} / hard ${hardMaxSteps} step budget)`);
   const reason = lastToolError
     ? ` The last error was — \`${lastToolError.name}\`: ${lastToolError.message}`
     : '';
   return {
-    text: `⚠️ I couldn't finish this — I reached the tool-call limit (${maxSteps} steps) without completing it, so **the task was NOT done.**${reason} Tell me how you'd like to proceed, or I can try a different approach.`,
-    steps: maxSteps,
+    text: `⚠️ I couldn't finish this — I reached the tool-call limit without completing it, so **the task was NOT done.**${reason} Tell me how you'd like to proceed, or I can try a different approach.`,
+    steps: hardMaxSteps,
   };
 }
