@@ -297,6 +297,10 @@ function fakeData(
       calls.push(`createVar:${a}:${c}:${w}:${String(v.type)}:${String(v.name)}`);
       return { variableId: 'V1', name: String(v.name ?? ''), type: String(v.type ?? '') };
     },
+    updateGtmVariable: async (_a: string, _c: string, _w: string, variableId: string, v: Record<string, unknown>) => {
+      calls.push(`updateVar:${variableId}:${String(v.name ?? '')}`);
+      return { variableId, name: String(v.name ?? 'kept'), type: 'c' };
+    },
     createMetaEmqVariables: async (a: string, c: string, w: string) => {
       calls.push(`metaEmq:${a}:${c}:${w}`);
       return { created: ['ed - fbp', 'ed - fbc', 'ed - event_id'], skipped: ['ed - value'] };
@@ -620,8 +624,8 @@ async function main(): Promise<void> {
     // plus the read-only discover_site_urls = 110.
     // plus the read-only check_ga4_compatibility = 111, plus spy_gtag_config = 112, plus the two
     // phone-conversion reads (detect_page_phone_numbers, plan_phone_conversion_tracking) = 114,
-    // plus the GTM write batch_delete_gtm_entities = 115.
-    assert.equal(withWrites.list().length, 115 + 64, 'read + write registry has 115 GTM/GA4-read/context/write + 64 GA4-write tools');
+    // plus the GTM write batch_delete_gtm_entities = 115, plus the GTM write update_gtm_variable = 116.
+    assert.equal(withWrites.list().length, 116 + 64, 'read + write registry has 116 GTM/GA4-read/context/write + 64 GA4-write tools');
     // isWrite() reflects the registry's write flag, so the agentic loop can tell a landed write
     // (forward progress on a build) from a read and decide whether to run past the step budget.
     assert.equal(withWrites.isWrite?.('create_gtm_tag'), true, 'a create is a write');
@@ -1266,6 +1270,36 @@ async function main(): Promise<void> {
       trigger: { name: 'Z', kind: 'custom_event', eventName: 'x' },
     }));
     assert.ok(okVar.tag, 'a {{variable}} measurement id is allowed');
+  });
+
+  await test('create on an EXISTING name steers to UPDATE in place, not delete-and-recreate', async () => {
+    // The tag already exists -> the precheck must skip the create AND tell the model to update_gtm_tag
+    // (with the id), explicitly warning against delete+recreate. This is the fix for the model deleting
+    // and re-making tags/triggers/variables instead of editing them.
+    const fd = fakeData();
+    fd.data.listGtmTags = async () => [{ tagId: '42', name: 'GA4 - Event - Purchase', type: 'gaawe' }] as never;
+    const reg = buildToolRegistry(fd.data, approveAsIs);
+    const out = JSON.parse(await reg.execute('create_gtm_tracking_tag', {
+      accountId: '1', containerId: '2', workspaceId: '3',
+      platform: 'ga4_event', tagName: 'GA4 - Event - Purchase', measurementId: 'G-REAL12345', eventName: 'purchase',
+      trigger: { name: 'Purchase Trigger', kind: 'custom_event', eventName: 'purchase' },
+    }));
+    assert.equal(out.alreadyExists, true, 'the create was skipped, not duplicated');
+    assert.match(out.message, /update_gtm_tag \(tagId 42\)/, 'names the update tool + the id');
+    assert.match(out.message, /do NOT delete it/i, 'warns against delete+recreate');
+    assert.ok(!fd.calls.some((c) => c.startsWith('createTag')), 'nothing was created');
+  });
+
+  await test('update_gtm_variable edits a variable IN PLACE (the non-destructive path for variables)', async () => {
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data, approveAsIs);
+    const out = JSON.parse(await reg.execute('update_gtm_variable', {
+      accountId: '1', containerId: '2', workspaceId: '3', variableId: 'V7',
+      variable: { name: 'GA4 Measurement ID', parameter: [{ type: 'template', key: 'value', value: 'G-NEW99999' }] },
+    }));
+    assert.equal(out.variableId, 'V7', 'the SAME variable id is kept (no delete+recreate)');
+    assert.ok(fd.calls.some((c) => c.startsWith('updateVar:V7')), 'routed to updateGtmVariable, not delete/create');
+    assert.ok(!fd.calls.some((c) => c.startsWith('createVar') || c.startsWith('deleteVar')), 'no create or delete of the variable');
   });
 
   await test('create_tracking_tag (google_tag) builds a googtag and creates its trigger', async () => {

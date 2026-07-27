@@ -49,6 +49,13 @@ export const GTM_CREATION_METHODOLOGY =
   'what was created and that nothing is published; (5) if a trigger cannot reliably fire (iframe/AJAX form, SPA route), say so and ' +
   'give the dataLayer / Custom-Event alternative rather than a tag that silently will not fire. Name tags/triggers per the GA4 ' +
   'naming convention already specified above. ' +
+  'CHANGING AN EXISTING ENTITY — to modify a tag/trigger/variable that already exists, UPDATE it IN PLACE: update_gtm_tag, ' +
+  'update_gtm_trigger, update_gtm_variable (all read-modify-write, so omitted fields are preserved), or a targeted editor ' +
+  '(add_ga4_event_parameters, set_gtm_tag_paused, set_gtm_tag_consent, set_ga4_measurement_id, move_gtm_entities_to_folder). ' +
+  'NEVER delete the entity and create a new one to "change" it: delete+recreate assigns a NEW id, which silently breaks every ' +
+  'tag/trigger that referenced the old one and loses its version history. If a create returns "already exists", that is your cue ' +
+  'to UPDATE that id (the message gives it), not to delete and recreate. Deleting is only for an entity the user genuinely wants ' +
+  'REMOVED, not as a step in an edit. ' +
   'BULK BUILDS — when the user asks to create MANY entities at once (e.g. "create these 40 tags"), build ALL of them in this SAME ' +
   'turn without stopping to ask "shall I proceed?" between them: every create lands in the DRAFT workspace and is reversible, so ' +
   'there is nothing to gate on mid-way, and pausing after each batch just wastes the user\'s time. Keep issuing the create calls ' +

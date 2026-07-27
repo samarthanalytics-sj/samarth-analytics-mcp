@@ -257,7 +257,20 @@ async function findExistingByName(
         ? (match as { variableId: string }).variableId
         : (match as { triggerId: string }).triggerId;
   const label = kind === 'tag' ? 'Tag' : kind === 'variable' ? 'Variable' : 'Trigger';
-  return { alreadyExists: true, [kind]: match, message: `${label} "${match.name}" already exists (ID ${id}) — not created.` };
+  const updateTool = kind === 'tag' ? 'update_gtm_tag' : kind === 'variable' ? 'update_gtm_variable' : 'update_gtm_trigger';
+  const idField = kind === 'tag' ? 'tagId' : kind === 'variable' ? 'variableId' : 'triggerId';
+  // Steer the model away from the delete-and-recreate reflex. Hitting "already exists" on a create is
+  // exactly the moment it would otherwise delete the entity and make a fresh one - which loses the id,
+  // its wiring/references, and version history. Name the in-place update tool and its id instead.
+  return {
+    alreadyExists: true,
+    [kind]: match,
+    message:
+      `${label} "${match.name}" already exists (${idField} ${id}), so it was NOT created again. ` +
+      `If you need to CHANGE it, UPDATE it in place with ${updateTool} (${idField} ${id})` +
+      `${kind === 'tag' ? ' - or a targeted editor like add_ga4_event_parameters / set_gtm_tag_paused / set_gtm_tag_consent' : ''}. ` +
+      `Do NOT delete it and create a new one: that changes its ${idField} and breaks anything that referenced it. If it is already correct, leave it as is.`,
+  };
 }
 
 /** True when a GA4/Google-tag/Ads id is an obvious PLACEHOLDER (G-123456789, G-XXXXXXXXXX, all zeros,
@@ -5055,6 +5068,26 @@ export function buildToolRegistry(
       write: true,
       summarize: (a) => `Update tag ${s(a.tagId)} in workspace ${s(a.workspaceId)}`,
       handler: (a) => data.updateGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), s(a.tagId), obj(a.tag)),
+    },
+    {
+      name: 'update_gtm_variable',
+      description:
+        'Update an existing variable in a GTM workspace IN PLACE. Read-modify-write: the current variable is fetched and only the fields you pass are overlaid, with `parameter` merged by key, so omitted fields are preserved. This is the correct way to CHANGE a variable (its value, name, or a parameter) - do NOT delete and recreate it, which loses its variableId and silently breaks every tag/trigger that referenced it. To find the variableId, list_gtm_variables.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          variableId: { type: 'string' },
+          variable: { type: 'object', description: 'Partial variable: only the fields to change. parameter[] is merged by key.' },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'variableId', 'variable'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => `Update variable ${s(a.variableId)} in workspace ${s(a.workspaceId)}`,
+      handler: (a) => data.updateGtmVariable(s(a.accountId), s(a.containerId), s(a.workspaceId), s(a.variableId), obj(a.variable)),
     },
     {
       name: 'add_ga4_event_parameters',
