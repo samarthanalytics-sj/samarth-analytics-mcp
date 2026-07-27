@@ -1,3 +1,10 @@
+## [1.406.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.406.0...v1.406.1) (2026-07-27)
+
+### Bug Fixes
+
+* **desktop:** close cross-platform write-safety + isolation gaps from the production audit ([#703](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/703)) ([d1f5371](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d1f5371de4f014d7894f53b5dca162ed49aed1ee))
+* **desktop:** load the Electron scan driver lazily so the test suite runs in CI ([#702](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/702)) ([dd30c6b](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/dd30c6bc6938cb99c3f0df0c2eb5d8ec7e3cb335))
+
 ## [1.406.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.405.0...v1.406.0) (2026-07-27)
 
 ### Features
