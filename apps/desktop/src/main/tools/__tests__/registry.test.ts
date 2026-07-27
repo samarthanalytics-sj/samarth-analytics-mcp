@@ -2957,6 +2957,52 @@ async function main(): Promise<void> {
     assert.match(String(out.error ?? out.message), /developer token/i);
   });
 
+  await test('batch conversion actions: reuse=true reuses a matching taggable action, creates only the rest', async () => {
+    const fa = fakeAds();
+    let cardText = '';
+    let cards = 0;
+    const approve: ConfirmFn = async (p) => { cards += 1; cardText = p.summary; return p.details; };
+    const reg = buildToolRegistry(fakeData().data, approve, 'gtm', undefined, undefined, undefined, undefined, fa.ads);
+    const out = JSON.parse(await reg.execute('create_google_ads_conversion_actions_for_tags', {
+      customerId: '9876543210',
+      reuse: true,
+      entries: [
+        { tagName: 'Contact form' },  // matches existing id 111 (taggable, has id+label) -> REUSE, no create
+        { tagName: 'Offline sale' },  // name matches id 222 but it is not taggable / no label -> CREATE
+        { tagName: 'Brand New' },     // no match at all -> CREATE
+      ],
+    }));
+    assert.equal(cards, 1, 'still one approval card for the batch');
+    assert.match(cardText, /2 LIVE Google Ads conversion actions will be created/, cardText);
+    assert.match(cardText, /1 existing conversion action will be REUSED \(no new write\)/, cardText);
+    assert.equal(out.ok, true, JSON.stringify(out));
+    assert.equal(out.createdCount, 2, 'two created live');
+    assert.equal(out.reusedCount, 1, 'one reused');
+    // The account was read once to find reuse candidates.
+    assert.ok(fa.calls.some((c) => c.startsWith('listConversionActions')), 'existing actions were read for reuse');
+    // The reused entry did NOT hit create; the other two did.
+    assert.ok(!fa.calls.some((c) => c.includes('Contact form') && c.startsWith('createConversionAction')), 'the reused action was not re-created');
+    assert.ok(fa.calls.some((c) => c.startsWith('createConversionAction:9876543210:Offline sale')), 'the non-taggable same-name entry was created fresh');
+    assert.ok(fa.calls.some((c) => c.startsWith('createConversionAction:9876543210:Brand New')), 'the unmatched entry was created');
+    const reused = out.created.find((c: { source: string }) => c.source === 'reused');
+    assert.equal(reused.conversionId, 'AW-17867466396', 'reused row carries the existing id');
+    assert.equal(reused.conversionLabel, 'g9RqCLD6kdQcEJzJwOhB', 'reused row carries the existing label, not a new one');
+  });
+
+  await test('batch conversion actions: reuse defaults OFF (a same-named action is duplicated, no read)', async () => {
+    const fa = fakeAds();
+    const approve: ConfirmFn = async (p) => p.details;
+    const reg = buildToolRegistry(fakeData().data, approve, 'gtm', undefined, undefined, undefined, undefined, fa.ads);
+    const out = JSON.parse(await reg.execute('create_google_ads_conversion_actions_for_tags', {
+      customerId: '9876543210',
+      entries: [{ tagName: 'Contact form' }],
+    }));
+    assert.equal(out.createdCount, 1, 'created despite an identical existing action');
+    assert.equal(out.reusedCount, 0);
+    assert.ok(!fa.calls.some((c) => c.startsWith('listConversionActions')), 'reuse off -> no needless account read');
+    assert.ok(fa.calls.some((c) => c.startsWith('createConversionAction:9876543210:Contact form')), 'the duplicate was created');
+  });
+
   await test('a GTM create still applies directly: the new gate did not leak onto draft writes', async () => {
     let cards = 0;
     const count = async (p: { details: Record<string, unknown> }) => { cards += 1; return p.details; };
