@@ -110,13 +110,50 @@ function parseCsvRow(line: string): string[] {
   return out.map((s) => s.trim());
 }
 
+/** Longest common prefix of a set of strings (''  when they diverge at the first char). */
+function commonPrefix(strs: string[]): string {
+  if (strs.length === 0) return '';
+  let p = strs[0];
+  for (const s of strs) {
+    let k = 0;
+    while (k < p.length && k < s.length && p[k] === s[k]) k++;
+    p = p.slice(0, k);
+    if (!p) break;
+  }
+  return p;
+}
+
+/**
+ * Whether the first CSV row is DATA rather than a header, judged by whether it fits the same pattern
+ * as the rows below it (a header stands out; a data row blends in). Conservative - defaults to
+ * treating row 0 as a header (the CSV convention), and only returns true on a positive signal:
+ *   - a first-row cell is a plain number (headers are essentially never pure numbers), or
+ *   - the first row has duplicate labels (column names must be unique), or
+ *   - some column's values ALL share a long prefix, row 0 included (row 0 is part of the series - a
+ *     real header would break the prefix). This is the case the "GA4 - Event - ..." dumps hit.
+ */
+function firstRowIsData(rows: string[][]): boolean {
+  if (rows.length < 3) return false; // too few rows to tell a series from a header
+  const first = rows[0];
+  if (first.some((c) => c !== '' && /^-?\d+(?:\.\d+)?$/.test(c))) return true;
+  const nonEmpty = first.filter((c) => c !== '');
+  if (new Set(nonEmpty.map((c) => c.toLowerCase())).size < nonEmpty.length) return true;
+  for (let j = 0; j < first.length; j++) {
+    const col = rows.map((r) => r[j] ?? '').filter((v) => v !== '');
+    if (col.length >= 3 && commonPrefix(col).trim().length >= 6) return true;
+  }
+  return false;
+}
+
 /**
  * A block of CSV text as a table. Models emit CSV (comma-quoted rows) as readily as a pipe table, and
  * the exporter could not read it - so CSV/XLSX sat disabled on a reply that was ALREADY tabular data.
  *
  * Requires an unmistakable CSV shape - commas present, 2+ columns, 2+ rows, and most rows sharing the
  * header's column count - so a paragraph of prose with a comma is never mistaken for a table. The
- * first row is the header (CSV convention). Returns null when the shape is not clearly a table.
+ * first row is the header (CSV convention) UNLESS it looks like data (see firstRowIsData), in which
+ * case synthetic "Column N" headers are used and every row is kept as data. Returns null when the
+ * shape is not clearly a table.
  */
 export function csvBlockToTable(source: string): { header: string[]; rows: string[][] } | null {
   if (!source.includes(',')) return null;
@@ -127,6 +164,10 @@ export function csvBlockToTable(source: string): { header: string[]; rows: strin
   if (cols < 2) return null;
   const consistent = rows.filter((r) => r.length === cols).length;
   if (consistent < Math.ceil(rows.length * 0.8)) return null; // too ragged to be a table
+  if (firstRowIsData(rows)) {
+    const header = Array.from({ length: cols }, (_, j) => `Column ${j + 1}`);
+    return { header, rows: rows.map((r) => header.map((_, j) => plainCell(r[j] ?? ''))) };
+  }
   const header = rows[0].map(plainCell);
   return { header, rows: rows.slice(1).map((r) => header.map((_, j) => plainCell(r[j] ?? ''))) };
 }

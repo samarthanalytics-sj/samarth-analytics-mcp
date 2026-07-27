@@ -163,6 +163,21 @@ check('a CSV reply now earns a CSV export', replyCsv(fenced(CSV_BODY, 'csv')).in
 check('a one-column / one-row block is NOT a CSV table', extractReplyTables(fenced('just one column\nno commas here', 'csv')).length === 0);
 check('a JS fence with a comma is NOT read as CSV', extractReplyTables(fenced('const a = 1, b = 2;', 'js')).length === 0);
 
+// Header synthesis: a HEADERLESS data dump (row 0 fits the same series as the rest) gets Column N
+// headers, and its first row is kept as DATA - not silently promoted to a header.
+const HEADERLESS = [
+  '"GA4 - Event - PLP Shell Testing Tag","PLP Shell Testing"',
+  '"GA4 - Event - Clover POS Tag","Clover POS"',
+  '"GA4 - Event - Toast POS Tag","Toast POS"',
+].join('\n');
+const hl = extractReplyTables(fenced(HEADERLESS, 'csv'));
+check('a headerless CSV dump still becomes a table', hl.length === 1);
+check('synthetic Column N headers are used when none is detected', JSON.stringify(hl[0].header) === '["Column 1","Column 2"]');
+check('the first row is kept as DATA, not promoted to a header', hl[0].rows.length === 3 && hl[0].rows[0][1] === 'PLP Shell Testing');
+check('a real header is NOT replaced by synthetic ones', JSON.stringify(extractReplyTables(fenced(CSV_BODY, 'csv'))[0].header) === '["name","form"]');
+check('a numeric first row is treated as data (headers are not numbers)', JSON.stringify(extractReplyTables(fenced('1,2\n3,4\n5,6', 'csv'))[0].header) === '["Column 1","Column 2"]');
+check('duplicate first-row labels are treated as data', extractReplyTables(fenced('x,x\na,b\nc,d', 'csv'))[0].header[0] === 'Column 1');
+
 // ── pipe tables WITHOUT a separator (matches the chat renderer) ──────────────────
 check('a pipe table missing its |---| separator is still extracted', extractReplyTables('| A | B |\n| 1 | 2 |\n| 3 | 4 |').length === 1);
 check('that table has both data rows', extractReplyTables('| A | B |\n| 1 | 2 |\n| 3 | 4 |')[0].rows.length === 2);
