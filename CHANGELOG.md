@@ -1,3 +1,9 @@
+## [1.413.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.413.0...v1.413.1) (2026-07-27)
+
+### Bug Fixes
+
+* **desktop:** update tags/triggers/variables in place instead of deleting and recreating them ([0f94b50](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/0f94b50bffdeaaad1513156793dd7b97cf3f3788))
+
 ## [1.413.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.412.0...v1.413.0) (2026-07-27)
 
 ### Features
