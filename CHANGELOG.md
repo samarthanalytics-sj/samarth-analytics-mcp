@@ -1,3 +1,9 @@
+## [1.408.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.407.0...v1.408.0) (2026-07-27)
+
+### Features
+
+* **desktop:** warn when a batch delete would break a surviving {{variable}} reference ([829da3b](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/829da3b1ff26891aafb9086666c7f7107cbd2da7))
+
 ## [1.407.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.406.2...v1.407.0) (2026-07-27)
 
 ### Features
