@@ -149,6 +149,16 @@ export interface Tool extends LlmToolDef {
   /** Deletes data — requires a SECOND confirmation before applying. */
   destructive?: boolean;
   /**
+   * For a `destructive` tool, collapse the two-step approval into ONE card.
+   *
+   * The default destructive flow shows a plan card and then a separate "type delete" card - correct
+   * for a single delete, but wrong for a REVIEWED BATCH whose whole point is one approval for the
+   * set. With this on, the tool shows exactly one destructive-styled card carrying the full plan
+   * (summarize()), and on approval runs with no further prompt. batch_delete_gtm_entities is the
+   * case it was added for: the user reviews the complete list once and approves once.
+   */
+  singleConfirm?: boolean;
+  /**
    * Shows a plain approval card before applying: one click to approve, no typed word.
    *
    * The middle rung between "applies directly" (every GTM create, which lands in a reversible draft
@@ -5262,7 +5272,7 @@ export function buildToolRegistry(
         'Pass the entities to remove as tags/triggers/variables arrays (each item is {id} or {name}; id is safest, a name is resolved against the workspace and an ambiguous name is refused). ' +
         'Use this whenever the user wants to delete MORE THAN ONE entity - never loop delete_gtm_tag / delete_gtm_trigger / delete_gtm_variable, which would prompt for every single item. ' +
         'The approval card shows the COMPLETE categorized plan (how many tags, triggers and variables will be deleted, each by name, with a note when deleting a trigger will unlink a tag that still uses it) so the user reviews everything once. On approval the whole batch runs with no further prompts, deleting tags first, then triggers, then variables (so nothing is referenced when it is removed). ' +
-        'Built-in triggers and not-found or ambiguous names are reported as skipped, never deleted. This is the DELETE half of a batch; creates and edits already apply directly to the draft workspace with no card, so present those in the same plan message but you do not route them through this tool. Draft only, never published. Destructive, confirms twice.',
+        'Built-in triggers and not-found or ambiguous names are reported as skipped, never deleted. This is the DELETE half of a batch; creates and edits already apply directly to the draft workspace with no card, so present those in the same plan message but you do not route them through this tool. Draft only, never published. Shows ONE approval card listing everything that will be deleted; after the user approves, the whole set is removed with no further prompts.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -5278,6 +5288,10 @@ export function buildToolRegistry(
       },
       write: true,
       destructive: true,
+      // ONE approval dialog for the whole batch, not the per-item two-step: the card lists every
+      // entity to delete, so approving it once is the deliberate confirmation and there is no second
+      // prompt. See Tool.singleConfirm.
+      singleConfirm: true,
       // The approval card must show the RESOLVED plan (real names, ids, blocked items), which needs
       // the live snapshot - but summarize() is synchronous. So precheck (async, runs before the card)
       // resolves and stashes the plan keyed by this exact args object; summarize reads it back. The
@@ -5956,7 +5970,7 @@ export function buildToolRegistry(
         // two-step approval below. The confirm fn still gates write-tool AVAILABILITY above.
         if (tool.destructive) {
           const summary = tool.summarize ? tool.summarize(effectiveArgs) : tool.name;
-          const declined = JSON.stringify({ declined: true, message: 'The user declined this change.' });
+          const declined = JSON.stringify({ declined: true, message: 'The user declined this change. Nothing was deleted.' });
 
           // The user may edit names/types/config in the approval card; the returned
           // args replace the model's proposal.
@@ -5976,18 +5990,22 @@ export function buildToolRegistry(
           }
           effectiveArgs = edited;
 
-          // Deletes require a SECOND, final confirmation.
-          const again = await confirm({
-            tool: tool.name,
-            summary: `FINAL CONFIRMATION — permanently ${tool.summarize ? tool.summarize(effectiveArgs) : summary}. This cannot be undone.`,
-            details: effectiveArgs,
-            destructive: true,
-            requireTextConfirm: 'delete', // type "delete" to confirm
-            platform: writePlatform,
-          });
-          if (!again) {
-            console.error(`[tool] ${name}: user DECLINED final confirmation`);
-            return declined;
+          // A REVIEWED BATCH (singleConfirm) is approved by that one card - the plan listed every
+          // item, so a second prompt would be the per-operation confirmation the batch flow exists to
+          // remove. A single delete keeps the second, type-"delete" confirmation.
+          if (!tool.singleConfirm) {
+            const again = await confirm({
+              tool: tool.name,
+              summary: `FINAL CONFIRMATION — permanently ${tool.summarize ? tool.summarize(effectiveArgs) : summary}. This cannot be undone.`,
+              details: effectiveArgs,
+              destructive: true,
+              requireTextConfirm: 'delete', // type "delete" to confirm
+              platform: writePlatform,
+            });
+            if (!again) {
+              console.error(`[tool] ${name}: user DECLINED final confirmation`);
+              return declined;
+            }
           }
         } else if (tool.approval) {
           // ONE approval card, no typed word: the write is additive, but it is live in an external
