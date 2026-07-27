@@ -2647,14 +2647,14 @@ async function main(): Promise<void> {
     const isWrite = (n: string) => /^(create|update|set|add|upload)_/.test(n);
 
     assert.ok(adsInGtm.length > 0, 'the GTM chat still sees Ads tools');
-    // The conversion-action CREATE is the one write GTM keeps: a google_ads_conversion tag for a
-    // form that has never been tracked needs a label that does not exist yet, and the label is
-    // only ever returned by this call. Scoping it out left the chat able to READ a label but not
-    // mint one, which broke the flow the Ads tools are in the GTM chat for.
+    // The conversion-action creates are the only writes GTM keeps: a google_ads_conversion tag for a
+    // form that has never been tracked needs a label that does not exist yet, and the label is only
+    // ever returned by these calls. Both the single create and the batch (one action per tag) are
+    // allowed; nothing that moves money or data is.
     assert.deepEqual(
-      adsInGtm.filter(isWrite),
-      ['create_google_ads_conversion_action'],
-      'GTM keeps the conversion-action create and no other Ads write',
+      adsInGtm.filter(isWrite).sort(),
+      ['create_google_ads_conversion_action', 'create_google_ads_conversion_actions_for_tags'],
+      'GTM keeps the conversion-action creates (single + batch) and no other Ads write',
     );
     // Everything that moves money or pushes data stays out.
     for (const n of ['set_google_ads_campaign_status', 'update_google_ads_campaign_budget', 'add_google_ads_negative_keywords', 'upload_google_ads_customer_match', 'update_google_ads_conversion_action']) {
@@ -2902,6 +2902,59 @@ async function main(): Promise<void> {
     const out = JSON.parse(await reg.execute('create_google_ads_conversion_action', { customerId: '9876543210', name: 'Original', category: 'PHONE_CALL_LEAD' }));
     assert.equal(out.ok, true, JSON.stringify(out));
     assert.ok(fa.calls.some((c) => c.includes('Renamed in the card')), `the edited name reached the API: ${fa.calls.join(', ')}`);
+  });
+
+  await test('batch conversion actions: ONE card, names derived by stripping the affixes, all created live', async () => {
+    const fa = fakeAds();
+    let cards = 0;
+    let cardText = '';
+    const approve: ConfirmFn = async (p) => { cards += 1; cardText = p.summary; return p.details; };
+    const reg = buildToolRegistry(fakeData().data, approve, 'gtm', undefined, undefined, undefined, undefined, fa.ads);
+    const out = JSON.parse(await reg.execute('create_google_ads_conversion_actions_for_tags', {
+      customerId: '9876543210',
+      stripPrefix: 'GA4 - Event -',
+      stripSuffix: 'Click Tag',
+      entries: [
+        { tagName: 'GA4 - Event - Book A Demo Click Tag' },
+        { tagName: 'GA4 - Event - Contact Us Click Tag', category: 'CONTACT' },
+      ],
+    }));
+    assert.equal(cards, 1, 'exactly ONE approval card for the whole batch of live creates');
+    assert.match(cardText, /2 LIVE Google Ads conversion actions will be created/);
+    assert.ok(cardText.includes('"Book A Demo"') && cardText.includes('"Contact Us"'), `derived names shown: ${cardText}`);
+    assert.equal(out.ok, true, JSON.stringify(out));
+    assert.equal(out.createdCount, 2);
+    // Each created action carries the id + label the model will put in the GTM tag.
+    assert.ok(out.created.every((c: { conversionId: string | null; conversionLabel: string | null }) => c.conversionId && c.conversionLabel !== undefined));
+    // The API was called with the STRIPPED names + the right categories (default + override).
+    assert.ok(fa.calls.some((c) => c.includes('Book A Demo')) && fa.calls.some((c) => c.includes('Contact Us')), `stripped names reached the API: ${fa.calls.join(', ')}`);
+  });
+
+  await test('batch conversion actions: declining creates nothing; an entry that strips to empty is skipped', async () => {
+    const fa = fakeAds();
+    const decline: ConfirmFn = async () => null;
+    const reg = buildToolRegistry(fakeData().data, decline, 'gtm', undefined, undefined, undefined, undefined, fa.ads);
+    const declined = JSON.parse(await reg.execute('create_google_ads_conversion_actions_for_tags', { customerId: '9876543210', entries: [{ tagName: 'Lead Tag' }] }));
+    assert.equal(declined.declined, true);
+    assert.ok(!fa.calls.some((c) => c.startsWith('createConversionAction')), 'a declined batch never reached the Ads API');
+
+    // An entry whose name is entirely the stripped prefix has no name to create -> skipped, no card even.
+    const fa2 = fakeAds();
+    let cards2 = 0;
+    const reg2 = buildToolRegistry(fakeData().data, (async (p) => { cards2 += 1; return p.details; }) as ConfirmFn, 'gtm', undefined, undefined, undefined, undefined, fa2.ads);
+    const out = JSON.parse(await reg2.execute('create_google_ads_conversion_actions_for_tags', { customerId: '9876543210', stripPrefix: 'GA4 - Event -', entries: [{ tagName: 'GA4 - Event -' }] }));
+    assert.equal(cards2, 0, 'nothing creatable -> no approval card');
+    assert.ok(!fa2.calls.some((c) => c.startsWith('createConversionAction')), 'and no create');
+    assert.equal(out.created ?? 0, 0);
+  });
+
+  await test('batch conversion actions: unavailable Ads reports the fix before any card', async () => {
+    const notReady = fakeAds({ notReady: { code: 'DEVELOPER_TOKEN_MISSING', message: 'No Google Ads developer token is set.', remedy: 'Add it in Settings.' } });
+    let cards = 0;
+    const reg = buildToolRegistry(fakeData().data, (async (p) => { cards += 1; return p.details; }) as ConfirmFn, 'gtm', undefined, undefined, undefined, undefined, notReady.ads);
+    const out = JSON.parse(await reg.execute('create_google_ads_conversion_actions_for_tags', { customerId: '9876543210', entries: [{ tagName: 'Lead Tag' }] }));
+    assert.equal(cards, 0, 'no approval card when Ads is not ready');
+    assert.match(String(out.error ?? out.message), /developer token/i);
   });
 
   await test('a GTM create still applies directly: the new gate did not leak onto draft writes', async () => {

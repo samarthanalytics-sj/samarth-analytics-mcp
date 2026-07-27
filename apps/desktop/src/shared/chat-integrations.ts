@@ -97,10 +97,10 @@ export const CONNECTED_WRITE_ALLOWLIST: Record<GoogleProduct, readonly string[]>
     'create_ga4_custom_dimension',
     'create_ga4_custom_metric',
   ],
-  // Ads connected to a GTM chat: mint the conversion action the tag needs. Unchanged from the
-  // original pairing rule. Deliberately absent: anything that moves money or data (campaign
-  // status, budgets, negative keywords, the three uploads) and edits to an existing action.
-  ads: ['create_google_ads_conversion_action'],
+  // Ads connected to a GTM chat: mint the conversion action(s) the tag(s) need - one at a time, or a
+  // whole batch from tag names behind one approval. Deliberately absent: anything that moves money or
+  // data (campaign status, budgets, negative keywords, the three uploads) and edits to an existing action.
+  ads: ['create_google_ads_conversion_action', 'create_google_ads_conversion_actions_for_tags'],
 };
 
 /** May a CONNECTED (non-primary) platform's write tool be offered in this chat? Reads never reach
@@ -167,6 +167,9 @@ export function buildIntegrationPrompt(product: GoogleProduct, integrations: rea
       'Also check list_gtm_tags for a Conversion Linker (type gclidw) and offer to add one if missing. ' +
       'taggable=false on an action means it can NEVER fire from GTM (offline import, app, store visit, Analytics-imported): report its `note` and do not build a tag for it. ' +
       'BEFORE building, check the container for an EXISTING tag carrying that same conversionId+Label (list_gtm_tags) and say so rather than creating a second one that double-counts. ' +
+      (writes
+        ? 'BATCH of several conversion tags at once (the user gives the tag names + triggers): do NOT loop create_google_ads_conversion_action per tag - call create_google_ads_conversion_actions_for_tags ONCE with all the entries and the exact stripPrefix/stripSuffix the user specified for the conversion NAME (e.g. strip "GA4 - Event -" and "Click Tag"). It shows ONE approval listing every conversion name against its tag, creates them all live, and returns each tag\'s Conversion ID + Label read back from the account. THEN show the user a table (tag name | conversion name | Conversion ID | Conversion Label) so they can verify the pairing is correct, and build each tag with create_gtm_tracking_tag using those LITERAL verified values. '
+        : '') +
       'WORTH OFFERING once the tag exists: audit_google_ads_conversion_health surfaces config problems this pairing can then fix here (a missing label, an action that never fires, double counting). ';
   }
   // Both destinations connected to a GTM chat: the seam between them is only auditable when the

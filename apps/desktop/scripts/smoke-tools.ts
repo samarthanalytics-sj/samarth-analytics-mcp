@@ -344,6 +344,7 @@ async function main(): Promise<void> {
     // the gated set. Keep it in step with the registry: any new Tool.approval write belongs here.
     const isApprovalGated = (n: string) =>
       n === 'create_google_ads_conversion_action' ||
+      n === 'create_google_ads_conversion_actions_for_tags' ||
       ((n.startsWith('create_') || n.startsWith('update_')) && n.endsWith('_access_binding'));
     const destructiveNames = writeNames.filter(isDestructive);
     const gatedNames = writeNames.filter((n) => !isDestructive(n) && isApprovalGated(n));
