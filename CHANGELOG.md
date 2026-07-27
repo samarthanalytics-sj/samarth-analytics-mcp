@@ -1,3 +1,9 @@
+## [1.414.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.414.3...v1.414.4) (2026-07-27)
+
+### Bug Fixes
+
+* **desktop:** chat export recognizes CSV blocks and separator-less pipe tables ([a0963d8](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a0963d8b2b0f6fcaeef0affa44607b709b12a171))
+
 ## [1.414.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.414.2...v1.414.3) (2026-07-27)
 
 ### Bug Fixes
