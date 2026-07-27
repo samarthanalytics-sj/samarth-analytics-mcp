@@ -104,6 +104,9 @@ export interface WriteProposal {
   tool: string;
   summary: string;
   details: Record<string, unknown>;
+  /** Which live surface this write lands on, so the approval card can tell the truth about
+   *  reversibility: GTM = a draft workspace (revertible), GA4/Ads = live and immediate. */
+  platform?: GoogleProduct | 'ads';
   /** Destructive (delete) — the UI emphasizes this and it requires a 2nd confirm. */
   destructive?: boolean;
   /** When set, the approval card requires the user to TYPE this word (e.g. "delete") before
@@ -314,6 +317,17 @@ const GTM_GA4_TAG_TOOLS = new Set([
 // tag-edit tools above, which operate on GTM despite the "ga4" in their name.
 const productOf = (name: string): GoogleProduct =>
   name.includes('ga4') && !GTM_GA4_TAG_TOOLS.has(name) ? 'ga4' : 'gtm';
+
+// GTM-filed tools (no "ga4" in the name) that nonetheless READ the GA4 Admin/Data API — cross-checking
+// measurement ids, or a combined GTM+GA4 scorecard/report. productOf() files them under 'gtm', so an
+// Ads chat that connected GTM would otherwise reach GA4 through them, breaking the matrix rule that an
+// Ads chat never sees a GA4 property. An Ads chat can ONLY ever connect GTM (never GA4), so these are
+// unconditionally withheld there; they stay available in a GTM chat, which is allowed to read GA4.
+const GTM_NAMED_TOOLS_READING_GA4 = new Set([
+  'check_gtm_measurement_ids',
+  'analytics_scorecard',
+  'generate_analytics_report',
+]);
 
 /**
  * Record the resources a WEB setup tool created into the per-container install
@@ -1083,9 +1097,9 @@ function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean, data
         'applies IMMEDIATELY to the advertiser\'s live Google Ads account. No draft stage, no undo, no tool here can ' +
         'remove it. So call list_google_ads_conversion_actions FIRST and reuse an existing action when one fits; only ' +
         'create when the user actually asked for a new one, and state the exact name and category you are about to ' +
-        'create BEFORE calling. It is gated by the app\'s strongest confirmation: the same two-step card deletes use, ' +
-        'which asks the user to type "delete" to approve. Warn them about that wording, it is confirmation strength, ' +
-        'not a delete. Requires customerId, name and category; optional countingType and loginCustomerId.',
+        'create BEFORE calling. It shows a SINGLE one-click approval card (no typed word, NOT a two-step delete): ' +
+        'the user approves or edits it once, then it applies live. Requires customerId, name and category; ' +
+        'optional countingType and loginCustomerId.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1673,7 +1687,12 @@ export function buildToolRegistry(
    *  conversion-action create) for every non-chat caller. An EXPLICIT array - what the chat service
    *  now always sends - makes cross-platform tools strictly opt-in: an empty array means a GTM chat
    *  with NO Ads tools, and ['gtm'] on a GA4/Ads chat pulls the GTM toolset in alongside. */
-  integrations?: readonly GoogleProduct[]
+  integrations?: readonly GoogleProduct[],
+  /** Pins the turn to ONE Google account. Called before every tool executes; it must throw if the
+   *  active account has changed since the turn began. Without it, the data layer resolves the active
+   *  account per call, so switching accounts mid-turn would run the rest of the turn (incl. an
+   *  already-approved write) against a DIFFERENT account's token than the prompt/journal believe. */
+  accountGuard?: () => void
 ): ToolExecutor {
   // batch_delete_gtm_entities: the approval card needs the RESOLVED plan text, but summarize() is
   // synchronous. precheck (async) resolves and stashes it here keyed by the exact args object;
@@ -5840,6 +5859,9 @@ export function buildToolRegistry(
     // container was last selected in another tab - a different client entirely). GA4 tools never
     // appear in an Ads chat.
     if (product === 'ads') {
+      // GA4-reading tools are withheld even though productOf files them under 'gtm': an Ads chat has no
+      // GA4 coverage (it can only connect GTM), so letting them through would expose a GA4 property.
+      if (GTM_NAMED_TOOLS_READING_GA4.has(t.name)) return false;
       return integrations !== undefined && integrations.includes('gtm') && productOf(t.name) === 'gtm' && connectedOk('gtm', t);
     }
     const owner = productOf(t.name);
@@ -5865,6 +5887,16 @@ export function buildToolRegistry(
         .filter((t) => toolAllowedForContainer(t.name, containerKind))
         .map(({ name, description, inputSchema }) => ({ name, description, inputSchema })),
     execute: async (name, args): Promise<string> => {
+      // Pin the turn to its account BEFORE anything else: if the user switched Google accounts mid-turn,
+      // abort here so no read or write runs against a different account's token than the prompt/journal
+      // believe (the data layer resolves the active account per call, so this is the only stop).
+      if (accountGuard) {
+        try { accountGuard(); }
+        catch (e) {
+          console.error(`[tool] ✗ ${name}: account changed mid-turn - aborting`);
+          return JSON.stringify({ declined: true, message: e instanceof Error ? e.message : 'The active Google account changed mid-request. Start a new message so tools run against the account you intend.' });
+        }
+      }
       const tool = tools.find((t) => t.name === name);
       if (!tool) {
         const near = closestToolNames(name, tools.map((t) => t.name));
@@ -5914,6 +5946,10 @@ export function buildToolRegistry(
           console.error(`[tool] ${name}: writes disabled (no confirm fn)`);
           return JSON.stringify({ declined: true, message: 'Write tools are disabled.' });
         }
+        // The live surface this write lands on, so the approval card can tell the truth about
+        // reversibility (GTM = draft workspace; GA4/Ads = live + immediate). Ads tools are named
+        // by an explicit set; everything else is GTM vs GA4 by productOf.
+        const writePlatform: GoogleProduct | 'ads' = adsToolNames.has(name) ? 'ads' : productOf(name);
         // Approval is DELETE-ONLY (user decision 2026-07-03): non-destructive writes (create/edit
         // tags, triggers, variables, folders, …) apply directly — they land in a DRAFT workspace,
         // are never published by us, and are reversible there. Destructive tools keep the full
@@ -5929,6 +5965,7 @@ export function buildToolRegistry(
             summary,
             details: effectiveArgs,
             destructive: true,
+            platform: writePlatform,
           });
           if (!edited) {
             console.error(`[tool] ${name}: user DECLINED in approval card`);
@@ -5946,6 +5983,7 @@ export function buildToolRegistry(
             details: effectiveArgs,
             destructive: true,
             requireTextConfirm: 'delete', // type "delete" to confirm
+            platform: writePlatform,
           });
           if (!again) {
             console.error(`[tool] ${name}: user DECLINED final confirmation`);
@@ -5956,7 +5994,7 @@ export function buildToolRegistry(
           // account the moment it applies and this app cannot revert it. The user may still edit the
           // args in the card, exactly like the destructive path.
           const summary = tool.summarize ? tool.summarize(effectiveArgs) : tool.name;
-          const edited = await confirm({ tool: tool.name, summary, details: effectiveArgs });
+          const edited = await confirm({ tool: tool.name, summary, details: effectiveArgs, platform: writePlatform });
           if (!edited) {
             console.error(`[tool] ${name}: user DECLINED in approval card`);
             return JSON.stringify({ declined: true, message: 'The user declined this change. Nothing was created.' });
@@ -5967,6 +6005,16 @@ export function buildToolRegistry(
           effectiveArgs = edited;
         } else {
           console.error(`[tool] ${name}: write auto-applied (approval is delete-only)`);
+        }
+        // Re-check the account AFTER the approval card resolved: the user can switch Google accounts
+        // while a card is open, and applying then would land the approved write on the new account's
+        // token. The entry-time guard cannot cover this await window.
+        if (accountGuard) {
+          try { accountGuard(); }
+          catch (e) {
+            console.error(`[tool] ✗ ${name}: account changed during approval - aborting before apply`);
+            return JSON.stringify({ declined: true, message: e instanceof Error ? e.message : 'The active Google account changed mid-request. Nothing was applied.' });
+          }
         }
       }
       try {

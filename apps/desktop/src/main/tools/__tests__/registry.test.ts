@@ -410,11 +410,11 @@ const reject = async () => null;
 
 // A confirm() answering a fixed yes/no sequence; records each proposal.
 function seqConfirm(...answers: boolean[]): {
-  fn: (p: { details: Record<string, unknown>; destructive?: boolean }) => Promise<Record<string, unknown> | null>;
-  calls: Array<{ destructive?: boolean }>;
+  fn: (p: { details: Record<string, unknown>; destructive?: boolean; platform?: string }) => Promise<Record<string, unknown> | null>;
+  calls: Array<{ destructive?: boolean; platform?: string }>;
 } {
   let i = 0;
-  const seen: Array<{ destructive?: boolean }> = [];
+  const seen: Array<{ destructive?: boolean; platform?: string }> = [];
   return {
     calls: seen,
     fn: async (p) => {
@@ -715,6 +715,56 @@ async function main(): Promise<void> {
     await buildToolRegistry(fd2.data, del.fn, 'ga4').execute('delete_ga4_key_event', { name: 'properties/1/keyEvents/2' });
     assert.equal(del.calls.length, 2, 'delete asked twice');
     assert.ok(fd2.calls.includes('ga4Delete:v1beta:properties.keyEvents:properties/1/keyEvents/2'), 'delete applied after both confirms');
+  });
+
+  await test('GA4 access-binding grants show a one-click approval card (creates/updates); ordinary creates do not', async () => {
+    // Granting a real person account/property access hands out real-world power, so it must NOT ride the
+    // silent auto-apply create path - it shows a single approval card (not the misleading two-step
+    // "type delete" delete path, whose wording is wrong for a grant). (Audit fix + review correction.)
+    const declineCard = seqConfirm(false); // one card, declined
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data, declineCard.fn, 'ga4');
+    const out = await reg.execute('create_ga4_property_access_binding', { property: '1', user: 'evil@example.com', roles: ['predefinedRoles/admin'] });
+    assert.equal(declineCard.calls.length, 1, 'access-binding grant showed ONE approval card');
+    assert.equal(declineCard.calls[0].destructive ?? false, false, 'and it is NOT the destructive delete card (no "type delete")');
+    assert.equal(declineCard.calls[0].platform, 'ga4', 'the card is told this is a live GA4 write');
+    assert.equal(JSON.parse(out).declined, true, 'declining cancels the grant');
+    assert.ok(!fd.calls.some((c) => c.startsWith('ga4Create:')), 'no access grant reached the API when declined');
+    // Approving the single card applies it.
+    const approve = seqConfirm(true);
+    const fd2 = fakeData();
+    await buildToolRegistry(fd2.data, approve.fn, 'ga4').execute('create_ga4_account_access_binding', { accountId: '1', user: 'a@b.com', roles: ['predefinedRoles/viewer'] });
+    assert.equal(approve.calls.length, 1, 'one approval, then it applies');
+    assert.ok(fd2.calls.some((c) => c.startsWith('ga4Create:')), 'the grant reached the API after approval');
+    // An ordinary config create still applies in one click with NO card.
+    const cfg = seqConfirm(true);
+    await buildToolRegistry(fakeData().data, cfg.fn, 'ga4').execute('create_ga4_key_event', { property: '1', eventName: 'x' });
+    assert.equal(cfg.calls.length, 0, 'an ordinary GA4 create still shows no card');
+  });
+
+  await test('the approval card is told which live surface a write lands on (platform)', async () => {
+    // The card wording must be truthful per product: a GTM write is a draft; GA4/Ads are live. The
+    // registry stamps every write proposal with its platform so the card can say so. (Audit fix.)
+    const ga4 = seqConfirm(true, true);
+    await buildToolRegistry(fakeData().data, ga4.fn, 'ga4').execute('delete_ga4_key_event', { name: 'properties/1/keyEvents/2' });
+    assert.ok(ga4.calls.length > 0 && ga4.calls.every((c) => c.platform === 'ga4'), 'a GA4 write proposal carries platform=ga4');
+    const gtm = seqConfirm(true, true);
+    await buildToolRegistry(fakeData().data, gtm.fn, 'gtm').execute('delete_gtm_tag', { accountId: '1', containerId: '2', workspaceId: '3', tagId: '9' });
+    assert.ok(gtm.calls.length > 0 && gtm.calls.every((c) => c.platform === 'gtm'), 'a GTM write proposal carries platform=gtm');
+  });
+
+  await test('per-turn account guard: a tool aborts when the pinned account no longer matches', async () => {
+    // Simulate a mid-turn account switch: the guard throws, so the tool must decline WITHOUT calling
+    // the API, rather than run against the wrong account's token. (Audit fix.)
+    const fd = fakeData();
+    let switched = false;
+    const guard = (): void => { if (switched) throw new Error('The active Google account changed mid-request.'); };
+    const reg = buildToolRegistry(fd.data, approveAsIs, 'gtm', undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, guard);
+    switched = true;
+    const out = await reg.execute('list_gtm_accounts', {});
+    assert.equal(JSON.parse(out).declined, true, 'the tool declined after the account switch');
+    assert.match(String(JSON.parse(out).message), /account changed mid-request/i);
+    assert.ok(!fd.calls.some((c) => c.startsWith('listGtmAccounts')), 'no API call ran against the new account');
   });
 
   await test('unknown tool name suggests the closest real tool (did you mean)', async () => {
@@ -2716,6 +2766,14 @@ async function main(): Promise<void> {
     assert.equal(adsGtm.includes('create_gtm_tracking_tag'), true, 'builds the conversion tag here');
     assert.equal(adsGtm.includes('list_google_ads_conversion_actions'), true, 'still has its own Ads tools');
     assert.equal(adsGtm.includes('list_ga4_properties'), false, 'an Ads chat can never reach GA4');
+    // The matrix leak: GTM-NAMED tools that READ the GA4 API (productOf files them as gtm) must NOT
+    // reach an Ads chat either, or "an Ads chat never sees the property" is false. These have no "ga4"
+    // in the name, so only the explicit GTM_NAMED_TOOLS_READING_GA4 exclusion keeps them out.
+    for (const leaky of ['check_gtm_measurement_ids', 'analytics_scorecard', 'generate_analytics_report']) {
+      assert.equal(adsGtm.includes(leaky), false, `${leaky} reads GA4, so it must be withheld from an Ads chat`);
+    }
+    // ...but the GTM chat (which is allowed to read GA4) still gets them.
+    assert.equal(withIntegrations('gtm', []).includes('check_gtm_measurement_ids'), true, 'a GTM chat keeps its GA4 cross-check');
   });
 
   await test('integrations: OMITTING the argument preserves the legacy scoping for every non-chat caller', async () => {

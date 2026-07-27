@@ -127,10 +127,11 @@ forwarding number and counts the call itself.
 
 ### GTM + GA4 + Ads (both connected)
 
-`audit_google_ads_ga4_link` becomes available: it reports whether the property is linked to the Ads
-account (direct vs manager-level vs missing), whether GA4-imported conversion actions still match
-current key events, and the classic double-count where a GA4 import and a website tag are both
-primary. This audit needs to see **both** sides, so it is unavailable in any other configuration.
+`audit_google_ads_ga4_link` reports whether the property is linked to the Ads account (direct vs
+manager-level vs missing), whether GA4-imported conversion actions still match current key events, and
+the classic double-count where a GA4 import and a website tag are both primary. It is an Ads-side
+read: it belongs to the Ads product, so it runs in any **Ads** chat (it reads the GA4-link status from
+the Ads account); it does not require the GA4 chip. A GTM chat sees it only when Ads is connected.
 
 **Example prompt:** "Why do conversions differ between GA4 and Google Ads?"
 
@@ -196,9 +197,15 @@ Unchanged by integrations:
 - Cached read results (the tool-result carry-over) are keyed by account + product + target **and the
   connected platforms and their targets**, so disconnecting a platform, or switching its target,
   never lets stale results inform the next answer.
-- Memories are scoped to the clients the chat covers. A connected platform's client counts, because
-  connecting it displays its context bar - the target is explicitly chosen for this thread rather
-  than inherited from another tab.
+- Memories are scoped to the clients the chat covers (its own product's target plus any connected
+  platform's target). A connected platform's target is the account's saved context for that platform
+  - the same target its own chat uses, shown in its context bar. It is inherited from the account
+  context, not chosen per-thread; to point a connected platform somewhere else, switch its context.
+- The visible conversation is keyed on the chat's OWN product and target, so toggling a connected chip
+  never blanks it. The tool-result carry-over (above) additionally keys on the connected targets, so a
+  stale cached read can't inform the next answer. One known limitation: switching a connected
+  platform's target mid-conversation leaves earlier messages about the previous target in the visible
+  history, so start a new chat if you re-point a connected GTM container (its tag ids are per-container).
 - Chip selections are stored per app account + product, so switching Google accounts starts clean.
 
 ## Limitations

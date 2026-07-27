@@ -32,6 +32,13 @@ interface Desc {
   parent: Parent;
   accessor: string; // dotted path on the client, e.g. 'properties.keyEvents'
   rawBody?: boolean;
+  // Sensitive creates/updates that grant real-world power to a third party (access bindings grant a
+  // live person account/property permissions). They ARE revertible (a delete tool revokes the grant),
+  // but a silent auto-apply would let a prompt injection hand out access, so they get a SINGLE approval
+  // card the user must approve (like a live Ads create - not the two-step "type delete" path, whose
+  // wording would be wrong for a grant). The ordinary config creates (key events, dimensions, links)
+  // stay one-click with no card.
+  sensitive?: boolean;
   // toBody, when present, REPLACES the flat pick(bodyKeys) mapping — use it when
   // the request body needs nesting the flat args can't express (e.g. a WEB data
   // stream's defaultUri lives under webStreamData, not at the top level).
@@ -197,13 +204,13 @@ const CATALOG: Desc[] = [
     del: { desc: 'Remove a source property from a rollup (360).' },
   },
   {
-    key: 'property_access_binding', plural: 'property access bindings', version: 'v1alpha', parent: 'property', accessor: 'properties.accessBindings',
+    key: 'property_access_binding', plural: 'property access bindings', version: 'v1alpha', parent: 'property', accessor: 'properties.accessBindings', sensitive: true,
     create: { props: { user: { type: 'string', description: 'User email to grant access.' }, roles: { type: 'array', items: { type: 'string' }, description: 'e.g. ["predefinedRoles/analyst"].' } }, required: ['user', 'roles'], bodyKeys: ['user', 'roles'], desc: "Grant a user access to a property (needs manage.users)." },
     update: { props: { roles: { type: 'array', items: { type: 'string' } } }, bodyKeys: ['roles'], desc: "Change a user's property roles." },
     del: { desc: "Revoke a user's property access." },
   },
   {
-    key: 'account_access_binding', plural: 'account access bindings', version: 'v1alpha', parent: 'account', accessor: 'accounts.accessBindings',
+    key: 'account_access_binding', plural: 'account access bindings', version: 'v1alpha', parent: 'account', accessor: 'accounts.accessBindings', sensitive: true,
     create: { props: { user: { type: 'string' }, roles: { type: 'array', items: { type: 'string' } } }, required: ['user', 'roles'], bodyKeys: ['user', 'roles'], desc: 'Grant a user access to an account (needs manage.users).' },
     update: { props: { roles: { type: 'array', items: { type: 'string' } } }, bodyKeys: ['roles'], desc: "Change a user's account roles." },
     del: { desc: "Revoke a user's account access." },
@@ -222,10 +229,11 @@ export function buildGa4WriteTools(data: GoogleDataService): Tool[] {
       const c = d.create;
       tools.push({
         name: `create_ga4_${d.key}`,
-        description: `[GA4] ${c.desc} Applies directly to GA4 (no approval card; GA4 config change).`,
+        description: `[GA4] ${c.desc} ${d.sensitive ? 'Grants a real person live access - shows a one-click approval card (approve or edit it once).' : 'Applies directly to GA4 (no approval card; GA4 config change).'}`,
         inputSchema: { type: 'object', properties: { ...P.props, ...c.props, ...(d.rawBody ? { body: bodyArgProp } : {}) }, required: [...P.required, ...(c.required ?? [])], additionalProperties: false },
         write: true,
-        summarize: (a) => `Create ${d.plural} under ${P.build(a)}`,
+        ...(d.sensitive ? { approval: true as const } : {}),
+        summarize: (a) => `Grant ${d.plural} on ${P.build(a)}`,
         handler: (a) => {
           const body = { ...(c.toBody ? c.toBody(a) : pick(a, c.bodyKeys)), ...obj(a.body) };
           c.validate?.(body);
@@ -238,9 +246,10 @@ export function buildGa4WriteTools(data: GoogleDataService): Tool[] {
       const u = d.update;
       tools.push({
         name: `update_ga4_${d.key}`,
-        description: `[GA4] ${u.desc} Pass only the fields to change (updateMask derived from them). Applies directly to GA4.`,
+        description: `[GA4] ${u.desc} Pass only the fields to change (updateMask derived from them). ${d.sensitive ? 'Changes live access for a real person - shows a one-click approval card.' : 'Applies directly to GA4.'}`,
         inputSchema: { type: 'object', properties: { ...nameProp(d.plural), ...u.props, ...(d.rawBody ? { body: bodyArgProp } : {}), updateMask: { type: 'string', description: 'Comma-separated field paths; omit to derive from supplied fields.' } }, required: ['name'], additionalProperties: false },
         write: true,
+        ...(d.sensitive ? { approval: true as const } : {}),
         summarize: (a) => `Update ${d.plural} ${s(a.name)}`,
         handler: (a) => {
           const body = { ...(u.toBody ? u.toBody(a) : pick(a, u.bodyKeys)), ...obj(a.body) };

@@ -564,7 +564,16 @@ export class ChatService {
         return semanticIndex.search(lib, semanticProvider, key, query);
       }
       : undefined;
-    const tools = buildToolRegistry(this.data, confirm, product, this.history, ctxControl, this.manifests, memoryCtx, this.ads, containerKind, semantic, integrations);
+    // Pin the whole turn to the account it started on. The data/ads layers resolve the active account
+    // per call, so without this a mid-turn account switch would run later tool calls (incl. an approved
+    // write) as a different Google identity than this turn's prompt, memory scope and change journal.
+    const turnAccountId = active.id;
+    const accountGuard = (): void => {
+      if (this.registry.getActiveView()?.id !== turnAccountId) {
+        throw new Error('The active Google account changed mid-request. Start a new message so tools run against the account you intend.');
+      }
+    };
+    const tools = buildToolRegistry(this.data, confirm, product, this.history, ctxControl, this.manifests, memoryCtx, this.ads, containerKind, semantic, integrations, accountGuard);
 
     // PROGRESSIVE TOOL DISCLOSURE, composed with the container-kind scoping above. The two filters
     // are DIFFERENT AXES and both apply, in this order:
@@ -843,7 +852,10 @@ export class ChatService {
       // exactly the turn whose reads we least want repeated. The key is recomputed because
       // set_gtm_container can switch the working container mid-turn, which would make these results
       // a mix of two clients; in that case they are dropped rather than filed under either one.
-      if (this.threadKey(active, product) === threadKey) this.toolMemory.record(threadKey, turnToolResults);
+      // Recompute with the SAME integrations used to build threadKey at the top of the turn - omitting
+      // them appends no `|+<targets>` suffix, so the keys never match once a chip is on and the whole
+      // turn's tool results are silently dropped (the model then re-fetches everything next turn).
+      if (this.threadKey(active, product, integrations) === threadKey) this.toolMemory.record(threadKey, turnToolResults);
     }
 
     // Injected + anything the model recalled mid-turn via the memory tool.
