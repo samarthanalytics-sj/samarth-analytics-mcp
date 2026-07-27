@@ -39,6 +39,12 @@ import { registerNetworkIpc } from './network/network-ipc';
 import type { MonitorAlert, Ga4MonitorRun, AdsMonitorRun } from '../shared/ipc';
 import { EmbeddingStore } from './storage/embedding-store';
 import { CorpusSemanticIndex } from './corpus/semantic-index';
+import { installReadableConsole } from '../shared/log-format';
+
+// Keep the terminal logs legible: transliterate Unicode glyphs (-> [ok] [x] - ...) that a legacy
+// Windows console renders as mojibake, and collapse repeated identical lines. Console-only; the data
+// and reports that reach the UI never pass through here. Installed first, before anything logs.
+installReadableConsole();
 
 // Phase 0 scaffold: boot a window, wire a minimal, secure IPC bridge, and prove
 // renderer <-> main messaging works. Later phases add the account registry,
