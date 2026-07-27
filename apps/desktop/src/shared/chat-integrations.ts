@@ -168,7 +168,7 @@ export function buildIntegrationPrompt(product: GoogleProduct, integrations: rea
       'taggable=false on an action means it can NEVER fire from GTM (offline import, app, store visit, Analytics-imported): report its `note` and do not build a tag for it. ' +
       'BEFORE building, check the container for an EXISTING tag carrying that same conversionId+Label (list_gtm_tags) and say so rather than creating a second one that double-counts. ' +
       (writes
-        ? 'BATCH of several conversion tags at once (the user gives the tag names + triggers): do NOT loop create_google_ads_conversion_action per tag - call create_google_ads_conversion_actions_for_tags ONCE with all the entries and the exact stripPrefix/stripSuffix the user specified for the conversion NAME (e.g. strip "GA4 - Event -" and "Click Tag"). It shows ONE approval listing every conversion name against its tag, creates them all live, and returns each tag\'s Conversion ID + Label read back from the account. THEN show the user a table (tag name | conversion name | Conversion ID | Conversion Label) so they can verify the pairing is correct, and build each tag with create_gtm_tracking_tag using those LITERAL verified values. '
+        ? 'BATCH / ONE-CLICK for several conversions at once (a tag list, a pasted list, or a CSV): do NOT loop create_google_ads_conversion_action per tag - call create_google_ads_conversion_actions_for_tags ONCE with all the entries, the exact stripPrefix/stripSuffix the user specified for the conversion NAME (e.g. strip "GA4 - Event -" and "Click Tag"), and a category per entry (or defaultCategory) for the conversion TYPE. To build the whole stack behind ONE approval, ALSO pass the GTM accountId/containerId/workspaceId and a trigger on each entry (reused by name if it exists, else created from kind + conditions): the tool then creates each LIVE conversion action, reads back its REAL Conversion ID + Label, builds that entry\'s awct tag on its trigger in the GTM DRAFT workspace, and ensures a Conversion Linker - and you just show the final summary + verification table. Omit the GTM ids/triggers to get the conversion ACTIONS only, then build the tags yourself with create_gtm_tracking_tag from the returned LITERAL values. The Conversion ID + Label only exist AFTER the action is created, so the verification table comes after approval, never before. '
         : '') +
       'WORTH OFFERING once the tag exists: audit_google_ads_conversion_health surfaces config problems this pairing can then fix here (a missing label, an action that never fires, double counting). ';
   }
@@ -194,6 +194,9 @@ export function buildIntegrationPrompt(product: GoogleProduct, integrations: rea
       'Also check list_gtm_tags for a Conversion Linker (type gclidw) and offer to add one if missing. ' +
       'taggable=false means the action can NEVER fire from GTM (offline import, app, store visit, Analytics-imported): report its `note` instead of building a tag. ' +
       'BEFORE building, list_gtm_tags and check whether a tag already carries that conversionId+Label - a second one double-counts. ' +
+      (writes
+        ? 'For SEVERAL conversions at once (a tag list or CSV), call create_google_ads_conversion_actions_for_tags with the entries plus the GTM accountId/containerId/workspaceId and a trigger per entry: it creates every LIVE conversion action, reads back its real ID + Label, and builds each awct tag + a Conversion Linker in the GTM draft, all behind ONE approval - then show the final summary + verification table. '
+        : '') +
       'Be explicit about the asymmetry: Ads changes are LIVE immediately, GTM changes land in a DRAFT workspace the user publishes manually. ';
   }
 

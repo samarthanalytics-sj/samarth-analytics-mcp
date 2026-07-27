@@ -34,6 +34,7 @@ import {
   buildGoogleAdsCallConversionTag,
   buildGoogleAdsRemarketingTag,
   buildConversionLinkerTag,
+  BUILTIN_ALL_PAGES_TRIGGER_ID,
   buildCustomImageTag,
   buildTrigger,
   triggerBuiltInVars,
@@ -231,6 +232,214 @@ const metaPixelTagName = (a: Record<string, unknown>): string => {
 
 /** One-line truncation for logging tool args/results without flooding the console. */
 const truncForLog = (str: string, n = 600): string => (str.length > n ? `${str.slice(0, n)}…(+${str.length - n} chars)` : str);
+
+/** The trigger sub-schema shared by create_gtm_tracking_tag and the Ads-tag batch builder. One source
+ *  so both tools expose exactly the same trigger vocabulary (kind + condition fields) to the model. */
+const TRIGGER_INPUT_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    name: { type: 'string' },
+    kind: { type: 'string', enum: ['link_click', 'all_clicks', 'custom_event', 'pageview', 'form_submit', 'youtube_video', 'timer', 'element_visibility', 'history_change', 'scroll_depth', 'dom_ready', 'window_loaded', 'js_error'] },
+    clickUrlValue: { type: 'string' },
+    clickUrlOperator: { type: 'string' },
+    clickUrlIgnoreCase: { type: 'boolean' },
+    clickTextValue: { type: 'string' },
+    clickTextOperator: { type: 'string' },
+    clickTextIgnoreCase: { type: 'boolean' },
+    clickElementValue: { type: 'string' },
+    clickElementOperator: { type: 'string' },
+    clickClassesValue: { type: 'string' },
+    clickClassesOperator: { type: 'string' },
+    clickIdValue: { type: 'string' },
+    clickIdOperator: { type: 'string' },
+    pageHostnameValue: { type: 'string' },
+    pageHostnameOperator: { type: 'string' },
+    referrerValue: { type: 'string' },
+    referrerOperator: { type: 'string' },
+    queryStringValue: { type: 'string' },
+    queryStringOperator: { type: 'string' },
+    visibilitySelector: { type: 'string' },
+    visibilityElementId: { type: 'string' },
+    visibilityMinPercent: { type: 'number' },
+    visibilityFiringFrequency: { type: 'string', enum: ['ONCE', 'ONCE_PER_ELEMENT', 'MANY_PER_ELEMENT'] },
+    visibilityObserveDomChanges: { type: 'boolean' },
+    visibilityMinOnScreenMs: { type: 'number' },
+    scrollPercentages: { type: 'string' },
+    scrollPixels: { type: 'string' },
+    scrollHorizontalPercentages: { type: 'string' },
+    lookupTable: {
+      type: 'object',
+      properties: { name: { type: 'string' }, texts: { type: 'array', items: { type: 'string' } } },
+      required: ['name', 'texts'],
+    },
+    formIdValue: { type: 'string' },
+    formIdOperator: { type: 'string' },
+    formClassesValue: { type: 'string' },
+    formClassesOperator: { type: 'string' },
+    pagePathValue: { type: 'string' },
+    pagePathOperator: { type: 'string' },
+    pageUrlValue: { type: 'string' },
+    pageUrlOperator: { type: 'string' },
+    eventName: { type: 'string' },
+    dataLayerConditions: {
+      type: 'array',
+      description: 'custom_event only: ANDed scope conditions on a pushed dataLayer key, each read via an auto-created {{dlv - <key>}} variable. Scopes an AJAX/embed form to ONE form by its pushed form_id ({{Form ID}} does NOT resolve on a pushed event).',
+      items: {
+        type: 'object',
+        properties: { key: { type: 'string' }, value: { type: 'string' }, operator: { type: 'string' } },
+        required: ['key', 'value'],
+      },
+    },
+    intervalMs: { type: 'string', description: 'timer only, REQUIRED: firing interval in ms (e.g. "30000").' },
+    limit: { type: 'string', description: 'timer only: max fires (omit = unlimited).' },
+  },
+  required: ['name', 'kind'],
+};
+
+/** Coerce a raw trigger object (as passed to create_gtm_tracking_tag or the Ads-tag batch builder)
+ *  into a TriggerInput. Pure: every optional condition field is read defensively (the model can pass
+ *  any shape), and an unset field stays undefined so buildTrigger's own per-field default applies. */
+function coerceTriggerInput(ts: Record<string, unknown>): TriggerInput {
+  return {
+    name: s(ts.name),
+    kind: (s(ts.kind) || 'pageview') as TriggerInput['kind'],
+    clickUrlValue: ts.clickUrlValue != null ? s(ts.clickUrlValue) : undefined,
+    clickUrlOperator: ts.clickUrlOperator != null ? s(ts.clickUrlOperator) : undefined,
+    clickUrlIgnoreCase: bln(ts.clickUrlIgnoreCase),
+    clickTextValue: ts.clickTextValue != null ? s(ts.clickTextValue) : undefined,
+    clickTextOperator: ts.clickTextOperator != null ? s(ts.clickTextOperator) : undefined,
+    clickTextIgnoreCase: bln(ts.clickTextIgnoreCase),
+    lookupTable: (() => {
+      const lt = obj(ts.lookupTable);
+      const name = s(lt.name).trim();
+      const texts = Array.isArray(lt.texts) ? lt.texts.map((t) => s(t)).filter(Boolean) : [];
+      return name && texts.length ? { name, texts } : undefined;
+    })(),
+    clickElementValue: ts.clickElementValue != null ? s(ts.clickElementValue) : undefined,
+    clickElementOperator: ts.clickElementOperator != null ? s(ts.clickElementOperator) : undefined,
+    clickClassesValue: ts.clickClassesValue != null ? s(ts.clickClassesValue) : undefined,
+    clickClassesOperator: ts.clickClassesOperator != null ? s(ts.clickClassesOperator) : undefined,
+    clickIdValue: ts.clickIdValue != null ? s(ts.clickIdValue) : undefined,
+    clickIdOperator: ts.clickIdOperator != null ? s(ts.clickIdOperator) : undefined,
+    pageHostnameValue: ts.pageHostnameValue != null ? s(ts.pageHostnameValue) : undefined,
+    pageHostnameOperator: ts.pageHostnameOperator != null ? s(ts.pageHostnameOperator) : undefined,
+    referrerValue: ts.referrerValue != null ? s(ts.referrerValue) : undefined,
+    referrerOperator: ts.referrerOperator != null ? s(ts.referrerOperator) : undefined,
+    queryStringValue: ts.queryStringValue != null ? s(ts.queryStringValue) : undefined,
+    queryStringOperator: ts.queryStringOperator != null ? s(ts.queryStringOperator) : undefined,
+    visibilitySelector: ts.visibilitySelector != null ? s(ts.visibilitySelector) : undefined,
+    visibilityElementId: ts.visibilityElementId != null ? s(ts.visibilityElementId) : undefined,
+    visibilityMinPercent: ts.visibilityMinPercent != null ? s(ts.visibilityMinPercent) : undefined,
+    visibilityFiringFrequency: ts.visibilityFiringFrequency != null ? s(ts.visibilityFiringFrequency) : undefined,
+    visibilityObserveDomChanges: typeof ts.visibilityObserveDomChanges === 'boolean' ? ts.visibilityObserveDomChanges : undefined,
+    visibilityMinOnScreenMs: ts.visibilityMinOnScreenMs != null ? s(ts.visibilityMinOnScreenMs) : undefined,
+    scrollPercentages: ts.scrollPercentages != null ? s(ts.scrollPercentages) : undefined,
+    scrollPixels: ts.scrollPixels != null ? s(ts.scrollPixels) : undefined,
+    scrollHorizontalPercentages: ts.scrollHorizontalPercentages != null ? s(ts.scrollHorizontalPercentages) : undefined,
+    formIdValue: ts.formIdValue != null ? s(ts.formIdValue) : undefined,
+    formIdOperator: ts.formIdOperator != null ? s(ts.formIdOperator) : undefined,
+    formClassesValue: ts.formClassesValue != null ? s(ts.formClassesValue) : undefined,
+    formClassesOperator: ts.formClassesOperator != null ? s(ts.formClassesOperator) : undefined,
+    pagePathValue: ts.pagePathValue != null ? s(ts.pagePathValue) : undefined,
+    pagePathOperator: ts.pagePathOperator != null ? s(ts.pagePathOperator) : undefined,
+    pageUrlValue: ts.pageUrlValue != null ? s(ts.pageUrlValue) : undefined,
+    pageUrlOperator: ts.pageUrlOperator != null ? s(ts.pageUrlOperator) : undefined,
+    eventName: ts.eventName != null ? s(ts.eventName) : undefined,
+    dataLayerConditions: Array.isArray(ts.dataLayerConditions)
+      ? ts.dataLayerConditions
+          .map((c) => {
+            const o = obj(c);
+            return { key: s(o.key).trim(), value: s(o.value), operator: o.operator != null ? s(o.operator) : undefined };
+          })
+          .filter((c) => c.key !== '' && c.value !== '')
+      : undefined,
+    intervalMs: ts.intervalMs != null ? s(ts.intervalMs) : undefined,
+    limit: ts.limit != null ? s(ts.limit) : undefined,
+  };
+}
+
+/** Build ONE Google Ads conversion tag (awct) on its trigger, in the GTM draft workspace: reuse-or-
+ *  create the named trigger, enable the built-in variables the trigger's conditions need, provision the
+ *  trigger's OWN condition variables ({{dlv - key}} / Query String / Click Text lookup), then create the
+ *  tag with the LITERAL Conversion ID + Label. A focused slice of create_gtm_tracking_tag's trigger+tag
+ *  path for this single platform (the awct tag references no variables of its own). Draft-only, so a
+ *  wrong tag is revertible before publish. */
+async function buildAwctTagOnTrigger(
+  d: GoogleDataService,
+  ids: { accountId: string; containerId: string; workspaceId: string },
+  spec: { tagName: string; conversionId: string; conversionLabel: string; trigger: Record<string, unknown> },
+): Promise<{ tagName: string; triggerName: string; reusedTrigger: boolean; createdVariables: string[] }> {
+  const { accountId, containerId, workspaceId } = ids;
+  const triggerInput = coerceTriggerInput(spec.trigger);
+  if (!triggerInput.name.trim()) throw new Error('the trigger needs a name');
+  // A Timer with no interval never fires - refuse it rather than create a dead trigger.
+  if (triggerInput.kind === 'timer' && !s(triggerInput.intervalMs ?? '').trim()) {
+    throw new Error('a timer trigger requires intervalMs (the firing interval in milliseconds, e.g. "30000").');
+  }
+
+  // Enable exactly the built-in variables the trigger's conditions reference (e.g. {{Click Text}}).
+  const builtIns = triggerBuiltInVars(triggerInput);
+  if (builtIns.length) {
+    try { await d.enableGtmBuiltInVariables(accountId, containerId, workspaceId, builtIns); } catch { /* best-effort: the trigger still references them; the user can enable them in GTM */ }
+  }
+
+  // Provision the trigger's OWN condition variables, created only when missing (never overwrite an
+  // existing same-named variable): {{dlv - <key>}} for pushed-dataLayer conditions, a Query String URL
+  // variable web containers do not provide as a built-in, and a Click Text lookup table.
+  const createdVariables: string[] = [];
+  const dlvKeys = triggerDataLayerVarKeys(triggerInput);
+  const trigUrlVars = triggerUrlVarNames(triggerInput);
+  const lt = triggerInput.lookupTable;
+  if (dlvKeys.length || trigUrlVars.length || lt) {
+    const existingVarNames = new Set(
+      (await d.listGtmVariables(accountId, containerId, workspaceId)).map((v) => v.name.toLowerCase())
+    );
+    for (const name of trigUrlVars) {
+      if (existingVarNames.has(name.toLowerCase())) continue;
+      try { await d.createGtmVariable(accountId, containerId, workspaceId, buildQueryStringVariable(name) as unknown as Record<string, unknown>); createdVariables.push(name); existingVarNames.add(name.toLowerCase()); } catch { /* best-effort */ }
+    }
+    if (lt && !existingVarNames.has(lt.name.toLowerCase())) {
+      try { await d.createGtmVariable(accountId, containerId, workspaceId, buildClickTextLookupVariable(lt.name, lt.texts) as unknown as Record<string, unknown>); createdVariables.push(lt.name); existingVarNames.add(lt.name.toLowerCase()); } catch { /* best-effort */ }
+    }
+    for (const key of dlvKeys) {
+      const name = `dlv - ${key}`;
+      if (existingVarNames.has(name.toLowerCase())) continue;
+      try { await d.createGtmVariable(accountId, containerId, workspaceId, buildVariable({ name, kind: 'data_layer', dataLayerName: key }) as unknown as Record<string, unknown>); createdVariables.push(name); existingVarNames.add(name.toLowerCase()); } catch { /* best-effort */ }
+    }
+  }
+
+  // Reuse an existing same-named trigger, else create it (deterministic name => idempotent re-runs).
+  const existing = (await d.listGtmTriggers(accountId, containerId, workspaceId)).find(
+    (t) => t.name.toLowerCase() === triggerInput.name.toLowerCase()
+  );
+  let triggerId: string;
+  let reusedTrigger = false;
+  if (existing) {
+    triggerId = existing.triggerId;
+    reusedTrigger = true;
+  } else {
+    triggerId = (await d.createGtmTrigger(accountId, containerId, workspaceId, buildTrigger(triggerInput) as unknown as Record<string, unknown>)).triggerId;
+  }
+
+  const tag = buildGoogleAdsConversionTag({ name: spec.tagName, conversionId: spec.conversionId, conversionLabel: spec.conversionLabel });
+  await d.createGtmTag(accountId, containerId, workspaceId, { ...tag, firingTriggerId: [triggerId] } as unknown as Record<string, unknown>);
+  return { tagName: spec.tagName, triggerName: triggerInput.name, reusedTrigger, createdVariables };
+}
+
+/** Ensure a SINGLE Conversion Linker (gclidw) exists in the workspace, firing on the built-in All
+ *  Pages trigger. Idempotent: returns 'existing' without writing when one is already present, so a
+ *  bulk build never mints a second linker. */
+async function ensureConversionLinker(
+  d: GoogleDataService,
+  ids: { accountId: string; containerId: string; workspaceId: string },
+): Promise<'created' | 'existing'> {
+  const { accountId, containerId, workspaceId } = ids;
+  const tags = await d.listGtmTags(accountId, containerId, workspaceId);
+  if (tags.some((t) => s(t.type) === 'gclidw')) return 'existing';
+  const linker = buildConversionLinkerTag({ name: 'Conversion Linker' });
+  await d.createGtmTag(accountId, containerId, workspaceId, { ...linker, firingTriggerId: [BUILTIN_ALL_PAGES_TRIGGER_ID] } as unknown as Record<string, unknown>);
+  return 'created';
+}
 
 /** Precheck helper: is a tag/variable with this name already in the workspace? Returns an
  *  "already present" payload (so the create is skipped, no approval) or null to proceed. */
@@ -507,8 +716,19 @@ function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean, data
   // fed to the planner, which reuses a taggable name+id+label match instead of minting a duplicate.
   const buildAdsBatchPlan = async (a: Record<string, unknown>) => {
     const rawEntries = Array.isArray(a.entries) ? (a.entries as Array<Record<string, unknown>>) : [];
+    // Keep each entry's trigger (when given) beside its naming fields. The pure planner only needs the
+    // naming fields; the trigger rides along so the handler can build THAT entry's tag. Both the plan
+    // steps and this list derive from one filtered array in the same order, so they stay index-aligned.
     const entries = rawEntries
-      .map((e) => ({ tagName: s(e.tagName).trim(), conversionName: s(e.conversionName).trim() || undefined, category: s(e.category).trim() || undefined }))
+      .map((e) => {
+        const trigger = obj(e.trigger);
+        return {
+          tagName: s(e.tagName).trim(),
+          conversionName: s(e.conversionName).trim() || undefined,
+          category: s(e.category).trim() || undefined,
+          trigger: Object.keys(trigger).length ? trigger : undefined,
+        };
+      })
       .filter((e) => e.tagName);
     const reuse = a.reuse === true;
     let existingActions: ExistingConversionAction[] | undefined;
@@ -522,13 +742,27 @@ function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean, data
         conversionLabel: x.conversionLabel ?? null,
       }));
     }
-    return planAdsConversionActions(entries, {
-      prefix: s(a.stripPrefix).trim() || undefined,
-      suffix: s(a.stripSuffix).trim() || undefined,
-      defaultCategory: s(a.defaultCategory).trim().toUpperCase() || 'SUBMIT_LEAD_FORM',
-      reuse,
-      existingActions,
-    });
+    const plan = planAdsConversionActions(
+      entries.map((e) => ({ tagName: e.tagName, conversionName: e.conversionName, category: e.category })),
+      {
+        prefix: s(a.stripPrefix).trim() || undefined,
+        suffix: s(a.stripSuffix).trim() || undefined,
+        defaultCategory: s(a.defaultCategory).trim().toUpperCase() || 'SUBMIT_LEAD_FORM',
+        reuse,
+        existingActions,
+      }
+    );
+    return { plan, entries };
+  };
+
+  // Whether this batch can also build the GTM tags in the same run: a GTM data service is present and
+  // the caller supplied the container ids. When false the tool creates the conversion ACTIONS only and
+  // hands tag-building back to the model (its original behavior), so nothing breaks in an Ads-only chat.
+  const gtmIdsOf = (a: Record<string, unknown>) => ({ accountId: s(a.accountId).trim(), containerId: s(a.containerId).trim(), workspaceId: s(a.workspaceId).trim() });
+  const canBuildTagsFor = (a: Record<string, unknown>): boolean => {
+    if (!data) return false;
+    const { accountId, containerId, workspaceId } = gtmIdsOf(a);
+    return Boolean(accountId && containerId && workspaceId);
   };
 
   const readTools: Tool[] = [
@@ -1265,17 +1499,22 @@ function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean, data
     {
       name: 'create_google_ads_conversion_actions_for_tags',
       description:
-        'BATCH: create ONE Google Ads conversion action per GTM tag, in the selected Ads account, behind a SINGLE approval, and return each one\'s Conversion ID + Label so you can build the tags. ' +
-        'Use this when the user is making SEVERAL Google Ads conversion tags at once and gives the tag names (and triggers) - it replaces calling create_google_ads_conversion_action once per tag (which would show one live-write card each). ' +
+        'BATCH one-click: create ONE Google Ads conversion action per GTM tag in the selected Ads account, and (when you ALSO pass the GTM container ids + a trigger per entry) build each one\'s Google Ads conversion TAG on that trigger and ensure a Conversion Linker - all behind a SINGLE approval. ' +
+        'Use this when the user is setting up SEVERAL Google Ads conversions at once, from a tag list, a pasted list, or a CSV. It replaces calling create_google_ads_conversion_action + create_gtm_tracking_tag once per tag. ' +
         'NAMING: each conversion action is named from the tag name with the affixes you pass STRIPPED off - pass stripPrefix and stripSuffix exactly as the user specifies (e.g. stripPrefix "GA4 - Event -", stripSuffix "Click Tag" turns "GA4 - Event - Book A Demo Click Tag" into "Book A Demo"). Pass an entry\'s conversionName to override the derived name. If a name strips to empty, that entry is skipped and reported. ' +
-        'Every CREATE is a LIVE, irreversible write to the ad account (no draft, no undo). One approval card lists them all; on approval they are created, then their Conversion IDs and Labels come back. ' +
-        'REUSE: pass reuse=true to avoid duplicates - any entry whose (stripped) name already matches an existing taggable conversion action that has a Conversion ID + Label is REUSED (no new write), and its existing ID + Label are returned for the tag; only the unmatched entries are created. Default is reuse=false (always create, even if a same-named action exists). ' +
-        'NEXT: for each returned entry, call create_gtm_tracking_tag (platform google_ads_conversion) with its conversionId and conversionLabel as LITERAL values and the trigger the user gave, so the tag lands in the GTM draft workspace. Also check list_gtm_tags for a Conversion Linker (gclidw) and add one if missing.',
+        'CATEGORY = the Google Ads conversion type: pass defaultCategory for the batch and/or a per-entry category. The enum is the only set Google Ads supports - map the user\'s intent onto it (form/lead -> SUBMIT_LEAD_FORM, phone call -> PHONE_CALL_LEAD, sign up -> SIGNUP, purchase -> PURCHASE, add to cart -> ADD_TO_CART, book -> BOOK_APPOINTMENT); there is no Click / Download / Page View / Custom category. ' +
+        'ORDER + REVERSIBILITY (spell this out to the user): the single approval card lists only the LIVE, irreversible conversion-action creates. On approval each action is created (or reused), its REAL Conversion ID + Label are read back from the account, THEN - if you supplied the GTM ids + that entry\'s trigger - its awct tag is built on that trigger in the GTM DRAFT workspace (revertible) and a Conversion Linker is ensured once. The Conversion ID + Label do NOT exist until the action is created, so they can only be shown for verification AFTER approval (in the returned table), never before. ' +
+        'TRIGGER per entry: the tag fires on entry.trigger, which REUSES an existing trigger of that name or CREATES it from kind + conditions (the same trigger vocabulary as create_gtm_tracking_tag) - so a CSV or prompt can carry a trigger name and its conditions. An entry with no trigger gets its conversion action created but no tag (reported). ' +
+        'REUSE: pass reuse=true to avoid duplicate conversion actions - any entry whose (stripped) name already matches an existing taggable action with a usable ID + Label is REUSED (no new write). Default reuse=false. ' +
+        'If you do NOT pass the GTM ids (e.g. an Ads-only chat), this creates the conversion ACTIONS only and returns their IDs + Labels for you to build the tags with create_gtm_tracking_tag.',
       inputSchema: {
         type: 'object',
         properties: {
           customerId: { type: 'string', description: 'The Ads account that will OWN the actions, bare digits.' },
           loginCustomerId: { type: 'string', description: 'Manager (MCC) id to act through, when reached via a manager.' },
+          accountId: { type: 'string', description: 'GTM account id. Pass together with containerId + workspaceId to ALSO build each conversion tag (and a Conversion Linker) in the draft workspace in this same approved run. Omit all three to create the conversion actions only.' },
+          containerId: { type: 'string', description: 'GTM container id (with accountId + workspaceId) for building the tags.' },
+          workspaceId: { type: 'string', description: 'GTM workspace id (with accountId + containerId) for building the tags.' },
           stripPrefix: { type: 'string', description: 'Exact prefix to remove from each tag name to get the conversion name (e.g. "GA4 - Event -"). Optional.' },
           stripSuffix: { type: 'string', description: 'Exact suffix to remove from each tag name (e.g. "Click Tag"). Optional.' },
           reuse: { type: 'boolean', description: 'When true, reuse an existing taggable conversion action whose name matches (with a usable Conversion ID + Label) instead of creating a duplicate. Default false.' },
@@ -1286,13 +1525,14 @@ function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean, data
           },
           entries: {
             type: 'array',
-            description: 'One per tag: { tagName, optional conversionName, optional category }.',
+            description: 'One per tag: { tagName, optional conversionName, optional category, optional trigger }. Include a trigger (with the GTM ids above) to build that tag; omit the trigger to create the conversion action only.',
             items: {
               type: 'object',
               properties: {
                 tagName: { type: 'string' },
                 conversionName: { type: 'string', description: 'Override the name derived from tagName.' },
                 category: { type: 'string', enum: CONVERSION_CATEGORIES.map((c) => c.value) },
+                trigger: { ...TRIGGER_INPUT_SCHEMA, description: 'What this conversion tag fires on - REUSED by name if it already exists, else CREATED from kind + conditions. Omit to create the conversion action only (no tag).' },
               },
               required: ['tagName'],
               additionalProperties: false,
@@ -1313,62 +1553,114 @@ function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean, data
       precheck: async (a) => {
         const notReady = await adsNotReady(ads);
         if (notReady) return notReady;
-        const plan = await buildAdsBatchPlan(a);
-        adsBatchPlanCache.set(a, plan.text);
+        const { plan, entries } = await buildAdsBatchPlan(a);
+        // When this run will also build tags, the card must say so - the Ads actions are the only LIVE,
+        // irreversible part; the tags + linker land in the revertible GTM draft. Only count entries that
+        // will actually get a tag (have a trigger and a non-blocked action).
+        const buildTags = canBuildTagsFor(a);
+        const willTag = buildTags ? entries.filter((e, i) => e.trigger && !plan.steps[i]?.blocked).length : 0;
+        const cardText = willTag
+          ? `${plan.text}\n\nThen ${willTag} Google Ads conversion tag${willTag === 1 ? '' : 's'} will be built on ${willTag === 1 ? 'its' : 'their'} trigger${willTag === 1 ? '' : 's'} in the GTM DRAFT workspace (revertible before you publish), plus a Conversion Linker if the container has none. Any entry with no trigger gets the conversion action only.`
+          : plan.text;
+        adsBatchPlanCache.set(a, cardText);
         if (plan.empty) {
-          return { ok: true, created: 0, message: 'No conversion actions could be derived from these tag names.', plan: plan.text };
+          return { ok: true, created: 0, message: 'No conversion actions could be derived from these tag names.', plan: cardText };
         }
         return null;
       },
       handler: (a) =>
         run(async () => {
-          const plan = await buildAdsBatchPlan(a);
+          const { plan, entries } = await buildAdsBatchPlan(a);
+          const buildTags = canBuildTagsFor(a);
+          const ids = gtmIdsOf(a);
           // One unified verification table. `source` tells created-live from reused-existing; the
           // conversionId + conversionLabel are the values that go INTO each tag either way.
           const created: Array<{ tagName: string; conversionName: string; category: string; conversionId: string | null; conversionLabel: string | null; source: 'created' | 'reused' }> = [];
           const failed: Array<{ tagName: string; conversionName: string; error: string }> = [];
           const skipped = plan.steps.filter((st) => st.blocked).map((st) => ({ tagName: st.tagName, reason: st.blocked! }));
-          for (const step of plan.steps) {
+          const tagsCreated: Array<{ tagName: string; conversionName: string; triggerName: string; reusedTrigger: boolean }> = [];
+          const tagsSkipped: Array<{ tagName: string; reason: string }> = [];
+          const tagsFailed: Array<{ tagName: string; error: string }> = [];
+
+          for (let i = 0; i < plan.steps.length; i++) {
+            const step = plan.steps[i];
             if (step.blocked) continue;
+            let conversionId: string | null = null;
+            let conversionLabel: string | null = null;
             // Reuse: an existing taggable action already matched by name; use its id + label, no write.
             if (step.mode === 'reuse') {
-              created.push({ tagName: step.tagName, conversionName: step.conversionName, category: step.category, conversionId: step.conversionId ?? null, conversionLabel: step.conversionLabel ?? null, source: 'reused' });
-              continue;
-            }
-            const input = { name: step.conversionName, category: step.category };
-            try {
-              // Dry-run first, exactly like the single create: a duplicate name or bad category fails
-              // BEFORE anything lands, and one bad entry never aborts the rest of the batch.
-              const invalid = await ads.validateConversionAction(s(a.customerId), input, login(a));
-              if (invalid) {
-                failed.push({ tagName: step.tagName, conversionName: step.conversionName, error: invalid.remedy ? `${invalid.message} ${invalid.remedy}` : invalid.message });
+              conversionId = step.conversionId ?? null;
+              conversionLabel = step.conversionLabel ?? null;
+              created.push({ tagName: step.tagName, conversionName: step.conversionName, category: step.category, conversionId, conversionLabel, source: 'reused' });
+            } else {
+              const input = { name: step.conversionName, category: step.category };
+              try {
+                // Dry-run first, exactly like the single create: a duplicate name or bad category fails
+                // BEFORE anything lands, and one bad entry never aborts the rest of the batch.
+                const invalid = await ads.validateConversionAction(s(a.customerId), input, login(a));
+                if (invalid) {
+                  failed.push({ tagName: step.tagName, conversionName: step.conversionName, error: invalid.remedy ? `${invalid.message} ${invalid.remedy}` : invalid.message });
+                  continue;
+                }
+                const action = await ads.createConversionAction(s(a.customerId), input, login(a));
+                conversionId = action.conversionId;
+                conversionLabel = action.conversionLabel;
+                created.push({ tagName: step.tagName, conversionName: step.conversionName, category: step.category, conversionId, conversionLabel, source: 'created' });
+              } catch (e) {
+                failed.push({ tagName: step.tagName, conversionName: step.conversionName, error: e instanceof Error ? e.message : String(e) });
                 continue;
               }
-              const action = await ads.createConversionAction(s(a.customerId), input, login(a));
-              created.push({ tagName: step.tagName, conversionName: step.conversionName, category: step.category, conversionId: action.conversionId, conversionLabel: action.conversionLabel, source: 'created' });
+            }
+
+            // Build this entry's tag when we can and it asked for one. The conversion action already
+            // exists here (created or reused), so a tag failure never rolls it back - it is reported and
+            // the action stands, ready for the tag to be built later. Reversible GTM writes come AFTER the
+            // irreversible Ads write for this entry, on purpose.
+            if (!buildTags) continue;
+            const trigger = entries[i]?.trigger;
+            if (!trigger) { tagsSkipped.push({ tagName: step.tagName, reason: 'no trigger was given, so the conversion action was created but no tag' }); continue; }
+            if (!conversionId || !conversionLabel) { tagsSkipped.push({ tagName: step.tagName, reason: 'Google returned no Conversion ID/Label (no snippet), so no tag was built - it would record nothing' }); continue; }
+            try {
+              const built = await buildAwctTagOnTrigger(data!, ids, { tagName: step.tagName, conversionId, conversionLabel, trigger });
+              tagsCreated.push({ tagName: built.tagName, conversionName: step.conversionName, triggerName: built.triggerName, reusedTrigger: built.reusedTrigger });
             } catch (e) {
-              failed.push({ tagName: step.tagName, conversionName: step.conversionName, error: e instanceof Error ? e.message : String(e) });
+              tagsFailed.push({ tagName: step.tagName, error: e instanceof Error ? e.message : String(e) });
             }
           }
+
+          // Ensure ONE Conversion Linker, only when at least one tag was actually built (nothing to link
+          // otherwise). Idempotent: returns 'existing' without writing when the container already has one.
+          let conversionLinker: 'created' | 'existing' | undefined;
+          if (buildTags && tagsCreated.length) {
+            try { conversionLinker = await ensureConversionLinker(data!, ids); } catch { conversionLinker = undefined; }
+          }
+
           const reusedCount = created.filter((c) => c.source === 'reused').length;
           const newCount = created.length - reusedCount;
+          const builtAnyTags = tagsCreated.length > 0 || tagsSkipped.length > 0 || tagsFailed.length > 0;
           return {
-            ok: failed.length === 0,
+            ok: failed.length === 0 && tagsFailed.length === 0,
             createdCount: newCount,
             reusedCount,
+            ...(buildTags ? { tagsCreatedCount: tagsCreated.length } : {}),
+            ...(conversionLinker ? { conversionLinker } : {}),
             customerId: s(a.customerId),
-            // The verification table: one row per tag with the values that will go INTO its tag. For a
+            // The verification table: one row per tag with the values that went INTO its tag. For a
             // created row the conversionId + conversionLabel were read back from the Google Ads account
             // after creation (that read is where the label comes from - it exists nowhere else); for a
             // reused row they come from the existing action. Either way it is the real, account-verified
             // pairing, not an echo of the request.
             created,
+            ...(tagsCreated.length ? { tagsCreated } : {}),
             ...(skipped.length ? { skipped } : {}),
+            ...(tagsSkipped.length ? { tagsSkipped } : {}),
             ...(failed.length ? { failed } : {}),
-            note:
-              'FIRST show the user a table of every entry - tag name | conversion name | Conversion ID | Conversion Label | source (created or reused) - and say the ID and Label were read FROM the Google Ads account (so they are verified, not guessed), so the user can confirm each conversion is correct BEFORE the tags are built. ' +
-              'THEN, for each entry, build its GTM tag: create_gtm_tracking_tag (platform google_ads_conversion) with that entry\'s conversionId and conversionLabel as LITERAL values (never a {{variable}}) and the trigger the user gave for that tag; it lands in the DRAFT workspace, so a wrong one is revertible before publish. A null conversionLabel means Google published no snippet - report that row instead of building a tag that records nothing. ' +
-              'Also check list_gtm_tags for a Conversion Linker (gclidw) and add one if missing. Report anything skipped or failed with its reason. The "created" rows are LIVE new conversion actions in Google Ads now; the "reused" rows created nothing new.',
+            ...(tagsFailed.length ? { tagsFailed } : {}),
+            note: builtAnyTags
+              ? 'Done in ONE approved run. Show the user a CONCISE final summary: total conversion actions created (createdCount) and reused (reusedCount), total Google Ads tags created (tagsCreatedCount), the Conversion Linker (conversionLinker: created or existing), and any skipped/failed rows with their reason. Then a verification table - tag name | conversion name | Conversion ID | Conversion Label | source - noting the ID + Label were read FROM the Google Ads account (verified, not guessed). The conversion actions are LIVE in Google Ads now; the tags + linker are in the GTM DRAFT workspace, so review and publish when ready. Do not build anything else - the tags are already created.'
+              : 'FIRST show the user a table of every entry - tag name | conversion name | Conversion ID | Conversion Label | source (created or reused) - and say the ID and Label were read FROM the Google Ads account (so they are verified, not guessed), so the user can confirm each conversion is correct BEFORE the tags are built. ' +
+                'THEN, for each entry, build its GTM tag: create_gtm_tracking_tag (platform google_ads_conversion) with that entry\'s conversionId and conversionLabel as LITERAL values (never a {{variable}}) and the trigger the user gave for that tag; it lands in the DRAFT workspace, so a wrong one is revertible before publish. A null conversionLabel means Google published no snippet - report that row instead of building a tag that records nothing. ' +
+                'Also check list_gtm_tags for a Conversion Linker (gclidw) and add one if missing. Report anything skipped or failed with its reason. The "created" rows are LIVE new conversion actions in Google Ads now; the "reused" rows created nothing new.',
           };
         }),
     },
@@ -3286,66 +3578,7 @@ export function buildToolRegistry(
           url: { type: 'string' },
           useCacheBuster: { type: 'boolean' },
           cacheBusterQueryParam: { type: 'string' },
-          trigger: {
-            type: 'object',
-            properties: {
-              name: { type: 'string' },
-              kind: { type: 'string', enum: ['link_click', 'all_clicks', 'custom_event', 'pageview', 'form_submit', 'youtube_video', 'timer', 'element_visibility', 'history_change', 'scroll_depth', 'dom_ready', 'window_loaded', 'js_error'] },
-              clickUrlValue: { type: 'string' },
-              clickUrlOperator: { type: 'string' },
-              clickUrlIgnoreCase: { type: 'boolean' },
-              clickTextValue: { type: 'string' },
-              clickTextOperator: { type: 'string' },
-              clickTextIgnoreCase: { type: 'boolean' },
-              clickElementValue: { type: 'string' },
-              clickElementOperator: { type: 'string' },
-              clickClassesValue: { type: 'string' },
-              clickClassesOperator: { type: 'string' },
-              clickIdValue: { type: 'string' },
-              clickIdOperator: { type: 'string' },
-              pageHostnameValue: { type: 'string' },
-              pageHostnameOperator: { type: 'string' },
-              referrerValue: { type: 'string' },
-              referrerOperator: { type: 'string' },
-              queryStringValue: { type: 'string' },
-              queryStringOperator: { type: 'string' },
-              visibilitySelector: { type: 'string' },
-              visibilityElementId: { type: 'string' },
-              visibilityMinPercent: { type: 'number' },
-              visibilityFiringFrequency: { type: 'string', enum: ['ONCE', 'ONCE_PER_ELEMENT', 'MANY_PER_ELEMENT'] },
-              visibilityObserveDomChanges: { type: 'boolean' },
-              visibilityMinOnScreenMs: { type: 'number' },
-              scrollPercentages: { type: 'string' },
-              scrollPixels: { type: 'string' },
-              scrollHorizontalPercentages: { type: 'string' },
-              lookupTable: {
-                type: 'object',
-                properties: { name: { type: 'string' }, texts: { type: 'array', items: { type: 'string' } } },
-                required: ['name', 'texts'],
-              },
-              formIdValue: { type: 'string' },
-              formIdOperator: { type: 'string' },
-              formClassesValue: { type: 'string' },
-              formClassesOperator: { type: 'string' },
-              pagePathValue: { type: 'string' },
-              pagePathOperator: { type: 'string' },
-              pageUrlValue: { type: 'string' },
-              pageUrlOperator: { type: 'string' },
-              eventName: { type: 'string' },
-              dataLayerConditions: {
-                type: 'array',
-                description: 'custom_event only: ANDed scope conditions on a pushed dataLayer key, each read via an auto-created {{dlv - <key>}} variable. Scopes an AJAX/embed form to ONE form by its pushed form_id ({{Form ID}} does NOT resolve on a pushed event).',
-                items: {
-                  type: 'object',
-                  properties: { key: { type: 'string' }, value: { type: 'string' }, operator: { type: 'string' } },
-                  required: ['key', 'value'],
-                },
-              },
-              intervalMs: { type: 'string', description: 'timer only, REQUIRED: firing interval in ms (e.g. "30000").' },
-              limit: { type: 'string', description: 'timer only: max fires (omit = unlimited).' },
-            },
-            required: ['name', 'kind'],
-          },
+          trigger: { ...TRIGGER_INPUT_SCHEMA },
         },
         required: ['accountId', 'containerId', 'workspaceId', 'platform', 'tagName', 'trigger'],
         additionalProperties: false,
@@ -3478,66 +3711,7 @@ export function buildToolRegistry(
           throw new Error(`unknown platform: ${platform}`);
         }
 
-        const ts = obj(a.trigger);
-        const triggerInput: TriggerInput = {
-          name: s(ts.name),
-          kind: (s(ts.kind) || 'pageview') as TriggerInput['kind'],
-          clickUrlValue: ts.clickUrlValue != null ? s(ts.clickUrlValue) : undefined,
-          clickUrlOperator: ts.clickUrlOperator != null ? s(ts.clickUrlOperator) : undefined,
-          clickUrlIgnoreCase: bln(ts.clickUrlIgnoreCase),
-          clickTextValue: ts.clickTextValue != null ? s(ts.clickTextValue) : undefined,
-          clickTextOperator: ts.clickTextOperator != null ? s(ts.clickTextOperator) : undefined,
-          clickTextIgnoreCase: bln(ts.clickTextIgnoreCase),
-          lookupTable: (() => {
-            const lt = obj(ts.lookupTable);
-            const name = s(lt.name).trim();
-            const texts = Array.isArray(lt.texts) ? lt.texts.map((t) => s(t)).filter(Boolean) : [];
-            return name && texts.length ? { name, texts } : undefined;
-          })(),
-          clickElementValue: ts.clickElementValue != null ? s(ts.clickElementValue) : undefined,
-          clickElementOperator: ts.clickElementOperator != null ? s(ts.clickElementOperator) : undefined,
-          clickClassesValue: ts.clickClassesValue != null ? s(ts.clickClassesValue) : undefined,
-          clickClassesOperator: ts.clickClassesOperator != null ? s(ts.clickClassesOperator) : undefined,
-          clickIdValue: ts.clickIdValue != null ? s(ts.clickIdValue) : undefined,
-          clickIdOperator: ts.clickIdOperator != null ? s(ts.clickIdOperator) : undefined,
-          pageHostnameValue: ts.pageHostnameValue != null ? s(ts.pageHostnameValue) : undefined,
-          pageHostnameOperator: ts.pageHostnameOperator != null ? s(ts.pageHostnameOperator) : undefined,
-          referrerValue: ts.referrerValue != null ? s(ts.referrerValue) : undefined,
-          referrerOperator: ts.referrerOperator != null ? s(ts.referrerOperator) : undefined,
-          queryStringValue: ts.queryStringValue != null ? s(ts.queryStringValue) : undefined,
-          queryStringOperator: ts.queryStringOperator != null ? s(ts.queryStringOperator) : undefined,
-          visibilitySelector: ts.visibilitySelector != null ? s(ts.visibilitySelector) : undefined,
-          visibilityElementId: ts.visibilityElementId != null ? s(ts.visibilityElementId) : undefined,
-          visibilityMinPercent: ts.visibilityMinPercent != null ? s(ts.visibilityMinPercent) : undefined,
-          visibilityFiringFrequency: ts.visibilityFiringFrequency != null ? s(ts.visibilityFiringFrequency) : undefined,
-          visibilityObserveDomChanges: typeof ts.visibilityObserveDomChanges === 'boolean' ? ts.visibilityObserveDomChanges : undefined,
-          visibilityMinOnScreenMs: ts.visibilityMinOnScreenMs != null ? s(ts.visibilityMinOnScreenMs) : undefined,
-          scrollPercentages: ts.scrollPercentages != null ? s(ts.scrollPercentages) : undefined,
-          scrollPixels: ts.scrollPixels != null ? s(ts.scrollPixels) : undefined,
-          scrollHorizontalPercentages: ts.scrollHorizontalPercentages != null ? s(ts.scrollHorizontalPercentages) : undefined,
-          formIdValue: ts.formIdValue != null ? s(ts.formIdValue) : undefined,
-          formIdOperator: ts.formIdOperator != null ? s(ts.formIdOperator) : undefined,
-          formClassesValue: ts.formClassesValue != null ? s(ts.formClassesValue) : undefined,
-          formClassesOperator: ts.formClassesOperator != null ? s(ts.formClassesOperator) : undefined,
-          pagePathValue: ts.pagePathValue != null ? s(ts.pagePathValue) : undefined,
-          pagePathOperator: ts.pagePathOperator != null ? s(ts.pagePathOperator) : undefined,
-          pageUrlValue: ts.pageUrlValue != null ? s(ts.pageUrlValue) : undefined,
-          pageUrlOperator: ts.pageUrlOperator != null ? s(ts.pageUrlOperator) : undefined,
-          eventName: ts.eventName != null ? s(ts.eventName) : undefined,
-          // Optional ANDed custom_event scope conditions on a pushed dataLayer key, read via an
-          // auto-created {{dlv - <key>}} variable (scopes an AJAX/embed form's custom_event to ONE form
-          // by the form_id its listener pushes). Coerce defensively — the model can pass any shape.
-          dataLayerConditions: Array.isArray(ts.dataLayerConditions)
-            ? ts.dataLayerConditions
-                .map((c) => {
-                  const o = obj(c);
-                  return { key: s(o.key).trim(), value: s(o.value), operator: o.operator != null ? s(o.operator) : undefined };
-                })
-                .filter((c) => c.key !== '' && c.value !== '')
-            : undefined,
-          intervalMs: ts.intervalMs != null ? s(ts.intervalMs) : undefined,
-          limit: ts.limit != null ? s(ts.limit) : undefined,
-        };
+        const triggerInput = coerceTriggerInput(obj(a.trigger));
         // A Timer with no interval NEVER fires (blank Interval in the GTM UI) — fail loudly instead of
         // silently creating a broken trigger (enums are advisory; the model can pass any kind string).
         if (triggerInput.kind === 'timer' && !s(triggerInput.intervalMs ?? '').trim()) {
