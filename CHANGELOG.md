@@ -1,3 +1,9 @@
+## [1.415.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.414.4...v1.415.0) (2026-07-27)
+
+### Features
+
+* **desktop:** synthesize Column N headers for a headerless CSV export block ([08400e1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/08400e1b7ef0456fc9826fac92f5ca5f2a9a4a37))
+
 ## [1.414.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.414.3...v1.414.4) (2026-07-27)
 
 ### Bug Fixes
