@@ -1041,11 +1041,18 @@ export class GoogleDataService {
   ): Promise<GtmTagView> {
     const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
     const gtm = tagmanager({ version: 'v2', auth });
-    const res = await this.qCreate(() => gtm.accounts.containers.workspaces.tags.create({
-      parent: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`,
-      requestBody: tag,
-    }));
+    let res;
+    try {
+      res = await this.qCreate(() => gtm.accounts.containers.workspaces.tags.create({
+        parent: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`,
+        requestBody: tag,
+      }));
+    } catch (e) {
+      log.error(`[gtm-tag] create FAILED "${String((tag as { name?: unknown }).name ?? 'tag')}"`, e instanceof Error ? e.message : String(e));
+      throw e;
+    }
     this.journal('tag', accountId, containerId, workspaceId, res.data.tagId ?? '', `${res.data.name ?? 'tag'} (#${res.data.tagId})`);
+    log.success(`[gtm-tag] created "${res.data.name ?? 'tag'}"`, `type ${res.data.type ?? '?'} \u00b7 #${res.data.tagId ?? '?'} \u00b7 draft (not published)`);
     return { tagId: res.data.tagId ?? '', name: res.data.name ?? '', type: res.data.type ?? '' };
   }
 
