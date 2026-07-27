@@ -469,6 +469,16 @@ function isTableSeparator(line: string): boolean {
   // instead of falling through to raw `|` text.
   return s.length > 0 && /^[|\s:\u2010-\u2015\-]+$/.test(s) && /[\u2010-\u2015\-]/.test(s);
 }
+/** True when `line` begins a pipe table: either a classic GFM header (next line is a |---| separator)
+ *  OR a header whose next line is also a pipe row (models frequently emit the pipes but omit the
+ *  separator, or space-pad the columns). Requires 2+ columns so a lone "a | b" prose line is not
+ *  misread as a table. */
+function looksLikeTableStart(line: string, next: string | undefined): boolean {
+  if (!line.includes('|') || next === undefined) return false;
+  if (isTableSeparator(next)) return true;
+  if (!next.includes('|')) return false;
+  return splitTableRow(line).length >= 2 && splitTableRow(next).length >= 2;
+}
 function isHeading(line: string): boolean {
   return /^#{1,6}\s+/.test(line);
 }
@@ -520,31 +530,40 @@ function Markdown({ text }: { text?: string | null }): JSX.Element {
       continue;
     }
 
-    // GFM table: a header row followed by a |---|---| separator.
-    if (line.includes('|') && i + 1 < lines.length && isTableSeparator(lines[i + 1])) {
+    // GFM table: a header row, ideally followed by a |---|---| separator. Many models emit the pipes
+    // but omit the separator (or space-pad the columns), which used to fall through to raw text with
+    // the whitespace collapsed into a misaligned mess. Render it as a table whenever the shape is
+    // unmistakable: a header plus pipe rows below it.
+    if (looksLikeTableStart(line, lines[i + 1])) {
       const header = splitTableRow(line);
-      i += 2;
+      const hasSep = isTableSeparator(lines[i + 1]);
+      let j = hasSep ? i + 2 : i + 1;
       const rows: string[][] = [];
-      while (i < lines.length && lines[i].trim() !== '' && lines[i].includes('|')) {
-        rows.push(splitTableRow(lines[i]));
-        i++;
+      while (j < lines.length && lines[j].trim() !== '' && lines[j].includes('|') && !isTableSeparator(lines[j])) {
+        rows.push(splitTableRow(lines[j]));
+        j++;
       }
-      const tk = key++;
-      blocks.push(
-        <div key={tk} style={mdStyles.tableWrap}>
-          <table style={mdStyles.table}>
-            <thead>
-              <tr>{header.map((c, j) => <th key={j} style={mdStyles.th}>{renderInline(c, `t${tk}h${j}`)}</th>)}</tr>
-            </thead>
-            <tbody>
-              {rows.map((r, ri) => (
-                <tr key={ri}>{header.map((_, j) => <td key={j} style={mdStyles.td}>{renderInline(r[j] ?? '', `t${tk}r${ri}c${j}`)}</td>)}</tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      );
-      continue;
+      // A separator makes the table unambiguous (one row is enough). Without it, require 2+ rows so a
+      // stray pair of pipe lines in prose is not turned into a table.
+      if (hasSep ? rows.length >= 1 : rows.length >= 2) {
+        i = j;
+        const tk = key++;
+        blocks.push(
+          <div key={tk} style={mdStyles.tableWrap}>
+            <table style={mdStyles.table}>
+              <thead>
+                <tr>{header.map((c, ci) => <th key={ci} style={mdStyles.th}>{renderInline(c, `t${tk}h${ci}`)}</th>)}</tr>
+              </thead>
+              <tbody>
+                {rows.map((r, ri) => (
+                  <tr key={ri}>{header.map((_, ci) => <td key={ci} style={mdStyles.td}>{renderInline(r[ci] ?? '', `t${tk}r${ri}c${ci}`)}</td>)}</tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        );
+        continue;
+      }
     }
 
     // Heading.
@@ -574,15 +593,18 @@ function Markdown({ text }: { text?: string | null }): JSX.Element {
       continue;
     }
 
-    // Paragraph: gather consecutive plain lines.
-    const para: string[] = [];
+    // Paragraph: the current line plus consecutive plain lines. The first line is always consumed (it
+    // reached here because no other block matched), which also guarantees forward progress even when a
+    // pipe line looked like a table start but did not qualify as one.
+    const para: string[] = [lines[i]];
+    i++;
     while (
       i < lines.length &&
       lines[i].trim() !== '' &&
       !lines[i].trim().startsWith('```') &&
       !isHeading(lines[i]) &&
       !isListItem(lines[i]) &&
-      !(lines[i].includes('|') && i + 1 < lines.length && isTableSeparator(lines[i + 1]))
+      !looksLikeTableStart(lines[i], lines[i + 1])
     ) {
       para.push(lines[i]);
       i++;
