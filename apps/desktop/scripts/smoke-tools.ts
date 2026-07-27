@@ -290,6 +290,7 @@ async function main(): Promise<void> {
     // writes stay auto-apply because a draft workspace absorbs them.
     const isDestructive = (n: string) =>
       n.startsWith('delete_') ||
+      n.startsWith('batch_delete_') || // batch_delete_gtm_entities: a destructive multi-entity delete
       n.startsWith('archive_') ||
       (/google_ads/.test(n) && !n.includes('_ga4_') && !n.startsWith('create_'));
     // GATED-BUT-NOT-DESTRUCTIVE (Tool.approval, 2026-07-24): additive writes that are nonetheless

@@ -146,6 +146,7 @@ const GROUP_MEMBERS: Record<ToolGroup, readonly string[]> = {
     'create_gtm_variable_typed',
     'delete_gtm_variable',
     'delete_unused_gtm_variables',
+    'batch_delete_gtm_entities',
     'enable_gtm_builtin_variables',
     'create_gtm_folder',
     'rename_gtm_folder',
@@ -431,6 +432,8 @@ const WRITE_VERBS = [
 export const GROUP_KEYWORDS: Record<Exclude<ToolGroup, 'core'>, readonly string[]> = {
   'gtm-write': [
     ...WRITE_VERBS,
+    'batch',
+    'bulk',
     'ecommerce',
     'e-commerce',
     'funnel',
