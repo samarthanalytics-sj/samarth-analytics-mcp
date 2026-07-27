@@ -1,3 +1,9 @@
+## [1.413.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.412.0...v1.413.0) (2026-07-27)
+
+### Features
+
+* **desktop:** retry transient GTM write errors (5xx + fresh-container 404) and reject placeholder measurement IDs ([8eb9444](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/8eb9444f48afacae0c942d2c374358229a4fefb4))
+
 ## [1.412.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.411.0...v1.412.0) (2026-07-27)
 
 ### Features
