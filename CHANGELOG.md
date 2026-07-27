@@ -1,3 +1,9 @@
+## [1.406.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.406.1...v1.406.2) (2026-07-27)
+
+### Bug Fixes
+
+* **desktop:** smoke-tools expects the GA4 access-binding writes to be approval-gated ([#705](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/705)) ([c2ce208](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c2ce208f2289e07aaf3b47a2850bff36c9a20b48))
+
 ## [1.406.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.406.0...v1.406.1) (2026-07-27)
 
 ### Bug Fixes
