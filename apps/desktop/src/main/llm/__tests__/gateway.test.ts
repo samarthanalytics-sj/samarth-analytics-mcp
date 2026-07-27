@@ -127,6 +127,46 @@ await test('fail-fast: after one tool error, the rest of the batch is skipped (n
   assert.equal((toolTurn.results ?? []).every((r) => r.isError), true, 'the failed call + both skipped results are all errors');
 });
 
+await test('BULK: a realistic 40-tag build finishes in ONE turn under the production budget (soft 40 / hard 300)', async () => {
+  // Faithful to chat-service: a reasoning model does ONE call per step. The user says "create these
+  // 40 tags"; the model lists once, then issues 40 create_gtm_tracking_tag calls (each a draft-write),
+  // then a final summary. That is 42 steps - past the soft ceiling of 40. The progress-aware budget
+  // must carry it to the end because a write lands on every build step.
+  const SOFT = 40, HARD = 300; // the exact values chat-service passes
+  const buildNames = ['list_gtm_tags', ...Array.from({ length: 40 }, () => 'create_gtm_tracking_tag')];
+  const isGtmWrite = (name: string): boolean => name.startsWith('create_');
+
+  const client = callsThenAnswer(buildNames, 'Done. All 40 tags were created in the draft workspace.');
+  let creates = 0;
+  const exec = writeExecutor(async (name) => {
+    if (name.startsWith('create_')) creates += 1;
+    return name.startsWith('create_') ? JSON.stringify({ tag: { tagId: `T${creates}` } }) : '[]';
+  }, isGtmWrite);
+
+  const res = await runChat(
+    client,
+    { system: 's', model: 'm', apiKey: 'k', messages: [{ role: 'user', text: 'create these 40 tags' }] },
+    exec,
+    {},
+    SOFT,
+    { hardMaxSteps: HARD }
+  );
+  assert.equal(creates, 40, `all 40 tags were created (built ${creates})`);
+  assert.equal(res.text, 'Done. All 40 tags were created in the draft workspace.', 'one final summary, not a mid-batch "proceed" prompt');
+  assert.doesNotMatch(res.text, /tool-call limit|NOT done|proceed/i, 'never surfaced the step-limit / proceed message');
+  assert.equal(res.steps, 42, '1 list + 40 creates + 1 final answer, carried past the soft ceiling of 40');
+
+  // Before the fix (no extension: hard == soft == 40) the SAME build stalls out and forces "proceed".
+  const before = await runChat(
+    new ScriptedClient([...buildNames.map((name, i) => ({ toolCalls: [{ id: String(i + 1), name, args: {} }] })), { text: 'Done.' }]),
+    { system: 's', model: 'm', apiKey: 'k', messages: [{ role: 'user', text: 'create these 40 tags' }] },
+    writeExecutor(async () => '{}', isGtmWrite),
+    {},
+    SOFT // no hardMaxSteps -> old fixed-budget behaviour
+  );
+  assert.match(before.text, /tool-call limit|NOT done/i, 'the old fixed budget stopped this exact build partway (the bug being fixed)');
+});
+
 await test('caps at maxSteps when the model keeps calling tools, and says the task is NOT done', async () => {
   const client = new ScriptedClient([{ toolCalls: [{ id: '1', name: 't', args: {} }] }]);
   const exec = executor(async () => 'ok');
