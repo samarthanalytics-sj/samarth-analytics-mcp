@@ -94,7 +94,7 @@ import {
   planTriggerRetarget,
 } from '../gtm-builders';
 import type { AuditTag as TAuditTag, ContainerSnapshot as TContainerSnapshot, ServerContainerSnapshot as TServerContainerSnapshot } from '../gtm-builders';
-import { buildGoogleTagEventSettingsVariable } from '../gtm-builders';
+import { buildGoogleTagEventSettingsVariable, ga4TagFields } from '../gtm-builders';
 import { classifyPixel } from '../pixel-signatures';
 
 let passed = 0;
@@ -3585,6 +3585,28 @@ test('buildGoogleTagEventSettingsVariable: gtes eventSettingsTable keyed paramet
     { type: 'template', key: 'parameter', value: 'previous_page' },
     { type: 'template', key: 'parameterValue', value: '{{Referrer}}' },
   ]);
+});
+
+// ── ga4TagFields: surface the tag's GA4 EVENT NAME (distinct from the trigger's custom event name) ──
+test('ga4TagFields returns a GA4 tag event name + measurement id', () => {
+  const tag = {
+    type: 'gaawe',
+    parameter: [
+      { type: 'template', key: 'eventName', value: 'why_restaurants_choose_chownow_for_online_ordering' },
+      { type: 'template', key: 'measurementIdOverride', value: 'G-REAL12345' },
+      { type: 'template', key: 'measurementId', value: '' },
+    ],
+  };
+  assert.deepEqual(ga4TagFields(tag), { eventName: 'why_restaurants_choose_chownow_for_online_ordering', measurementId: 'G-REAL12345' });
+});
+test('ga4TagFields reads a Google tag measurement id from tagId', () => {
+  assert.deepEqual(ga4TagFields({ type: 'googtag', parameter: [{ type: 'template', key: 'tagId', value: 'G-ABC123' }] }), { measurementId: 'G-ABC123' });
+});
+test('ga4TagFields is empty for a non-GA4 tag (e.g. custom html)', () => {
+  assert.deepEqual(ga4TagFields({ type: 'html', parameter: [{ type: 'template', key: 'html', value: '<script>' }] }), {});
+});
+test('ga4TagFields omits eventName when the GA4 tag has none set', () => {
+  assert.deepEqual(ga4TagFields({ type: 'gaawe', parameter: [{ type: 'template', key: 'measurementIdOverride', value: 'G-1' }] }), { measurementId: 'G-1' });
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
