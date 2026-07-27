@@ -1,5 +1,6 @@
 import type { RegistryService } from './registry-service';
 import type { GoogleDataService } from '../google/data-service';
+import { log } from '../logger';
 import type { GoogleAdsService } from '../google/ads-service';
 import type { ProviderKeyStore } from '../storage/provider-keys';
 import type { AuditHistoryStore } from '../storage/audit-history';
@@ -341,7 +342,7 @@ export class ChatService {
         byContainer = new Map(containers.map((c) => [c.containerId, containerKindFromUsageContext(c.usageContext)]));
         this.containerKinds.set(accountId, byContainer);
       } catch (e) {
-        console.error('[chat] container-kind lookup failed, sending the full tool list:', e instanceof Error ? e.message : e);
+        log.warn('[chat] container-kind lookup failed, sending the full tool list', e instanceof Error ? e.message : String(e));
         return undefined;
       }
     }
@@ -483,7 +484,7 @@ export class ChatService {
     // the legacy pairing granted tools only, and must not retroactively widen anything else.
     const chosen = (p: GoogleProduct): boolean => product === p || (integrations?.includes(p) ?? false);
     if (requested && integrations && requested.length !== integrations.length) {
-      console.error(`[chat] integration(s) requested but unavailable in this session, dropped: ${requested.filter((p) => !integrations.includes(p)).join(', ')}`);
+      log.warn(`[chat] integration(s) requested but unavailable in this session, dropped: ${requested.filter((p) => !integrations.includes(p)).join(', ')}`);
     }
 
     const client = createProvider(active.llm.provider);
@@ -517,7 +518,7 @@ export class ChatService {
       try {
         this.memory?.recordUse(active.id, ids);
       } catch (e) {
-        console.error('[chat] memory usage log failed (continuing):', e instanceof Error ? e.message : e);
+        log.warn('[chat] memory usage log failed (continuing)', e instanceof Error ? e.message : String(e));
       }
     };
     const memoryCtx = this.memory
@@ -593,9 +594,9 @@ export class ChatService {
       // The container kind resolved ONCE above, reused as the group signal: server work in a server
       // container needs the server tools even when the user never types the word "server".
       serverContainer: containerKind === 'server',
-      onEnable: (group, reason) => console.error(`[chat] tool group "${group}" enabled (${reason})`),
+      onEnable: (group, reason) => log.info(`[chat] tool group "${group}" enabled (${reason})`),
     });
-    console.error(`[chat] tool groups: ${gatedTools.enabledGroups().join(', ')} → ${gatedTools.list().length}/${tools.list().length + 1} tool definitions sent (container kind: ${containerKind ?? 'unknown'})`);
+    log.info(`[chat] tool groups: ${gatedTools.enabledGroups().join(', ')} -> ${gatedTools.list().length}/${tools.list().length + 1} tool definitions sent (container kind: ${containerKind ?? 'unknown'})`);
 
     // Tool-result carry-over. An EMPTY history means a brand-new conversation (the user cleared the
     // thread or switched target), so nothing may carry over into it.
@@ -779,7 +780,7 @@ export class ChatService {
     // thread would have it answer confidently about messages it can no longer see.
     const bounded = boundChatHistory(history);
     if (bounded.dropped) {
-      console.error(`[chat] history bounded: dropped ${bounded.dropped} older turn(s) to fit the request budget`);
+      log.info(`[chat] history bounded: dropped ${bounded.dropped} older turn(s) to fit the request budget`);
     }
     const messages: LlmTurn[] = [
       // History replays each user turn's media too, so follow-up questions keep seeing the doc.
@@ -890,7 +891,7 @@ export class ChatService {
       const secs = Math.max(1, Math.round((Date.now() - turnStart) / 1000));
       const perMin = (tagsCreated / secs) * 60;
       const backoffs = this.data.quotaBackoffs;
-      console.error(`[chat] created ${tagsCreated} tag(s) in ${secs}s (${perMin.toFixed(1)}/min, ${backoffs} quota backoff(s))`);
+      log.success(`[chat] created ${tagsCreated} tag(s) in ${secs}s (${perMin.toFixed(1)}/min, ${backoffs} quota backoff(s))`);
       // User-visible one-liner only for a real BULK build (2+ tags), so ordinary single-tag chats
       // stay clean. Appended to the returned text AND streamed, so it shows live and persists.
       if (tagsCreated >= 2) {

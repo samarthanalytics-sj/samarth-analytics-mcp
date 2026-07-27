@@ -1,4 +1,5 @@
 import { anthropicClient } from './anthropic';
+import { log } from '../logger';
 import { openaiClient } from './openai';
 import { geminiClient } from './gemini';
 import { capToolResult } from '../../shared/context-budget';
@@ -137,11 +138,11 @@ export async function runChat(
     // Past the soft ceiling, only continue while writes are still landing. Otherwise fall through to
     // the "not done" message so the user is asked how to proceed rather than looping silently.
     if (step > maxSteps && stepsSinceWrite >= stallSteps) {
-      console.error(`[chat] soft step budget (${maxSteps}) reached and no write in the last ${stallSteps} steps - stopping`);
+      log.warn(`[chat] soft step budget (${maxSteps}) reached and no write in the last ${stallSteps} steps - stopping`);
       break;
     }
     if (input.signal?.aborted) {
-      console.error('[chat] stopped by user');
+      log.info('[chat] stopped by user');
       return { text: 'Stopped.', steps: step - 1, usage };
     }
     // Re-listed ONCE per step, not once per turn: a gated executor (see tool-groups.ts) sends a
@@ -166,7 +167,7 @@ export async function runChat(
       );
     } catch (e) {
       if (input.signal?.aborted || (e as { name?: string })?.name === 'AbortError') {
-        console.error('[chat] stopped by user (mid-stream)');
+        log.info('[chat] stopped by user (mid-stream)');
         return { text: 'Stopped.', steps: step, usage };
       }
       throw e;
@@ -174,11 +175,11 @@ export async function runChat(
 
     if (reply.usage) {
       usage = addCacheUsage(usage, reply.usage);
-      console.error(`[chat] step ${step} ${formatCacheUsage(reply.usage)}`);
+      log.info(`[chat] step ${step} ${formatCacheUsage(reply.usage)}`);
     }
 
     if (reply.toolCalls && reply.toolCalls.length > 0) {
-      console.error(`[chat] step ${step}: model requested ${reply.toolCalls.length} tool call(s): ${reply.toolCalls.map((c) => c.name).join(', ')}`);
+      log.info(`[chat] step ${step}: model requested ${reply.toolCalls.length} tool call(s): ${reply.toolCalls.map((c) => c.name).join(', ')}`);
       messages.push({ role: 'assistant', text: reply.text, toolCalls: reply.toolCalls });
       const results = [];
       // Fail fast: once a tool call in this batch errors, STOP — don't prompt the user
@@ -222,7 +223,7 @@ export async function runChat(
           const n = (writeCallCounts.get(key) ?? 0) + 1;
           writeCallCounts.set(key, n);
           if (n > MAX_IDENTICAL_WRITES) {
-            console.error(`[chat] blocked repeated identical write: ${call.name} (call #${n} this turn with the same args)`);
+            log.warn(`[chat] blocked repeated identical write: ${call.name} (call #${n} this turn with the same args)`);
             results.push({
               id: call.id,
               name: call.name,
@@ -243,7 +244,7 @@ export async function runChat(
           // Uncapped, one large list/audit payload was re-sent on every remaining step of the turn.
           const capped = capToolResult(call.name, content);
           if (capped.capped) {
-            console.error(`[chat] ${call.name}: result capped for the model (${capped.originalChars} -> ${capped.content.length} chars)`);
+            log.info(`[chat] ${call.name}: result capped for the model (${capped.originalChars} -> ${capped.content.length} chars)`);
           }
           // Just-in-time reference AFTER the cap, so a large result can never trim away the
           // methodology that tells the model how to report it.
@@ -271,15 +272,15 @@ export async function runChat(
       continue;
     }
 
-    console.error(`[chat] step ${step}: model returned a final answer (no tool calls)`);
-    if (usage) console.error(`[chat] turn total ${formatCacheUsage(usage)} over ${step} step(s)`);
+    log.info(`[chat] step ${step}: model returned a final answer (no tool calls)`);
+    if (usage) log.info(`[chat] turn total ${formatCacheUsage(usage)} over ${step} step(s)`);
     return { text: reply.text ?? '', steps: step, usage };
   }
 
   // Ran out of budget without the model giving a final answer — surface WHY (the real tool error)
   // and make clear the task did NOT complete, instead of a vague "stopped". The reported ceiling is
   // whatever actually bit: the soft budget for a stalled turn, the hard cap for a runaway one.
-  console.error(`[chat] stopped without a final answer (soft ${maxSteps} / hard ${hardMaxSteps} step budget)`);
+  log.warn(`[chat] stopped without a final answer (soft ${maxSteps} / hard ${hardMaxSteps} step budget)`);
   const reason = lastToolError
     ? ` The last error was — \`${lastToolError.name}\`: ${lastToolError.message}`
     : '';
