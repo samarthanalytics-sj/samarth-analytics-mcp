@@ -2954,12 +2954,18 @@ async function main(): Promise<void> {
     variables: [{ variableId: 'v1', name: 'Old Var', type: 'c' }],
   };
 
-  await test('batch_delete_gtm_entities: ONE card shows the whole categorized plan; approving runs it in safe order', async () => {
+  await test('batch_delete_gtm_entities: exactly ONE card shows the whole categorized plan; approving runs it in safe order', async () => {
     const fd = fakeData({ snapshot: batchSnap });
     let cardCount = 0;
     let cardText = '';
-    // Destructive → two confirms; capture the first card's summary (the plan the user reviews).
-    const approve: ConfirmFn = async (p) => { cardCount += 1; if (cardCount === 1) cardText = p.summary; return p.details; };
+    let sawDestructive = false;
+    let sawTypeToConfirm = false;
+    const approve: ConfirmFn = async (p) => {
+      cardCount += 1; cardText = p.summary;
+      if (p.destructive) sawDestructive = true;
+      if (p.requireTextConfirm) sawTypeToConfirm = true;
+      return p.details;
+    };
     const reg = buildToolRegistry(fd.data, approve);
     const out = JSON.parse(await reg.execute('batch_delete_gtm_entities', {
       accountId: '1', containerId: '2', workspaceId: '3',
@@ -2967,6 +2973,10 @@ async function main(): Promise<void> {
       triggers: [{ id: 't3' }],
       variables: [{ name: 'Old Var' }],
     }));
+    // ONE dialog for the whole batch - not the per-item two-step - styled as a delete, no typed word.
+    assert.equal(cardCount, 1, 'exactly one approval card for the entire batch');
+    assert.equal(sawDestructive, true, 'the card is styled as a destructive action');
+    assert.equal(sawTypeToConfirm, false, 'no separate type-"delete" second prompt');
     // The card content: categorized, named, counted.
     assert.match(cardText, /This batch will change 2 Tags, 1 Trigger, 1 Variable\./);
     assert.match(cardText, /2 Tags will be deleted:/);
@@ -2977,6 +2987,60 @@ async function main(): Promise<void> {
     // Safe order: both tags before the trigger before the variable.
     const seq = fd.calls.filter((c) => c.startsWith('deleteTag:') || c.startsWith('deleteTrigger:') || c.startsWith('deleteVar:'));
     assert.deepEqual(seq, ['deleteTag:1:2:3:10', 'deleteTag:1:2:3:11', 'deleteTrigger:1:2:3:t3', 'deleteVar:1:2:3:v1'], `order was ${seq.join(', ')}`);
+  });
+
+  // ── End-to-end approval matrix: the four scenarios from the spec ──
+  await test('E2E: a batch of only create/update/replace shows NO approval', async () => {
+    const fd = fakeData({ snapshot: batchSnap });
+    let confirmCalls = 0;
+    const spy: ConfirmFn = async (p) => { confirmCalls += 1; return p.details; };
+    const reg = buildToolRegistry(fd.data, spy, 'gtm');
+    // create
+    await reg.execute('create_gtm_tracking_tag', { accountId: '1', containerId: '2', workspaceId: '3', platform: 'ga4_event', tagName: 'GA4 - Event - New', measurementId: 'G-1', eventName: 'x', trigger: { name: 'T', kind: 'pageview' } });
+    // update (pause is an edit to an existing tag)
+    await reg.execute('set_gtm_tag_paused', { accountId: '1', containerId: '2', workspaceId: '3', tagId: '10', paused: true });
+    // replace-style config change (enabling built-ins rewrites workspace config)
+    await reg.execute('enable_gtm_builtin_variables', { accountId: '1', containerId: '2', workspaceId: '3', types: ['clickUrl'] });
+    assert.equal(confirmCalls, 0, 'create / update / replace all applied to the draft with no approval');
+  });
+
+  await test('E2E: a delete-only batch shows exactly ONE approval for the whole set', async () => {
+    const fd = fakeData({ snapshot: batchSnap });
+    let confirmCalls = 0;
+    const spy: ConfirmFn = async (p) => { confirmCalls += 1; return p.details; };
+    const reg = buildToolRegistry(fd.data, spy, 'gtm');
+    const out = JSON.parse(await reg.execute('batch_delete_gtm_entities', { accountId: '1', containerId: '2', workspaceId: '3', tags: [{ id: '10' }, { id: '11' }], triggers: [{ id: 't3' }], variables: [{ name: 'Old Var' }] }));
+    assert.equal(confirmCalls, 1, 'one dialog for four deletions, not four (and not two)');
+    assert.equal(out.deletedCount, 4);
+  });
+
+  await test('E2E: a MIXED batch prompts once - only for the deletes', async () => {
+    const fd = fakeData({ snapshot: batchSnap });
+    let confirmCalls = 0;
+    const spy: ConfirmFn = async (p) => { confirmCalls += 1; return p.details; };
+    const reg = buildToolRegistry(fd.data, spy, 'gtm');
+    // The non-delete half of the batch: no prompts.
+    await reg.execute('create_gtm_tracking_tag', { accountId: '1', containerId: '2', workspaceId: '3', platform: 'ga4_event', tagName: 'GA4 - Event - New', measurementId: 'G-1', eventName: 'x', trigger: { name: 'T', kind: 'pageview' } });
+    await reg.execute('set_gtm_tag_paused', { accountId: '1', containerId: '2', workspaceId: '3', tagId: '12', paused: true });
+    assert.equal(confirmCalls, 0, 'creates and updates so far applied silently');
+    // The delete half: one prompt for the whole set.
+    const out = JSON.parse(await reg.execute('batch_delete_gtm_entities', { accountId: '1', containerId: '2', workspaceId: '3', tags: [{ id: '10' }], variables: [{ id: 'v1' }] }));
+    assert.equal(confirmCalls, 1, 'the only approval in the whole mixed batch was the single delete card');
+    assert.equal(out.deletedCount, 2);
+  });
+
+  await test('E2E: cancelling the delete approval executes NO deletions; the earlier non-delete writes stay applied', async () => {
+    const fd = fakeData({ snapshot: batchSnap });
+    let confirmCalls = 0;
+    const decline: ConfirmFn = async () => { confirmCalls += 1; return null; };
+    const reg = buildToolRegistry(fd.data, decline, 'gtm');
+    // A non-delete write happened first and is NOT rolled back by a later cancel.
+    await reg.execute('set_gtm_tag_paused', { accountId: '1', containerId: '2', workspaceId: '3', tagId: '10', paused: true });
+    const out = JSON.parse(await reg.execute('batch_delete_gtm_entities', { accountId: '1', containerId: '2', workspaceId: '3', tags: [{ id: '10' }, { id: '11' }], triggers: [{ id: 't3' }] }));
+    assert.equal(confirmCalls, 1, 'one dialog, declined');
+    assert.equal(out.declined, true, 'the batch reports it was declined');
+    assert.ok(!fd.calls.some((c) => c.startsWith('deleteTag:') || c.startsWith('deleteTrigger:') || c.startsWith('deleteVar:')), 'not a single deletion reached the API');
+    assert.ok(fd.calls.some((c) => c.startsWith('setPaused:')), 'the earlier update remains applied, as intended');
   });
 
   await test('batch_delete: not-found and ambiguous names are skipped, never deleted', async () => {
