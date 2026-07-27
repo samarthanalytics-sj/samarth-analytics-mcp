@@ -823,6 +823,17 @@ export class ChatService {
     // Every tool result from THIS turn, folded into the thread's carry-over once the turn ends.
     const turnToolResults: Array<{ name: string; args?: Record<string, unknown>; content?: string; ok: boolean }> = [];
 
+    // Build-throughput accounting: time the turn and count actual TAG creates, so a bulk build can
+    // report a real "N tags in Ms" rate. Reset the GTM quota-backoff counter and route any mid-build
+    // quota wait to the UI (reusing the rate-limit banner) so a pause-for-reset is explained, not a
+    // silent freeze. Cleared in the finally below.
+    const turnStart = Date.now();
+    if (covers('gtm')) {
+      this.data.quotaBackoffs = 0;
+      this.data.onQuotaBackoff = ({ attempt, delayMs }) =>
+        emit?.({ type: 'retry', provider: 'Google Tag Manager', status: 429, attempt, maxAttempts: 8, delayMs, reason: 'write quota per minute reached - waiting for it to reset, then resuming automatically' });
+    }
+
     let result;
     try {
       result = await runChat(client, { system, systemStatic: staticSystem, model: active.llm.model, apiKey, messages, signal }, gatedTools, {
@@ -865,10 +876,34 @@ export class ChatService {
       // them appends no `|+<targets>` suffix, so the keys never match once a chip is on and the whole
       // turn's tool results are silently dropped (the model then re-fetches everything next turn).
       if (this.threadKey(active, product, integrations) === threadKey) this.toolMemory.record(threadKey, turnToolResults);
+      // Stop routing quota waits once the turn is over (the callback closes over this turn's emit).
+      if (covers('gtm')) this.data.onQuotaBackoff = undefined;
+    }
+
+    // Build-throughput line: how many actual TAGS were created this turn and how fast. A tag-create
+    // tool name ends in "_tag" (create_gtm_tracking_tag, create_gtm_tag, the pixel/server tag tools);
+    // "_tags" (batch conversion) and triggers/variables are deliberately excluded - this counts tags.
+    let statsSuffix = '';
+    const isTagCreate = (name: string): boolean => /^create_.*_tag$/.test(name) || name === 'create_gtm_tag_with_trigger';
+    const tagsCreated = turnToolResults.filter((r) => r.ok && isTagCreate(r.name)).length;
+    if (tagsCreated > 0) {
+      const secs = Math.max(1, Math.round((Date.now() - turnStart) / 1000));
+      const perMin = (tagsCreated / secs) * 60;
+      const backoffs = this.data.quotaBackoffs;
+      console.error(`[chat] created ${tagsCreated} tag(s) in ${secs}s (${perMin.toFixed(1)}/min, ${backoffs} quota backoff(s))`);
+      // User-visible one-liner only for a real BULK build (2+ tags), so ordinary single-tag chats
+      // stay clean. Appended to the returned text AND streamed, so it shows live and persists.
+      if (tagsCreated >= 2) {
+        const mins = Math.floor(secs / 60);
+        const elapsed = mins > 0 ? `${mins}m ${secs % 60}s` : `${secs}s`;
+        const waited = backoffs > 0 ? `, paused ${backoffs}x for the GTM write limit to reset` : '';
+        statsSuffix = `\n\n_Created ${tagsCreated} tags in ${elapsed} (~${perMin.toFixed(1)}/min${waited})._`;
+        emit?.({ type: 'text', delta: stripDashes(statsSuffix) });
+      }
     }
 
     // Injected + anything the model recalled mid-turn via the memory tool.
     const memoriesUsed = [...usedMemories.values()];
-    return { text: stripDashes(result.text), toolCalls, ...(memoriesUsed.length ? { memoriesUsed } : {}) };
+    return { text: stripDashes(result.text) + stripDashes(statsSuffix), toolCalls, ...(memoriesUsed.length ? { memoriesUsed } : {}) };
   }
 }

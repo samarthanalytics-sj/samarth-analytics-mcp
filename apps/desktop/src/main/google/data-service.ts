@@ -279,6 +279,33 @@ export class GoogleDataService {
     private readonly clients: AccountClientManager
   ) {}
 
+  /** Count of GTM write-quota backoffs (429s waited out) since it was last reset. The chat turn resets
+   *  it at the start of a build and reads it for the build-stats line, so the user can see whether a
+   *  slow bulk build was quota-limited. Incremented by qCreate's onBackoff. */
+  quotaBackoffs = 0;
+  /** Optional per-turn hook so a quota wait can reach the UI ("waiting Ns for the write limit to
+   *  reset") instead of a silent pause. Set by the chat service around a turn, cleared after. */
+  onQuotaBackoff?: (info: { attempt: number; delayMs: number }) => void;
+
+  /** Quota-window retry for the INDIVIDUAL chat create path (tags/triggers/variables/built-ins). A
+   *  429 there is the per-user-per-minute write limit; rather than a short exponential guess, wait the
+   *  reset (honoring Retry-After) and resume the SAME create automatically, across a window long
+   *  enough to outlast a per-minute reset. So a 40-tag build pauses on the throttled tag and finishes
+   *  all 40 with no human interaction. Retrying a create after a 429 is safe: the 429 means nothing
+   *  was written, so there is no duplicate risk. */
+  private qCreate<T>(fn: () => Promise<T>): Promise<T> {
+    return withQuotaRetry(fn, {
+      maxRetries: 8,
+      baseDelayMs: 2_000,
+      maxDelayMs: 65_000,
+      onBackoff: ({ attempt, delayMs }) => {
+        this.quotaBackoffs += 1;
+        console.error(`[gtm] write quota hit - waiting ${Math.round(delayMs / 1000)}s for the per-minute limit to reset (retry ${attempt}/8)`);
+        this.onQuotaBackoff?.({ attempt, delayMs });
+      },
+    });
+  }
+
   private activeAuth(): OAuth2Client {
     const active = this.registry.getActiveView();
     if (!active) throw new Error('No active account. Connect a Google account first.');
@@ -921,10 +948,10 @@ export class GoogleDataService {
   ): Promise<GtmTagView> {
     const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
     const gtm = tagmanager({ version: 'v2', auth });
-    const res = await gtm.accounts.containers.workspaces.tags.create({
+    const res = await this.qCreate(() => gtm.accounts.containers.workspaces.tags.create({
       parent: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`,
       requestBody: tag,
-    });
+    }));
     this.journal('tag', accountId, containerId, workspaceId, res.data.tagId ?? '', `${res.data.name ?? 'tag'} (#${res.data.tagId})`);
     return { tagId: res.data.tagId ?? '', name: res.data.name ?? '', type: res.data.type ?? '' };
   }
@@ -2664,10 +2691,10 @@ export class GoogleDataService {
   ): Promise<string[]> {
     const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
     const gtm = tagmanager({ version: 'v2', auth });
-    const res = await gtm.accounts.containers.workspaces.built_in_variables.create({
+    const res = await this.qCreate(() => gtm.accounts.containers.workspaces.built_in_variables.create({
       parent: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`,
       type: types,
-    });
+    }));
     return (res.data.builtInVariable ?? []).map((v) => v.type ?? '');
   }
 
@@ -2721,13 +2748,13 @@ export class GoogleDataService {
   ): Promise<{ triggerId: string; name: string; type: string }> {
     const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
     const gtm = tagmanager({ version: 'v2', auth });
-    const res = await gtm.accounts.containers.workspaces.triggers.create({
+    const res = await this.qCreate(() => gtm.accounts.containers.workspaces.triggers.create({
       parent: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`,
       // normalizeTriggerType runs FIRST so the corrected `type` drives every downstream normalizer
       // (a model-authored "custom_event"/"all_clicks" must become "customEvent"/"click" before the
       // customEvent/timer/wait-default repairs inspect it).
       requestBody: normalizeCustomEventTrigger(normalizeTimerTrigger(applyTriggerWaitDefaults(normalizeTriggerType(trigger)))),
-    });
+    }));
     this.journal('trigger', accountId, containerId, workspaceId, res.data.triggerId ?? '', `${res.data.name ?? 'trigger'} (#${res.data.triggerId})`);
     return { triggerId: res.data.triggerId ?? '', name: res.data.name ?? '', type: res.data.type ?? '' };
   }
@@ -2836,10 +2863,10 @@ export class GoogleDataService {
   ): Promise<{ variableId: string; name: string; type: string }> {
     const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
     const gtm = tagmanager({ version: 'v2', auth });
-    const res = await gtm.accounts.containers.workspaces.variables.create({
+    const res = await this.qCreate(() => gtm.accounts.containers.workspaces.variables.create({
       parent: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`,
       requestBody: variable,
-    });
+    }));
     this.journal('variable', accountId, containerId, workspaceId, res.data.variableId ?? '', `${res.data.name ?? 'variable'} (#${res.data.variableId})`);
     return { variableId: res.data.variableId ?? '', name: res.data.name ?? '', type: res.data.type ?? '' };
   }

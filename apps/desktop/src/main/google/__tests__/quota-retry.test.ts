@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { withQuotaRetry, QUOTA_RE } from '../quota-retry';
+import { withQuotaRetry, QUOTA_RE, readRetryAfterMs } from '../quota-retry';
 
 let passed = 0;
 let failed = 0;
@@ -86,6 +86,50 @@ async function main(): Promise<void> {
       }),
     );
     assert.deepEqual(delays, [2000, 4000, 8000]);
+  });
+
+  await test('readRetryAfterMs parses a delta-seconds Retry-After header and an HTTP date', () => {
+    const withHeader = (v: string): unknown => ({ response: { headers: { 'retry-after': v } } });
+    assert.equal(readRetryAfterMs(withHeader('45')), 45_000, 'delta-seconds -> ms');
+    assert.equal(readRetryAfterMs({ response: { headers: { 'Retry-After': '10' } } }), 10_000, 'capitalized header too');
+    assert.equal(readRetryAfterMs({}), undefined, 'no header -> undefined');
+    assert.equal(readRetryAfterMs(new Error('boom')), undefined, 'a plain error -> undefined');
+    const httpDate = readRetryAfterMs(withHeader(new Date(Date.now() + 30_000).toUTCString()));
+    assert.ok(typeof httpDate === 'number' && httpDate > 20_000 && httpDate <= 30_000, `HTTP-date -> ~30s, got ${httpDate}`);
+  });
+
+  await test('honors the reset hint: waits AT LEAST Retry-After, capped by maxDelayMs', async () => {
+    const delays: number[] = [];
+    const err = Object.assign(new Error('Error 429: Queries per minute per user'), {
+      response: { headers: { 'retry-after': '50' } }, // server says the minute resets in 50s
+    });
+    await assert.rejects(
+      withQuotaRetry(async () => Promise.reject(err), {
+        maxRetries: 2,
+        baseDelayMs: 2000, // exponential would be 2s, 4s
+        maxDelayMs: 65_000,
+        sleep: async (ms) => { delays.push(ms); },
+      }),
+    );
+    // Each wait is max(exponential, 50s hint) — so the retry resumes when the quota actually resets.
+    assert.deepEqual(delays, [50_000, 50_000]);
+  });
+
+  await test('onBackoff fires once per retry with the attempt number and the delay', async () => {
+    const seen: Array<{ attempt: number; delayMs: number }> = [];
+    await assert.rejects(
+      withQuotaRetry(async () => Promise.reject(quotaErr()), {
+        maxRetries: 3,
+        baseDelayMs: 2000,
+        sleep: async () => {},
+        onBackoff: ({ attempt, delayMs }) => seen.push({ attempt, delayMs }),
+      }),
+    );
+    assert.deepEqual(seen, [
+      { attempt: 1, delayMs: 2000 },
+      { attempt: 2, delayMs: 4000 },
+      { attempt: 3, delayMs: 8000 },
+    ]);
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);

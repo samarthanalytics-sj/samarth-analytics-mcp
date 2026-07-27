@@ -10,6 +10,28 @@ export const QUOTA_RE =
 
 const realSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Read the server's reset hint from a quota error, in ms — so the wait lines up with when the quota
+ * actually resets instead of a blind exponential guess. Honors the standard `Retry-After` header
+ * (delta-seconds or an HTTP date) that googleapis surfaces on the GaxiosError; returns undefined when
+ * there is none, in which case the caller falls back to exponential backoff. Defensive: any odd shape
+ * yields undefined rather than throwing.
+ */
+export function readRetryAfterMs(error: unknown): number | undefined {
+  try {
+    const headers = (error as { response?: { headers?: Record<string, unknown> } })?.response?.headers;
+    const raw = headers?.['retry-after'] ?? headers?.['Retry-After'];
+    if (raw == null) return undefined;
+    const s = String(raw).trim();
+    if (/^\d+$/.test(s)) return Number(s) * 1_000; // delta-seconds
+    const when = Date.parse(s); // HTTP-date
+    if (!Number.isNaN(when)) return Math.max(0, when - Date.now());
+  } catch {
+    /* fall through to undefined */
+  }
+  return undefined;
+}
+
 export interface QuotaRetryOptions {
   /** Retries AFTER the first attempt (default 3 → up to 4 tries total). */
   maxRetries?: number;
@@ -19,18 +41,26 @@ export interface QuotaRetryOptions {
   maxDelayMs?: number;
   /** Injectable sleep so tests run instantly. */
   sleep?: (ms: number) => Promise<void>;
+  /** Extract the server's reset hint (ms) from the error; the wait is at LEAST this long (capped),
+   *  so a per-minute quota resumes when it truly resets. Defaults to reading Retry-After. */
+  retryAfterMs?: (error: unknown) => number | undefined;
+  /** Fired right before each backoff sleep, so a caller can log/count the wait or surface it to the
+   *  UI (e.g. "waiting Ns for the write limit to reset") instead of an unexplained pause. */
+  onBackoff?: (info: { attempt: number; delayMs: number; error: unknown }) => void;
 }
 
 /**
- * Run `fn`, retrying ONLY on a GTM quota / rate-limit error with exponential
- * backoff (2s, 4s, 8s … capped). Any non-quota error throws immediately (no
- * pointless retries). Defaults to 3 retries.
+ * Run `fn`, retrying ONLY on a GTM quota / rate-limit error. Backs off exponentially (2s, 4s, 8s …
+ * capped), but if the error carries a reset hint (Retry-After) the wait honors it so the retry
+ * resumes exactly when the quota window reopens. Any non-quota error throws immediately (no pointless
+ * retries). Defaults to 3 retries.
  */
 export async function withQuotaRetry<T>(fn: () => Promise<T>, opts: QuotaRetryOptions = {}): Promise<T> {
   const maxRetries = opts.maxRetries ?? 3;
   const base = opts.baseDelayMs ?? 2_000;
   const cap = opts.maxDelayMs ?? 30_000;
   const sleep = opts.sleep ?? realSleep;
+  const retryAfterMs = opts.retryAfterMs ?? readRetryAfterMs;
   let attempt = 0;
   for (;;) {
     try {
@@ -38,8 +68,12 @@ export async function withQuotaRetry<T>(fn: () => Promise<T>, opts: QuotaRetryOp
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       if (QUOTA_RE.test(msg) && attempt < maxRetries) {
-        const delay = Math.min(cap, base * 2 ** attempt); // 2s, 4s, 8s, …
+        const backoff = base * 2 ** attempt; // 2s, 4s, 8s, …
+        // Wait the LONGER of our backoff and the server's own reset hint, capped. Honoring the hint
+        // is what makes a throttled build resume right when the minute-quota resets, not before.
+        const delay = Math.min(cap, Math.max(backoff, retryAfterMs(e) ?? 0));
         attempt += 1;
+        opts.onBackoff?.({ attempt, delayMs: delay, error: e });
         await sleep(delay);
         continue;
       }
