@@ -9,6 +9,10 @@ import './global.css';
 import { App } from './App';
 import { ErrorBoundary } from './ErrorBoundary';
 import { applyTheme, loadTheme } from './theme';
+import { installRendererDevConsole } from './dev-console-bridge';
+
+// Capture uncaught/rejected errors and mirror the main process's dev logs into this DevTools Console.
+installRendererDevConsole();
 
 // Apply the saved theme before first paint so there's no flash of the wrong palette.
 applyTheme(loadTheme());

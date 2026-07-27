@@ -27,6 +27,7 @@ export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin(), groupDynImportWarnings],
     build: {
+      sourcemap: true,
       rollupOptions: {
         input: { index: resolve(__dirname, 'src/main/index.ts') },
         onwarn: (warning, warn) => {
@@ -43,6 +44,7 @@ export default defineConfig({
   preload: {
     plugins: [externalizeDepsPlugin()],
     build: {
+      sourcemap: true,
       rollupOptions: {
         input: { index: resolve(__dirname, 'src/preload/index.ts') },
       },
@@ -51,6 +53,7 @@ export default defineConfig({
   renderer: {
     root: resolve(__dirname, 'src/renderer'),
     build: {
+      sourcemap: true,
       rollupOptions: {
         input: { index: resolve(__dirname, 'src/renderer/index.html') },
       },
