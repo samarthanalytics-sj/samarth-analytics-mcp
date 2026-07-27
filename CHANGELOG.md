@@ -1,3 +1,9 @@
+## [1.409.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.408.1...v1.409.0) (2026-07-27)
+
+### Features
+
+* **desktop:** batch-create Google Ads conversion actions from tag names, one approval ([74cdcbe](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/74cdcbe57dd61f165d4f3b99574c066d80c0ef93))
+
 ## [1.408.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.408.0...v1.408.1) (2026-07-27)
 
 ### Bug Fixes
