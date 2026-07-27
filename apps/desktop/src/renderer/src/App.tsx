@@ -1975,12 +1975,13 @@ const PLATFORM_FULL: Record<GoogleProduct, string> = {
   ga4: 'Google Analytics 4',
   ads: 'Google Ads',
 };
-// One accent per platform, so each card is recognisable at a glance. Tint background + coloured
-// glyph (never white-on-accent) so it reads in both themes - see [[desktop-theme-accents]].
+// One accent per platform, matched to each Google product's real brand identity (GTM blue, GA4 the
+// Analytics orange, Google Ads green). Tint background + coloured glyph, never white-on-accent, so it
+// reads in both themes - the tokens carry per-theme values (see theme.ts / [[desktop-theme-accents]]).
 const PLATFORM_ACCENT: Record<GoogleProduct, { fg: string; bg: string; border: string }> = {
-  gtm: { fg: 'var(--c-blue)', bg: 'var(--c-blue-bg)', border: 'var(--c-blue-border)' },
-  ga4: { fg: 'var(--c-amber)', bg: 'var(--c-amber-bg)', border: 'var(--c-amber-border)' },
-  ads: { fg: 'var(--c-green)', bg: 'var(--c-green-bg)', border: 'var(--c-green-border)' },
+  gtm: { fg: 'var(--plat-gtm)', bg: 'var(--plat-gtm-bg)', border: 'var(--plat-gtm-border)' },
+  ga4: { fg: 'var(--plat-ga4)', bg: 'var(--plat-ga4-bg)', border: 'var(--plat-ga4-border)' },
+  ads: { fg: 'var(--plat-ads)', bg: 'var(--plat-ads-bg)', border: 'var(--plat-ads-border)' },
 };
 const CONTEXT_ORDER: readonly GoogleProduct[] = ['gtm', 'ga4', 'ads'];
 
