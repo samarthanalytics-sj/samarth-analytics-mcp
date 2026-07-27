@@ -1,3 +1,9 @@
+## [1.417.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.416.5...v1.417.0) (2026-07-27)
+
+### Features
+
+* **desktop:** structured, sectioned startup logs with a level convention ([556805f](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/556805f2bbc72f573b844e0688efd9f760b1f912))
+
 ## [1.416.5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.416.4...v1.416.5) (2026-07-27)
 
 ### Performance Improvements
