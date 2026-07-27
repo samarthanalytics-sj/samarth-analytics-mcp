@@ -1,3 +1,9 @@
+## [1.416.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.416.0...v1.416.1) (2026-07-27)
+
+### Bug Fixes
+
+* **desktop:** list_gtm_tags exposes a GA4 tag's own event name (not the trigger's) ([8b4a13f](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/8b4a13f97d2f9bb64cb9ed730017e1b2071dd17b))
+
 ## [1.416.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.415.0...v1.416.0) (2026-07-27)
 
 ### Features
