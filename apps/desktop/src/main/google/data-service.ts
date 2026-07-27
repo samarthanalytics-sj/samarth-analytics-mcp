@@ -5,7 +5,7 @@ import type { OAuth2Client } from 'google-auth-library';
 import type { AccountClientManager } from './account-clients';
 import type { RegistryService } from '../services/registry-service';
 import type { ContainerSnapshot, ServerContainerSnapshot } from './gtm-builders';
-import { ga4TagFields, applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, normalizeTriggerType, setCustomEventName, customEventNameOf, buildGa4Client, buildGa4ServerTag, buildMetaCapiServerTag, buildTikTokCapiServerTag, buildStapeDataTag, buildServerAllEventsTrigger, buildServerEventTrigger, buildAdsConversionServerTag, buildMetaEmqVariables, buildTikTokEmqVariables, buildEcommerceDlvVariables, buildGa4EventTag, buildTrigger, planTriggerRetarget, type TriggerInput, buildGtmClient, buildVariable, sanitizeName, matchesServerContainer, customTemplateType, upsertGoogleTagConfig, triggerUsageBreakdown, detectMetaTags, evaluateTrackingSetup, GA4_ECOMMERCE_FUNNEL_EVENTS, type TrackingSetupReport, type TrackingSetupCheck } from './gtm-builders';
+import { ga4TagFields, readGa4EventParameters, applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, normalizeTriggerType, setCustomEventName, customEventNameOf, buildGa4Client, buildGa4ServerTag, buildMetaCapiServerTag, buildTikTokCapiServerTag, buildStapeDataTag, buildServerAllEventsTrigger, buildServerEventTrigger, buildAdsConversionServerTag, buildMetaEmqVariables, buildTikTokEmqVariables, buildEcommerceDlvVariables, buildGa4EventTag, buildTrigger, planTriggerRetarget, type TriggerInput, buildGtmClient, buildVariable, sanitizeName, matchesServerContainer, customTemplateType, upsertGoogleTagConfig, triggerUsageBreakdown, detectMetaTags, evaluateTrackingSetup, GA4_ECOMMERCE_FUNNEL_EVENTS, type TrackingSetupReport, type TrackingSetupCheck } from './gtm-builders';
 import { resolveGa4MeasurementIds } from './gtm-ga4-check';
 import { withQuotaRetry, withRetry, QUOTA_RE, TRANSIENT_5XX_RE, NOT_FOUND_OR_PERMISSION_RE } from './quota-retry';
 
@@ -261,6 +261,9 @@ export interface GtmTagView {
    *  firing trigger's real name and customEventName - never guess them from the tag name. Empty means
    *  the tag has no firing trigger (it will never fire). */
   firingTriggerId?: string[];
+  /** For a GA4 Event tag (gaawe): its ACTUAL event parameters (name -> value), read from the tag's
+   *  eventSettingsTable - so a tag inventory shows what each tag really sends, not an assumed set. */
+  eventParameters?: Array<{ name: string; value: string }>;
 }
 
 export interface Ga4DataStreamView {
@@ -722,13 +725,21 @@ export class GoogleDataService {
     // is answerable WITHOUT confusing it with the firing trigger's custom event name. Also the FIRING
     // TRIGGER ids, so a tag can be joined to its real trigger (name + customEventName) via
     // list_gtm_triggers instead of the model guessing them from the tag name.
-    return tags.map((t) => ({
-      tagId: t.tagId ?? '',
-      name: t.name ?? '(unnamed)',
-      type: t.type ?? '',
-      ...ga4TagFields(t as unknown as Record<string, unknown>),
-      firingTriggerId: Array.isArray(t.firingTriggerId) ? (t.firingTriggerId as string[]) : [],
-    }));
+    return tags.map((t) => {
+      const rec = t as unknown as Record<string, unknown>;
+      const view: GtmTagView = {
+        tagId: t.tagId ?? '',
+        name: t.name ?? '(unnamed)',
+        type: t.type ?? '',
+        ...ga4TagFields(rec),
+        firingTriggerId: Array.isArray(t.firingTriggerId) ? (t.firingTriggerId as string[]) : [],
+      };
+      if (t.type === 'gaawe') {
+        const eventParameters = readGa4EventParameters(rec);
+        if (eventParameters.length) view.eventParameters = eventParameters;
+      }
+      return view;
+    });
   }
 
   async listGa4DataStreams(property: string): Promise<Ga4DataStreamView[]> {

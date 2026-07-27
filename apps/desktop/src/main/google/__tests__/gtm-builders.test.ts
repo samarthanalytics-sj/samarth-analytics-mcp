@@ -94,7 +94,7 @@ import {
   planTriggerRetarget,
 } from '../gtm-builders';
 import type { AuditTag as TAuditTag, ContainerSnapshot as TContainerSnapshot, ServerContainerSnapshot as TServerContainerSnapshot } from '../gtm-builders';
-import { buildGoogleTagEventSettingsVariable, ga4TagFields } from '../gtm-builders';
+import { buildGoogleTagEventSettingsVariable, ga4TagFields, readGa4EventParameters } from '../gtm-builders';
 import { classifyPixel } from '../pixel-signatures';
 
 let passed = 0;
@@ -3607,6 +3607,35 @@ test('ga4TagFields is empty for a non-GA4 tag (e.g. custom html)', () => {
 });
 test('ga4TagFields omits eventName when the GA4 tag has none set', () => {
   assert.deepEqual(ga4TagFields({ type: 'gaawe', parameter: [{ type: 'template', key: 'measurementIdOverride', value: 'G-1' }] }), { measurementId: 'G-1' });
+});
+
+// ── readGa4EventParameters: the tag's ACTUAL params (so an inventory shows real values) ──
+test('readGa4EventParameters reads the eventSettingsTable name/value pairs', () => {
+  const tag = {
+    type: 'gaawe',
+    parameter: [
+      { type: 'template', key: 'eventName', value: 'purchase' },
+      {
+        type: 'list',
+        key: 'eventSettingsTable',
+        list: [
+          { type: 'map', map: [{ type: 'template', key: 'parameter', value: 'form_id' }, { type: 'template', key: 'parameterValue', value: '{{dlv - form_id}}' }] },
+          { type: 'map', map: [{ type: 'template', key: 'parameter', value: 'form_name' }, { type: 'template', key: 'parameterValue', value: 'Contact Us' }] },
+        ],
+      },
+    ],
+  };
+  assert.deepEqual(readGa4EventParameters(tag), [
+    { name: 'form_id', value: '{{dlv - form_id}}' },
+    { name: 'form_name', value: 'Contact Us' },
+  ]);
+});
+test('readGa4EventParameters is empty for a tag with no event settings table', () => {
+  assert.deepEqual(readGa4EventParameters({ type: 'gaawe', parameter: [{ type: 'template', key: 'eventName', value: 'x' }] }), []);
+});
+test('a round-trip through buildGa4EventTag is read back intact', () => {
+  const built = buildGa4EventTag({ name: 'T', measurementId: 'G-1', eventName: 'lead', eventParameters: [{ name: 'page_url', value: '{{Page URL}}' }] }) as unknown as Record<string, unknown>;
+  assert.deepEqual(readGa4EventParameters(built), [{ name: 'page_url', value: '{{Page URL}}' }]);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
