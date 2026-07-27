@@ -1,3 +1,9 @@
+## [1.414.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.414.0...v1.414.1) (2026-07-27)
+
+### Bug Fixes
+
+* **desktop:** stop runaway identical-write loops + make in-place edits quota-resilient ([aecceb9](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/aecceb91dfed5fb68e8c79617a9e526f67703d9e))
+
 ## [1.414.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.413.1...v1.414.0) (2026-07-27)
 
 ### Features
