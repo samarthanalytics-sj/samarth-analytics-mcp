@@ -149,6 +149,25 @@ check('a JSON block and a pipe table coexist',
   extractReplyTables([fenced(ROWS), '', '| A | B |', '|---|---|', '| 1 | 2 |'].join('\n')).length === 2);
 check('a heading titles the JSON table', extractReplyTables(['## Tags', fenced(ROWS)].join('\n'))[0].title === 'Tags');
 
+// ── CSV blocks ──────────────────────────────────────────────────────────────────
+// A model asked for CSV emits comma-quoted rows (often in a fence), which the exporter could not read
+// - so the CSV button sat disabled on a reply that was ALREADY csv data.
+const CSV_BODY = ['name,form', '"GA4 - Event - A Tag","A"', '"GA4 - Event - B Tag","B"'].join('\n');
+check('a ```csv fence becomes a table', extractReplyTables(fenced(CSV_BODY, 'csv')).length === 1);
+check('the CSV header is the first row', JSON.stringify(extractReplyTables(fenced(CSV_BODY, 'csv'))[0].header) === '["name","form"]');
+check('CSV data rows are parsed', extractReplyTables(fenced(CSV_BODY, 'csv'))[0].rows.length === 2);
+check('a quoted comma stays inside its cell', extractReplyTables(fenced('a,b\n"x,1","y"', 'csv'))[0].rows[0][0] === 'x,1');
+check('doubled quotes unescape', extractReplyTables(fenced('a,b\n"say ""hi""","y"', 'csv'))[0].rows[0][0] === 'say "hi"');
+check('a BARE fence of CSV is tried too (models emit both)', extractReplyTables(fenced(CSV_BODY, ''))[0]?.rows.length === 2);
+check('a CSV reply now earns a CSV export', replyCsv(fenced(CSV_BODY, 'csv')).includes('name,form'));
+check('a one-column / one-row block is NOT a CSV table', extractReplyTables(fenced('just one column\nno commas here', 'csv')).length === 0);
+check('a JS fence with a comma is NOT read as CSV', extractReplyTables(fenced('const a = 1, b = 2;', 'js')).length === 0);
+
+// ── pipe tables WITHOUT a separator (matches the chat renderer) ──────────────────
+check('a pipe table missing its |---| separator is still extracted', extractReplyTables('| A | B |\n| 1 | 2 |\n| 3 | 4 |').length === 1);
+check('that table has both data rows', extractReplyTables('| A | B |\n| 1 | 2 |\n| 3 | 4 |')[0].rows.length === 2);
+check('a lone pipe-pair (no separator, <2 rows) is NOT a table', extractReplyTables('a | b\nc | d').length === 0);
+
 if (failures.length) console.error(failures.join('\n'));
 console.log(`chat-export: ${passed}/${passed + failed} checks passed`);
 if (failed > 0) process.exit(1);

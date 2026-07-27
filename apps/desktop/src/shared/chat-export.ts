@@ -90,6 +90,47 @@ function cellText(v: unknown): string {
     return String(v);
   }
 }
+/** Split ONE CSV line into cells, honoring "quoted, fields" and "" escaped quotes. Models emit one
+ *  record per line, so newlines-inside-quotes are not handled (nor produced). */
+function parseCsvRow(line: string): string[] {
+  const out: string[] = [];
+  let cur = '';
+  let inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (inQ) {
+      if (c === '"') {
+        if (line[i + 1] === '"') { cur += '"'; i++; } else inQ = false;
+      } else cur += c;
+    } else if (c === '"') inQ = true;
+    else if (c === ',') { out.push(cur); cur = ''; }
+    else cur += c;
+  }
+  out.push(cur);
+  return out.map((s) => s.trim());
+}
+
+/**
+ * A block of CSV text as a table. Models emit CSV (comma-quoted rows) as readily as a pipe table, and
+ * the exporter could not read it - so CSV/XLSX sat disabled on a reply that was ALREADY tabular data.
+ *
+ * Requires an unmistakable CSV shape - commas present, 2+ columns, 2+ rows, and most rows sharing the
+ * header's column count - so a paragraph of prose with a comma is never mistaken for a table. The
+ * first row is the header (CSV convention). Returns null when the shape is not clearly a table.
+ */
+export function csvBlockToTable(source: string): { header: string[]; rows: string[][] } | null {
+  if (!source.includes(',')) return null;
+  const lines = source.split('\n').map((l) => l.replace(/\r$/, '')).filter((l) => l.trim() !== '');
+  if (lines.length < 2) return null;
+  const rows = lines.map(parseCsvRow);
+  const cols = rows[0].length;
+  if (cols < 2) return null;
+  const consistent = rows.filter((r) => r.length === cols).length;
+  if (consistent < Math.ceil(rows.length * 0.8)) return null; // too ragged to be a table
+  const header = rows[0].map(plainCell);
+  return { header, rows: rows.slice(1).map((r) => header.map((_, j) => plainCell(r[j] ?? ''))) };
+}
+
 /** All GFM tables in a chat reply, each titled by the closest preceding heading or standalone bold line. */
 export function extractReplyTables(md: string): ChatReplyTable[] {
   const lines = (md ?? '').replace(/\r\n/g, '\n').split('\n');
@@ -121,27 +162,38 @@ export function extractReplyTables(md: string): ChatReplyTable[] {
         i++;
       }
       i++; // past the closing fence
-      // An unlabelled fence is worth trying: models emit bare ``` around JSON as often as ```json.
-      if (lang === '' || lang === 'json') {
-        const t = jsonBlockToTable(body.join('\n'));
-        if (t) {
-          tables.push({ title: lastTitle || `Table ${tables.length + 1}`, header: t.header, rows: t.rows });
-          lastTitle = '';
-        }
+      // A fenced block may be a JSON array OR CSV. An unlabelled fence is worth trying both: models
+      // emit bare ``` around JSON and around CSV as often as the labelled forms.
+      const fenced = body.join('\n');
+      const t = (lang === '' || lang === 'json' ? jsonBlockToTable(fenced) : null) ?? (lang === '' || lang === 'csv' ? csvBlockToTable(fenced) : null);
+      if (t) {
+        tables.push({ title: lastTitle || `Table ${tables.length + 1}`, header: t.header, rows: t.rows });
+        lastTitle = '';
       }
       continue;
     }
-    if (line.includes('|') && i + 1 < lines.length && isTableSep(lines[i + 1])) {
+    // A pipe table: a header row, ideally followed by a |---| separator. Many models omit the
+    // separator (the chat renderer tolerates that too), so accept a header + pipe rows when the shape
+    // is unmistakable: 2+ columns and, with no separator, 2+ data rows so a stray "a | b" prose line
+    // pair is not misread. A lookahead (j) means lines are only consumed when a table really forms.
+    const hasSep = line.includes('|') && i + 1 < lines.length && isTableSep(lines[i + 1]);
+    const noSepStart =
+      line.includes('|') && i + 1 < lines.length && lines[i + 1].includes('|') && !isTableSep(lines[i + 1]) &&
+      splitRow(line).length >= 2 && splitRow(lines[i + 1]).length >= 2;
+    if (hasSep || noSepStart) {
       const header = splitRow(line).map(plainCell);
-      i += 2;
+      let j = hasSep ? i + 2 : i + 1;
       const rows: string[][] = [];
-      while (i < lines.length && lines[i].trim() !== '' && lines[i].includes('|')) {
-        rows.push(splitRow(lines[i]).map(plainCell));
-        i++;
+      while (j < lines.length && lines[j].trim() !== '' && lines[j].includes('|') && !isTableSep(lines[j])) {
+        rows.push(splitRow(lines[j]).map(plainCell));
+        j++;
       }
-      tables.push({ title: lastTitle || `Table ${tables.length + 1}`, header, rows });
-      lastTitle = ''; // one title claims one table — the next table needs its own heading
-      continue;
+      if (hasSep ? rows.length >= 1 : rows.length >= 2) {
+        i = j;
+        tables.push({ title: lastTitle || `Table ${tables.length + 1}`, header, rows });
+        lastTitle = ''; // one title claims one table — the next table needs its own heading
+        continue;
+      }
     }
     i++;
   }
