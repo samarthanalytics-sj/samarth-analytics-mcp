@@ -1,3 +1,9 @@
+## [1.416.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.416.3...v1.416.4) (2026-07-27)
+
+### Bug Fixes
+
+* **desktop:** readable terminal logs - transliterate mojibake glyphs + collapse repeats ([70f4643](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/70f46432f4f67fe12d808001a57fd8f907c7e193))
+
 ## [1.416.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.416.2...v1.416.3) (2026-07-27)
 
 ### Bug Fixes
