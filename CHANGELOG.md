@@ -1,3 +1,9 @@
+## [1.410.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.409.0...v1.410.0) (2026-07-27)
+
+### Features
+
+* **desktop:** reuse option for batch Ads conversion actions instead of always duplicating ([768baf9](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/768baf950e61264f0b6517056b2fd3362b4dc3ed))
+
 ## [1.409.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.408.1...v1.409.0) (2026-07-27)
 
 ### Features
