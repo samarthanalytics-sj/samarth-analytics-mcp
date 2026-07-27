@@ -47,10 +47,12 @@ function writeExecutor(execute: ToolExecutor['execute'], isWrite: (name: string)
   return { list: () => [{ name: 't', description: 'test tool', inputSchema: {} }], execute, isWrite };
 }
 
-/** Client that replays a fixed list of tool-call names, one call per step, then a final answer. */
+/** Client that replays a fixed list of tool-call names, one call per step, then a final answer. Each
+ *  call gets DISTINCT args (its index) so the repeated-identical-write guard never trips - these
+ *  helpers model progress across distinct items, not a loop on one. */
 function callsThenAnswer(names: string[], answer = 'done'): ScriptedClient {
   return new ScriptedClient([
-    ...names.map((name, i) => ({ toolCalls: [{ id: String(i + 1), name, args: {} }] })),
+    ...names.map((name, i) => ({ toolCalls: [{ id: String(i + 1), name, args: { i } }] })),
     { text: answer },
   ]);
 }
@@ -133,10 +135,16 @@ await test('BULK: a realistic 40-tag build finishes in ONE turn under the produc
   // then a final summary. That is 42 steps - past the soft ceiling of 40. The progress-aware budget
   // must carry it to the end because a write lands on every build step.
   const SOFT = 40, HARD = 300; // the exact values chat-service passes
-  const buildNames = ['list_gtm_tags', ...Array.from({ length: 40 }, () => 'create_gtm_tracking_tag')];
   const isGtmWrite = (name: string): boolean => name.startsWith('create_');
+  // DISTINCT args per tag (real builds have unique names), so the repeated-write guard never trips -
+  // it only blocks IDENTICAL repeats, which a genuine 40-tag build never issues.
+  const buildCalls = [
+    { id: '1', name: 'list_gtm_tags', args: {} },
+    ...Array.from({ length: 40 }, (_, i) => ({ id: String(i + 2), name: 'create_gtm_tracking_tag', args: { tagName: `GA4 - Event - Tag ${i + 1}` } })),
+  ];
+  const clientReplies = [...buildCalls.map((c) => ({ toolCalls: [c] })), { text: 'Done. All 40 tags were created in the draft workspace.' }];
 
-  const client = callsThenAnswer(buildNames, 'Done. All 40 tags were created in the draft workspace.');
+  const client = new ScriptedClient(clientReplies);
   let creates = 0;
   const exec = writeExecutor(async (name) => {
     if (name.startsWith('create_')) creates += 1;
@@ -158,13 +166,64 @@ await test('BULK: a realistic 40-tag build finishes in ONE turn under the produc
 
   // Before the fix (no extension: hard == soft == 40) the SAME build stalls out and forces "proceed".
   const before = await runChat(
-    new ScriptedClient([...buildNames.map((name, i) => ({ toolCalls: [{ id: String(i + 1), name, args: {} }] })), { text: 'Done.' }]),
+    new ScriptedClient([...buildCalls.map((c) => ({ toolCalls: [c] })), { text: 'Done.' }]),
     { system: 's', model: 'm', apiKey: 'k', messages: [{ role: 'user', text: 'create these 40 tags' }] },
     writeExecutor(async () => '{}', isGtmWrite),
     {},
     SOFT // no hardMaxSteps -> old fixed-budget behaviour
   );
   assert.match(before.text, /tool-call limit|NOT done/i, 'the old fixed budget stopped this exact build partway (the bug being fixed)');
+});
+
+await test('repeated-write guard: an identical write is blocked after 2 tries, ending the loop', async () => {
+  // The model loops on the SAME write (observed: update_gtm_trigger on one trigger 15+ times). The
+  // guard must run it at most twice, then feed back a "blocked" notice and let the turn end.
+  const client = new ScriptedClient([{ toolCalls: [{ id: '1', name: 'update_gtm_trigger', args: { triggerId: '3', eventName: 'form_submission' } }] }]);
+  let executed = 0;
+  const exec = writeExecutor(async () => { executed += 1; return 'ok'; }, () => true);
+  const res = await runChat(
+    client,
+    { system: 's', model: 'm', apiKey: 'k', messages: [{ role: 'user', text: 'fix triggers' }] },
+    exec,
+    {},
+    3,
+    { hardMaxSteps: 30, stallSteps: 2 }
+  );
+  assert.equal(executed, 2, 'the identical write ran at most twice, not in a loop');
+  assert.match(res.text, /NOT done/i, 'the turn ends (the blocked repeats make no progress, so the stall stop fires)');
+  // The 3rd call fed back a blocked notice so the model could react.
+  const blocked = client.inputs.flatMap((i) => i.messages).filter((m) => m.role === 'tool').flatMap((m) => (m as { results: Array<{ content: string }> }).results).some((r) => /Blocked: you have already called/.test(r.content));
+  assert.ok(blocked, 'a blocked notice was fed back to the model');
+});
+
+await test('repeated-write guard: DISTINCT writes are never blocked', async () => {
+  const client = new ScriptedClient([
+    { toolCalls: [{ id: '1', name: 'update_gtm_trigger', args: { triggerId: '3' } }] },
+    { toolCalls: [{ id: '2', name: 'update_gtm_trigger', args: { triggerId: '6' } }] },
+    { toolCalls: [{ id: '3', name: 'update_gtm_trigger', args: { triggerId: '8' } }] },
+    { text: 'all three updated' },
+  ]);
+  let executed = 0;
+  const exec = writeExecutor(async () => { executed += 1; return 'ok'; }, () => true);
+  const res = await runChat(
+    client,
+    { system: 's', model: 'm', apiKey: 'k', messages: [{ role: 'user', text: 'update three triggers' }] },
+    exec, {}, 10, { hardMaxSteps: 30 }
+  );
+  assert.equal(res.text, 'all three updated');
+  assert.equal(executed, 3, 'three DISTINCT writes all ran');
+});
+
+await test('repeated-write guard: identical READS are NOT blocked (only writes are)', async () => {
+  const client = new ScriptedClient([{ toolCalls: [{ id: '1', name: 'list_gtm_triggers', args: { x: 1 } }] }]);
+  let executed = 0;
+  const exec = writeExecutor(async () => { executed += 1; return '[]'; }, () => false); // not a write
+  await runChat(
+    client,
+    { system: 's', model: 'm', apiKey: 'k', messages: [{ role: 'user', text: 'list' }] },
+    exec, {}, 4
+  );
+  assert.equal(executed, 4, 'identical reads ran every step (the guard is write-only)');
 });
 
 await test('caps at maxSteps when the model keeps calling tools, and says the task is NOT done', async () => {
