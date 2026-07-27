@@ -1,3 +1,9 @@
+## [1.408.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.408.0...v1.408.1) (2026-07-27)
+
+### Bug Fixes
+
+* **desktop:** make selected text visible when copying ([c226f16](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c226f162d62a4dc636805f44b9ec0f545c560641))
+
 ## [1.408.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.407.0...v1.408.0) (2026-07-27)
 
 ### Features
