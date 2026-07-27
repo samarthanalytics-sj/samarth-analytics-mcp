@@ -1,6 +1,6 @@
 // Pure tests for the chat-reply export builders (table extraction, CSV, exportability, sheet names).
 // Run: tsx src/shared/__tests__/chat-export.test.ts
-import { extractReplyTables, replyLooksExportable, replyCsv, sheetNameFor, asksForExport, shouldOfferExport } from '../chat-export';
+import { extractReplyTables, replyLooksExportable, replyCsv, sheetNameFor, asksForExport, shouldOfferExport, exportReplyFilename, safeFilePart } from '../chat-export';
 
 let passed = 0;
 let failed = 0;
@@ -148,6 +148,20 @@ check('a pipe inside a code block never becomes a table',
 check('a JSON block and a pipe table coexist',
   extractReplyTables([fenced(ROWS), '', '| A | B |', '|---|---|', '| 1 | 2 |'].join('\n')).length === 2);
 check('a heading titles the JSON table', extractReplyTables(['## Tags', fenced(ROWS)].join('\n'))[0].title === 'Tags');
+
+// ── exportReplyFilename ─────────────────────────────────────────────────────────
+// The default save name should describe what the file CONTAINS - the reply's title, else the user's
+// request - not a generic "chat report".
+const efn = (reply: string, ask: string): string => exportReplyFilename(reply, ask, 'gtm', '2026-07-27');
+check('names the file after a reply heading', efn('## Custom Event Triggers\n\n| A |\n|---|\n| x |', 'anything') === 'GTM - Custom Event Triggers 2026-07-27');
+check('falls back to the user request when the reply has no title',
+  efn('"GA4 - Event - A Tag","form_submission"\n"GA4 - Event - B Tag","form_submission"', 'list down all the custom-event triggers and there customEventName')
+    === 'GTM - custom-event triggers and there customEventName 2026-07-27');
+check('strips a trailing "export as csv" from the request', efn('"a","b"\n"c","d"', 'give me the trigger names as a csv') === 'GTM - trigger names 2026-07-27');
+check('generic fallback when neither a title nor a usable request exists', efn('| A |\n|---|\n| x |', '') === 'GTM chat report 2026-07-27');
+check('forbidden filename characters are stripped', !/[\\/:*?"<>|]/.test(efn('## Tags: A/B * C?', 'x')));
+check('a non-generic table title beats the request', efn('**Trigger Inventory**\n| A | B |\n|---|---|\n| 1 | 2 |', 'export it') === 'GTM - Trigger Inventory 2026-07-27');
+check('safeFilePart drops forbidden chars and trailing dots', safeFilePart('a/b:c*d.') === 'a b c d');
 
 // ── CSV blocks ──────────────────────────────────────────────────────────────────
 // A model asked for CSV emits comma-quoted rows (often in a fence), which the exporter could not read
