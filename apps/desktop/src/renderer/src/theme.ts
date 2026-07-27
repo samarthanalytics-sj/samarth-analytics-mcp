@@ -85,6 +85,18 @@ const VARS: Record<Theme, Record<string, string>> = {
     '--c-green': '#6ee7b7',
     '--c-green-bg': '#0a3d2e',
     '--c-green-border': '#147a5c',
+    // Per-platform brand accents for the chat context cards: each product's real identity colour
+    // (GTM blue, GA4 the Analytics orange, Google Ads green), as a pastel glyph on a deep tint so it
+    // reads on the dark surface without white-on-accent. See [[desktop-theme-accents]].
+    '--plat-gtm': '#93c5fd',
+    '--plat-gtm-bg': '#16283f',
+    '--plat-gtm-border': '#2f4d78',
+    '--plat-ga4': '#fdba74',
+    '--plat-ga4-bg': '#3a220b',
+    '--plat-ga4-border': '#8a4e1c',
+    '--plat-ads': '#6ee7b7',
+    '--plat-ads-bg': '#0a3d2e',
+    '--plat-ads-border': '#177a5c',
   },
   light: {
     ...SHARED,
@@ -128,6 +140,17 @@ const VARS: Record<Theme, Record<string, string>> = {
     '--c-green': '#047857',
     '--c-green-bg': '#d1fae5',
     '--c-green-border': '#a7f3d0',
+    // Per-platform brand accents (light): a strong brand-hue glyph on a soft tint. GA4 is the
+    // Analytics orange, distinct from the yellow-amber "warning" accent.
+    '--plat-gtm': '#1d4ed8',
+    '--plat-gtm-bg': '#dbeafe',
+    '--plat-gtm-border': '#bfdbfe',
+    '--plat-ga4': '#c2410c',
+    '--plat-ga4-bg': '#ffedd5',
+    '--plat-ga4-border': '#fed7aa',
+    '--plat-ads': '#047857',
+    '--plat-ads-bg': '#d1fae5',
+    '--plat-ads-border': '#a7f3d0',
   },
 };
 
