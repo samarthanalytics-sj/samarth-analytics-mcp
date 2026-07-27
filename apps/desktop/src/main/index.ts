@@ -1,5 +1,6 @@
 import { app, shell, BrowserWindow, ipcMain, session } from 'electron';
 import { join } from 'node:path';
+import { installConsoleBridge, installHttpLogging, installIpcLogging, setDevLogSink } from './devtools/dev-logger';
 import { AccountRepository } from './storage/account-repository';
 import { SecretStore } from './storage/secret-store';
 import { SafeStorageCryptor } from './storage/safe-storage-cryptor';
@@ -161,6 +162,16 @@ function registerIpcHandlers(): void {
 }
 
 app.whenReady().then(() => {
+  // Dev-only: mirror main-process activity into the renderer DevTools Console. Installed at the very
+  // top so it captures startup logs and the first API calls (buffered until the window exists), and
+  // BEFORE the IPC handlers register (below) so the IPC wrapper sees every channel. The sink that
+  // fans entries out to the window is wired after createWindow(). No-op in packaged builds.
+  if (isDev) {
+    installConsoleBridge();
+    installIpcLogging(ipcMain);
+    void installHttpLogging();
+  }
+
   // Lock down the renderer's CSP in packaged builds. Left open in dev so the
   // Vite dev server (HMR over ws + injected scripts) keeps working.
   if (app.isPackaged) {
@@ -351,6 +362,13 @@ app.whenReady().then(() => {
   log.success('Tool registry ready');
   createWindow();
   log.success('Main window created');
+  // Now a window exists: point the DevLog bridge at it and flush the buffered startup entries. Every
+  // entry was already redacted in the main process before this send.
+  if (isDev) {
+    setDevLogSink((entry) => {
+      for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('devlog:entry', entry);
+    });
+  }
   log.success('MCP services ready');
   log.success('Application ready');
   log.summary([
