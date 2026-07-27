@@ -1,3 +1,9 @@
+## [1.414.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.414.1...v1.414.2) (2026-07-27)
+
+### Bug Fixes
+
+* **desktop:** render chat pipe tables even when the model omits the |---| separator row ([fdf9751](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/fdf97518c3853c09031674455083e6f0001b1252))
+
 ## [1.414.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.414.0...v1.414.1) (2026-07-27)
 
 ### Bug Fixes
