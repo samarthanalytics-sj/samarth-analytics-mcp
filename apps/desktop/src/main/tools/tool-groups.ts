@@ -144,6 +144,7 @@ const GROUP_MEMBERS: Record<ToolGroup, readonly string[]> = {
     'delete_unused_gtm_triggers',
     'create_gtm_variable',
     'create_gtm_variable_typed',
+    'update_gtm_variable',
     'delete_gtm_variable',
     'delete_unused_gtm_variables',
     'batch_delete_gtm_entities',

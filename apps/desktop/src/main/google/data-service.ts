@@ -2799,6 +2799,36 @@ export class GoogleDataService {
     };
   }
 
+  /** Update an existing VARIABLE in place WITHOUT losing its config. GTM's update replaces the whole
+   *  resource, so fetch the current variable, overlay only the fields provided, and merge `parameter`
+   *  BY KEY - a partial edit (a new name, or one changed parameter) never wipes the rest. This is the
+   *  correct path for "change variable X"; deleting and recreating it loses its id and silently breaks
+   *  every tag/trigger that referenced it by that id. */
+  async updateGtmVariable(
+    accountId: string,
+    containerId: string,
+    workspaceId: string,
+    variableId: string,
+    variable: Record<string, unknown>
+  ): Promise<{ variableId: string; name: string; type: string }> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const path = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/variables/${variableId}`;
+    const current = (await gtm.accounts.containers.workspaces.variables.get({ path })).data;
+    const merged: Record<string, unknown> = { ...current };
+    for (const [k, v] of Object.entries(variable)) {
+      if (v === undefined) continue;
+      if (k === 'parameter') {
+        merged.parameter = mergeParametersByKey((current.parameter as GtmParam[] | undefined) ?? [], v as GtmParam[]);
+      } else {
+        merged[k] = v;
+      }
+    }
+    const res = await gtm.accounts.containers.workspaces.variables.update({ path, requestBody: merged });
+    this.journal('variable', accountId, containerId, workspaceId, res.data.variableId ?? variableId, `${res.data.name ?? 'variable'} (#${variableId})`);
+    return { variableId: res.data.variableId ?? variableId, name: res.data.name ?? '', type: res.data.type ?? '' };
+  }
+
   /**
    * Repair a CREATED tag's firing trigger to a corrected shape (the "Verify firing" fix). Snapshots
    * the container, finds the tag by name + its first firing trigger, then either rewrites that

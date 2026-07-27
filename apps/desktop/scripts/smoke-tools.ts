@@ -47,7 +47,7 @@ const MUTATIONS = new Set([
   'addGa4EventParameters', 'addGa4ServerParameters', 'setGa4MeasurementId', 'setGtmTagConsent',
   'addGa4EventParametersToAllTags', 'setGa4MeasurementIdOnAllTags',
   'deleteGtmTag', 'deleteGtmTrigger', 'deleteGtmVariable',
-  'enableGtmBuiltInVariables', 'createGtmTrigger', 'updateGtmTrigger', 'createGtmVariable',
+  'enableGtmBuiltInVariables', 'createGtmTrigger', 'updateGtmTrigger', 'createGtmVariable', 'updateGtmVariable',
   'createGtmFolder', 'moveEntitiesToFolder', 'renameGtmFolder', 'deleteGtmFolder',
   'createGtmEnvironment',
   'createServerContainer', 'createGtmClient', 'deleteGtmClient', 'createGtmTransformation', 'bootstrapServerSideTagging',
@@ -199,6 +199,8 @@ function makeFakeData(): { data: GoogleDataService; calls: string[]; mutations: 
       r('createGtmTrigger', { triggerId: 'NEW1', name: String(t?.name ?? ''), type: String(t?.type ?? '') }),
     createGtmVariable: (_a: string, _b: string, _c: string, v: Record<string, unknown>) =>
       r('createGtmVariable', { variableId: 'V9', name: String(v?.name ?? ''), type: String(v?.type ?? '') }),
+    updateGtmVariable: (_a: string, _b: string, _c: string, variableId: string, v: Record<string, unknown>) =>
+      r('updateGtmVariable', { variableId, name: String(v?.name ?? ''), type: String(v?.type ?? '') }),
   } as unknown as GoogleDataService;
   // Google Ads (a separate service, injected separately). It shares `calls`, so its mutating methods
   // are counted by mutations() exactly like a GTM write. Every public GoogleAdsService method a tool
