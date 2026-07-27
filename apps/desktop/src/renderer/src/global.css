@@ -20,8 +20,16 @@ code, pre, kbd, samp {
   font-family: var(--font-mono);
   font-size: 0.95em;
 }
+/* Selected text must stay READABLE on every surface (dark canvas, blue user bubbles, code blocks),
+ * so force BOTH a solid highlight and a contrasting text colour - a translucent tint with no colour
+ * override left selected text nearly invisible. */
 ::selection {
-  background: var(--primary-soft);
+  background: var(--selection-bg);
+  color: var(--selection-fg);
+}
+::-moz-selection {
+  background: var(--selection-bg);
+  color: var(--selection-fg);
 }
 
 /* ── Interactive states ──────────────────────────────────────────────────────────────────────── */
