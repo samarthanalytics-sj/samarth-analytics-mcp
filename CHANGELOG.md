@@ -1,3 +1,9 @@
+## [1.416.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.415.0...v1.416.0) (2026-07-27)
+
+### Features
+
+* **desktop:** informative default filename for chat report exports ([2bd6750](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/2bd675075b6989f82f7da55eb1e6c889add4d154))
+
 ## [1.415.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.414.4...v1.415.0) (2026-07-27)
 
 ### Features
