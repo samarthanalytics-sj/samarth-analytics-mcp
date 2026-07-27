@@ -293,12 +293,21 @@ async function main(): Promise<void> {
       n.startsWith('batch_delete_') || // batch_delete_gtm_entities: a destructive multi-entity delete
       n.startsWith('archive_') ||
       (/google_ads/.test(n) && !n.includes('_ga4_') && !n.startsWith('create_'));
-    // GATED-BUT-NOT-DESTRUCTIVE (Tool.approval, 2026-07-24): additive writes that are nonetheless
-    // LIVE in an external account and not revertible by this app. They show ONE plain card with no
-    // typed word, so under a DECLINING confirm they decline like a delete - which is the point - but
-    // they must never be counted as destructive, because nothing is deleted and no delete API call
-    // may result. create_google_ads_conversion_action is the only member today.
-    const isApprovalGated = (n: string) => n === 'create_google_ads_conversion_action';
+    // GATED-BUT-NOT-DESTRUCTIVE (Tool.approval): additive/modifying writes that are nonetheless LIVE
+    // in an external account and not revertible by this app. They show ONE plain card with no typed
+    // word, so under a DECLINING confirm they decline like a delete - which is the point - but they
+    // must never be counted as destructive, because nothing is deleted and no delete API call may
+    // result. Members, all carrying Tool.approval in the registry:
+    //   - create_google_ads_conversion_action (a live Ads conversion action);
+    //   - the GA4 ACCESS-BINDING create/update tools, which change WHO can access a property/account
+    //     (a permission write, flagged `sensitive` in ga4-write-tools → approval:true). The delete
+    //     access-binding tool is caught by isDestructive above, so only create_/update_ land here.
+    // registry.list() intentionally projects only {name, description, inputSchema} (the LLM tool
+    // shape), so this classification cannot read the approval flag off the listed tools and must name
+    // the gated set. Keep it in step with the registry: any new Tool.approval write belongs here.
+    const isApprovalGated = (n: string) =>
+      n === 'create_google_ads_conversion_action' ||
+      ((n.startsWith('create_') || n.startsWith('update_')) && n.endsWith('_access_binding'));
     const destructiveNames = writeNames.filter(isDestructive);
     const gatedNames = writeNames.filter((n) => !isDestructive(n) && isApprovalGated(n));
     let gatedDeclined = 0;
