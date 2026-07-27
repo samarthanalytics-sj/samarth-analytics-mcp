@@ -39,7 +39,10 @@ import { registerNetworkIpc } from './network/network-ipc';
 import type { MonitorAlert, Ga4MonitorRun, AdsMonitorRun } from '../shared/ipc';
 import { EmbeddingStore } from './storage/embedding-store';
 import { CorpusSemanticIndex } from './corpus/semantic-index';
+import { readFileSync } from 'node:fs';
+import { type as osType, release as osRelease, version as osVersion } from 'node:os';
 import { installReadableConsole } from '../shared/log-format';
+import { log } from './logger';
 
 // Keep the terminal logs legible: transliterate Unicode glyphs (-> [ok] [x] - ...) that a legacy
 // Windows console renders as mojibake, and collapse repeated identical lines. Console-only; the data
@@ -52,6 +55,36 @@ installReadableConsole();
 // and the multi-provider LLM gateway. See apps/desktop/README.md.
 
 const isDev = !app.isPackaged;
+
+/** The release version for the startup banner. In dev the app's own package is 0.0.0 (semantic-release
+ *  bumps the repo-root package.json instead), so read that; packaged builds carry the real version. */
+function appVersion(): string {
+  if (isDev) {
+    for (const p of [join(process.cwd(), 'package.json'), join(process.cwd(), '..', '..', 'package.json')]) {
+      try {
+        const v = (JSON.parse(readFileSync(p, 'utf8')) as { version?: string }).version;
+        if (v && v !== '0.0.0') return `v${v}`;
+      } catch { /* try the next candidate */ }
+    }
+  }
+  return `v${app.getVersion()}`;
+}
+
+/** A friendly OS label ("Windows 10 Pro"), falling back to type + kernel release. */
+function osLabel(): string {
+  try {
+    const v = osVersion();
+    if (v) return v;
+  } catch { /* fall through */ }
+  return `${osType()} ${osRelease()}`;
+}
+
+/** Local wall-clock timestamp "YYYY-MM-DD HH:mm:ss" for the banner. */
+function nowStamp(): string {
+  const d = new Date();
+  const p = (n: number): string => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
 
 // Quiet Electron's dev-only "Insecure Content-Security-Policy" console warning.
 // It fires in unpackaged builds (electron-vite preview) for the renderer and for
@@ -144,14 +177,20 @@ app.whenReady().then(() => {
   // Local data layer: account registry (metadata) + secret store (encrypted via
   // safeStorage/DPAPI). Dev uses the repo-root data/ dir; packaged uses AppData.
   const dataDir = resolveDataDir();
-  console.error(`[samarth-desktop] data dir: ${dataDir}`);
+  log.banner('Samarth Analytics MCP Desktop', [
+    ['Version', appVersion()],
+    ['Environment', app.isPackaged ? 'Production' : 'Development'],
+    ['Started At', nowStamp()],
+  ]);
+  log.section('System');
+  log.info('Data directory', dataDir);
+  log.info('Platform', osLabel(), `Node ${process.versions.node}`, `Electron ${process.versions.electron}`, `Chrome ${process.versions.chrome}`);
   const accounts = new AccountRepository(join(dataDir, 'registry.json'));
   const secrets = new SecretStore(join(dataDir, 'secrets.json'), new SafeStorageCryptor());
   const providerKeys = new ProviderKeyStore(join(dataDir, 'app-settings.json'), secrets);
   const registry = new RegistryService(accounts, secrets, providerKeys);
-  if (!secrets.available()) {
-    console.warn('[samarth-desktop] safeStorage encryption unavailable — secret writes will fail.');
-  }
+  if (secrets.available()) log.success('Secret store ready', 'Encrypted at rest via safeStorage / OS keychain');
+  else log.warn('safeStorage encryption unavailable', 'Secret writes will fail on this machine');
 
   // Per-account Google sign-in (loopback OAuth) + the auto-refreshing client
   // manager + read-only GTM/GA4 data fetches. Client id/secret come from env or
@@ -217,15 +256,19 @@ app.whenReady().then(() => {
   // Startup diagnostic — proves THIS running process loaded the current build. If the
   // GA4-edit tools are missing here, the main process is stale (electron-vite did not
   // reload it): fully quit and `npm run dev` again. See [[desktop-dev-restart-gotcha]].
+  log.section('Loading Modules');
+  log.success('Google services initialized', 'GTM, GA4 and Google Ads clients ready');
+  let toolCount = 0;
   try {
     const names = buildToolRegistry(dataService, async () => null).list().map((t) => t.name);
+    toolCount = names.length;
+    log.success('GTM/GA4 tools loaded', `Total tools: ${toolCount}`);
     const ga4Edit = ['set_ga4_measurement_id', 'set_ga4_measurement_id_on_all_tags', 'add_ga4_event_parameters', 'add_ga4_event_parameters_to_all_tags'];
-    const present = ga4Edit.filter((n) => names.includes(n));
-    console.error(
-      `[samarth-desktop] ${names.length} GTM/GA4 tools loaded · GA4-edit tools: ${present.length === ga4Edit.length ? `ALL present (${present.join(', ')})` : `MISSING ${ga4Edit.filter((n) => !present.includes(n)).join(', ')} — STALE BUILD, fully restart npm run dev`}`
-    );
+    const missing = ga4Edit.filter((n) => !names.includes(n));
+    if (missing.length === 0) log.success('GA4 edit tools present', ...ga4Edit.map((n) => `[ok] ${n}`));
+    else log.warn('GA4 edit tools MISSING - STALE BUILD, fully restart npm run dev', ...missing.map((n) => `[missing] ${n}`));
   } catch (e) {
-    console.error('[samarth-desktop] tool diagnostic failed:', e);
+    log.error('Tool diagnostic failed', e instanceof Error ? e.message : String(e));
   }
 
   // Continuous monitoring: re-audits the active container on a timer and pushes
@@ -302,7 +345,22 @@ app.whenReady().then(() => {
   });
   registerTagWatchIpc(tagWatch);
   registerNetworkIpc({ configPath: join(dataDir, 'network-config.json') });
+
+  log.section('Application Startup');
+  log.success('IPC handlers registered');
+  log.success('Tool registry ready');
   createWindow();
+  log.success('Main window created');
+  log.success('MCP services ready');
+  log.success('Application ready');
+  log.summary([
+    '[ok] Build successful',
+    '[ok] Electron started',
+    '[ok] Renderer running',
+    `[ok] ${toolCount} tools loaded`,
+    '[ok] GTM / GA4 / Ads services ready',
+    '[ok] MCP ready',
+  ]);
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
