@@ -74,7 +74,7 @@ import { autoHealConfirmMessage } from '../../shared/workspace-warnings';
 import { MEMORY_KINDS, type Memory, type MemoryKind } from '../../shared/chat-memory';
 import type { SeedCandidate } from '../../shared/memory-seed';
 import { resolveChatInput, slashMenuMatches, type SlashCommand } from '../../shared/chat-commands';
-import { extractReplyTables, shouldOfferExport } from '../../shared/chat-export';
+import { extractReplyTables, shouldOfferExport, exportReplyFilename } from '../../shared/chat-export';
 import { adsStatus, adsStatusLabel, adsUsable, adsNeedsConsent } from '../../shared/ads-status';
 import { INTEGRATION_OPTIONS, INTEGRATION_LABEL, INTEGRATION_HINT } from '../../shared/chat-integrations';
 import { describeAdsToken } from '../../shared/ads-token-scope';
@@ -1046,7 +1046,7 @@ function formatMsgTime(ts: number): string {
 /** The "Export report" bar under long / tabular assistant replies — save the reply as PDF, CSV,
  *  XLSX or Markdown via a main-process save dialog. CSV/XLSX export the reply's ACTUAL tables, so
  *  they're disabled (with the reason on hover) when the reply has none — never an empty file. */
-function ExportReplyBar({ text, product, onError }: { text: string; product: GoogleProduct; onError: (m: string) => void }): JSX.Element {
+function ExportReplyBar({ text, ask, product, onError }: { text: string; ask: string; product: GoogleProduct; onError: (m: string) => void }): JSX.Element {
   const [exporting, setExporting] = useState<'' | 'pdf' | 'csv' | 'xlsx' | 'md'>('');
   const [savedTo, setSavedTo] = useState('');
   const tableCount = useMemo(() => extractReplyTables(text).length, [text]);
@@ -1056,7 +1056,9 @@ function ExportReplyBar({ text, product, onError }: { text: string; product: Goo
     setExporting(fmt);
     setSavedTo('');
     try {
-      const name = `${product.toUpperCase()} chat report ${new Date().toISOString().slice(0, 10)}`;
+      // Name the file after what it CONTAINS (the reply's title, or the user's request), not a generic
+      // "chat report", so a folder of exports is self-describing.
+      const name = exportReplyFilename(text, ask, product, new Date().toISOString().slice(0, 10));
       const path = await window.desktop.llm.exportReply(fmt, name, text);
       if (path) {
         setSavedTo(path.split(/[\\/]/).pop() ?? path);
@@ -1696,7 +1698,7 @@ function ChatView({
                   messages[i - 1]?.role === 'user' ? messages[i - 1].text : '',
                   messages[i + 1]?.role === 'user' ? messages[i + 1].text : '',
                 ) && (
-                <ExportReplyBar text={m.text} product={product} onError={onError} />
+                <ExportReplyBar text={m.text} ask={messages[i - 1]?.role === 'user' ? messages[i - 1].text : ''} product={product} onError={onError} />
               )}
             </div>
           ))}

@@ -338,3 +338,63 @@ export function sheetNameFor(title: string, index: number): string {
   const cleaned = plainDashes(title).replace(/[[\]:*?/\\]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 31).trim();
   return cleaned || `Table ${index + 1}`;
 }
+
+/** Filesystem-safe filename part: drops the chars Windows forbids (\/:*?"<>|), collapses whitespace,
+ *  trims trailing dots/spaces (also forbidden), and caps the length. */
+export function safeFilePart(s: string, max = 70): string {
+  return plainDashes(s ?? '')
+    .replace(/[\\/:*?"<>|]+/g, ' ')
+    .replace(/[\n\r\t]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, max)
+    .replace(/[. ]+$/, '')
+    .trim();
+}
+
+// A leading request preamble ("please list down all the ...") - stripped so the filename keeps the
+// SUBJECT, not the verb. Applied repeatedly for stacked openers.
+const ASK_PREAMBLE =
+  /^(?:please|kindly|can\s+you|could\s+you|would\s+you|now|also|then|and|list(?:\s+down)?(?:\s+out)?|show(?:\s+me)?|give\s+me|get\s+me|export|download|create|generate|make|prepare|build|provide|draft|produce|output|compile|write|send|share|i\s+want|i\s+need|i'?d\s+like|need|want)\b[\s,:-]*/i;
+// A trailing "... as a csv / in a table / export" clause - stripped so the format ask is not the name.
+const ASK_TRAILER =
+  /\b(?:as|in|into|to)\s+(?:an?\s+|the\s+)?(?:csv|xlsx?|excel|spreadsheet|pdf|docx?|md|markdown|table|tabular|report|sheet|document|file|format)\b.*$/i;
+
+/** Turn a user's request into a short filename subject: drop the "please export ... as csv" scaffolding,
+ *  keep the meaningful noun phrase. '' when nothing meaningful remains. */
+function subjectFromAsk(ask: string): string {
+  let s = (ask ?? '').replace(/\s+/g, ' ').trim();
+  for (let k = 0; k < 5; k++) {
+    const next = s.replace(ASK_PREAMBLE, '');
+    if (next === s) break;
+    s = next.trim();
+  }
+  s = s.replace(/^(?:all\s+the|all|the)\s+/i, '').trim();
+  s = s.replace(ASK_TRAILER, '').trim();
+  s = s.replace(/\b(?:export|download|please|kindly)\b/gi, '').replace(/\s+/g, ' ').trim();
+  return s.replace(/[?.!,;:]+$/, '').trim();
+}
+
+/**
+ * An informative default filename for a saved chat reply: "<PRODUCT> - <subject> <date>". The subject
+ * is the reply's own title when it has one (a heading, a bold line, or a non-generic table title), else
+ * it is derived from the user's request that produced the reply (so a raw CSV dump asked for with
+ * "list all custom-event triggers and their event names" is named after that, not a generic date).
+ * Falls back to "<PRODUCT> chat report <date>" when nothing meaningful is available.
+ */
+export function exportReplyFilename(reply: string, ask: string, product: string, isoDate: string): string {
+  const titled = extractReplyTables(reply).map((t) => t.title).find((t) => t && !/^Table \d+$/.test(t));
+  let subject = titled ?? '';
+  if (!subject) {
+    const h = /^#{1,6}\s+(.+?)\s*$/m.exec(reply);
+    if (h) subject = plainCell(h[1]).trim();
+  }
+  if (!subject) {
+    const b = /^\*\*([^*]+)\*\*:?\s*$/m.exec(reply);
+    if (b) subject = plainCell(b[1]).replace(/:$/, '').trim();
+  }
+  if (subject.length < 3) subject = subjectFromAsk(ask);
+  const prod = (product || '').toUpperCase().trim();
+  const base = subject.length >= 3 ? `${prod} - ${subject}` : `${prod} chat report`;
+  return `${safeFilePart(base)} ${isoDate}`.trim();
+}
