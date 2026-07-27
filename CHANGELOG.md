@@ -1,3 +1,9 @@
+## [1.416.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.416.1...v1.416.2) (2026-07-27)
+
+### Bug Fixes
+
+* **desktop:** list_gtm_tags exposes firingTriggerId so trigger data is joined, not fabricated ([81aee2f](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/81aee2fc096952bc1b1556e1a5d821779ee309c8))
+
 ## [1.416.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.416.0...v1.416.1) (2026-07-27)
 
 ### Bug Fixes
