@@ -1,3 +1,13 @@
+## [1.406.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.405.0...v1.406.0) (2026-07-27)
+
+### Features
+
+* **desktop:** batch_delete_gtm_entities - one approval for a whole delete set ([bbaaf1f](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/bbaaf1f36940e6b92a37746abbcaf5cf34d78896))
+
+### Bug Fixes
+
+* **desktop:** chat context is one labeled card per platform, no duplicates ([cf00d9f](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/cf00d9ff1e431acfef569692d86f1a3f4f05aa15))
+
 ## [1.405.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.404.0...v1.405.0) (2026-07-24)
 
 ### Features
