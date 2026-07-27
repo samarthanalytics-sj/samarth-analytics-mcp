@@ -61,6 +61,21 @@ export interface RunChatCallbacks {
   onRetry?: (notice: RetryNotice) => void;
 }
 
+/** Deterministic stringify (keys sorted) so identical tool-call arguments hash the same regardless of
+ *  key order — used to detect a model repeating the exact same write. */
+function stableStringify(v: unknown): string {
+  if (v === null || typeof v !== 'object') return JSON.stringify(v) ?? 'null';
+  if (Array.isArray(v)) return '[' + v.map(stableStringify).join(',') + ']';
+  const o = v as Record<string, unknown>;
+  return '{' + Object.keys(o).sort().map((k) => JSON.stringify(k) + ':' + stableStringify(o[k])).join(',') + '}';
+}
+
+/** How many times an identical WRITE call (same tool + same args) may run in one turn before the loop
+ *  blocks further repeats. A write is idempotent at the target, so repeating it changes nothing; a
+ *  model that loops on it (observed: update_gtm_trigger on the same trigger 15+ times) burns quota and
+ *  never terminates. Two lets an accidental retry through; the third+ is refused. */
+const MAX_IDENTICAL_WRITES = 2;
+
 /** Progress-aware extension of the step budget (see runChat). */
 export interface StepBudgetOptions {
   /** Absolute cap on steps even while making progress — a runaway-loop backstop. Defaults to
@@ -95,6 +110,9 @@ export async function runChat(
   const messages: LlmTurn[] = [...input.messages];
   let usage: CacheUsage | undefined;
   let lastToolError: { name: string; message: string } | null = null;
+  // Count identical WRITE calls this turn (tool + args), so a model that loops on the same idempotent
+  // write is stopped instead of repeating it forever.
+  const writeCallCounts = new Map<string, number>();
 
   const hardMaxSteps = Math.max(maxSteps, opts.hardMaxSteps ?? maxSteps);
   const stallSteps = Math.max(1, opts.stallSteps ?? 6);
@@ -181,6 +199,29 @@ export async function runChat(
             isError: true,
           });
           continue;
+        }
+        // Block a runaway loop on the SAME idempotent write: once the model has issued this exact
+        // (tool + args) write MAX_IDENTICAL_WRITES times this turn, refuse further repeats. Feeds back
+        // a result (so tool_use/tool_result pairing stays valid) but does NOT execute or count as
+        // forward progress, so the loop's stall detector can then end the turn.
+        if (executor.isWrite?.(call.name)) {
+          const key = `${call.name} ${stableStringify(call.args)}`;
+          const n = (writeCallCounts.get(key) ?? 0) + 1;
+          writeCallCounts.set(key, n);
+          if (n > MAX_IDENTICAL_WRITES) {
+            console.error(`[chat] blocked repeated identical write: ${call.name} (call #${n} this turn with the same args)`);
+            results.push({
+              id: call.id,
+              name: call.name,
+              content:
+                `Blocked: you have already called \`${call.name}\` with these exact arguments ${n - 1} time(s) this turn. ` +
+                `This write is idempotent, so repeating it changes nothing. Do NOT call it again with the same arguments - ` +
+                `move on to the next DISTINCT item, or if the task is complete, give your final answer now.`,
+              isError: true,
+            });
+            callbacks.onToolResult?.({ name: call.name, ok: false, error: 'repeated identical write blocked', args: call.args });
+            continue;
+          }
         }
         callbacks.onToolCall?.(call);
         try {

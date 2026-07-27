@@ -1031,7 +1031,7 @@ export class GoogleDataService {
         merged[k] = v;
       }
     }
-    const res = await gtm.accounts.containers.workspaces.tags.update({ path, requestBody: merged });
+    const res = await this.qCreate(() => gtm.accounts.containers.workspaces.tags.update({ path, requestBody: merged }));
     this.journal('tag', accountId, containerId, workspaceId, tagId, `${res.data.name ?? 'tag'} (#${tagId})`);
     return { tagId: res.data.tagId ?? '', name: res.data.name ?? '', type: res.data.type ?? '' };
   }
@@ -1058,7 +1058,7 @@ export class GoogleDataService {
       );
     }
     const updated = addEventParameters(current as Record<string, unknown>, parameters);
-    const res = await gtm.accounts.containers.workspaces.tags.update({ path, requestBody: updated });
+    const res = await this.qCreate(() => gtm.accounts.containers.workspaces.tags.update({ path, requestBody: updated }));
     console.error(`[gtm]   ✓ tag ${tagId} (${res.data.name}) saved`);
     this.journal('tag', accountId, containerId, workspaceId, tagId, `${res.data.name ?? 'tag'} (#${tagId})`);
     return { tagId: res.data.tagId ?? tagId, name: res.data.name ?? '', type: res.data.type ?? '' };
@@ -1118,7 +1118,7 @@ export class GoogleDataService {
       );
     }
     const updated = setTemplateParam(current as Record<string, unknown>, key, measurementId);
-    const res = await gtm.accounts.containers.workspaces.tags.update({ path, requestBody: updated });
+    const res = await this.qCreate(() => gtm.accounts.containers.workspaces.tags.update({ path, requestBody: updated }));
     console.error(`[gtm]   ✓ tag ${tagId} (${res.data.name}) saved`);
     this.journal('tag', accountId, containerId, workspaceId, tagId, `${res.data.name ?? 'tag'} (#${tagId})`);
     return { tagId: res.data.tagId ?? tagId, name: res.data.name ?? '', type: res.data.type ?? '' };
@@ -2861,7 +2861,7 @@ export class GoogleDataService {
     workspaceId: string,
     triggerId: string,
     patch: { name?: string; eventName?: string }
-  ): Promise<{ triggerId: string; name: string; type: string; customEventName: string }> {
+  ): Promise<{ triggerId: string; name: string; type: string; customEventName: string; noChange?: boolean }> {
     const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
     const gtm = tagmanager({ version: 'v2', auth });
     const path = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/triggers/${triggerId}`;
@@ -2869,7 +2869,19 @@ export class GoogleDataService {
     let body: Record<string, unknown> = { ...(current as Record<string, unknown>) };
     if (patch.name && patch.name.trim()) body.name = patch.name.trim();
     if (patch.eventName !== undefined) body = setCustomEventName(body, patch.eventName);
-    const res = await gtm.accounts.containers.workspaces.triggers.update({ path, requestBody: body });
+    // Idempotent: if the requested state already matches, skip the write. Re-setting a trigger's event
+    // name to what it already is wastes a write (and quota) and, worse, invites a model to loop on it.
+    const unchanged = (body.name ?? '') === (current.name ?? '') && customEventNameOf(body) === customEventNameOf(current as unknown as Record<string, unknown>);
+    if (unchanged) {
+      return {
+        triggerId: current.triggerId ?? triggerId,
+        name: current.name ?? '',
+        type: current.type ?? '',
+        customEventName: customEventNameOf(current as unknown as Record<string, unknown>),
+        noChange: true,
+      };
+    }
+    const res = await this.qCreate(() => gtm.accounts.containers.workspaces.triggers.update({ path, requestBody: body }));
     this.journal('trigger', accountId, containerId, workspaceId, res.data.triggerId ?? triggerId, `${res.data.name ?? 'trigger'} (#${triggerId})`);
     return {
       triggerId: res.data.triggerId ?? triggerId,
@@ -2904,7 +2916,7 @@ export class GoogleDataService {
         merged[k] = v;
       }
     }
-    const res = await gtm.accounts.containers.workspaces.variables.update({ path, requestBody: merged });
+    const res = await this.qCreate(() => gtm.accounts.containers.workspaces.variables.update({ path, requestBody: merged }));
     this.journal('variable', accountId, containerId, workspaceId, res.data.variableId ?? variableId, `${res.data.name ?? 'variable'} (#${variableId})`);
     return { variableId: res.data.variableId ?? variableId, name: res.data.name ?? '', type: res.data.type ?? '' };
   }
