@@ -61,6 +61,12 @@ const VARS: Record<Theme, Record<string, string>> = {
     '--on-primary': '#ffffff',
     '--primary-soft': 'rgba(37, 99, 235, 0.16)',
     '--primary-soft-border': 'rgba(59, 130, 246, 0.45)',
+    // Text selection: a SOLID light-blue highlight with near-black text, so the selection is clearly
+    // visible on the dark chat surface AND inside the blue user bubbles (light-on-blue reads; a
+    // translucent primary tint did not). Light bg + dark fg is the one pairing readable on every
+    // surface text appears on.
+    '--selection-bg': '#a7c7f5',
+    '--selection-fg': '#0b1220',
     '--danger': '#dc2626',
     '--danger-hover': '#ef4444',
     '--on-danger': '#ffffff',
@@ -117,6 +123,10 @@ const VARS: Record<Theme, Record<string, string>> = {
     '--on-primary': '#ffffff',
     '--primary-soft': '#dbeafe',
     '--primary-soft-border': '#93c5fd',
+    // Text selection (light): light-blue highlight, dark text - readable on white surfaces and on the
+    // blue user bubbles alike.
+    '--selection-bg': '#b6d4fb',
+    '--selection-fg': '#0b1220',
     '--danger': '#dc2626',
     '--danger-hover': '#b91c1c',
     '--on-danger': '#ffffff',
