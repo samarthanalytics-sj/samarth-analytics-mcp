@@ -90,7 +90,11 @@ function check(name: string, ok: boolean, detail?: string): void {
   check('a built-in trigger id is refused', Boolean(builtin[0].blocked) && /built-in/.test(builtin[0].blocked ?? ''));
 
   const referenced = resolveDeletions({ triggers: [{ id: 't2' }] }, snap);
-  check('deleting a referenced trigger is ALLOWED but the note warns which tags lose it', !referenced[0].blocked && /still referenced by 1 tag/.test(referenced[0].change ?? '') && (referenced[0].change ?? '').includes('Meta Pixel'));
+  check('deleting a referenced trigger is ALLOWED but the note warns which SURVIVING tags lose it', !referenced[0].blocked && /still referenced by 1 surviving tag/.test(referenced[0].change ?? '') && (referenced[0].change ?? '').includes('Meta Pixel'));
+  // A trigger referenced ONLY by a tag that is ALSO being deleted orphans nothing, so no warning.
+  const trigWithItsTag = resolveDeletions({ tags: [{ id: '11' }], triggers: [{ id: 't2' }] }, snap);
+  const trigItem = trigWithItsTag.find((i) => i.entity === 'trigger');
+  check('a trigger whose only referrer is also being deleted gets a clean note', trigItem?.change === 'trigger deleted');
 
   const orphan = resolveDeletions({ triggers: [{ id: 't3' }] }, snap);
   check('an unreferenced trigger has a clean change note', !orphan[0].blocked && orphan[0].change === 'trigger deleted');
@@ -100,6 +104,53 @@ function check(name: string, ok: boolean, detail?: string): void {
   check('resolve -> summarize produces a coherent multi-entity plan', combined.counts.total === 3 && combined.text.includes('1 Tag will be deleted:') && combined.text.includes('1 Trigger will be deleted:') && combined.text.includes('1 Variable will be deleted:'));
 }
 
+// ── the variable-reference warning (the dangerous case: GTM does not block it) ──
+{
+  const refSnap = {
+    tags: [
+      { tagId: 'T1', name: 'GA4 Purchase', firingTriggerId: [], references: ['GA4 Measurement ID', 'Transaction Value'] },
+      { tagId: 'T2', name: 'Doomed Tag', firingTriggerId: [], references: ['Only Here'] },
+    ],
+    triggers: [{ triggerId: 'g1', name: 'Value Gate', references: ['Transaction Value'] }],
+    variables: [
+      { variableId: 'V1', name: 'GA4 Measurement ID' },
+      { variableId: 'V2', name: 'Transaction Value' },
+      { variableId: 'V3', name: 'Only Here' },
+      { variableId: 'V4', name: 'Truly Unused' },
+      { variableId: 'V5', name: 'Chained', references: ['GA4 Measurement ID'] },
+    ],
+  };
+
+  // "GA4 Measurement ID" is used by tag "GA4 Purchase" AND variable "Chained" - both survive.
+  const usedByTag = resolveDeletions({ variables: [{ id: 'V1' }] }, refSnap);
+  check('deleting a used variable warns and names the referrers', !usedByTag[0].blocked && /still referenced by 2 surviving items/.test(usedByTag[0].change ?? '') && (usedByTag[0].change ?? '').includes('tag "GA4 Purchase"') && /references will break/.test(usedByTag[0].change ?? ''));
+  check('the warning names the variable whose {{reference}} breaks', (usedByTag[0].change ?? '').includes('{{GA4 Measurement ID}}'));
+
+  const usedByTagAndTrigger = resolveDeletions({ variables: [{ name: 'Transaction Value' }] }, refSnap);
+  check('a variable used by a tag AND a trigger warns about both', /still referenced by 2 surviving items/.test(usedByTagAndTrigger[0].change ?? '') && (usedByTagAndTrigger[0].change ?? '').includes('tag "GA4 Purchase"') && (usedByTagAndTrigger[0].change ?? '').includes('trigger "Value Gate"'));
+
+  const usedByVar = resolveDeletions({ variables: [{ id: 'V1' }] }, { ...refSnap, tags: [], triggers: [] });
+  check('a variable referenced by another VARIABLE is caught too', (usedByVar[0].change ?? '').includes('variable "Chained"'));
+
+  const unused = resolveDeletions({ variables: [{ name: 'Truly Unused' }] }, refSnap);
+  check('an unreferenced variable has the clean note, no false alarm', unused[0].change === 'variable deleted');
+
+  // The only referrer of V3 ("Only Here") is "Doomed Tag" - delete both, and there is no surviving
+  // referrer, so no warning: the batch is self-consistent.
+  const together = resolveDeletions({ tags: [{ id: 'T2' }], variables: [{ id: 'V3' }] }, refSnap);
+  const varItem = together.find((i) => i.entity === 'variable');
+  check('deleting a variable together with its ONLY referrer is clean (no orphan warning)', varItem?.change === 'variable deleted');
+
+  // Case sensitivity: {{Only Here}} must not match a delete of "only here" - but that name resolves
+  // to V3 exactly, and its referrer Doomed Tag survives, so it warns. Confirms exact-name ref match.
+  const caseRef = resolveDeletions({ variables: [{ id: 'V3' }] }, refSnap);
+  check('reference match is exact-name (the {{Only Here}} referrer is found)', (caseRef[0].change ?? '').includes('Doomed Tag'));
+
+  // A missing `references` (older snapshot data) degrades to no warning rather than a throw.
+  const noRefs = resolveDeletions({ variables: [{ id: 'V1' }] }, { tags: [{ tagId: 'T1', name: 'X', firingTriggerId: [] }], triggers: [], variables: [{ variableId: 'V1', name: 'GA4 Measurement ID' }] });
+  check('absent reference data degrades to the clean note, never a crash', noRefs[0].change === 'variable deleted');
+}
+
 // ── the built-in guard mirrors gtm-builders ──
 {
   check('built-in trigger id range', isBuiltinTriggerId('2147479553') && isBuiltinTriggerId('2147479001') && !isBuiltinTriggerId('t2') && !isBuiltinTriggerId('12345'));
@@ -107,4 +158,4 @@ function check(name: string, ok: boolean, detail?: string): void {
 
 console.log(`\ngtm-batch-plan: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }
-if (passed < 25) { console.error(`expected >= 25 checks, got ${passed}`); process.exit(1); }
+if (passed < 35) { console.error(`expected >= 35 checks, got ${passed}`); process.exit(1); }

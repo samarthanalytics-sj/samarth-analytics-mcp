@@ -1714,15 +1714,27 @@ export function buildToolRegistry(
           .map((x) => (x && typeof x === 'object' ? { id: s((x as Record<string, unknown>).id).trim() || undefined, name: s((x as Record<string, unknown>).name).trim() || undefined } : {}))
           .filter((r) => r.id || r.name)
       : [];
+  // The {{variable}} names an entity's config references. Stringifying the whole entity catches every
+  // string field the same way the audit's refsIn walk does; the only theoretical false positive is a
+  // NAME that literally contains "{{...}}" (invalid in practice), and it would at most over-warn, never
+  // wrongly delete. Mirrors VAR_REF in gtm-builders.
+  const VAR_REF_RE = /\{\{([^}]+)\}\}/g;
+  const referencesOf = (entity: unknown): string[] => {
+    const out = new Set<string>();
+    for (const m of JSON.stringify(entity ?? {}).matchAll(VAR_REF_RE)) out.add(m[1].trim());
+    return [...out];
+  };
   /** Fetch the workspace snapshot and resolve the requested deletions to concrete, validated items. */
   const resolveBatchDeletions = async (a: Record<string, unknown>): Promise<GtmBatchItem[]> => {
     const snap = await data.getGtmContainerSnapshot(s(a.accountId), s(a.containerId), s(a.workspaceId));
     return resolveDeletions(
       { tags: asDeleteRequests(a.tags), triggers: asDeleteRequests(a.triggers), variables: asDeleteRequests(a.variables) },
       {
-        tags: snap.tags.map((t) => ({ tagId: t.tagId, name: t.name, firingTriggerId: t.firingTriggerId, blockingTriggerId: t.blockingTriggerId })),
-        triggers: snap.triggers.map((t) => ({ triggerId: t.triggerId, name: t.name })),
-        variables: snap.variables.map((v) => ({ variableId: v.variableId, name: v.name })),
+        // `references` lets the resolver warn when deleting a variable would break a {{reference}} in a
+        // surviving tag / trigger / variable (GTM does not refuse such a delete).
+        tags: snap.tags.map((t) => ({ tagId: t.tagId, name: t.name, firingTriggerId: t.firingTriggerId, blockingTriggerId: t.blockingTriggerId, references: referencesOf(t) })),
+        triggers: snap.triggers.map((t) => ({ triggerId: t.triggerId, name: t.name, references: referencesOf(t) })),
+        variables: snap.variables.map((v) => ({ variableId: v.variableId, name: v.name, references: referencesOf(v) })),
       }
     );
   };
@@ -5271,7 +5283,7 @@ export function buildToolRegistry(
         'Delete a SPECIFIC SET of tags, triggers AND variables in ONE approval, instead of one card per item. ' +
         'Pass the entities to remove as tags/triggers/variables arrays (each item is {id} or {name}; id is safest, a name is resolved against the workspace and an ambiguous name is refused). ' +
         'Use this whenever the user wants to delete MORE THAN ONE entity - never loop delete_gtm_tag / delete_gtm_trigger / delete_gtm_variable, which would prompt for every single item. ' +
-        'The approval card shows the COMPLETE categorized plan (how many tags, triggers and variables will be deleted, each by name, with a note when deleting a trigger will unlink a tag that still uses it) so the user reviews everything once. On approval the whole batch runs with no further prompts, deleting tags first, then triggers, then variables (so nothing is referenced when it is removed). ' +
+        'The approval card shows the COMPLETE categorized plan (how many tags, triggers and variables will be deleted, each by name) so the user reviews everything once, INCLUDING dependency warnings: deleting a trigger a surviving tag still uses will unlink it, and deleting a variable a surviving tag/trigger/variable still references by {{name}} will BREAK that reference (GTM does not refuse it). Relay those warnings when you present the plan. On approval the whole batch runs with no further prompts, deleting tags first, then triggers, then variables (so nothing is referenced when it is removed). ' +
         'Built-in triggers and not-found or ambiguous names are reported as skipped, never deleted. This is the DELETE half of a batch; creates and edits already apply directly to the draft workspace with no card, so present those in the same plan message but you do not route them through this tool. Draft only, never published. Shows ONE approval card listing everything that will be deleted; after the user approves, the whole set is removed with no further prompts.',
       inputSchema: {
         type: 'object',
