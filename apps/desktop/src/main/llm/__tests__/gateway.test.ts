@@ -214,6 +214,43 @@ await test('repeated-write guard: DISTINCT writes are never blocked', async () =
   assert.equal(executed, 3, 'three DISTINCT writes all ran');
 });
 
+await test('no-op writes do NOT count as progress, so churning already-done writes stalls out', async () => {
+  // The loophole: a model re-touches DISTINCT already-satisfied triggers (each returns noChange, each
+  // dodges the identical-write guard). If a no-op counted as progress it would reset the stall and run
+  // to the hard cap. Distinct args each step so the identical guard never fires; every result is a
+  // no-op -> no forward progress -> the stall stop must end the turn near the soft ceiling.
+  let executed = 0;
+  const client = new ScriptedClient(
+    Array.from({ length: 40 }, (_, i) => ({ toolCalls: [{ id: String(i + 1), name: 'update_gtm_trigger', args: { triggerId: String(i + 3) } }] }))
+  );
+  const exec = writeExecutor(async () => { executed += 1; return JSON.stringify({ triggerId: 'x', noChange: true }); }, () => true);
+  const res = await runChat(
+    client,
+    { system: 's', model: 'm', apiKey: 'k', messages: [{ role: 'user', text: 'set them all' }] },
+    exec, {}, 3, { hardMaxSteps: 300, stallSteps: 2 }
+  );
+  assert.match(res.text, /NOT done/i, 'a turn of pure no-op writes stalls out');
+  assert.ok(executed <= 5, `stopped near the soft ceiling, nowhere near the 300 hard cap (ran ${executed})`);
+});
+
+await test('a REAL write (changed something) DOES count as progress, so a genuine build runs on', async () => {
+  // Guard against over-correcting: distinct writes that actually change something must still extend
+  // the budget past the soft ceiling (this is the 40-tag build behaviour).
+  const client = new ScriptedClient([
+    ...Array.from({ length: 5 }, (_, i) => ({ toolCalls: [{ id: String(i + 1), name: 'update_gtm_trigger', args: { triggerId: String(i + 3) } }] })),
+    { text: 'all five updated' },
+  ]);
+  let executed = 0;
+  const exec = writeExecutor(async () => { executed += 1; return JSON.stringify({ triggerId: 'x', customEventName: 'purchase' }); }, () => true);
+  const res = await runChat(
+    client,
+    { system: 's', model: 'm', apiKey: 'k', messages: [{ role: 'user', text: 'update five' }] },
+    exec, {}, 3, { hardMaxSteps: 300, stallSteps: 2 }
+  );
+  assert.equal(res.text, 'all five updated');
+  assert.equal(executed, 5, 'all five real writes ran past the soft ceiling of 3');
+});
+
 await test('repeated-write guard: identical READS are NOT blocked (only writes are)', async () => {
   const client = new ScriptedClient([{ toolCalls: [{ id: '1', name: 'list_gtm_triggers', args: { x: 1 } }] }]);
   let executed = 0;
