@@ -257,6 +257,10 @@ export interface GtmTagView {
   eventName?: string;
   /** For a GA4 Event tag (measurementIdOverride) or Google tag (tagId): the G-/AW-/GT- id it uses. */
   measurementId?: string;
+  /** The ids of the triggers that FIRE this tag. Resolve these against list_gtm_triggers to get the
+   *  firing trigger's real name and customEventName - never guess them from the tag name. Empty means
+   *  the tag has no firing trigger (it will never fire). */
+  firingTriggerId?: string[];
 }
 
 export interface Ga4DataStreamView {
@@ -715,12 +719,15 @@ export class GoogleDataService {
       (r) => r.data.nextPageToken
     );
     // Surface the GA4 EVENT NAME (and measurement id) for GA4 tags so "what event does this tag send?"
-    // is answerable WITHOUT confusing it with the firing trigger's custom event name.
+    // is answerable WITHOUT confusing it with the firing trigger's custom event name. Also the FIRING
+    // TRIGGER ids, so a tag can be joined to its real trigger (name + customEventName) via
+    // list_gtm_triggers instead of the model guessing them from the tag name.
     return tags.map((t) => ({
       tagId: t.tagId ?? '',
       name: t.name ?? '(unnamed)',
       type: t.type ?? '',
       ...ga4TagFields(t as unknown as Record<string, unknown>),
+      firingTriggerId: Array.isArray(t.firingTriggerId) ? (t.firingTriggerId as string[]) : [],
     }));
   }
 

@@ -1975,7 +1975,9 @@ export function buildToolRegistry(
     {
       name: 'list_gtm_tags',
       description:
-        'List the tags in a GTM workspace. Each tag returns tagId, name, type, and for a GA4 Event tag (type "gaawe") its `eventName` - the GA4 EVENT NAME the tag SENDS (its "Event Name" field, e.g. "purchase") - plus `measurementId` when set. IMPORTANT: a tag\'s `eventName` is NOT the same as its firing trigger\'s custom event name (from list_gtm_triggers.customEventName, the dataLayer event like "form_submission" that FIRES the tag). To answer "what event name does this tag send / what is the tag\'s event name", use THIS tag `eventName`, never the trigger\'s.',
+        'List the tags in a GTM workspace. Each tag returns tagId, name, type, `firingTriggerId` (the ids of the triggers that fire it), and for a GA4 Event tag (type "gaawe") its `eventName` - the GA4 EVENT NAME the tag SENDS (its "Event Name" field, e.g. "purchase") - plus `measurementId` when set. ' +
+        'IMPORTANT: a tag\'s `eventName` is NOT the same as its firing trigger\'s custom event name (list_gtm_triggers.customEventName, the dataLayer event like "form_submission" that FIRES the tag). For "what event name does this tag send", use THIS tag `eventName`. ' +
+        'For a tag\'s TRIGGER NAME or its trigger\'s customEventName, you MUST resolve `firingTriggerId` against list_gtm_triggers (match triggerId) and read the real name / customEventName from there - NEVER derive the trigger name by editing the tag name, and NEVER put the tag\'s eventName in a customEventName column. If you have not called list_gtm_triggers, do so before reporting any trigger detail.',
       inputSchema: {
         type: 'object',
         properties: {
