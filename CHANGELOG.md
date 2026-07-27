@@ -1,3 +1,9 @@
+## [1.416.5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.416.4...v1.416.5) (2026-07-27)
+
+### Performance Improvements
+
+* **desktop:** cache the GTM container list per turn (fewer API calls, no log spam) ([39e14a3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/39e14a3c8d8ae46be827a5d441fc000aa2b1f4e2))
+
 ## [1.416.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.416.3...v1.416.4) (2026-07-27)
 
 ### Bug Fixes
