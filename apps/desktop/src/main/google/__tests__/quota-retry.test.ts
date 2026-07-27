@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { withQuotaRetry, QUOTA_RE, readRetryAfterMs } from '../quota-retry';
+import { withQuotaRetry, withRetry, QUOTA_RE, TRANSIENT_5XX_RE, NOT_FOUND_OR_PERMISSION_RE, readRetryAfterMs, type RetryRule } from '../quota-retry';
 
 let passed = 0;
 let failed = 0;
@@ -130,6 +130,61 @@ async function main(): Promise<void> {
       { attempt: 2, delayMs: 4000 },
       { attempt: 3, delayMs: 8000 },
     ]);
+  });
+
+  // ── withRetry: the multi-rule engine behind the GTM create path ──
+
+  const err = (msg: string): Error => new Error(msg);
+  // The three rules the GTM create path uses (short delays so tests run instantly).
+  const gtmCreateRules: RetryRule[] = [
+    { label: 'quota', match: (_e, m) => QUOTA_RE.test(m), maxRetries: 8, baseDelayMs: 1, honorRetryAfter: true },
+    { label: 'server', match: (_e, m) => TRANSIENT_5XX_RE.test(m), maxRetries: 4, baseDelayMs: 1 },
+    { label: 'propagation', match: (_e, m) => NOT_FOUND_OR_PERMISSION_RE.test(m), maxRetries: 4, baseDelayMs: 1 },
+  ];
+  const runRules = <T>(fn: () => Promise<T>, backoffs?: string[]): Promise<T> =>
+    withRetry(fn, { rules: gtmCreateRules, sleep: async () => {}, onBackoff: ({ rule }) => backoffs?.push(rule) });
+
+  await test('the create regexes classify the observed GTM errors', () => {
+    assert.ok(TRANSIENT_5XX_RE.test('Error 503: The service is currently unavailable'));
+    assert.ok(TRANSIENT_5XX_RE.test('Internal error encountered.'));
+    assert.ok(NOT_FOUND_OR_PERMISSION_RE.test('Not found or permission denied.'), 'the exact GTM message');
+    assert.ok(!NOT_FOUND_OR_PERMISSION_RE.test('Tag not found'), 'a plain not-found is NOT the conflated write error');
+    assert.ok(!TRANSIENT_5XX_RE.test('Invalid argument'));
+  });
+
+  await test('withRetry retries a transient 5xx then succeeds', async () => {
+    let calls = 0;
+    const out = await runRules(async () => { calls += 1; if (calls < 3) throw err('Error 503: service unavailable'); return 'ok'; });
+    assert.equal(out, 'ok');
+    assert.equal(calls, 3, 'failed twice on 503, succeeded on the 3rd');
+  });
+
+  await test('withRetry rides out the fresh-container 404, then the identical create succeeds', async () => {
+    let calls = 0;
+    const out = await runRules(async () => { calls += 1; if (calls < 3) throw err('Not found or permission denied.'); return 'created'; });
+    assert.equal(out, 'created', 'the propagation window cleared and the create went through');
+    assert.equal(calls, 3);
+  });
+
+  await test('withRetry gives the conflated 404 only a BOUNDED retry (a genuine wrong id still fails)', async () => {
+    let calls = 0;
+    await assert.rejects(runRules(async () => { calls += 1; throw err('Not found or permission denied.'); }), /Not found or permission denied/);
+    assert.equal(calls, 5, '1 initial + 4 bounded retries, then it gives up (does not loop forever)');
+  });
+
+  await test('withRetry gives EACH rule its own budget (5xx blips + a 404 window in one call)', async () => {
+    const seq = ['Error 503: x', 'Error 503: x', 'Not found or permission denied.', 'Not found or permission denied.', 'ok'];
+    let i = 0;
+    const backoffs: string[] = [];
+    const out = await runRules(async () => { const v = seq[i++]; if (v !== 'ok') throw err(v); return v; }, backoffs);
+    assert.equal(out, 'ok');
+    assert.deepEqual(backoffs, ['server', 'server', 'propagation', 'propagation'], 'server and propagation budgets did not steal from each other');
+  });
+
+  await test('withRetry throws immediately on an unmatched error', async () => {
+    let calls = 0;
+    await assert.rejects(runRules(async () => { calls += 1; throw err('Invalid argument: name'); }), /Invalid argument/);
+    assert.equal(calls, 1, 'no retry for a non-transient error');
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);
