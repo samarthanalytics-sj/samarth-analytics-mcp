@@ -24,7 +24,7 @@ import { getPatternLibrary } from '../corpus/pattern-library';
 import { fingerprintResource, diffManifest, type ManifestResource } from '../../shared/install-manifest';
 import { buildTrackingStatus } from '../../shared/tracking-status';
 import { resolveDeletions, summarizeGtmBatch, type GtmBatchItem, type DeleteRequest } from '../../shared/gtm-batch-plan';
-import { planAdsConversionActions } from '../../shared/ads-conversion-batch';
+import { planAdsConversionActions, type ExistingConversionAction } from '../../shared/ads-conversion-batch';
 import {
   buildGa4EventTag,
   buildGoogleTag,
@@ -466,6 +466,35 @@ function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean, data
   // text (the derived names), but summarize() is synchronous. precheck builds it and stashes it here
   // keyed by the args object; summarize reads it back. Per-registry (per-turn) WeakMap.
   const adsBatchPlanCache = new WeakMap<object, string>();
+
+  // Build the batch conversion plan the SAME way in precheck and in the handler (so the approved card
+  // and the executed run agree). When reuse is on, the account's existing actions are read once and
+  // fed to the planner, which reuses a taggable name+id+label match instead of minting a duplicate.
+  const buildAdsBatchPlan = async (a: Record<string, unknown>) => {
+    const rawEntries = Array.isArray(a.entries) ? (a.entries as Array<Record<string, unknown>>) : [];
+    const entries = rawEntries
+      .map((e) => ({ tagName: s(e.tagName).trim(), conversionName: s(e.conversionName).trim() || undefined, category: s(e.category).trim() || undefined }))
+      .filter((e) => e.tagName);
+    const reuse = a.reuse === true;
+    let existingActions: ExistingConversionAction[] | undefined;
+    if (reuse) {
+      const { actions } = await ads.listConversionActions(s(a.customerId), login(a));
+      existingActions = actions.map((x) => ({
+        id: String(x.id),
+        name: s(x.name),
+        taggable: x.taggable === true,
+        conversionId: x.conversionId ?? null,
+        conversionLabel: x.conversionLabel ?? null,
+      }));
+    }
+    return planAdsConversionActions(entries, {
+      prefix: s(a.stripPrefix).trim() || undefined,
+      suffix: s(a.stripSuffix).trim() || undefined,
+      defaultCategory: s(a.defaultCategory).trim().toUpperCase() || 'SUBMIT_LEAD_FORM',
+      reuse,
+      existingActions,
+    });
+  };
 
   const readTools: Tool[] = [
     {
@@ -1204,7 +1233,8 @@ function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean, data
         'BATCH: create ONE Google Ads conversion action per GTM tag, in the selected Ads account, behind a SINGLE approval, and return each one\'s Conversion ID + Label so you can build the tags. ' +
         'Use this when the user is making SEVERAL Google Ads conversion tags at once and gives the tag names (and triggers) - it replaces calling create_google_ads_conversion_action once per tag (which would show one live-write card each). ' +
         'NAMING: each conversion action is named from the tag name with the affixes you pass STRIPPED off - pass stripPrefix and stripSuffix exactly as the user specifies (e.g. stripPrefix "GA4 - Event -", stripSuffix "Click Tag" turns "GA4 - Event - Book A Demo Click Tag" into "Book A Demo"). Pass an entry\'s conversionName to override the derived name. If a name strips to empty, that entry is skipped and reported. ' +
-        'Every action is a LIVE, irreversible write to the ad account (no draft, no undo). One approval card lists them all; on approval they are created, then their Conversion IDs and Labels come back. ' +
+        'Every CREATE is a LIVE, irreversible write to the ad account (no draft, no undo). One approval card lists them all; on approval they are created, then their Conversion IDs and Labels come back. ' +
+        'REUSE: pass reuse=true to avoid duplicates - any entry whose (stripped) name already matches an existing taggable conversion action that has a Conversion ID + Label is REUSED (no new write), and its existing ID + Label are returned for the tag; only the unmatched entries are created. Default is reuse=false (always create, even if a same-named action exists). ' +
         'NEXT: for each returned entry, call create_gtm_tracking_tag (platform google_ads_conversion) with its conversionId and conversionLabel as LITERAL values and the trigger the user gave, so the tag lands in the GTM draft workspace. Also check list_gtm_tags for a Conversion Linker (gclidw) and add one if missing.',
       inputSchema: {
         type: 'object',
@@ -1213,6 +1243,7 @@ function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean, data
           loginCustomerId: { type: 'string', description: 'Manager (MCC) id to act through, when reached via a manager.' },
           stripPrefix: { type: 'string', description: 'Exact prefix to remove from each tag name to get the conversion name (e.g. "GA4 - Event -"). Optional.' },
           stripSuffix: { type: 'string', description: 'Exact suffix to remove from each tag name (e.g. "Click Tag"). Optional.' },
+          reuse: { type: 'boolean', description: 'When true, reuse an existing taggable conversion action whose name matches (with a usable Conversion ID + Label) instead of creating a duplicate. Default false.' },
           defaultCategory: {
             type: 'string',
             enum: CONVERSION_CATEGORIES.map((c) => c.value),
@@ -1247,15 +1278,7 @@ function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean, data
       precheck: async (a) => {
         const notReady = await adsNotReady(ads);
         if (notReady) return notReady;
-        const rawEntries = Array.isArray(a.entries) ? (a.entries as Array<Record<string, unknown>>) : [];
-        const entries = rawEntries
-          .map((e) => ({ tagName: s(e.tagName).trim(), conversionName: s(e.conversionName).trim() || undefined, category: s(e.category).trim() || undefined }))
-          .filter((e) => e.tagName);
-        const plan = planAdsConversionActions(entries, {
-          prefix: s(a.stripPrefix).trim() || undefined,
-          suffix: s(a.stripSuffix).trim() || undefined,
-          defaultCategory: s(a.defaultCategory).trim().toUpperCase() || 'SUBMIT_LEAD_FORM',
-        });
+        const plan = await buildAdsBatchPlan(a);
         adsBatchPlanCache.set(a, plan.text);
         if (plan.empty) {
           return { ok: true, created: 0, message: 'No conversion actions could be derived from these tag names.', plan: plan.text };
@@ -1264,20 +1287,19 @@ function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean, data
       },
       handler: (a) =>
         run(async () => {
-          const rawEntries = Array.isArray(a.entries) ? (a.entries as Array<Record<string, unknown>>) : [];
-          const entries = rawEntries
-            .map((e) => ({ tagName: s(e.tagName).trim(), conversionName: s(e.conversionName).trim() || undefined, category: s(e.category).trim() || undefined }))
-            .filter((e) => e.tagName);
-          const plan = planAdsConversionActions(entries, {
-            prefix: s(a.stripPrefix).trim() || undefined,
-            suffix: s(a.stripSuffix).trim() || undefined,
-            defaultCategory: s(a.defaultCategory).trim().toUpperCase() || 'SUBMIT_LEAD_FORM',
-          });
-          const created: Array<{ tagName: string; conversionName: string; category: string; conversionId: string | null; conversionLabel: string | null }> = [];
+          const plan = await buildAdsBatchPlan(a);
+          // One unified verification table. `source` tells created-live from reused-existing; the
+          // conversionId + conversionLabel are the values that go INTO each tag either way.
+          const created: Array<{ tagName: string; conversionName: string; category: string; conversionId: string | null; conversionLabel: string | null; source: 'created' | 'reused' }> = [];
           const failed: Array<{ tagName: string; conversionName: string; error: string }> = [];
           const skipped = plan.steps.filter((st) => st.blocked).map((st) => ({ tagName: st.tagName, reason: st.blocked! }));
           for (const step of plan.steps) {
             if (step.blocked) continue;
+            // Reuse: an existing taggable action already matched by name; use its id + label, no write.
+            if (step.mode === 'reuse') {
+              created.push({ tagName: step.tagName, conversionName: step.conversionName, category: step.category, conversionId: step.conversionId ?? null, conversionLabel: step.conversionLabel ?? null, source: 'reused' });
+              continue;
+            }
             const input = { name: step.conversionName, category: step.category };
             try {
               // Dry-run first, exactly like the single create: a duplicate name or bad category fails
@@ -1288,26 +1310,30 @@ function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean, data
                 continue;
               }
               const action = await ads.createConversionAction(s(a.customerId), input, login(a));
-              created.push({ tagName: step.tagName, conversionName: step.conversionName, category: step.category, conversionId: action.conversionId, conversionLabel: action.conversionLabel });
+              created.push({ tagName: step.tagName, conversionName: step.conversionName, category: step.category, conversionId: action.conversionId, conversionLabel: action.conversionLabel, source: 'created' });
             } catch (e) {
               failed.push({ tagName: step.tagName, conversionName: step.conversionName, error: e instanceof Error ? e.message : String(e) });
             }
           }
+          const reusedCount = created.filter((c) => c.source === 'reused').length;
+          const newCount = created.length - reusedCount;
           return {
             ok: failed.length === 0,
-            createdCount: created.length,
+            createdCount: newCount,
+            reusedCount,
             customerId: s(a.customerId),
-            // The verification table: one row per tag with the values that will go INTO its tag. The
-            // conversionId + conversionLabel were read back from the Google Ads account after creation
-            // (that read is where the label comes from - it exists nowhere else), so this is the real,
-            // account-verified pairing, not an echo of the request.
+            // The verification table: one row per tag with the values that will go INTO its tag. For a
+            // created row the conversionId + conversionLabel were read back from the Google Ads account
+            // after creation (that read is where the label comes from - it exists nowhere else); for a
+            // reused row they come from the existing action. Either way it is the real, account-verified
+            // pairing, not an echo of the request.
             created,
             ...(skipped.length ? { skipped } : {}),
             ...(failed.length ? { failed } : {}),
             note:
-              'FIRST show the user a table of every created entry - tag name | conversion name | Conversion ID | Conversion Label - and say the ID and Label were read back FROM the Google Ads account (so they are verified, not guessed), so the user can confirm each conversion is correct BEFORE the tags are built. ' +
+              'FIRST show the user a table of every entry - tag name | conversion name | Conversion ID | Conversion Label | source (created or reused) - and say the ID and Label were read FROM the Google Ads account (so they are verified, not guessed), so the user can confirm each conversion is correct BEFORE the tags are built. ' +
               'THEN, for each entry, build its GTM tag: create_gtm_tracking_tag (platform google_ads_conversion) with that entry\'s conversionId and conversionLabel as LITERAL values (never a {{variable}}) and the trigger the user gave for that tag; it lands in the DRAFT workspace, so a wrong one is revertible before publish. A null conversionLabel means Google published no snippet - report that row instead of building a tag that records nothing. ' +
-              'Also check list_gtm_tags for a Conversion Linker (gclidw) and add one if missing. Report anything skipped or failed with its reason. These conversion actions are LIVE in Google Ads now.',
+              'Also check list_gtm_tags for a Conversion Linker (gclidw) and add one if missing. Report anything skipped or failed with its reason. The "created" rows are LIVE new conversion actions in Google Ads now; the "reused" rows created nothing new.',
           };
         }),
     },
