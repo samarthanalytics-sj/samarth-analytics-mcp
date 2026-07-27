@@ -1,3 +1,9 @@
+## [1.414.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.414.2...v1.414.3) (2026-07-27)
+
+### Bug Fixes
+
+* **desktop:** a no-op write no longer counts as loop progress (closes the stall-evasion loophole) ([8fc541d](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/8fc541da59c2b6c153c912e4c83d51a0a16a00e4)), closes [#718](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/718) [#718](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/718)
+
 ## [1.414.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.414.1...v1.414.2) (2026-07-27)
 
 ### Bug Fixes
