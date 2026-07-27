@@ -1,6 +1,6 @@
 {
   "name": "samarth-desktop",
-  "version": "0.0.0",
+  "version": "1.1.0",
   "private": true,
   "description": "Samarth Desktop \u2014 local multi-account Electron app wrapping the GTM/GA4 MCP server",
   "author": "Samarth Analytics",
