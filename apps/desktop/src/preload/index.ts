@@ -78,6 +78,7 @@ import type { Memory, MemoryInput, MemoryPatch, AddMemoryResult } from '../share
 import type { TaskResultSummary } from '../shared/task-notification';
 import type { MemoryImportPlanView, SemanticCorpusStatus } from '../shared/ipc';
 import type { MemoryCandidate } from '../shared/memory-extract';
+import type { DevLogEntry } from '../shared/devlog';
 import type { SeedCandidate } from '../shared/memory-seed';
 
 // Tracks the in-flight streaming chat so llm.stop() can abort the right one.
@@ -90,6 +91,15 @@ let activeChatRequestId: string | null = null;
 const api = {
   getInfo: (): Promise<AppInfo> => ipcRenderer.invoke('app:getInfo'),
   ping: (message: string): Promise<string> => ipcRenderer.invoke('app:ping', message),
+
+  // Dev-only bridge: the main process mirrors its console logs, IPC calls and Google API HTTP here so
+  // they surface in the renderer DevTools Console. Entries are already redacted in main. In a packaged
+  // build the main process never sends on this channel, so this is a silent no-op.
+  onDevLog: (cb: (entry: DevLogEntry) => void): (() => void) => {
+    const listener = (_e: unknown, entry: DevLogEntry): void => cb(entry);
+    ipcRenderer.on('devlog:entry', listener);
+    return () => ipcRenderer.removeListener('devlog:entry', listener);
+  },
 
   accounts: {
     list: (): Promise<AccountView[]> => ipcRenderer.invoke('accounts:list'),
