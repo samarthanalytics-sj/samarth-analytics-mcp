@@ -200,19 +200,56 @@ function makeFakeData(): { data: GoogleDataService; calls: string[]; mutations: 
     createGtmVariable: (_a: string, _b: string, _c: string, v: Record<string, unknown>) =>
       r('createGtmVariable', { variableId: 'V9', name: String(v?.name ?? ''), type: String(v?.type ?? '') }),
   } as unknown as GoogleDataService;
-  // Google Ads (a separate service, injected separately). It shares `calls`, so its one mutating
-  // method is counted by mutations() exactly like a GTM write.
+  // Google Ads (a separate service, injected separately). It shares `calls`, so its mutating methods
+  // are counted by mutations() exactly like a GTM write. Every public GoogleAdsService method a tool
+  // calls is stubbed here with a shape matching its real return type (from ads-map.ts / ads-rest.ts),
+  // so each Ads tool returns a structured ok:true response instead of "ads.<x> is not a function". A
+  // missing method here surfaces as a tool returning ok:false, which the "every tool responds" check
+  // tolerates but which hides real coverage - keep this in step with the service.
+  const conversionCustomer = { conversionCustomerId: '1234567890', status: 'CONVERSION_TRACKING_MANAGED_BY_SELF', trackingId: '1234567890', crossAccountTrackingId: null, isCrossAccount: false, autoTaggingEnabled: true };
   const ads = {
+    // ── reads ──
     readiness: () => r('adsReadiness', { ready: true }),
-    listAccounts: () => r('adsListAccounts', [{ id: '1234567890', name: 'Acct', manager: false, level: 0, status: 'ENABLED', hidden: false, testAccount: false }]),
+    listAccounts: () => r('adsListAccounts', [{ id: '1234567890', name: 'Acct', manager: false, level: 0, status: 'ENABLED', hidden: false, testAccount: false, currencyCode: 'USD', timeZone: 'America/New_York' }]),
+    conversionCustomer: () => r('adsConversionCustomer', conversionCustomer),
     listConversionActions: () =>
       r('adsListConversionActions', {
         actions: [{ resourceName: 'customers/1/conversionActions/1', id: '1', name: 'Contact form', status: 'ENABLED', type: 'WEBPAGE', category: 'SUBMIT_LEAD_FORM', conversionId: 'AW-1234567890', conversionLabel: 'abcDEF123', taggable: true }],
-        conversionCustomer: { conversionCustomerId: '1234567890', status: 'CONVERSION_TRACKING_MANAGED_BY_SELF', trackingId: '1234567890', crossAccountTrackingId: null, isCrossAccount: false },
+        conversionCustomer,
       }),
+    listCampaigns: () => r('adsListCampaigns', [{ id: '111', name: 'Brand - Search', status: 'ENABLED', channelType: 'SEARCH', budget: { id: '9', amountMicros: 50000000, shared: false } }]),
+    campaignPerformance: () =>
+      r('adsCampaignPerformance', { windowLabel: 'Last 30 days', custom: false, campaigns: [{ id: '111', name: 'Brand - Search', status: 'ENABLED', impressions: 1000, clicks: 80, costMicros: 40000000, conversions: 12, conversionsValue: 3600, allConversions: 14 }] }),
+    changeHistory: () =>
+      r('adsChangeHistory', { startDate: '2026-06-27', endDate: '2026-07-27', events: [{ at: '2026-07-01 09:00:00', user: 'user@example.com', clientType: 'GOOGLE_ADS_WEB_CLIENT', resourceType: 'CAMPAIGN_BUDGET', operation: 'UPDATE', changedFields: ['amountMicros'], resourceName: 'customers/1/campaignBudgets/9', campaignName: 'Brand - Search' }] }),
+    conversionVolume: () =>
+      r('adsConversionVolume', { windowLabel: 'Last 30 days', custom: false, volume: [{ actionId: '1', name: 'Contact form', total: 42, firstDate: '2026-06-28', lastDate: '2026-07-26', activeDays: 20 }] }),
+    utmSetup: () =>
+      r('adsUtmSetup', { setup: { autoTaggingEnabled: true, trackingUrlTemplate: null, finalUrlSuffix: null, campaigns: [{ id: '111', name: 'Brand - Search', trackingUrlTemplate: null, finalUrlSuffix: null }] }, findings: [] }),
+    listUserLists: () =>
+      r('adsListUserLists', [{ id: '77', resourceName: 'customers/1/userLists/77', name: 'Past Purchasers', type: 'CRM_BASED', membershipStatus: 'OPEN', membershipLifeSpanDays: 540, sizeForDisplay: 12000, sizeForSearch: 8000, readOnly: false, matchRatePercentage: 65 }]),
+    structure: () => r('adsStructure', { windowLabel: 'Last 30 days', rows: [{ campaign: 'Brand - Search', adGroup: 'Core', status: 'ENABLED' }] }),
+    uploadDiagnostics: () =>
+      r('adsUploadDiagnostics', [{ client: 'GOOGLE_ADS_API', status: 'HEALTHY', successRatio: 0.98, totalEventCount: 500, successfulEventCount: 490, lastUploadDateTime: '2026-07-26 12:00:00' }]),
+    recommendations: () => r('adsRecommendations', [{ resourceName: 'customers/1/recommendations/5', type: 'CAMPAIGN_BUDGET', campaign: 'customers/1/campaigns/111' }]),
+    enhancedConversionsForLeads: () => r('adsEnhancedConversionsForLeads', false),
+    budgetPacing: () =>
+      r('adsBudgetPacing', { windowLabel: 'Last 14 days', pacing: [{ campaign: 'Brand - Search', status: 'ENABLED', dailyBudgetMicros: 50000000, sharedBudget: false, avgDailySpendMicros: 47000000, paceRatio: 0.94, verdict: 'capped' }] }),
     validateConversionAction: () => r('adsValidateConversionAction', null),
+    // ── writes ── (each records its call so mutations()/decline checks see it)
     createConversionAction: (_c: string, input: { name: string; category: string }) =>
       r('createConversionAction', { resourceName: 'customers/1/conversionActions/2', id: '2', name: input.name, status: 'ENABLED', type: 'WEBPAGE', category: input.category, conversionId: 'AW-1234567890', conversionLabel: 'newLABEL1', taggable: true }),
+    createUserList: (_c: string, name: string) => r('createUserList', { resourceName: 'customers/1/userLists/88', id: '88', name }),
+    setCampaignStatus: (_c: string, _id: string, status: string) => r('setCampaignStatus', { name: 'Brand - Search', previousStatus: 'ENABLED', status }),
+    updateCampaignBudget: (_c: string, _id: string, amount: number) => r('updateCampaignBudget', { previousAmountMicros: 50000000, amountMicros: amount, explicitlyShared: false }),
+    updateConversionAction: (_c: string, _id: string, _patch: unknown) => r('updateConversionAction', { name: 'Contact form', previous: { countingType: 'ONE_PER_CLICK', status: 'ENABLED' } }),
+    addNegativeKeywords: (_c: string, _id: string, keywords: unknown[]) => r('addNegativeKeywords', { campaignName: 'Brand - Search', added: Array.isArray(keywords) ? keywords.length : 0 }),
+    uploadClickConversions: (_c: string, conversions: unknown[]) =>
+      r('uploadClickConversions', { accepted: Array.isArray(conversions) ? conversions.length : 0, total: Array.isArray(conversions) ? conversions.length : 0, failures: [] }),
+    uploadConversionAdjustments: (_c: string, adjustments: unknown[]) =>
+      r('uploadConversionAdjustments', { accepted: Array.isArray(adjustments) ? adjustments.length : 0, total: Array.isArray(adjustments) ? adjustments.length : 0, failures: [] }),
+    uploadCustomerMatch: (_c: string, _list: string, members: unknown[]) =>
+      r('uploadCustomerMatch', { jobResourceName: 'customers/1/offlineUserDataJobs/5', outcome: { accepted: Array.isArray(members) ? members.length : 0, total: Array.isArray(members) ? members.length : 0, failures: [] } }),
   } as unknown as GoogleAdsService;
   return { data, calls, mutations: () => calls.filter((c) => MUTATIONS.has(c)).length, ads };
 }
