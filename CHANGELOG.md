@@ -1,3 +1,9 @@
+## [1.419.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.418.0...v1.419.0) (2026-07-27)
+
+### Features
+
+* **desktop:** make DevTools useful in dev - main logs, IPC + Google API calls, errors, sourcemaps ([#733](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/733)) ([d9bdabc](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d9bdabce01420a0ec503245f0162258ba3d037c9))
+
 ## [1.418.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.417.0...v1.418.0) (2026-07-27)
 
 ### Features
