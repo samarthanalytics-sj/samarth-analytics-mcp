@@ -25,6 +25,7 @@ import { fingerprintResource, diffManifest, type ManifestResource } from '../../
 import { buildTrackingStatus } from '../../shared/tracking-status';
 import { resolveDeletions, summarizeGtmBatch, type GtmBatchItem, type DeleteRequest } from '../../shared/gtm-batch-plan';
 import { planAdsConversionActions, type ExistingConversionAction } from '../../shared/ads-conversion-batch';
+import { log } from '../logger';
 import {
   buildGa4EventTag,
   buildGoogleTag,
@@ -6009,7 +6010,7 @@ export function buildToolRegistry(
               try {
                 memoryCtx.onRecall?.(hits.map((h) => h.memory));
               } catch (e) {
-                console.error('[tool] recall_memories provenance failed (continuing):', e instanceof Error ? e.message : e);
+                log.warn('[tool] recall_memories provenance failed (continuing)', e instanceof Error ? e.message : String(e));
               }
             }
             return {
@@ -6223,19 +6224,19 @@ export function buildToolRegistry(
       if (accountGuard) {
         try { accountGuard(); }
         catch (e) {
-          console.error(`[tool] ✗ ${name}: account changed mid-turn - aborting`);
+          log.warn(`[tool] ${name}: account changed mid-turn - aborting`);
           return JSON.stringify({ declined: true, message: e instanceof Error ? e.message : 'The active Google account changed mid-request. Start a new message so tools run against the account you intend.' });
         }
       }
       const tool = tools.find((t) => t.name === name);
       if (!tool) {
         const near = closestToolNames(name, tools.map((t) => t.name));
-        console.error(`[tool] ✗ model called UNKNOWN tool "${name}"${near.length ? ` — closest: ${near.join(', ')}` : ''}`);
+        log.error(`[tool] model called UNKNOWN tool "${name}"${near.length ? ` - closest: ${near.join(', ')}` : ''}`);
         throw new Error(
           `Unknown tool: ${name}.${near.length ? ` Did you mean: ${near.join(', ')}? Call one of those EXACT names.` : ''}`
         );
       }
-      console.error(`[tool] → ${name}${tool.write ? ' [write]' : ''} args=${truncForLog(JSON.stringify(args ?? {}))}`);
+      log.info(`[tool] -> ${name}${tool.write ? ' [write]' : ''} args=${truncForLog(JSON.stringify(args ?? {}))}`);
 
       // Guard against the model calling a plausible-looking tool with ANOTHER tool's
       // arguments (observed: set_gtm_tag_paused called with measurementId and no tagId →
@@ -6257,7 +6258,7 @@ export function buildToolRegistry(
         const msg =
           `Tool "${name}" requires [${requiredOf(tool).join(', ')}] but is missing [${missing.join(', ')}] (you sent [${provided.join(', ')}]).` +
           (better.length ? ` Those arguments match a different tool — call one of these instead: ${better.join(', ')}.` : '');
-        console.error(`[tool] ✗ ${name} BAD ARGS → ${msg}`);
+        log.error(`[tool] ${name} BAD ARGS -> ${msg}`);
         throw new Error(msg);
       }
 
@@ -6267,13 +6268,13 @@ export function buildToolRegistry(
       if (tool.precheck) {
         const pc = await tool.precheck(effectiveArgs);
         if (pc) {
-          console.error(`[tool] ${name}: already present → skipped (no create, no approval)`);
+          log.info(`[tool] ${name}: already present -> skipped (no create, no approval)`);
           return JSON.stringify(pc);
         }
       }
       if (tool.write) {
         if (!confirm) {
-          console.error(`[tool] ${name}: writes disabled (no confirm fn)`);
+          log.warn(`[tool] ${name}: writes disabled (no confirm fn)`);
           return JSON.stringify({ declined: true, message: 'Write tools are disabled.' });
         }
         // The live surface this write lands on, so the approval card can tell the truth about
@@ -6298,11 +6299,11 @@ export function buildToolRegistry(
             platform: writePlatform,
           });
           if (!edited) {
-            console.error(`[tool] ${name}: user DECLINED in approval card`);
+            log.warn(`[tool] ${name}: user DECLINED in approval card`);
             return declined;
           }
           if (JSON.stringify(edited) !== JSON.stringify(effectiveArgs)) {
-            console.error(`[tool] ${name}: args EDITED in approval card → ${truncForLog(JSON.stringify(edited))}`);
+            log.info(`[tool] ${name}: args EDITED in approval card -> ${truncForLog(JSON.stringify(edited))}`);
           }
           effectiveArgs = edited;
 
@@ -6319,7 +6320,7 @@ export function buildToolRegistry(
               platform: writePlatform,
             });
             if (!again) {
-              console.error(`[tool] ${name}: user DECLINED final confirmation`);
+              log.warn(`[tool] ${name}: user DECLINED final confirmation`);
               return declined;
             }
           }
@@ -6330,15 +6331,15 @@ export function buildToolRegistry(
           const summary = tool.summarize ? tool.summarize(effectiveArgs) : tool.name;
           const edited = await confirm({ tool: tool.name, summary, details: effectiveArgs, platform: writePlatform });
           if (!edited) {
-            console.error(`[tool] ${name}: user DECLINED in approval card`);
+            log.warn(`[tool] ${name}: user DECLINED in approval card`);
             return JSON.stringify({ declined: true, message: 'The user declined this change. Nothing was created.' });
           }
           if (JSON.stringify(edited) !== JSON.stringify(effectiveArgs)) {
-            console.error(`[tool] ${name}: args EDITED in approval card → ${truncForLog(JSON.stringify(edited))}`);
+            log.info(`[tool] ${name}: args EDITED in approval card -> ${truncForLog(JSON.stringify(edited))}`);
           }
           effectiveArgs = edited;
         } else {
-          console.error(`[tool] ${name}: write auto-applied (approval is delete-only)`);
+          log.info(`[tool] ${name}: write auto-applied (approval is delete-only)`);
         }
         // Re-check the account AFTER the approval card resolved: the user can switch Google accounts
         // while a card is open, and applying then would land the approved write on the new account's
@@ -6346,18 +6347,18 @@ export function buildToolRegistry(
         if (accountGuard) {
           try { accountGuard(); }
           catch (e) {
-            console.error(`[tool] ✗ ${name}: account changed during approval - aborting before apply`);
+            log.warn(`[tool] ${name}: account changed during approval - aborting before apply`);
             return JSON.stringify({ declined: true, message: e instanceof Error ? e.message : 'The active Google account changed mid-request. Nothing was applied.' });
           }
         }
       }
       try {
         const result = await tool.handler(effectiveArgs);
-        console.error(`[tool] ✓ ${name} → ${truncForLog(JSON.stringify(result))}`);
+        log.success(`[tool] ${name} -> ${truncForLog(JSON.stringify(result))}`);
         return JSON.stringify(result);
       } catch (e) {
         const msg = apiErrorMessage(e);
-        console.error(`[tool] ✗ ${name} FAILED: ${msg}`);
+        log.error(`[tool] ${name} FAILED: ${msg}`);
         throw new Error(msg);
       }
     },

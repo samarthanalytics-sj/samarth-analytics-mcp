@@ -8,6 +8,7 @@ import type { ContainerSnapshot, ServerContainerSnapshot } from './gtm-builders'
 import { ga4TagFields, readGa4EventParameters, applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, normalizeTriggerType, setCustomEventName, customEventNameOf, buildGa4Client, buildGa4ServerTag, buildMetaCapiServerTag, buildTikTokCapiServerTag, buildStapeDataTag, buildServerAllEventsTrigger, buildServerEventTrigger, buildAdsConversionServerTag, buildMetaEmqVariables, buildTikTokEmqVariables, buildEcommerceDlvVariables, buildGa4EventTag, buildTrigger, planTriggerRetarget, type TriggerInput, buildGtmClient, buildVariable, sanitizeName, matchesServerContainer, customTemplateType, upsertGoogleTagConfig, triggerUsageBreakdown, detectMetaTags, evaluateTrackingSetup, GA4_ECOMMERCE_FUNNEL_EVENTS, type TrackingSetupReport, type TrackingSetupCheck } from './gtm-builders';
 import { resolveGa4MeasurementIds } from './gtm-ga4-check';
 import { withQuotaRetry, withRetry, QUOTA_RE, TRANSIENT_5XX_RE, NOT_FOUND_OR_PERMISSION_RE } from './quota-retry';
+import { log } from '../logger';
 
 import type { Ga4PropertySnapshot } from './ga4-audit';
 import type { DataQualityCounts } from './ga4-data-quality';
@@ -340,7 +341,7 @@ export class GoogleDataService {
           rule === 'quota' ? 'write quota reached - waiting for the per-minute limit to reset'
           : rule === 'server' ? 'transient GTM server error'
           : 'a fresh container/workspace is not visible to the write path yet';
-        console.error(`[gtm] ${rule} retry: waiting ${Math.round(delayMs / 1000)}s (${why}, attempt ${attempt})`);
+        log.warn(`[gtm] ${rule} retry: waiting ${Math.round(delayMs / 1000)}s (${why}, attempt ${attempt})`);
       },
     });
   }
@@ -378,10 +379,10 @@ export class GoogleDataService {
         name: a.name ?? '(unnamed)',
         path: a.path ?? '',
       }));
-      console.log('[gtm-accounts] %d account(s): %s', views.length, views.map((a) => `${a.name}(${a.accountId})`).join(', ') || '—');
+      log.info(`[gtm-accounts] ${views.length} account(s): ${views.map((a) => `${a.name}(${a.accountId})`).join(', ') || '-'}`);
       return views;
     } catch (e) {
-      console.error('[gtm-accounts] FAILED: %s', e instanceof Error ? e.message : String(e));
+      log.error(`[gtm-accounts] FAILED: ${e instanceof Error ? e.message : String(e)}`);
       throw e;
     }
   }
@@ -408,10 +409,10 @@ export class GoogleDataService {
         usageContext: (c.usageContext ?? []).map(String),
       }));
       this.containerCache.set(key, { at: Date.now(), views });
-      console.log('[gtm-containers] account %s: %d container(s): %s', accountId, views.length, views.map((c) => `${c.name}${c.publicId ? ' ' + c.publicId : ''}`).join(', ') || '-');
+      log.info(`[gtm-containers] account ${accountId}: ${views.length} container(s): ${views.map((c) => `${c.name}${c.publicId ? ' ' + c.publicId : ''}`).join(', ') || '-'}`);
       return views;
     } catch (e) {
-      console.error('[gtm-containers] account %s FAILED: %s', accountId, e instanceof Error ? e.message : String(e));
+      log.error(`[gtm-containers] account ${accountId} FAILED: ${e instanceof Error ? e.message : String(e)}`);
       throw e;
     }
   }
@@ -483,10 +484,10 @@ export class GoogleDataService {
         name: w.name ?? '(unnamed)',
         path: w.path ?? '',
       }));
-      console.log('[gtm-workspaces] account %s container %s: %d workspace(s): %s', accountId, containerId, views.length, views.map((w) => `${w.name}(${w.workspaceId})`).join(', ') || '—');
+      log.info(`[gtm-workspaces] account ${accountId} container ${containerId}: ${views.length} workspace(s): ${views.map((w) => `${w.name}(${w.workspaceId})`).join(', ') || '-'}`);
       return views;
     } catch (e) {
-      console.error('[gtm-workspaces] account %s container %s FAILED: %s', accountId, containerId, e instanceof Error ? e.message : String(e));
+      log.error(`[gtm-workspaces] account ${accountId} container ${containerId} FAILED: ${e instanceof Error ? e.message : String(e)}`);
       throw e;
     }
   }
@@ -1097,7 +1098,7 @@ export class GoogleDataService {
     const gtm = tagmanager({ version: 'v2', auth });
     const path = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/tags/${tagId}`;
     const current = (await gtm.accounts.containers.workspaces.tags.get({ path })).data;
-    console.error(`[gtm] addGa4EventParameters tag=${tagId} type=${current.type} params=[${parameters.map((p) => p.name).join(', ')}]`);
+    log.info(`[gtm] addGa4EventParameters tag=${tagId} type=${current.type} params=[${parameters.map((p) => p.name).join(', ')}]`);
     if (current.type !== 'gaawe') {
       throw new Error(
         `Tag ${tagId} is type "${current.type ?? 'unknown'}", not a GA4 Event tag (gaawe). add_ga4_event_parameters only edits GA4 event tags.`
@@ -1105,7 +1106,7 @@ export class GoogleDataService {
     }
     const updated = addEventParameters(current as Record<string, unknown>, parameters);
     const res = await this.qCreate(() => gtm.accounts.containers.workspaces.tags.update({ path, requestBody: updated }));
-    console.error(`[gtm]   ✓ tag ${tagId} (${res.data.name}) saved`);
+    log.success(`[gtm] tag ${tagId} (${res.data.name}) saved`);
     this.journal('tag', accountId, containerId, workspaceId, tagId, `${res.data.name ?? 'tag'} (#${tagId})`);
     return { tagId: res.data.tagId ?? tagId, name: res.data.name ?? '', type: res.data.type ?? '' };
   }
@@ -1126,7 +1127,7 @@ export class GoogleDataService {
     const gtm = tagmanager({ version: 'v2', auth });
     const path = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/tags/${tagId}`;
     const current = (await gtm.accounts.containers.workspaces.tags.get({ path })).data;
-    console.error(`[gtm] addGa4ServerParameters tag=${tagId} type=${current.type} ep=[${(opts.eventParameters ?? []).map((p) => p.name).join(', ')}] up=[${(opts.userProperties ?? []).map((p) => p.name).join(', ')}]`);
+    log.info(`[gtm] addGa4ServerParameters tag=${tagId} type=${current.type} ep=[${(opts.eventParameters ?? []).map((p) => p.name).join(', ')}] up=[${(opts.userProperties ?? []).map((p) => p.name).join(', ')}]`);
     if (current.type !== 'sgtmgaaw') {
       throw new Error(
         `Tag ${tagId} is type "${current.type ?? 'unknown'}", not a GA4 SERVER tag (sgtmgaaw). add_ga4_server_parameters only edits GA4 server tags.`
@@ -1134,7 +1135,7 @@ export class GoogleDataService {
     }
     const updated = addServerGa4Params(current as Record<string, unknown>, opts);
     const res = await gtm.accounts.containers.workspaces.tags.update({ path, requestBody: updated });
-    console.error(`[gtm]   ✓ tag ${tagId} (${res.data.name}) saved`);
+    log.success(`[gtm] tag ${tagId} (${res.data.name}) saved`);
     this.journal('tag', accountId, containerId, workspaceId, tagId, `${res.data.name ?? 'tag'} (#${tagId})`);
     return { tagId: res.data.tagId ?? tagId, name: res.data.name ?? '', type: res.data.type ?? '' };
   }
@@ -1157,7 +1158,7 @@ export class GoogleDataService {
     const current = (await gtm.accounts.containers.workspaces.tags.get({ path })).data;
     const key =
       current.type === 'gaawe' ? 'measurementIdOverride' : current.type === 'googtag' ? 'tagId' : null;
-    console.error(`[gtm] setGa4MeasurementId tag=${tagId} type=${current.type} → ${key ?? '(unsupported)'}=${measurementId}`);
+    log.info(`[gtm] setGa4MeasurementId tag=${tagId} type=${current.type} -> ${key ?? '(unsupported)'}=${measurementId}`);
     if (!key) {
       throw new Error(
         `Tag ${tagId} is type "${current.type ?? 'unknown'}", not a GA4 Event tag (gaawe) or Google tag (googtag). set_ga4_measurement_id only edits those.`
@@ -1165,7 +1166,7 @@ export class GoogleDataService {
     }
     const updated = setTemplateParam(current as Record<string, unknown>, key, measurementId);
     const res = await this.qCreate(() => gtm.accounts.containers.workspaces.tags.update({ path, requestBody: updated }));
-    console.error(`[gtm]   ✓ tag ${tagId} (${res.data.name}) saved`);
+    log.success(`[gtm] tag ${tagId} (${res.data.name}) saved`);
     this.journal('tag', accountId, containerId, workspaceId, tagId, `${res.data.name ?? 'tag'} (#${tagId})`);
     return { tagId: res.data.tagId ?? tagId, name: res.data.name ?? '', type: res.data.type ?? '' };
   }
@@ -1197,7 +1198,7 @@ export class GoogleDataService {
           };
     const updated = { ...current, consentSettings };
     const res = await gtm.accounts.containers.workspaces.tags.update({ path, requestBody: updated as typeof current });
-    console.error(`[gtm] setGtmTagConsent tag=${tagId} → ${status}${status === 'needed' ? ` [${consentTypes.join(', ')}]` : ''}`);
+    log.info(`[gtm] setGtmTagConsent tag=${tagId} -> ${status}${status === 'needed' ? ` [${consentTypes.join(', ')}]` : ''}`);
     this.journal('tag', accountId, containerId, workspaceId, tagId, `${res.data.name ?? 'tag'} (#${tagId})`);
     return { tagId: res.data.tagId ?? tagId, name: res.data.name ?? '', type: res.data.type ?? '' };
   }
@@ -1226,10 +1227,10 @@ export class GoogleDataService {
       } catch (e) {
         const error = e instanceof Error ? e.message : String(e);
         failed.push({ tag: t.name, error });
-        console.error(`[gtm]   ✗ ${t.name}#${t.tagId}: ${error}`);
+        log.error(`[gtm] ${t.name}#${t.tagId}: ${error}`);
       }
     }
-    console.error(`[gtm] setGa4MeasurementIdOnAllTags DONE: ${updated.length} updated, ${failed.length} failed`);
+    log.info(`[gtm] setGa4MeasurementIdOnAllTags DONE: ${updated.length} updated, ${failed.length} failed`);
     return { total: targets.length, updated, failed };
   }
 
@@ -1255,10 +1256,10 @@ export class GoogleDataService {
       } catch (e) {
         const error = e instanceof Error ? e.message : String(e);
         failed.push({ tag: t.name, error });
-        console.error(`[gtm]   ✗ ${t.name}#${t.tagId}: ${error}`);
+        log.error(`[gtm] ${t.name}#${t.tagId}: ${error}`);
       }
     }
-    console.error(`[gtm] addGa4EventParametersToAllTags DONE: ${updated.length} updated, ${failed.length} failed`);
+    log.info(`[gtm] addGa4EventParametersToAllTags DONE: ${updated.length} updated, ${failed.length} failed`);
     return { total: targets.length, updated, failed };
   }
 
@@ -1280,7 +1281,7 @@ export class GoogleDataService {
       `accounts/${r.accountId}/containers/${r.containerId}/workspaces/${r.workspaceId}`;
     const reverted: string[] = [];
     const failed: Array<{ label: string; error: string }> = [];
-    console.error(`[gtm] revertLastChanges: ${refs.length} entity(ies): ${refs.map((r) => r.label).join(' | ')}`);
+    log.info(`[gtm] revertLastChanges: ${refs.length} entity(ies): ${refs.map((r) => r.label).join(' | ')}`);
     for (const r of refs) {
       try {
         const path = `${ws(r)}/${r.kind}s/${r.id}`;
@@ -1288,14 +1289,14 @@ export class GoogleDataService {
         else if (r.kind === 'trigger') await gtm.accounts.containers.workspaces.triggers.revert({ path });
         else await gtm.accounts.containers.workspaces.variables.revert({ path });
         reverted.push(r.label);
-        console.error(`[gtm]   ✓ reverted ${r.kind} ${r.id}`);
+        log.success(`[gtm] reverted ${r.kind} ${r.id}`);
       } catch (e) {
         const error = e instanceof Error ? e.message : String(e);
         failed.push({ label: r.label, error });
-        console.error(`[gtm]   ✗ revert ${r.kind} ${r.id}: ${error}`);
+        log.error(`[gtm] revert ${r.kind} ${r.id}: ${error}`);
       }
     }
-    console.error(`[gtm] revertLastChanges DONE: ${reverted.length} reverted, ${failed.length} failed`);
+    log.info(`[gtm] revertLastChanges DONE: ${reverted.length} reverted, ${failed.length} failed`);
     return { reverted, failed };
   }
 
@@ -1371,13 +1372,13 @@ export class GoogleDataService {
       ),
     ]);
     const snapshot = toSnapshot(tags, triggers, variables);
-    console.error(
-      `[gtm-snapshot] ws ${workspaceId}: ${tags.length} tags (${tagPages}p) · ${triggers.length} triggers (${triggerPages}p) · ${variables.length} variables (${variablePages}p)`
+    log.info(
+      `[gtm-snapshot] ws ${workspaceId}: ${tags.length} tags (${tagPages}p) - ${triggers.length} triggers (${triggerPages}p) - ${variables.length} variables (${variablePages}p)`
     );
     // Breakdown so an orphaned-trigger count that looks "too low" can be explained: the gap between
     // orphaned= and each ifXUnused= is the number of triggers ONLY that rule keeps out of the set.
     const tb = triggerUsageBreakdown(snapshot);
-    console.error(
+    log.info(
       `[trigger-usage] total=${tb.total} orphaned=${tb.orphaned} | ifBlockingUnused=${tb.orphanedIfBlockingUnused} ifPausedFiringUnused=${tb.orphanedIfPausedFiringUnused}`
     );
     return snapshot;
