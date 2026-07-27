@@ -1,3 +1,13 @@
+## [1.407.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.406.2...v1.407.0) (2026-07-27)
+
+### Features
+
+* **desktop:** redesign the Prompts tab with a product filter and add Google Ads + new-feature prompts ([#699](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/699)) ([05d4b9e](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/05d4b9e072eb87e382c736ce7f97a09a3f4b94be))
+
+### Bug Fixes
+
+* **desktop:** batch delete shows ONE approval dialog, not the two-step card ([83e24a7](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/83e24a791885dbb25419e63c75225ac8a0e4c161))
+
 ## [1.406.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.406.1...v1.406.2) (2026-07-27)
 
 ### Bug Fixes
