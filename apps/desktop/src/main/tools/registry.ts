@@ -1975,20 +1975,35 @@ export function buildToolRegistry(
     {
       name: 'list_gtm_tags',
       description:
-        'List the tags in a GTM workspace. Each tag returns tagId, name, type, `firingTriggerId` (the ids of the triggers that fire it), and for a GA4 Event tag (type "gaawe") its `eventName` - the GA4 EVENT NAME the tag SENDS (its "Event Name" field, e.g. "purchase") - plus `measurementId` when set. ' +
-        'IMPORTANT: a tag\'s `eventName` is NOT the same as its firing trigger\'s custom event name (list_gtm_triggers.customEventName, the dataLayer event like "form_submission" that FIRES the tag). For "what event name does this tag send", use THIS tag `eventName`. ' +
-        'For a tag\'s TRIGGER NAME or its trigger\'s customEventName, you MUST resolve `firingTriggerId` against list_gtm_triggers (match triggerId) and read the real name / customEventName from there - NEVER derive the trigger name by editing the tag name, and NEVER put the tag\'s eventName in a customEventName column. If you have not called list_gtm_triggers, do so before reporting any trigger detail.',
+        'List the tags in a GTM workspace. Each tag returns tagId, name, type, `firingTriggerId`, and for a GA4 Event tag (type "gaawe") its `eventName` (the GA4 EVENT NAME the tag SENDS, its "Event Name" field), `measurementId` when set, and `eventParameters` (the tag\'s ACTUAL event parameters as {name,value} - e.g. form_id -> {{Form ID}} - read straight from the tag; use THESE, do not assume a standard set). ' +
+        'A tag\'s `eventName` is NOT its firing trigger\'s custom event name (the dataLayer event like "form_submission" that FIRES the tag). ' +
+        'For any TRIGGER NAME or trigger customEventName column, pass resolveTriggers:true - each tag then also returns `firingTriggers` [{triggerId, name, customEventName}] resolved from the real triggers. NEVER derive a trigger name by editing the tag name, never leave customEventName blank, and never put the tag\'s eventName in a customEventName column - read them from `firingTriggers`.',
       inputSchema: {
         type: 'object',
         properties: {
           accountId: { type: 'string' },
           containerId: { type: 'string' },
           workspaceId: { type: 'string' },
+          resolveTriggers: { type: 'boolean', description: 'Also return each tag\'s firingTriggers [{triggerId,name,customEventName}], resolved from list_gtm_triggers. Use for any inventory that needs the trigger name or its customEventName.' },
         },
         required: ['accountId', 'containerId', 'workspaceId'],
         additionalProperties: false,
       },
-      handler: (a) => data.listGtmTags(s(a.accountId), s(a.containerId), s(a.workspaceId)),
+      handler: async (a) => {
+        const tags = await data.listGtmTags(s(a.accountId), s(a.containerId), s(a.workspaceId));
+        if (a.resolveTriggers !== true) return tags;
+        // Server-side join so the model gets the REAL firing trigger name + customEventName instead of
+        // guessing (or leaving it blank): the tag->trigger link the model kept fabricating.
+        const triggers = await data.listGtmTriggers(s(a.accountId), s(a.containerId), s(a.workspaceId));
+        const byId = new Map(triggers.map((t) => [t.triggerId, t]));
+        return tags.map((t) => ({
+          ...t,
+          firingTriggers: (t.firingTriggerId ?? []).map((id) => {
+            const tr = byId.get(id);
+            return { triggerId: id, name: tr?.name ?? '(trigger not found)', customEventName: tr?.customEventName ?? '' };
+          }),
+        }));
+      },
     },
     {
       // The site-wide counterpart to suggest_tags_from_url, which only ever looks at ONE page. Without

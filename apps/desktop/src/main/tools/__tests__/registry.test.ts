@@ -615,6 +615,25 @@ async function main(): Promise<void> {
     await assert.rejects(() => buildToolRegistry(fakeData().data).execute('nope', {}), /Unknown tool/);
   });
 
+  await test('list_gtm_tags resolveTriggers joins each tag to its real trigger name + customEventName', async () => {
+    const fd = fakeData({ existingTriggers: [{ triggerId: 'T5', name: 'Contact Form Trigger', type: 'customEvent', customEventName: 'form_submission' }] });
+    fd.data.listGtmTags = async () => [{ tagId: '9', name: 'GA4 - Event - Contact Tag', type: 'gaawe', eventName: 'contact', firingTriggerId: ['T5'] }] as never;
+    const reg = buildToolRegistry(fd.data);
+    const out = JSON.parse(await reg.execute('list_gtm_tags', { accountId: '1', containerId: '2', workspaceId: '3', resolveTriggers: true }));
+    assert.equal(out[0].eventName, 'contact', 'the tag event name is preserved');
+    assert.deepEqual(out[0].firingTriggers, [{ triggerId: 'T5', name: 'Contact Form Trigger', customEventName: 'form_submission' }], 'trigger resolved to its REAL name + customEventName');
+    assert.ok(fd.calls.some((c) => c.startsWith('listTriggers')), 'triggers were fetched to resolve');
+  });
+
+  await test('list_gtm_tags without resolveTriggers does NOT fetch triggers or add firingTriggers', async () => {
+    const fd = fakeData();
+    fd.data.listGtmTags = async () => [{ tagId: '9', name: 'X', type: 'gaawe', firingTriggerId: ['T5'] }] as never;
+    const reg = buildToolRegistry(fd.data);
+    const out = JSON.parse(await reg.execute('list_gtm_tags', { accountId: '1', containerId: '2', workspaceId: '3' }));
+    assert.equal(out[0].firingTriggers, undefined, 'no join when not asked');
+    assert.ok(!fd.calls.some((c) => c.startsWith('listTriggers')), 'triggers not fetched when not asked');
+  });
+
   await test('write tools appear ONLY when a confirm function is provided', async () => {
     const readOnly = buildToolRegistry(fakeData().data);
     assert.equal(readOnly.list().length, 60, 'read-only registry has 60 tools');

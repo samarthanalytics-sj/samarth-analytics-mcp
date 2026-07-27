@@ -1615,6 +1615,23 @@ export function ga4TagFields(tag: Record<string, unknown>): { eventName?: string
   return {};
 }
 
+/** Read a GA4 Event tag's actual event parameters out of its `eventSettingsTable` (the list-of-maps
+ *  keyed parameter/parameterValue that GTM stores). Returns the real {name, value} pairs so a tag
+ *  inventory can show what each tag ACTUALLY sends, instead of the model assuming a standard set. */
+export function readGa4EventParameters(tag: Record<string, unknown>): Array<{ name: string; value: string }> {
+  const params = Array.isArray(tag.parameter) ? (tag.parameter as Array<Record<string, unknown>>) : [];
+  const table = params.find((p) => p.key === 'eventSettingsTable' && Array.isArray(p.list));
+  if (!table) return [];
+  const out: Array<{ name: string; value: string }> = [];
+  for (const row of table.list as Array<Record<string, unknown>>) {
+    const map = Array.isArray(row.map) ? (row.map as Array<Record<string, unknown>>) : [];
+    const name = map.find((m) => m.key === 'parameter')?.value;
+    const value = map.find((m) => m.key === 'parameterValue')?.value;
+    if (name != null && String(name) !== '') out.push({ name: String(name), value: value != null ? String(value) : '' });
+  }
+  return out;
+}
+
 /** Read one setting (e.g. server_container_url) out of a Google tag's configSettingsTable —
  *  the list-of-maps shape upsertGoogleTagConfig writes. */
 export function googleTagConfigValue(tag: Record<string, unknown>, configKey: string): string {
