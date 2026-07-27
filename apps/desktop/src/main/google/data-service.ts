@@ -560,6 +560,39 @@ export class GoogleDataService {
     };
   }
 
+  /** Update a GTM ENVIRONMENT in place (name / url / enableDebug / description). Read-modify-write, so
+   *  omitted fields keep their current value and the gtm_auth token is preserved. Environments are
+   *  container-level (no workspace). Editing rather than delete+recreate keeps the environmentId and
+   *  its install snippet stable. */
+  async updateGtmEnvironment(
+    accountId: string,
+    containerId: string,
+    environmentId: string,
+    patch: { name?: string; url?: string; enableDebug?: boolean; description?: string }
+  ): Promise<GtmEnvironmentView> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const path = `accounts/${accountId}/containers/${containerId}/environments/${environmentId}`;
+    const [publicId, current] = await Promise.all([
+      this.getContainerPublicId(accountId, containerId),
+      gtm.accounts.containers.environments.get({ path }).then((r) => r.data),
+    ]);
+    const body: Record<string, unknown> = { ...current };
+    if (patch.name && patch.name.trim()) body.name = patch.name.trim();
+    if (patch.url !== undefined) body.url = patch.url;
+    if (patch.enableDebug !== undefined) body.enableDebug = patch.enableDebug;
+    if (patch.description !== undefined) body.description = patch.description;
+    const e = (await gtm.accounts.containers.environments.update({ path, requestBody: body })).data;
+    return {
+      environmentId: e.environmentId ?? environmentId,
+      name: e.name ?? '',
+      type: e.type ?? 'user',
+      authorizationCode: e.authorizationCode ?? '',
+      url: e.url ?? '',
+      snippet: buildEnvironmentSnippet(publicId, e.authorizationCode ?? '', e.environmentId ?? environmentId),
+    };
+  }
+
   /**
    * Auto-mint a WORKSPACE-PREVIEW install snippet so a scan can load the workspace's
    * DRAFT tags (for "Verify firing") without the user pasting anything. It:
@@ -1638,6 +1671,30 @@ export class GoogleDataService {
     return { deleted: true, clientId };
   }
 
+  /** Update a CLIENT in place (server container). Read-modify-write with `parameter` merged by key, so
+   *  a partial edit never wipes the rest of the client config. Keeps the clientId (delete+recreate
+   *  would reassign it and break request claiming). */
+  async updateGtmClient(
+    accountId: string,
+    containerId: string,
+    workspaceId: string,
+    clientId: string,
+    client: Record<string, unknown>
+  ): Promise<{ clientId: string; name: string; type: string }> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const path = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/clients/${clientId}`;
+    const current = (await gtm.accounts.containers.workspaces.clients.get({ path })).data;
+    const merged: Record<string, unknown> = { ...current };
+    for (const [k, v] of Object.entries(client)) {
+      if (v === undefined) continue;
+      if (k === 'parameter') merged.parameter = mergeParametersByKey((current.parameter as GtmParam[] | undefined) ?? [], v as GtmParam[]);
+      else merged[k] = v;
+    }
+    const res = await gtm.accounts.containers.workspaces.clients.update({ path, requestBody: merged });
+    return { clientId: res.data.clientId ?? clientId, name: res.data.name ?? '', type: res.data.type ?? '' };
+  }
+
   async listGtmTransformations(
     accountId: string,
     containerId: string,
@@ -1667,6 +1724,29 @@ export class GoogleDataService {
       requestBody: transformation,
     });
     return { transformationId: res.data.transformationId ?? '', name: res.data.name ?? '', type: res.data.type ?? '' };
+  }
+
+  /** Update a TRANSFORMATION in place (server container). Read-modify-write with `parameter` merged by
+   *  key. Keeps the transformationId stable rather than delete+recreate. */
+  async updateGtmTransformation(
+    accountId: string,
+    containerId: string,
+    workspaceId: string,
+    transformationId: string,
+    transformation: Record<string, unknown>
+  ): Promise<{ transformationId: string; name: string; type: string }> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const path = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/transformations/${transformationId}`;
+    const current = (await gtm.accounts.containers.workspaces.transformations.get({ path })).data;
+    const merged: Record<string, unknown> = { ...current };
+    for (const [k, v] of Object.entries(transformation)) {
+      if (v === undefined) continue;
+      if (k === 'parameter') merged.parameter = mergeParametersByKey((current.parameter as GtmParam[] | undefined) ?? [], v as GtmParam[]);
+      else merged[k] = v;
+    }
+    const res = await gtm.accounts.containers.workspaces.transformations.update({ path, requestBody: merged });
+    return { transformationId: res.data.transformationId ?? transformationId, name: res.data.name ?? '', type: res.data.type ?? '' };
   }
 
   /** Execute ONLY the selected server-plan items (server-plan.ts): every step reuses an existing

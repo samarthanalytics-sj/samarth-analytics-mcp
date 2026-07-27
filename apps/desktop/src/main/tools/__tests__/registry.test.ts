@@ -98,9 +98,21 @@ function fakeData(
       calls.push(`deleteClient:${clientId}`);
       return { deleted: true, clientId };
     },
+    updateGtmClient: async (_a: string, _c: string, _w: string, clientId: string, cl: Record<string, unknown>) => {
+      calls.push(`updateClient:${clientId}:${String(cl.name ?? '')}`);
+      return { clientId, name: String(cl.name ?? 'kept'), type: 'gaaw_client' };
+    },
     createGtmTransformation: async (a: string, c: string, w: string, x: Record<string, unknown>) => {
       calls.push(`createTransformation:${a}:${c}:${w}`);
       return { transformationId: 'X1', name: String(x.name ?? ''), type: String(x.type ?? '') };
+    },
+    updateGtmTransformation: async (_a: string, _c: string, _w: string, transformationId: string, x: Record<string, unknown>) => {
+      calls.push(`updateTransformation:${transformationId}:${String(x.name ?? '')}`);
+      return { transformationId, name: String(x.name ?? 'kept'), type: 'sgtm_transformation' };
+    },
+    updateGtmEnvironment: async (_a: string, _c: string, environmentId: string, patch: { name?: string }) => {
+      calls.push(`updateEnv:${environmentId}:${String(patch.name ?? '')}`);
+      return { environmentId, name: String(patch.name ?? 'kept'), type: 'user', authorizationCode: 'A', url: '', snippet: { head: 'h', body: 'b' } };
     },
     deriveWebContainerMeasurementId: async (a: string, webContainerId: string) => {
       calls.push(`deriveMid:${a}:${webContainerId}`);
@@ -624,8 +636,13 @@ async function main(): Promise<void> {
     // plus the read-only discover_site_urls = 110.
     // plus the read-only check_ga4_compatibility = 111, plus spy_gtag_config = 112, plus the two
     // phone-conversion reads (detect_page_phone_numbers, plan_phone_conversion_tracking) = 114,
-    // plus the GTM write batch_delete_gtm_entities = 115, plus the GTM write update_gtm_variable = 116.
-    assert.equal(withWrites.list().length, 116 + 64, 'read + write registry has 116 GTM/GA4-read/context/write + 64 GA4-write tools');
+    // plus the GTM write batch_delete_gtm_entities = 115, plus the GTM write update_gtm_variable = 116,
+    // plus the three in-place update tools update_gtm_environment / update_gtm_client / update_gtm_transformation = 119.
+    assert.equal(withWrites.list().length, 119 + 64, 'read + write registry has 119 GTM/GA4-read/context/write + 64 GA4-write tools');
+    for (const n of ['update_gtm_environment', 'update_gtm_client', 'update_gtm_transformation']) {
+      assert.equal(withWrites.list().some((t) => t.name === n), true, `${n} present`);
+      assert.equal(withWrites.isWrite?.(n), true, `${n} is a write`);
+    }
     // isWrite() reflects the registry's write flag, so the agentic loop can tell a landed write
     // (forward progress on a build) from a read and decide whether to run past the step budget.
     assert.equal(withWrites.isWrite?.('create_gtm_tag'), true, 'a create is a write');
@@ -1300,6 +1317,31 @@ async function main(): Promise<void> {
     assert.equal(out.variableId, 'V7', 'the SAME variable id is kept (no delete+recreate)');
     assert.ok(fd.calls.some((c) => c.startsWith('updateVar:V7')), 'routed to updateGtmVariable, not delete/create');
     assert.ok(!fd.calls.some((c) => c.startsWith('createVar') || c.startsWith('deleteVar')), 'no create or delete of the variable');
+  });
+
+  await test('update_gtm_client / _transformation / _environment edit server + container entities in place', async () => {
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data, approveAsIs);
+
+    const cl = JSON.parse(await reg.execute('update_gtm_client', {
+      accountId: '1', containerId: '2', workspaceId: '3', clientId: 'CL9', client: { name: 'GA4 (renamed)' },
+    }));
+    assert.equal(cl.clientId, 'CL9', 'same clientId kept (no delete+recreate)');
+    assert.ok(fd.calls.some((c) => c.startsWith('updateClient:CL9')), 'routed to updateGtmClient');
+
+    const tr = JSON.parse(await reg.execute('update_gtm_transformation', {
+      accountId: '1', containerId: '2', workspaceId: '3', transformationId: 'X5', transformation: { name: 'Strip PII v2' },
+    }));
+    assert.equal(tr.transformationId, 'X5', 'same transformationId kept');
+    assert.ok(fd.calls.some((c) => c.startsWith('updateTransformation:X5')), 'routed to updateGtmTransformation');
+
+    const env = JSON.parse(await reg.execute('update_gtm_environment', {
+      accountId: '1', containerId: '2', environmentId: 'E4', name: 'Staging', enableDebug: true,
+    }));
+    assert.equal(env.environmentId, 'E4', 'same environmentId kept (snippet stays valid)');
+    assert.ok(fd.calls.some((c) => c.startsWith('updateEnv:E4:Staging')), 'routed to updateGtmEnvironment');
+
+    assert.ok(!fd.calls.some((c) => c.startsWith('createClient') || c.startsWith('createTransformation') || c.startsWith('deleteClient')), 'nothing was created or deleted');
   });
 
   await test('create_tracking_tag (google_tag) builds a googtag and creates its trigger', async () => {

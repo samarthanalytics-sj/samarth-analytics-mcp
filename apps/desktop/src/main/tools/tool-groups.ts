@@ -154,6 +154,7 @@ const GROUP_MEMBERS: Record<ToolGroup, readonly string[]> = {
     'delete_gtm_folder',
     'move_gtm_entities_to_folder',
     'create_gtm_environment',
+    'update_gtm_environment',
     'copy_workspace_resources',
     // GTM tag EDITS that carry "ga4" in the name (the registry's GTM_GA4_TAG_TOOLS set): these
     // rewrite GTM tags, they are not GA4 Admin calls.
@@ -175,8 +176,10 @@ const GROUP_MEMBERS: Record<ToolGroup, readonly string[]> = {
     'create_server_container_from_web',
     'bootstrap_server_side_tagging',
     'create_gtm_client',
+    'update_gtm_client',
     'delete_gtm_client',
     'create_gtm_transformation',
+    'update_gtm_transformation',
     'create_server_trigger',
     'create_server_tag',
     'setup_server_ecommerce_funnel',

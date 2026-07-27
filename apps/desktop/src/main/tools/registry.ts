@@ -3819,6 +3819,34 @@ export function buildToolRegistry(
         }),
     },
     {
+      name: 'update_gtm_environment',
+      description:
+        'Update an existing GTM ENVIRONMENT in place (name, url, enableDebug, description). Read-modify-write, so omitted fields keep their current value and the gtm_auth token is preserved. Environments are container-level (no workspaceId). Use this to rename or re-point an environment - do NOT delete and recreate it, which reassigns the environmentId and invalidates the installed snippet. Find the environmentId via list_gtm_environments.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          environmentId: { type: 'string' },
+          name: { type: 'string' },
+          url: { type: 'string' },
+          enableDebug: { type: 'boolean' },
+          description: { type: 'string' },
+        },
+        required: ['accountId', 'containerId', 'environmentId'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => `Update GTM environment ${s(a.environmentId)} in container ${s(a.containerId)}`,
+      handler: (a) =>
+        data.updateGtmEnvironment(s(a.accountId), s(a.containerId), s(a.environmentId), {
+          name: a.name != null ? s(a.name) : undefined,
+          url: a.url != null ? s(a.url) : undefined,
+          enableDebug: typeof a.enableDebug === 'boolean' ? a.enableDebug : a.enableDebug != null ? s(a.enableDebug) === 'true' : undefined,
+          description: a.description != null ? s(a.description) : undefined,
+        }),
+    },
+    {
       name: 'create_server_container',
       description:
         'Create a SERVER container (server-side GTM, usageContext "server"). This creates the CONTAINER only: the tagging-server HOST (Cloud Run / App Engine) must be provisioned separately (GTM UI "automatically provision tagging server", or gcloud), after which its URL appears as taggingServerUrls.',
@@ -3850,6 +3878,26 @@ export function buildToolRegistry(
       write: true,
       summarize: (a) => `Create client "${s(obj(a.client).name)}" (type ${s(obj(a.client).type)}) in server workspace ${s(a.workspaceId)}`,
       handler: (a) => data.createGtmClient(s(a.accountId), s(a.containerId), s(a.workspaceId), obj(a.client)),
+    },
+    {
+      name: 'update_gtm_client',
+      description:
+        'Update a CLIENT in a SERVER container workspace IN PLACE. Read-modify-write: the current client is fetched and only the fields you pass are overlaid, with `parameter` merged by key, so omitted config is preserved. Use this to change a client (its name or a parameter) - do NOT delete and recreate it, which reassigns the clientId and breaks request claiming. Find the clientId via list_gtm_clients (or the server audit).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          clientId: { type: 'string' },
+          client: { type: 'object', description: 'Partial GTM Client resource: only the fields to change. parameter[] is merged by key.' },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'clientId', 'client'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => `Update client ${s(a.clientId)} in server workspace ${s(a.workspaceId)}`,
+      handler: (a) => data.updateGtmClient(s(a.accountId), s(a.containerId), s(a.workspaceId), s(a.clientId), obj(a.client)),
     },
     {
       name: 'delete_gtm_client',
@@ -3899,6 +3947,26 @@ export function buildToolRegistry(
         if (!t || Object.keys(t).length === 0) throw new Error('Provide allowParams (an event-param allow-list) or a raw transformation object.');
         return data.createGtmTransformation(s(a.accountId), s(a.containerId), s(a.workspaceId), t);
       },
+    },
+    {
+      name: 'update_gtm_transformation',
+      description:
+        'Update a TRANSFORMATION in a SERVER container workspace IN PLACE. Read-modify-write with `parameter` merged by key, so omitted fields are preserved. Use this to change a transformation - do NOT delete and recreate it, which reassigns the transformationId. Find the transformationId via list_gtm_transformations (or the server audit).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          transformationId: { type: 'string' },
+          transformation: { type: 'object', description: 'Partial GTM Transformation resource: only the fields to change. parameter[] is merged by key.' },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'transformationId', 'transformation'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => `Update transformation ${s(a.transformationId)} in server workspace ${s(a.workspaceId)}`,
+      handler: (a) => data.updateGtmTransformation(s(a.accountId), s(a.containerId), s(a.workspaceId), s(a.transformationId), obj(a.transformation)),
     },
     {
       name: 'bootstrap_server_side_tagging',
