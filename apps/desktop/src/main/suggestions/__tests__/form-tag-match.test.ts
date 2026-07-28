@@ -1,7 +1,7 @@
 // Pure tests for container-tag-driven form matching + field dedup (no browser).
 // Run: tsx apps/desktop/src/main/suggestions/__tests__/form-tag-match.test.ts
 
-import { matchFormsToTags, dedupeSharedFields, dedupKey, isFormEventName, type PagedForm, type FormTagIdentity } from '../form-tag-match';
+import { matchFormsToTags, dedupeSharedFields, dedupKey, isFormEventName, tagPageSeedUrls, type PagedForm, type FormTagIdentity } from '../form-tag-match';
 import type { FormFillFieldView } from '../../../shared/ipc';
 
 let passed = 0;
@@ -221,6 +221,23 @@ check('isFormEventName: platform_view (contains "form") → false', !isFormEvent
 // ── dedupKey ─────────────────────────────────────────────────────────────────────
 check('dedupKey: non-select is the role', dedupKey({ role: 'email', label: 'Email' }) === 'email');
 check('dedupKey: select is role|label', dedupKey({ role: 'select', label: 'Category' }) === 'select|category');
+
+// tagPageSeedUrls: the crawl-seed derivation from the form tags' own page scopes.
+const seeds = tagPageSeedUrls(
+  [
+    { page: '/resources/guides/2026-calendar' },
+    { page: '/resources/guides/holiday-checklist' },
+    { page: '/resources/guides/2026-calendar' }, // dup
+    { formName: 'x' } as { page?: string }, // no page scope
+    { page: 'not-a-path' }, // not a leading-slash path
+  ],
+  'https://get.chownow.com/',
+);
+check('tagPageSeedUrls: origin-resolved, deduped, non-path scopes dropped',
+  JSON.stringify(seeds) === JSON.stringify(['https://get.chownow.com/resources/guides/2026-calendar', 'https://get.chownow.com/resources/guides/holiday-checklist']),
+  JSON.stringify(seeds));
+check('tagPageSeedUrls: the homepage tag equals the target and is dropped', tagPageSeedUrls([{ page: '/' }], 'https://site.com/').length === 0);
+check('tagPageSeedUrls: a non-URL target yields no seeds (never a crash)', tagPageSeedUrls([{ page: '/x' }], 'not a url').length === 0);
 
 console.log(`\nform-tag-match: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }

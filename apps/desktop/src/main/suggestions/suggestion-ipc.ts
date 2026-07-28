@@ -29,7 +29,7 @@ import { routeTagsToPages, normalizeVerifyPages } from './verify-routing';
 import { runTaVerify, taProfileDirFor, type TaFormSubmit } from './ta-driver';
 import { eventsForContainer, taEventsToMonitorEvents, toTaEventViews, buildTriggerSuggestions, pageScopeToPath } from './ta-stream';
 import { toFormFillViews, localeOptions, classifyFiredContainerTags } from './form-fill-plan';
-import { matchFormsToTags, dedupeSharedFields, isFormEventName, type PagedForm, type FormTagIdentity } from './form-tag-match';
+import { matchFormsToTags, dedupeSharedFields, isFormEventName, tagPageSeedUrls, type PagedForm, type FormTagIdentity } from './form-tag-match';
 import { snapshotToVerifyInputs } from './container-verify';
 import { localeById } from '../../../../web-audit-mcp/src/agent/form-fill.js';
 import type { RawForm } from '../../../../web-audit-mcp/src/agent/forms.js';
@@ -528,7 +528,7 @@ export function registerSuggestionsIpc(data: GoogleDataService, memory?: MemoryS
     const locale = localeById(o.localeId);
     const emailTag = ''; // plain test@gmail.com by default (simple test values); editable in the review
     let error: string | undefined;
-    const empty = (err: string): FormTagVerifyPlanResult => ({ url: target, localeId: locale.id, locales: localeOptions(), matched: [], sharedFields: [], unmatchedTags: [], pagesCrawled: 0, error: err });
+    const empty = (err: string): FormTagVerifyPlanResult => ({ url: target, localeId: locale.id, locales: localeOptions(), matched: [], sharedFields: [], unmatchedTags: [], pagesCrawled: 0, formTagCount: 0, pageScopedSeeds: 0, error: err });
 
     // 1. The container's FORM (custom-event) tags → identities.
     let tags: FormTagIdentity[] = [];
@@ -575,21 +575,33 @@ export function registerSuggestionsIpc(data: GoogleDataService, memory?: MemoryS
     try {
       let seedUrls: string[] = [];
       let pagesTotal = 0;
+      // The form tags themselves say WHERE their forms live: each tag's Page-Path / URL trigger scope
+      // (t.page) is the landing page its form is on. Seed the crawl with those exact pages so a
+      // content-download form on a deep page (that generic sitemap/BFS discovery never reaches) gets
+      // FOUND and matched, instead of being reported "no matching form". No-op when a tag has no page
+      // scope (e.g. it only conditions on form_id) - that stays an honest coverage gap.
+      const tagPageSeeds = tagPageSeedUrls(tags, target);
       if (explicitPages.length === 0) {
         try {
           const disc = await discoverSite(target);
           seedUrls = disc.urls.filter((u) => u !== target);
           pagesTotal = disc.urls.length;
         } catch { /* discovery best-effort — crawlAndSuggest still BFS-crawls from the target */ }
+        // Tag page scopes go FIRST (top-priority seeds) so the offer landing pages are visited even if
+        // the budget can't cover the whole sitemap.
+        seedUrls = [...new Set([...tagPageSeeds, ...seedUrls])];
+        if (seedUrls.length + 1 > pagesTotal) pagesTotal = seedUrls.length + 1;
       }
       // Explicit list → scan exactly those (start = first page, the rest as top-priority seeds, budget =
       // list length so BFS-discovered links never get a slot). Else: sitemap present → whole site (up to the
       // 300 cap); none → a bounded BFS (60), header/nav/footer pages scanned first so none are stranded.
       const startUrl = explicitPages.length ? explicitPages[0] : target;
       const seeds = explicitPages.length ? explicitPages.slice(1) : seedUrls;
+      // Budget must cover the seeds (tag pages + sitemap), so a sitemap smaller than the tag-page set
+      // never caps the offer pages out. Bounded at 300.
       const maxPages = explicitPages.length
         ? explicitPages.length
-        : o.maxPages ?? (seedUrls.length ? Math.min(pagesTotal || seedUrls.length + 1, 300) : 60);
+        : o.maxPages ?? (seedUrls.length ? Math.min(Math.max(pagesTotal, seedUrls.length + 1), 300) : 60);
       const crawlTotal = maxPages;
       const pool = await makeDrivers(Math.min(scanConcurrency(), maxPages), { maxPages, cachePages: true });
       const scan = await crawlAndSuggest(
@@ -609,7 +621,10 @@ export function registerSuggestionsIpc(data: GoogleDataService, memory?: MemoryS
     // 3. Match forms ↔ tags, then collapse the matched forms' fields into ONE data-entry set.
     const { matched, unmatchedTags } = matchFormsToTags(pagedForms, tags);
     const sharedFields = dedupeSharedFields(matched);
-    return { url: target, localeId: locale.id, locales: localeOptions(), matched, sharedFields, unmatchedTags, pagesCrawled, ...(error ? { error } : {}) };
+    // Coverage transparency: how many form tags entered this flow, and how many carry a page scope we
+    // could seed - so the UI can say "12 of 65 tags fire on form submits" instead of looking broken.
+    const pageScopedSeeds = tagPageSeedUrls(tags, target).length;
+    return { url: target, localeId: locale.id, locales: localeOptions(), matched, sharedFields, unmatchedTags, pagesCrawled, formTagCount: tags.length, pageScopedSeeds, ...(error ? { error } : {}) };
   });
 
   // Phase 2 — REAL submit: fill the operator-reviewed values and submit ONE form for real, then report

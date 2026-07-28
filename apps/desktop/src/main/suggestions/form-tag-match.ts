@@ -78,6 +78,19 @@ function tagIdentities(tag: FormTagIdentity): Set<string>[] {
   return out;
 }
 
+/** The absolute landing-page URLs the form tags point at: each tag's Page-Path scope (`/path`)
+ *  resolved against the target's origin, deduped, target itself dropped. These are the pages a form
+ *  tag says its form lives on - seed the crawl with them so a deep content-download form gets found
+ *  instead of reported "no matching form". Empty when the target isn't a URL or no tag is page-scoped. PURE. */
+export function tagPageSeedUrls(tags: Array<{ page?: string }>, target: string): string[] {
+  let origin = '';
+  try { origin = new URL(target).origin; } catch { return []; }
+  const self = target.replace(/\/+$/, '');
+  return [...new Set(
+    tags.map((t) => t.page).filter((pg): pg is string => Boolean(pg && pg.startsWith('/'))).map((pg) => origin + pg),
+  )].filter((u) => u !== target && u.replace(/\/+$/, '') !== self);
+}
+
 /** True when a custom-event trigger's event name denotes a FORM submission (form_submission,
  *  form_submit, submit_form …). Scroll/CTA/other custom-event tags (custom_scroll_depth, cta_click)
  *  are NOT form tags, so they must be excluded before form matching — otherwise they get piled onto a
