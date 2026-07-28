@@ -177,6 +177,9 @@ export interface TaVerifyResult {
   needSignIn?: boolean;
   /** TA connected but the GTM container didn't enter debug — operator-readable reason. */
   debugProblem?: string;
+  /** Every GTM container Tag Assistant actually saw on the page — so a selected-vs-live container
+   *  mismatch is visible (the "it's using a different container id" case). */
+  containersSeen?: string[];
   error?: string;
   perTag: PerTagCapture[];
   pagesDriven: string[];
@@ -557,11 +560,14 @@ export async function runTaVerify(
     // Harvest + parse the stream from the TA page.
     const frames = await ta.evaluate<string[]>(() => (window as unknown as { __taFrames?: string[] }).__taFrames ?? []).catch(() => [] as string[]);
     const capture = parseTaFrames(frames);
-    const { containerDebugProblem, eventsForContainer } = await import('./ta-stream');
+    const { containerDebugProblem, eventsForContainer, containersSeenOnPage } = await import('./ta-stream');
+    const containersSeen = containersSeenOnPage(capture);
     let problem = containerDebugProblem(capture, containerPublicId);
     // The #1 cause of "not in debug" is a PUBLISHED container without preview creds: Tag Assistant's
     // connect flow only debugs Google tags. If we weren't given a Preview snippet, say exactly that.
-    if (problem && !previewParams) {
+    const selectedOnPage = capture.containers.some((x) => x.id === containerPublicId);
+    if (problem && !previewParams && selectedOnPage) {
+      // The container IS on the page but didn't enter debug (published, no preview creds).
       problem = `${containerPublicId} didn't enter debug mode. Tag Assistant's connect flow only debugs Google tags, not a published GTM container. To verify your GTM container's tags, open GTM, click Preview, copy your Preview snippet, and paste it into the "GTM Preview snippet" box here — then run this again. (Quick Preview creates no version or environment.)`;
     }
     const evs = eventsForContainer(capture, containerPublicId);
@@ -584,7 +590,7 @@ export async function runTaVerify(
 
     console.log('[tag-assistant] leaving the Tag Assistant window OPEN so you can inspect it — it closes automatically when you run verify again or quit the app.');
     keepWindowOpen = true; // reached a real result — keep the TA panel up for the user to review
-    return { pagesOk: true, perTag, pagesDriven, capture, ...(captures.length ? { captures } : {}), ...(summaryShot ? { summaryShot } : {}), ...(problem ? { debugProblem: problem } : {}) };
+    return { pagesOk: true, perTag, pagesDriven, capture, ...(containersSeen.length ? { containersSeen } : {}), ...(captures.length ? { captures } : {}), ...(summaryShot ? { summaryShot } : {}), ...(problem ? { debugProblem: problem } : {}) };
   } catch (e) {
     return { pagesOk: false, perTag, pagesDriven, error: (e instanceof Error ? e.message : String(e)).slice(0, 300) };
   } finally {

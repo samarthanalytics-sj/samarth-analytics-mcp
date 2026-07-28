@@ -376,7 +376,7 @@ export function registerSuggestionsIpc(data: GoogleDataService, memory?: MemoryS
           onFormProgress: (page, done, total) => emit({ phase: 'drive', message: 'Submitting a form for real in Tag Assistant', page, done, total }),
           shouldStop: shouldStopVerify,
         });
-        const base = { url: target, injected: false, previewAuth: false, pagesOk: ta.pagesOk, verifiedByMonitor: true as const, ...(ta.pagesDriven.length ? { pagesDriven: ta.pagesDriven } : {}), ...(pagesCrawled ? { pagesCrawled } : {}), ...(pagesTotal ? { pagesTotal } : {}) };
+        const base = { url: target, injected: false, previewAuth: false, pagesOk: ta.pagesOk, verifiedByMonitor: true as const, ...(ta.pagesDriven.length ? { pagesDriven: ta.pagesDriven } : {}), ...(pagesCrawled ? { pagesCrawled } : {}), ...(pagesTotal ? { pagesTotal } : {}), ...(ta.containersSeen?.length ? { containersSeen: ta.containersSeen } : {}) };
         if (ta.needSignIn || ta.error) return { ...base, verdicts: [], error: ta.error ?? 'Tag Assistant run failed.', ...(ta.needSignIn ? { needTaSignIn: true } : {}) };
         if (ta.debugProblem) return { ...base, verdicts: [], error: ta.debugProblem };
         const taEvents = eventsForContainer(ta.capture!, publicId);
