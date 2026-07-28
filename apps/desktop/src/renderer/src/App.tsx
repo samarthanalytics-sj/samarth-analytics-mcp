@@ -6691,6 +6691,12 @@ function FormFillReview({ url, verifyPages, snippet, active, onError, runSignal,
           ) : plan ? (
             <span style={{ fontSize: 12.5, color: matched.length ? 'var(--c-green)' : 'var(--text-muted)' }}>
               {matched.length ? `✓ ${matched.length} form(s) with tags` : 'No forms with tags found'}
+              {typeof plan.formTagCount === 'number' && (
+                <span style={{ ...styles.muted, fontSize: 12, fontWeight: 400, marginLeft: 8 }}>
+                  ({plan.formTagCount} tag(s) fire on FORM submits and enter this check; tags that fire on clicks or other events are verified in the tag results above, not here
+                  {plan.pageScopedSeeds ? `. ${plan.pageScopedSeeds} carry a page-path scope, so the crawl also visited those exact pages` : ''})
+                </span>
+              )}
             </span>
           ) : (
             <span style={{ ...styles.muted, fontSize: 12.5 }}>Runs when you verify above</span>
@@ -6867,7 +6873,7 @@ function FormFillReview({ url, verifyPages, snippet, active, onError, runSignal,
               {openUnmatched.length > 0 && (
                 <div style={styles.card}>
                   <div style={{ ...styles.h2, color: 'var(--c-amber)' }}>{firedTags ? `Not found and not fired (${openUnmatched.length})` : `Form tags with no matching form (${openUnmatched.length})`}</div>
-                  <div style={{ ...styles.muted, fontSize: 12 }}>{firedTags ? 'These form tags neither matched a form we found NOR fired during the run - the form may be on an un-crawled / behind-login page, render late, or its name differs from the tag. Verify those manually.' : 'These container form tags matched no form we found on the site - the form may be on an un-crawled/behind-login page, render late, or its name differs from the tag. Verify those manually.'}</div>
+                  <div style={{ ...styles.muted, fontSize: 12 }}>{firedTags ? 'These form tags neither matched a form we found NOR fired during the run. Likely: the form is on a page the crawl did not reach, loads in a cross-origin embed (HubSpot/Marketo iframe) we cannot read, or the tag conditions on a form_id shared across many pages so there is no distinct form per tag. Verify those manually.' : 'These container form tags matched no form we found. Likely reasons: the tag has no page-path scope so we did not know which page to visit; the form is a cross-origin embed (HubSpot/Marketo iframe) the browser blocks us from reading; the tag conditions on a form_id reused across many landing pages (one shared form, not one per tag); or the page is behind login. Tip: pass the exact PUBLIC landing-page URLs (not wp-admin editor URLs) in "Pages to verify" to point the crawl straight at them.'}</div>
                   <ul style={styles.resultList}>
                     {openUnmatched.map((n) => (<li key={n} style={styles.resultRow}>{n}</li>))}
                   </ul>

@@ -1079,6 +1079,11 @@ export interface FormTagVerifyPlanResult {
   /** Container form tags that matched NO form on the site (a coverage gap to flag). */
   unmatchedTags: string[];
   pagesCrawled: number;
+  /** How many container tags were FORM tags (custom-event on a form submit) - the ones this flow can
+   *  verify. The rest fire on clicks / other events and are covered by the tag-results run, not here. */
+  formTagCount: number;
+  /** How many of those form tags carried a Page-Path scope we seeded the crawl with. */
+  pageScopedSeeds: number;
   error?: string;
 }
 
