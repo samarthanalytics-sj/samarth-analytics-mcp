@@ -7351,9 +7351,13 @@ function VerifyPanel({
                 <div style={{ marginTop: 6 }}>
                   Proceed to inject <b style={{ fontFamily: 'var(--font-mono)' }}>{ctx?.containerPublicId}</b> into the verification session only (the live site is not changed), then confirm Tag Assistant connects to it. Or cancel.
                 </div>
-                {vSnippet.trim() && (
+                {vSnippet.trim() ? (
                   <div style={{ ...styles.muted, fontSize: 12, marginTop: 6 }}>
-                    A Preview snippet is pasted above, so Proceed uses that (it already targets your container) instead of a plain injection.
+                    Your pasted Preview snippet is used to load this container in DEBUG mode, and the live container is blocked, so Tag Assistant debugs YOUR container.
+                  </div>
+                ) : (
+                  <div style={{ ...styles.muted, fontSize: 12, marginTop: 6, color: 'var(--c-amber)' }}>
+                    Tip: to see YOUR container fire its tags in Tag Assistant, paste its GTM Preview snippet in the box above first. Without it the published build loads and may not stream tag data.
                   </div>
                 )}
               </div>
@@ -7361,9 +7365,10 @@ function VerifyPanel({
                 <button
                   style={styles.primaryBtn}
                   onClick={() => {
-                    // Preview snippet wins: when one is pasted it already targets the container, so don't
-                    // also raw-inject. Otherwise inject the selected container into the driven session.
-                    vInjectContainerRef.current = vSnippet.trim() ? undefined : (ctx?.containerPublicId ?? undefined);
+                    // Always inject the selected container into the driven session (Step 3). When a Preview
+                    // snippet is pasted, ta-driver loads this container WITH its preview creds (debug mode)
+                    // and blocks the live container's gtm.js, so Tag Assistant debugs YOURS not the live one.
+                    vInjectContainerRef.current = ctx?.containerPublicId ?? undefined;
                     continueTaScan();
                   }}
                 >

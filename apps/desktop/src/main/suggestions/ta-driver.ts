@@ -316,30 +316,37 @@ export async function runTaVerify(
   const ctx = await launchProfile(profileDir, false);
   let keepWindowOpen = false; // on success, leave the TA window open for the user to inspect
   // PREFLIGHT INJECTION (Step 3): the operator hit Proceed past a missing/mismatch gate, so the selected
-  // container is NOT live on this page. Boot it in the driven session ONLY (nothing on the public site
-  // changes) so Tag Assistant sees it. Preview mode wins when a snippet was pasted (it already makes the
-  // container enter debug via the request rewrite below), so we only raw-bootstrap when there is no
-  // preview snippet. Context-level init script → it runs in the debugged popup too; origin-guarded so it
-  // never touches the tagassistant.google.com / sign-in tabs.
-  const injectContainerId = !previewParams && opts.injectContainerId ? opts.injectContainerId.trim().toUpperCase() : '';
-  if (injectContainerId) console.log(`[preflight] step 3: injecting ${injectContainerId} into the Tag Assistant session (not live on the page; session-only) ...`);
+  // container is NOT the one live on this page. Make Tag Assistant debug YOUR container instead of the live
+  // one, in the driven session ONLY (nothing on the public site changes), in two parts:
+  //  (a) inject the selected container's gtm.js here, carrying the pasted GTM Preview creds
+  //      (gtm_auth/gtm_preview) when present so it loads in DEBUG/preview mode and streams tag-firing
+  //      frames — without those creds it can only load the published build (paste the snippet for debug);
+  //  (b) in the route handler below, abort every OTHER GTM container's gtm.js so the live container cannot
+  //      also boot and steal the Tag Assistant debug view.
+  // Context-level init script → it runs in the debugged popup too; origin-guarded so it never touches the
+  // tagassistant.google.com / sign-in tabs.
+  const injectContainerId = opts.injectContainerId ? opts.injectContainerId.trim().toUpperCase() : '';
+  const injectPreviewQs = injectContainerId && previewParams
+    ? `&gtm_auth=${previewParams.gtm_auth}&gtm_preview=${previewParams.gtm_preview}&gtm_cookies_win=${previewParams.gtm_cookies_win}`
+    : '';
+  if (injectContainerId) console.log(`[preflight] step 3: injecting ${injectContainerId} into the Tag Assistant session${injectPreviewQs ? ' in PREVIEW/debug mode (from your pasted snippet)' : ' (published build; paste its GTM Preview snippet for full debug)'}, and blocking other containers' gtm.js so TA debugs YOURS ...`);
   try {
     await ctx.addInitScript(captureFramesInit);
     if (injectContainerId) {
-      await ctx.addInitScript((id: string) => {
+      await ctx.addInitScript((arg: { id: string; qs: string }) => {
         try {
           const o = location.origin;
           if (o === 'https://tagassistant.google.com' || o.indexOf('https://accounts.google.com') === 0) return; // TA / sign-in tabs only
           const w = window as unknown as { google_tag_manager?: Record<string, unknown>; dataLayer?: unknown[] };
-          if (w.google_tag_manager && w.google_tag_manager[id]) return; // already booted → never double-load
+          if (w.google_tag_manager && w.google_tag_manager[arg.id]) return; // already booted → never double-load
           w.dataLayer = w.dataLayer || [];
           w.dataLayer.push({ 'gtm.start': Date.now(), event: 'gtm.js' });
           const s = document.createElement('script');
           s.async = true;
-          s.src = 'https://www.googletagmanager.com/gtm.js?id=' + id;
+          s.src = 'https://www.googletagmanager.com/gtm.js?id=' + arg.id + arg.qs;
           (document.head || document.documentElement).appendChild(s);
         } catch { /* injection is best-effort; Step 4 confirms whether TA actually saw it */ }
-      }, injectContainerId);
+      }, { id: injectContainerId, qs: injectPreviewQs });
     }
     // Abort analytics collectors so driving tags never delivers a real hit (the TA stream, not beacons,
     // is the verdict source). In PREVIEW mode, rewrite the container's gtm.js request to carry the preview
@@ -348,6 +355,18 @@ export async function runTaVerify(
     await ctx.route('**/*', (route) => {
       const reqUrl = route.request().url();
       if (classifyCollector(reqUrl)) { void route.abort(); return; }
+      // ISOLATE the injected container: when we injected YOUR container (Step 3), abort every OTHER GTM
+      // container's gtm.js so the live container cannot also boot and take over the Tag Assistant debug
+      // view — TA then debugs only YOURS. Our own injected request (id === injected) passes through (and
+      // already carries the preview creds we built into it).
+      if (injectContainerId) {
+        const other = reqUrl.match(/googletagmanager\.com\/gtm\.js\?[^"'\s]*id=(GTM-[A-Z0-9]+)/i);
+        if (other && other[1].toUpperCase() !== injectContainerId) {
+          console.log(`[preflight] blocking live container ${other[1].toUpperCase()} gtm.js so Tag Assistant debugs ${injectContainerId}.`);
+          void route.abort();
+          return;
+        }
+      }
       if (
         previewParams &&
         /googletagmanager\.com\/gtm\.js/i.test(reqUrl) &&
