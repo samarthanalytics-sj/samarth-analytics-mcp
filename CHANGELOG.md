@@ -1,3 +1,9 @@
+## [1.420.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.419.3...v1.420.0) (2026-07-28)
+
+### Features
+
+* **desktop:** container preflight gate + auto-inject before tag verification ([#738](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/738)) ([6663e42](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/6663e42755ca90fdc476c43df4696150663452e5))
+
 ## [1.419.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.419.2...v1.419.3) (2026-07-28)
 
 ### Bug Fixes
