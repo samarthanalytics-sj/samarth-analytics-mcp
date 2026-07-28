@@ -482,28 +482,48 @@ export function buildTriggerSuggestions(
 }
 
 /** Why a GTM container has no per-tag data, in operator terms — drives the "sign in and retry" UX.
- *  When the SELECTED container isn't on the page at all, it names the containers Tag Assistant DID
- *  see (the #1 confusion: "it's using a different container id") and steers to the right fix. */
-export function containerDebugProblem(capture: TaCapture, publicId: string): string | null {
-  const c = capture.containers.find((x) => x.id === publicId);
-  if (!c) {
-    // List the GTM containers TA actually observed, so the operator can see it connected to a
-    // DIFFERENT container than the one they selected — the exact mismatch they hit.
-    const seen = capture.containers.map((x) => x.id).filter((id) => /^GTM-/i.test(id));
-    const seenTxt = seen.length
-      ? `Tag Assistant connected to a DIFFERENT container on this page: ${seen.join(', ')} — not your selected ${publicId}.`
-      : `Tag Assistant saw no GTM container on this page.`;
+ *  `onPage` is the AUTHORITATIVE list of Google-tag ids Tag Assistant listed on the page (its
+ *  "Google tags found" chips, read from the DOM), which includes containers PRESENT but not
+ *  debugging — something the debug stream alone can't reveal. When absent it falls back to the
+ *  debug-stream containers. Distinguishes three real cases: (a) selected container present but NOT
+ *  in debug (TA defaulted to another / no-access container — the common ChowNow case), (b) selected
+ *  container genuinely absent from the page, (c) present but sign-in needed. */
+export function containerDebugProblem(capture: TaCapture, publicId: string, onPage?: string[]): string | null {
+  const want = publicId.toUpperCase();
+  const c = capture.containers.find((x) => x.id.toUpperCase() === want);
+  if (c?.debug) return null;
+  // The ground-truth page list: the chips when we have them, else the debug-stream containers.
+  const page = (onPage && onPage.length ? onPage : capture.containers.map((x) => x.id)).map((id) => id.toUpperCase());
+  const presentOnPage = page.includes(want);
+  const otherGtm = page.filter((id) => /^GTM-/.test(id) && id !== want);
+
+  // TA actually attached to the selected container but was denied details — a signed-in Google
+  // session with access is the fix. This takes priority over the generic "present but not debugging"
+  // message because we have direct evidence of the access failure.
+  if (c && c.detailsFound === false) {
+    return `Tag Assistant could not enable debugging for ${publicId}. A GTM web container needs a signed-in Google session with access to it. Sign in (one-time) and retry.`;
+  }
+  if (presentOnPage) {
+    // Installed on the page but not streaming debug data — TA debugs ONE container at a time and
+    // defaults to another (or one you lack access to), and a published container needs Preview creds.
     return (
-      `${seenTxt} Your container ${publicId} is not the one live on this URL — either it is not published/installed here, ` +
-      `or it loads indirectly (via dataLayer, a consent-management or CDP app, or server-side GTM) that Tag Assistant cannot attach to. ` +
-      `To verify ${publicId} — including unpublished workspace changes — open GTM, click Preview, copy the Preview snippet, and paste it into the "GTM Preview snippet" box, then run again. (Quick Preview creates no version or environment.)`
+      `${publicId} IS installed on this page, but Tag Assistant did not put it into debug mode` +
+      (otherGtm.length ? ` (it defaulted to ${otherGtm.join(', ')}, a container you may not have access to)` : '') +
+      `. Tag Assistant debugs one container at a time, and a published container also needs Preview credentials to stream per-tag data. ` +
+      `To verify ${publicId}, including unpublished workspace changes: open GTM, click Preview, copy the Preview snippet, and paste it into the "GTM Preview snippet" box, then run again. (Quick Preview creates no version or environment.)`
     );
   }
-  if (c.debug) return null;
-  if (c.detailsFound === false) {
-    return `Tag Assistant could not enable debugging for ${publicId} — a GTM web container needs a signed-in Google session with access to it. Sign in (one-time) and retry.`;
-  }
-  return `${publicId} did not enter debug mode — reconnect Tag Assistant and retry.`;
+  // Genuinely absent from the page.
+  const seenTxt = otherGtm.length
+    ? `Tag Assistant found these containers on this page: ${otherGtm.join(', ')}, not your selected ${publicId}.`
+    : page.length
+      ? `Tag Assistant found Google tags (${page.join(', ')}) but no GTM container matching ${publicId}.`
+      : `Tag Assistant saw no Google tag on this page.`;
+  return (
+    `${seenTxt} Your container ${publicId} is not live on this URL: either it is not published/installed here, ` +
+    `or it loads indirectly (via dataLayer, a consent-management or CDP app, or server-side GTM) that Tag Assistant cannot attach to. ` +
+    `To verify ${publicId}, including unpublished workspace changes, paste its GTM Preview snippet into the "GTM Preview snippet" box, then run again.`
+  );
 }
 
 /** The GTM container ids Tag Assistant actually observed on the debugged page (for the UI's

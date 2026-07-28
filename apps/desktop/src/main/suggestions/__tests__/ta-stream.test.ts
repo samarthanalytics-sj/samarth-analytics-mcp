@@ -80,14 +80,32 @@ check('status: weird/absent → unknown', mapExecuteStatus('zzz') === 'unknown' 
   const cap = parseTaFrames([starting('GTM-NKZD4BVB', false), details('GTM-NKZD4BVB', false)]);
   const problem = containerDebugProblem(cap, 'GTM-NKZD4BVB');
   check('signed-out: problem names the sign-in requirement', /signed-in|sign in/i.test(problem ?? ''));
-  check('unknown container: problem says the selected one is not live here', /not the one live on this URL/.test(containerDebugProblem(cap, 'GTM-MISSING') ?? ''));
+  check('unknown container: problem says the selected one is not live here', /not live on this URL/.test(containerDebugProblem(cap, 'GTM-MISSING') ?? ''));
   // Selected-vs-live MISMATCH: TA connected to a DIFFERENT container than the one selected. The
   // message must NAME the containers it actually saw and steer to the Preview-snippet fix.
   const mismatch = containerDebugProblem(cap, 'GTM-TCZW2WCF') ?? '';
-  check('mismatch: names the DIFFERENT container TA saw', /DIFFERENT container/.test(mismatch) && mismatch.includes('GTM-NKZD4BVB'));
+  check('mismatch: names the other container TA found', /found these containers on this page/.test(mismatch) && mismatch.includes('GTM-NKZD4BVB'));
   check('mismatch: names the selected container as absent', mismatch.includes('GTM-TCZW2WCF'));
   check('mismatch: steers to the GTM Preview snippet + names indirect loads', /Preview snippet/.test(mismatch) && /dataLayer|consent|server-side/.test(mismatch));
   check('containersSeenOnPage: lists only GTM- ids', JSON.stringify(containersSeenOnPage(cap)) === JSON.stringify(['GTM-NKZD4BVB']));
+}
+
+// ── the ChowNow case: selected container IS on the page (a TA chip) but TA debugged a DIFFERENT one ─
+// TA lists GTM-TCZW2WCF among the page's Google tags, yet defaulted to debugging GTM-TG6Q92 (no
+// access), so no debug frames ever streamed for GTM-TCZW2WCF. The `onPage` chip list is the only
+// signal that GTM-TCZW2WCF is present — the diagnostic must say "installed but not in debug", NOT
+// "saw no container".
+{
+  // Debug stream carries ONLY the container TA defaulted to; the selected one is absent from it.
+  const cap = parseTaFrames([starting('GTM-TG6Q92', false), details('GTM-TG6Q92', false)]);
+  const onPage = ['GTM-TG6Q92', 'GTM-TCZW2WCF', 'AW-947183689', 'G-ZXJP53FYFH'];
+  const msg = containerDebugProblem(cap, 'GTM-TCZW2WCF', onPage) ?? '';
+  check('chownow: says the selected container IS installed', /GTM-TCZW2WCF IS installed on this page/.test(msg));
+  check('chownow: names the container TA defaulted to', msg.includes('GTM-TG6Q92'));
+  check('chownow: never claims no container was seen', !/saw no/.test(msg));
+  check('chownow: steers to the Preview snippet', /Preview snippet/.test(msg));
+  // Lower-case selected id must still match a chip regardless of case.
+  check('chownow: match is case-insensitive', /IS installed/.test(containerDebugProblem(cap, 'gtm-tczw2wcf', onPage) ?? ''));
 }
 
 // ── worst-status-wins: failed is never papered over by a later running frame ───────────────────────

@@ -248,6 +248,20 @@ function readTaPanel(): { event: string; fired: string } {
 
 /** In the TA page: open the rail "Summary" view (the aggregate Tags-Fired list) so the FALLBACK proof
  *  screenshot is meaningful — never a random empty event. Best-effort. */
+// Read the Google-tag ids Tag Assistant lists on the page (its "Google tags found" chip bar). Runs
+// IN the TA page. Text/regex-based (not selector-based) so it survives TA DOM changes: any
+// GTM-/AW-/DC-/G- id shown anywhere is a container/tag TA found. This is the AUTHORITATIVE "what's on
+// the page" signal — the debug stream only carries containers that actually entered debug.
+function readTaContainerChips(): string[] {
+  try {
+    const text = document.body ? document.body.innerText || '' : '';
+    const ids = text.match(/\b(?:GTM|AW|DC)-[A-Z0-9]{4,}\b|\bG-[A-Z0-9]{6,}\b/gi) || [];
+    return Array.from(new Set(ids.map((s) => s.toUpperCase())));
+  } catch {
+    return [];
+  }
+}
+
 function clickTaSummary(): void {
   try {
     const el = (Array.prototype.slice.call(document.querySelectorAll('a,li,button,[role="button"],div,span')) as HTMLElement[])
@@ -561,15 +575,13 @@ export async function runTaVerify(
     const frames = await ta.evaluate<string[]>(() => (window as unknown as { __taFrames?: string[] }).__taFrames ?? []).catch(() => [] as string[]);
     const capture = parseTaFrames(frames);
     const { containerDebugProblem, eventsForContainer, containersSeenOnPage } = await import('./ta-stream');
-    const containersSeen = containersSeenOnPage(capture);
-    let problem = containerDebugProblem(capture, containerPublicId);
-    // The #1 cause of "not in debug" is a PUBLISHED container without preview creds: Tag Assistant's
-    // connect flow only debugs Google tags. If we weren't given a Preview snippet, say exactly that.
-    const selectedOnPage = capture.containers.some((x) => x.id === containerPublicId);
-    if (problem && !previewParams && selectedOnPage) {
-      // The container IS on the page but didn't enter debug (published, no preview creds).
-      problem = `${containerPublicId} didn't enter debug mode. Tag Assistant's connect flow only debugs Google tags, not a published GTM container. To verify your GTM container's tags, open GTM, click Preview, copy your Preview snippet, and paste it into the "GTM Preview snippet" box here — then run this again. (Quick Preview creates no version or environment.)`;
-    }
+    // AUTHORITATIVE on-page list: TA's own "Google tags found" chips (read from the DOM), unioned with
+    // the debug-stream containers. Includes containers PRESENT but not debugging — which the stream can't
+    // show — so the diagnostic knows the selected container is installed even when it never streamed data.
+    const chipIds = await ta.evaluate<string[]>(readTaContainerChips).catch(() => [] as string[]);
+    const onPage = Array.from(new Set([...capture.containers.map((x) => x.id.toUpperCase()), ...chipIds]));
+    const containersSeen = Array.from(new Set([...containersSeenOnPage(capture), ...chipIds.filter((id) => /^GTM-/i.test(id))]));
+    const problem = containerDebugProblem(capture, containerPublicId, onPage);
     const evs = eventsForContainer(capture, containerPublicId);
     const firedCount = evs.reduce((n, e) => n + e.tags.filter((t) => t.status === 'fired').length, 0);
     console.log(`[tag-assistant] captured ${frames.length} debug frame(s) -> ${evs.length} event(s) for ${containerPublicId}, ${firedCount} tag-fire(s)${problem ? ` -- ${problem}` : ''}`);
