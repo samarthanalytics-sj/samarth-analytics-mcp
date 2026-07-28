@@ -1,3 +1,9 @@
+## [1.419.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.419.1...v1.419.2) (2026-07-28)
+
+### Bug Fixes
+
+* **desktop:** tag verification - name the DIFFERENT container Tag Assistant connected to ([#736](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/736)) ([81dff50](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/81dff50f1745ba99aa512f063f2905982bcfa10a))
+
 ## [1.419.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.419.0...v1.419.1) (2026-07-28)
 
 ### Bug Fixes
