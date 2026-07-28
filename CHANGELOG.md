@@ -1,3 +1,9 @@
+## [1.420.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.420.1...v1.420.2) (2026-07-28)
+
+### Bug Fixes
+
+* **desktop:** label the verify inputs + clear GTM Preview snippet guidance ([#740](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/740)) ([1c01b85](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/1c01b853f22c0715e828e2ed25419eb115992c70))
+
 ## [1.420.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.420.0...v1.420.1) (2026-07-28)
 
 ### Bug Fixes
