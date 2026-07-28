@@ -481,13 +481,33 @@ export function buildTriggerSuggestions(
   });
 }
 
-/** Why a GTM container has no per-tag data, in operator terms — drives the "sign in and retry" UX. */
+/** Why a GTM container has no per-tag data, in operator terms — drives the "sign in and retry" UX.
+ *  When the SELECTED container isn't on the page at all, it names the containers Tag Assistant DID
+ *  see (the #1 confusion: "it's using a different container id") and steers to the right fix. */
 export function containerDebugProblem(capture: TaCapture, publicId: string): string | null {
   const c = capture.containers.find((x) => x.id === publicId);
-  if (!c) return `Tag Assistant never saw container ${publicId} on the page — is it installed on this URL?`;
+  if (!c) {
+    // List the GTM containers TA actually observed, so the operator can see it connected to a
+    // DIFFERENT container than the one they selected — the exact mismatch they hit.
+    const seen = capture.containers.map((x) => x.id).filter((id) => /^GTM-/i.test(id));
+    const seenTxt = seen.length
+      ? `Tag Assistant connected to a DIFFERENT container on this page: ${seen.join(', ')} — not your selected ${publicId}.`
+      : `Tag Assistant saw no GTM container on this page.`;
+    return (
+      `${seenTxt} Your container ${publicId} is not the one live on this URL — either it is not published/installed here, ` +
+      `or it loads indirectly (via dataLayer, a consent-management or CDP app, or server-side GTM) that Tag Assistant cannot attach to. ` +
+      `To verify ${publicId} — including unpublished workspace changes — open GTM, click Preview, copy the Preview snippet, and paste it into the "GTM Preview snippet" box, then run again. (Quick Preview creates no version or environment.)`
+    );
+  }
   if (c.debug) return null;
   if (c.detailsFound === false) {
     return `Tag Assistant could not enable debugging for ${publicId} — a GTM web container needs a signed-in Google session with access to it. Sign in (one-time) and retry.`;
   }
   return `${publicId} did not enter debug mode — reconnect Tag Assistant and retry.`;
+}
+
+/** The GTM container ids Tag Assistant actually observed on the debugged page (for the UI's
+ *  "containers on this page" line, so a selected-vs-live mismatch is visible at a glance). PURE. */
+export function containersSeenOnPage(capture: TaCapture): string[] {
+  return capture.containers.map((x) => x.id).filter((id) => /^GTM-/i.test(id));
 }

@@ -7400,7 +7400,17 @@ function VerifyPanel({
               </div>
             )}
             {vResult.error ? (
-              <div style={{ fontWeight: 600, color: 'var(--c-red)' }}>Error: {vResult.error}</div>
+              <>
+                <div style={{ fontWeight: 600, color: 'var(--c-red)' }}>Error: {vResult.error}</div>
+                {vResult.containersSeen && vResult.containersSeen.length > 0 && (
+                  <div style={{ ...styles.muted, fontSize: 12.5, marginTop: 6 }}>
+                    Containers Tag Assistant saw on this page: <b style={{ fontFamily: 'var(--font-mono)' }}>{vResult.containersSeen.join(', ')}</b>.
+                    {vResult.containersSeen.every((id) => id !== ctx?.containerPublicId) && ctx?.containerPublicId
+                      ? ` Your selected container ${ctx.containerPublicId} is NOT among them - the live site runs a different container, or yours loads indirectly (dataLayer / consent tool / server-side). Paste your GTM Preview snippet above to connect this exact container.`
+                      : ''}
+                  </div>
+                )}
+              </>
             ) : (
               <VerifyScorecard fired={firedReal.length} config={firedSynthetic.length} server={serverRelayed.length} untested={inconclusive.length} issues={notFired.length} />
             )}

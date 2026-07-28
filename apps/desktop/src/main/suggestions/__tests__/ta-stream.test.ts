@@ -5,7 +5,7 @@
 // samarthanalytics.com (2026-07-10 probes): CONTAINER_STARTING/CONTAINER_DETAILS/PING wrappers and
 // MEMO.data.memo.sanitized frames (EVENT_STARTED / DATA_LAYER / MACRO_RESOLVED / TAG_STARTED / TAG_STATUS).
 
-import { parseTaFrames, eventsForContainer, containerDebugProblem, mapExecuteStatus, taEventsToMonitorEvents, toTaEventViews, buildTriggerSuggestions, pageScopeToPath, type TaEventRecord } from '../ta-stream';
+import { parseTaFrames, eventsForContainer, containerDebugProblem, containersSeenOnPage, mapExecuteStatus, taEventsToMonitorEvents, toTaEventViews, buildTriggerSuggestions, pageScopeToPath, type TaEventRecord } from '../ta-stream';
 
 let passed = 0;
 let failed = 0;
@@ -80,7 +80,14 @@ check('status: weird/absent → unknown', mapExecuteStatus('zzz') === 'unknown' 
   const cap = parseTaFrames([starting('GTM-NKZD4BVB', false), details('GTM-NKZD4BVB', false)]);
   const problem = containerDebugProblem(cap, 'GTM-NKZD4BVB');
   check('signed-out: problem names the sign-in requirement', /signed-in|sign in/i.test(problem ?? ''));
-  check('unknown container: problem says TA never saw it', /never saw/.test(containerDebugProblem(cap, 'GTM-MISSING') ?? ''));
+  check('unknown container: problem says the selected one is not live here', /not the one live on this URL/.test(containerDebugProblem(cap, 'GTM-MISSING') ?? ''));
+  // Selected-vs-live MISMATCH: TA connected to a DIFFERENT container than the one selected. The
+  // message must NAME the containers it actually saw and steer to the Preview-snippet fix.
+  const mismatch = containerDebugProblem(cap, 'GTM-TCZW2WCF') ?? '';
+  check('mismatch: names the DIFFERENT container TA saw', /DIFFERENT container/.test(mismatch) && mismatch.includes('GTM-NKZD4BVB'));
+  check('mismatch: names the selected container as absent', mismatch.includes('GTM-TCZW2WCF'));
+  check('mismatch: steers to the GTM Preview snippet + names indirect loads', /Preview snippet/.test(mismatch) && /dataLayer|consent|server-side/.test(mismatch));
+  check('containersSeenOnPage: lists only GTM- ids', JSON.stringify(containersSeenOnPage(cap)) === JSON.stringify(['GTM-NKZD4BVB']));
 }
 
 // ── worst-status-wins: failed is never papered over by a later running frame ───────────────────────

@@ -791,6 +791,9 @@ export interface VerifyTagsResult {
   /** Authoritative mode needs a ONE-TIME Google sign-in for Tag Assistant to debug a GTM container —
    *  the UI shows the "Sign in for Tag Assistant" button when set. */
   needTaSignIn?: boolean;
+  /** GTM containers Tag Assistant actually saw on the page. When the selected container is absent, the
+   *  UI shows this so a selected-vs-live mismatch (a DIFFERENT container is live) is obvious. */
+  containersSeen?: string[];
   /** The distinct page URLs the driver actually navigated + drove tags on (multi-page drive). A
    *  click tag whose CTA lives off the homepage is driven on ITS page, so this is usually >1. */
   pagesDriven?: string[];
