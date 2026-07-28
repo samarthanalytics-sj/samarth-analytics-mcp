@@ -794,6 +794,10 @@ export interface VerifyTagsResult {
   /** GTM containers Tag Assistant actually saw on the page. When the selected container is absent, the
    *  UI shows this so a selected-vs-live mismatch (a DIFFERENT container is live) is obvious. */
   containersSeen?: string[];
+  /** The verdicts came from a container INJECTED into the driven session only (it was not live on the
+   *  page). The UI shows an honest note: results prove the tags fire WHEN the container is present, not
+   *  that the container is currently deployed on the public site. */
+  injectedContainer?: boolean;
   /** The distinct page URLs the driver actually navigated + drove tags on (multi-page drive). A
    *  click tag whose CTA lives off the homepage is driven on ITS page, so this is usually >1. */
   pagesDriven?: string[];
@@ -938,6 +942,25 @@ export interface VerifyTagsOptions {
    *  published, the throwaway workspace is discarded after. Opt-in (a container write) — the renderer
    *  confirms first. */
   monitor?: { accountId: string; containerId: string; workspaceId: string };
+  /** PREFLIGHT PROCEED: the operator confirmed a missing/mismatch gate, so inject THIS container id into
+   *  the driven Tag Assistant session (session-only; the public site is not changed) so TA can see it.
+   *  Ignored when a Preview snippet is supplied (that already targets the container). */
+  injectContainerId?: string;
+}
+
+/** Result of the container PREFLIGHT: which GTM container(s) are actually live on the URL (from a headless
+ *  load), so the renderer can compare against the selected container and gate before verification. */
+export interface PreflightContainerResult {
+  /** GTM-XXXX containers booted on the page (window.google_tag_manager ∪ gtm.js loader requests). */
+  liveContainers: string[];
+  /** G-/AW-/GT-/UA- measurement ids seen loading (gtag/js), for context in the gate copy. */
+  measurementIds: string[];
+  /** true = at least one GTM container was detected live. */
+  detected: boolean;
+  /** false = the page could not be loaded for detection; the renderer treats this like "no container"
+   *  (shows the gate, never silently proceeds). */
+  pageOk: boolean;
+  error?: string;
 }
 
 /* ── Real-submit form verification: fetch a form's OWN fields + a locale fill plan (review step) ── */

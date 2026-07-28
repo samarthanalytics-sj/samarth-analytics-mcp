@@ -46,6 +46,7 @@ import type {
   AdsMonitorStatus,
   AdsMonitorRun,
   DiscoverResult,
+  PreflightContainerResult,
   ParsedSuggestionsResult,
   ProviderStatus,
   AdsReadiness,
@@ -349,6 +350,23 @@ const api = {
     // suggestions that already exist (so they aren't re-created).
     existing: (accountId: string, containerId: string, workspaceId: string): Promise<{ names: string[]; hasGa4Base: boolean }> =>
       ipcRenderer.invoke('suggestions:existing', accountId, containerId, workspaceId),
+    // PREFLIGHT: headless-load the URL and report which GTM container(s) are live on it, so the verify
+    // flow can compare against the selected container and gate before Tag Assistant. `onStep` streams
+    // human-readable step lines (the visible progress trail). Read-only.
+    preflightContainer: (
+      url: string,
+      onStep?: (message: string) => void,
+    ): Promise<PreflightContainerResult> => {
+      const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const listener = (_e: unknown, payload: { requestId: string; message: string }): void => {
+        if (payload?.requestId !== requestId) return;
+        onStep?.(payload.message);
+      };
+      if (onStep) ipcRenderer.on('suggestions:preflight:event', listener);
+      return ipcRenderer
+        .invoke('suggestions:preflightContainer', requestId, url)
+        .finally(() => { if (onStep) ipcRenderer.removeListener('suggestions:preflight:event', listener); });
+    },
     // Verify FIRING: inject the pasted (preview) container, drive each tag's trigger,
     // and report fired/not-fired + a corrected trigger. Never delivers a real hit.
     verify: (

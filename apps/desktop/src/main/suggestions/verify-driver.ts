@@ -249,6 +249,80 @@ export function readGtmDebugInPage(): { containerIds: string[]; dataLayerEvents:
   return { containerIds, dataLayerEvents, dataLayer };
 }
 
+/** What a PREFLIGHT headless load found on the live URL. `liveContainers` = the GTM-XXXX containers that
+ *  actually BOOTED (window.google_tag_manager) unioned with any gtm.js loader requests we saw — the
+ *  authoritative "what is live", including containers injected indirectly (via another GTM, a consent
+ *  tool, or dataLayer) that a static HTML fetch would miss. `pageOk=false` = the page could not be
+ *  loaded for detection, which the caller treats as "no container" (never silently proceeds). */
+export interface PreflightDetection {
+  liveContainers: string[];
+  measurementIds: string[];
+  detected: boolean;
+  pageOk: boolean;
+  error?: string;
+}
+
+/** PREFLIGHT: load the URL in a headless browser and report the GTM container(s) actually live on it, so
+ *  the verify flow can compare against the operator-SELECTED container BEFORE driving Tag Assistant.
+ *  Deliberately a real browser load (not a static HTML fetch): the whole point is to catch a container
+ *  that boots dynamically, which is exactly the mismatch case this gate exists for. Ephemeral browser,
+ *  closed immediately; analytics collectors are aborted so detection never delivers a hit; SSRF-guarded. */
+export async function detectLiveContainers(
+  url: string,
+  opts: { settleMs?: number; navTimeoutMs?: number; shouldStop?: () => boolean } = {},
+): Promise<PreflightDetection> {
+  const navTimeoutMs = opts.navTimeoutMs ?? 20_000;
+  const settleMs = opts.settleMs ?? 1200;
+  console.log(`[preflight] step 1: detecting live GTM container(s) on ${url} via a headless load ...`);
+  if (!(await requestAllowed(url))) {
+    return { liveContainers: [], measurementIds: [], detected: false, pageOk: false, error: `Refusing to load ${url}: blocked by the SSRF guard (private/loopback/invalid host).` };
+  }
+  const pw = await loadPlaywright();
+  if (!pw) throw new PlaywrightUnavailableError();
+  const netContainers = new Set<string>();
+  const netMeasurement = new Set<string>();
+  let browser: PwBrowser | null = null;
+  try {
+    browser = await pw.chromium.launch({ headless: true });
+    const context = await browser.newContext({ viewport: { width: 1366, height: 900 } });
+    // Watch every request for a GTM container loader / gtag config (a second live signal alongside the
+    // booted globals), abort analytics collectors so a detection load never delivers a real hit, and
+    // SSRF-guard everything else.
+    await context.route('**/*', (route) => {
+      const reqUrl = route.request().url();
+      const gtm = reqUrl.match(/googletagmanager\.com\/gtm\.js\?[^"'\s]*id=(GTM-[A-Z0-9]+)/i);
+      if (gtm) netContainers.add(gtm[1].toUpperCase());
+      const gtag = reqUrl.match(/googletagmanager\.com\/gtag\/js\?[^"'\s]*id=((?:G|AW|GT|UA)-[A-Z0-9-]+)/i);
+      if (gtag) netMeasurement.add(gtag[1].toUpperCase());
+      if (classifyCollector(reqUrl)) { void route.abort(); return; }
+      void requestAllowed(reqUrl).then((ok) => (ok ? route.continue() : route.abort()), () => route.abort());
+    });
+    const page = await context.newPage();
+    console.log(`[preflight] navigating (nav timeout ${navTimeoutMs}ms, settle ${settleMs}ms) ...`);
+    const resp = await page
+      .goto(url, { waitUntil: 'networkidle', timeout: navTimeoutMs })
+      .catch((e: unknown) => { console.log(`[preflight] navigation issue: ${e instanceof Error ? e.message : String(e)}`); return null; });
+    const status = resp ? resp.status() : null;
+    const pageOk = status === null || status < 400; // networkidle can resolve with a null response on some SPAs
+    await page.waitForTimeout(settleMs);
+    // window.google_tag_manager keys = the containers that actually BOOTED (the ground truth), unioned
+    // with the gtm.js loader requests seen above.
+    const booted = await page
+      .evaluate<{ containerIds: string[] }>(readGtmDebugInPage)
+      .catch(() => ({ containerIds: [] as string[] }));
+    const liveContainers = Array.from(new Set([...booted.containerIds.map((s) => s.toUpperCase()), ...netContainers]));
+    const measurementIds = Array.from(netMeasurement);
+    console.log(`[preflight] booted=[${booted.containerIds.join(', ')}] gtm.js-requests=[${[...netContainers].join(', ')}] -> live=[${liveContainers.join(', ')}] measurement=[${measurementIds.join(', ')}] pageOk=${pageOk}`);
+    return { liveContainers, measurementIds, detected: liveContainers.length > 0, pageOk };
+  } catch (e) {
+    const error = (e instanceof Error ? e.message : String(e)).slice(0, 200);
+    console.log(`[preflight] detection failed: ${error}`);
+    return { liveContainers: [], measurementIds: [], detected: false, pageOk: false, error };
+  } finally {
+    try { await browser?.close(); } catch { /* best-effort */ }
+  }
+}
+
 /**
  * Derive a gtm.js loader src from a pasted snippet / URL / GTM-XXXX id, or null.
  *
