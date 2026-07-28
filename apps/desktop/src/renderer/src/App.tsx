@@ -7278,25 +7278,45 @@ function VerifyPanel({
             your container</b> (no version, no preview). To test UNPUBLISHED <b>draft</b> tags, paste a GTM
             <b> Preview</b> snippet below - that loads your drafts and still creates nothing.
           </div>
+          {/* BOX 1 - Main website URL */}
+          <div style={styles.fieldLabel}>Main website URL</div>
+          <div style={{ ...styles.muted, fontSize: 12 }}>The live site whose pages carry this container. One URL only.</div>
           <input
             value={vUrl}
             onChange={(e) => setVUrl(e.target.value)}
-            placeholder="https://www.example.com - the live site whose pages carry this container"
-            style={{ ...styles.input, width: '100%', marginTop: 8 }}
+            placeholder="https://www.example.com"
+            style={{ ...styles.input, width: '100%', marginTop: 4 }}
             disabled={!ready}
           />
+          {/* BOX 2 - GTM Preview snippet, with clear guidance on WHICH snippet + how much to paste */}
+          <div style={styles.fieldLabel}>GTM Preview snippet <span style={{ fontWeight: 400, ...styles.muted }}>(needed to debug your GTM container's tags)</span></div>
+          <div style={{ ...styles.muted, fontSize: 12, lineHeight: 1.55 }}>
+            In GTM click <b>Preview</b>, enter your site, connect, then copy the snippet Tag Assistant shows (or use Preview &rarr; <b>Share</b> and copy that link). Paste the <b>head</b> <code style={styles.codeChip}>{'<script>…</script>'}</code> snippet - you do <b>not</b> need the <code style={styles.codeChip}>{'<noscript>'}</code> body part. Pasting the <b>whole</b> head snippet is safest; a trimmed paste also works as long as it still contains <code style={styles.codeChip}>id=GTM-XXXX</code>, <code style={styles.codeChip}>gtm_auth</code> and <code style={styles.codeChip}>gtm_preview</code>. Creates no version or environment.
+          </div>
           <textarea
             value={vSnippet}
             onChange={(e) => setVSnippet(e.target.value)}
-            placeholder="Paste your GTM PREVIEW snippet (with gtm_auth & gtm_preview). Required for 'Verify with Tag Assistant' to see your GTM container's tags - in GTM click Preview, then Share/Copy the snippet. Creates no version/environment."
-            style={{ ...styles.input, width: '100%', minHeight: 52, marginTop: 8, fontFamily: 'monospace', fontSize: 12 }}
+            placeholder={'Paste the head <script> GTM Preview snippet here (must include gtm_auth & gtm_preview), e.g.\n<!-- Google Tag Manager -->\n<script>(function(w,d,s,l,i){...})(window,document,\'script\',\'dataLayer\',\'GTM-XXXXXXX&gtm_auth=...&gtm_preview=env-...&gtm_cookies_win=x\');</script>'}
+            style={{ ...styles.input, width: '100%', minHeight: 72, marginTop: 4, fontFamily: 'monospace', fontSize: 12 }}
             disabled={!ready}
           />
+          {vSnippet.trim() && (
+            <div style={{ fontSize: 12, marginTop: 4, color: /gtm_auth=/.test(vSnippet) && /gtm_preview=/.test(vSnippet) ? 'var(--c-green)' : 'var(--c-amber)' }}>
+              {/gtm_auth=/.test(vSnippet) && /gtm_preview=/.test(vSnippet)
+                ? '✓ Preview snippet detected (gtm_auth + gtm_preview present) - your container will load in debug mode.'
+                : '⚠ This does not look like a Preview snippet: gtm_auth / gtm_preview are missing, so only the PUBLISHED container will load (draft tags will not show). Re-copy from GTM Preview.'}
+            </div>
+          )}
+          {/* BOX 3 - Pages to verify (URLs only) */}
+          <div style={styles.fieldLabel}>Pages to verify <span style={{ fontWeight: 400, ...styles.muted }}>(optional, URLs only)</span></div>
+          <div style={{ ...styles.muted, fontSize: 12, lineHeight: 1.55 }}>
+            One URL per line. When set, verify skips the auto-crawl and drives every tag on <b>only</b> these pages, so forms/tags on pages the crawl missed still get tested. Use the <b>public</b> page URLs (not wp-admin / editor URLs).
+          </div>
           <textarea
             value={vVerifyPages}
             onChange={(e) => setVVerifyPages(e.target.value)}
-            placeholder="Pages to verify (optional) - one URL per line. When set, verify SKIPS the auto-crawl and drives every tag on ONLY these pages, so forms/tags on pages the crawl missed still get tested. e.g. https://www.example.com/contact"
-            style={{ ...styles.input, width: '100%', minHeight: 52, marginTop: 8, fontFamily: 'monospace', fontSize: 12 }}
+            placeholder={'https://www.example.com/contact\nhttps://www.example.com/pricing'}
+            style={{ ...styles.input, width: '100%', minHeight: 52, marginTop: 4, fontFamily: 'monospace', fontSize: 12 }}
             disabled={!ready}
           />
           {vVerifyPages.trim() && (
@@ -7357,7 +7377,7 @@ function VerifyPanel({
                   </div>
                 ) : (
                   <div style={{ ...styles.muted, fontSize: 12, marginTop: 6, color: 'var(--c-amber)' }}>
-                    Tip: to see YOUR container fire its tags in Tag Assistant, paste its GTM Preview snippet in the box above first. Without it the published build loads and may not stream tag data.
+                    To see YOUR container fire its tags in Tag Assistant, first cancel, paste its snippet in the <b>GTM Preview snippet</b> box above (in GTM: Preview &rarr; connect &rarr; copy the head <code style={styles.codeChip}>{'<script>'}</code> snippet with gtm_auth &amp; gtm_preview), then run again. Without it only the published build loads and may not stream tag data.
                   </div>
                 )}
               </div>
@@ -12774,6 +12794,9 @@ const styles: Record<string, React.CSSProperties> = {
   resultList: { listStyle: 'none', margin: '12px 0 0', padding: 0 },
   resultRow: { padding: '6px 0', borderBottom: '1px solid var(--border)', fontSize: 13, fontFamily: 'ui-monospace, monospace' },
   muted: { color: 'var(--text-faint)', fontSize: 13 },
+  // A form-field title (bold, above an input) + an inline mono code chip, used to label the verify inputs.
+  fieldLabel: { marginTop: 12, marginBottom: 2, fontSize: 12.5, fontWeight: 600, color: 'var(--text)' },
+  codeChip: { fontFamily: 'var(--font-mono)', fontSize: 11, padding: '1px 5px', borderRadius: 4, background: 'var(--surface-2)', border: '1px solid var(--border)' },
   dot: { width: 9, height: 9, borderRadius: 999, display: 'inline-block', flexShrink: 0 },
   linkBtn: { background: 'transparent', border: 'none', color: 'var(--c-blue)', cursor: 'pointer', fontSize: 12, padding: 0, textDecoration: 'underline' },
   // "Download the full audit" bar - a tinted, bordered strip so the export is an obvious call to
