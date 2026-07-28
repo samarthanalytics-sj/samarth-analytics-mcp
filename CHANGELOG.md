@@ -1,3 +1,9 @@
+## [1.419.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.419.0...v1.419.1) (2026-07-28)
+
+### Bug Fixes
+
+* **desktop:** form verify - seed the crawl with the form tags' own page scopes + honest coverage ([#735](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/735)) ([41cb76e](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/41cb76ef9ec2ede2f2c809ae5109dcc8f6bd9b1f))
+
 ## [1.419.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.418.0...v1.419.0) (2026-07-27)
 
 ### Features
