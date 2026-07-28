@@ -6902,6 +6902,7 @@ function VerifyPanel({
   const ready = Boolean(active?.hasGoogleToken && ctx?.accountId && ctx?.containerId && ctx?.workspaceId);
   const [vUrl, setVUrl] = useState('');
   const [vSnippet, setVSnippet] = useState('');
+  const [vMinting, setVMinting] = useState(false); // auto-generating a Preview snippet from the container
   const [vVerifyPages, setVVerifyPages] = useState('');
   const [vVerifying, setVVerifying] = useState(false);
   const [vVerifyKind, setVVerifyKind] = useState<'firing' | 'ta' | null>(null);
@@ -7073,6 +7074,36 @@ function VerifyPanel({
       setVVerifyKind(null);
       setVProgress(null);
       setVStopping(false);
+    }
+  }
+
+  // AUTO-GENERATE the GTM Preview snippet for the SELECTED container, so the user never has to hunt for it
+  // in GTM. Reuses the same mint the auto-heal uses: it snapshots the workspace into a DRAFT container
+  // version (nothing published) and reads the built-in "Latest" preview environment, returning a snippet
+  // that carries gtm_auth/gtm_preview. That snapshot SUBMITS the workspace (GTM hands back a fresh editable
+  // one), so we confirm first, then follow the app's active workspace to the new one.
+  async function autoGeneratePreview(): Promise<void> {
+    if (!ready || !ctx?.accountId || !ctx?.containerId || !ctx?.workspaceId || !active) {
+      setVNote({ kind: 'error', text: 'Pick a GTM account, container and draft workspace first.' });
+      return;
+    }
+    if (vMinting) return;
+    if (!window.confirm('Auto-generate a GTM Preview snippet for this container?\n\nThis creates a DRAFT container version to load your tags in debug mode. NOTHING is published. GTM then hands your workspace a fresh editable copy (the app switches to it automatically).')) return;
+    setVMinting(true);
+    setVNote(null);
+    onError('');
+    try {
+      const { snippet, newWorkspaceId, environmentName } = await window.desktop.tags.mintPreview(ctx.accountId, ctx.containerId, ctx.workspaceId);
+      setVSnippet(snippet);
+      // The mint submitted the workspace; follow GTM to the fresh editable one so later reads/writes work.
+      if (newWorkspaceId) {
+        try { await window.desktop.accounts.setGtmContext(active.id, { ...ctx, workspaceId: newWorkspaceId, workspaceName: 'Workspace (auto)' }); } catch { /* best-effort */ }
+      }
+      setVNote({ kind: 'info', text: `Preview snippet generated from the "${environmentName}" environment and filled in below. It loads your container in debug mode; nothing was published.` });
+    } catch (e) {
+      setVNote({ kind: 'error', text: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setVMinting(false);
     }
   }
 
@@ -7291,20 +7322,31 @@ function VerifyPanel({
           {/* BOX 2 - GTM Preview snippet, with clear guidance on WHICH snippet + how much to paste */}
           <div style={styles.fieldLabel}>GTM Preview snippet <span style={{ fontWeight: 400, ...styles.muted }}>(needed to debug your GTM container's tags)</span></div>
           <div style={{ ...styles.muted, fontSize: 12, lineHeight: 1.55 }}>
-            In GTM click <b>Preview</b>, enter your site, connect, then copy the snippet Tag Assistant shows (or use Preview &rarr; <b>Share</b> and copy that link). Paste the <b>head</b> <code style={styles.codeChip}>{'<script>…</script>'}</code> snippet - you do <b>not</b> need the <code style={styles.codeChip}>{'<noscript>'}</code> body part. Pasting the <b>whole</b> head snippet is safest; a trimmed paste also works as long as it still contains <code style={styles.codeChip}>id=GTM-XXXX</code>, <code style={styles.codeChip}>gtm_auth</code> and <code style={styles.codeChip}>gtm_preview</code>. Creates no version or environment.
+            <b>Easiest: click "Auto-generate" below</b> and the app builds this for you (nothing published). Or paste it yourself: this is <b>not</b> the plain <b>Install</b> snippet from GTM's "Install Google Tag Manager" box (that one has no <code style={styles.codeChip}>gtm_auth</code> / <code style={styles.codeChip}>gtm_preview</code>). Get the Preview one from GTM &rarr; <b>Admin</b> &rarr; <b>Environments</b> &rarr; your environment &rarr; <b>Get snippet</b>, or from Preview &rarr; <b>Share</b>. Paste the <b>head</b> <code style={styles.codeChip}>{'<script>…</script>'}</code> part only (not the <code style={styles.codeChip}>{'<noscript>'}</code> body); a trimmed paste is fine as long as it still contains <code style={styles.codeChip}>id=GTM-XXXX</code>, <code style={styles.codeChip}>gtm_auth</code> and <code style={styles.codeChip}>gtm_preview</code>.
           </div>
           <textarea
             value={vSnippet}
             onChange={(e) => setVSnippet(e.target.value)}
-            placeholder={'Paste the head <script> GTM Preview snippet here (must include gtm_auth & gtm_preview), e.g.\n<!-- Google Tag Manager -->\n<script>(function(w,d,s,l,i){...})(window,document,\'script\',\'dataLayer\',\'GTM-XXXXXXX&gtm_auth=...&gtm_preview=env-...&gtm_cookies_win=x\');</script>'}
+            placeholder={'Paste the head <script> GTM Preview snippet here (must include gtm_auth & gtm_preview), or click "Auto-generate" below. e.g.\n<!-- Google Tag Manager -->\n<script>(function(w,d,s,l,i){...})(window,document,\'script\',\'dataLayer\',\'GTM-XXXXXXX&gtm_auth=...&gtm_preview=env-...&gtm_cookies_win=x\');</script>'}
             style={{ ...styles.input, width: '100%', minHeight: 72, marginTop: 4, fontFamily: 'monospace', fontSize: 12 }}
             disabled={!ready}
           />
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 6 }}>
+            <button
+              style={{ ...styles.toggleOff, ...(!ready || vMinting || vVerifying ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
+              onClick={() => void autoGeneratePreview()}
+              disabled={!ready || vMinting || vVerifying}
+              title="Builds the GTM Preview snippet for the selected container automatically (creates a DRAFT container version - nothing is published) and fills it in above. No copying from GTM needed."
+            >
+              {vMinting ? 'Generating preview…' : '✨ Auto-generate preview snippet'}
+            </button>
+            <span style={{ ...styles.muted, fontSize: 12 }}>No copying needed - creates a draft version, nothing published.</span>
+          </div>
           {vSnippet.trim() && (
             <div style={{ fontSize: 12, marginTop: 4, color: /gtm_auth=/.test(vSnippet) && /gtm_preview=/.test(vSnippet) ? 'var(--c-green)' : 'var(--c-amber)' }}>
               {/gtm_auth=/.test(vSnippet) && /gtm_preview=/.test(vSnippet)
                 ? '✓ Preview snippet detected (gtm_auth + gtm_preview present) - your container will load in debug mode.'
-                : '⚠ This does not look like a Preview snippet: gtm_auth / gtm_preview are missing, so only the PUBLISHED container will load (draft tags will not show). Re-copy from GTM Preview.'}
+                : '⚠ That is the Install snippet, not the Preview snippet: gtm_auth / gtm_preview are missing, so only the PUBLISHED container loads (draft tags will not show, and Tag Assistant cannot stream this container). Click "Auto-generate preview snippet" above, or get the Preview snippet from GTM Admin > Environments > Get snippet.'}
             </div>
           )}
           {/* BOX 3 - Pages to verify (URLs only) */}
@@ -7377,7 +7419,7 @@ function VerifyPanel({
                   </div>
                 ) : (
                   <div style={{ ...styles.muted, fontSize: 12, marginTop: 6, color: 'var(--c-amber)' }}>
-                    To see YOUR container fire its tags in Tag Assistant, first cancel, paste its snippet in the <b>GTM Preview snippet</b> box above (in GTM: Preview &rarr; connect &rarr; copy the head <code style={styles.codeChip}>{'<script>'}</code> snippet with gtm_auth &amp; gtm_preview), then run again. Without it only the published build loads and may not stream tag data.
+                    To reliably see YOUR container fire its tags in Tag Assistant, first cancel, click <b>Auto-generate preview snippet</b> in the box above (or paste your own Preview snippet), then run again. Without it only the published build loads and may not stream tag data.
                   </div>
                 )}
               </div>
