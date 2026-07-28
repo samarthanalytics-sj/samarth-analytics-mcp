@@ -1,3 +1,9 @@
+## [1.420.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.420.0...v1.420.1) (2026-07-28)
+
+### Bug Fixes
+
+* **desktop:** preflight inject - actually open YOUR container in Tag Assistant on a mismatch ([#739](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/739)) ([90340c9](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/90340c9ced58d43ffb96a3203cb48154cde2d297)), closes [#738](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/738)
+
 ## [1.420.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.419.3...v1.420.0) (2026-07-28)
 
 ### Features
