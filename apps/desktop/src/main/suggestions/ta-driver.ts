@@ -75,7 +75,7 @@ interface PwPage {
   url(): string;
 }
 interface PwContext {
-  addInitScript(fn: unknown): Promise<void>;
+  addInitScript(fn: unknown, arg?: unknown): Promise<void>;
   newPage(): Promise<PwPage>;
   route(pattern: string, handler: (route: { request(): { url(): string }; continue(overrides?: { url?: string }): Promise<void>; abort(): Promise<void> }) => unknown): Promise<void>;
   waitForEvent(event: 'page', opts?: { timeout?: number }): Promise<PwPage>;
@@ -180,6 +180,10 @@ export interface TaVerifyResult {
   /** Every GTM container Tag Assistant actually saw on the page — so a selected-vs-live container
    *  mismatch is visible (the "it's using a different container id" case). */
   containersSeen?: string[];
+  /** The selected container was INJECTED into this driven session (it was not live on the page) so Tag
+   *  Assistant could see it. Results confirm the tags fire when the container is present; they do NOT
+   *  prove the container is currently deployed on the public site. Drives an honesty note in the UI. */
+  injectedContainer?: boolean;
   error?: string;
   perTag: PerTagCapture[];
   pagesDriven: string[];
@@ -286,7 +290,7 @@ export async function runTaVerify(
   url: string,
   tags: VerifyDriverTag[],
   containerPublicId: string,
-  opts: { settleMs?: number; navTimeoutMs?: number; loginHint?: string; signInTimeoutMs?: number; previewSnippet?: string; forms?: TaFormSubmit[]; onSignInPrompt?: () => void; onPageProgress?: (page: string, done: number, total: number) => void; onFormProgress?: (page: string, done: number, total: number) => void; shouldStop?: () => boolean } = {},
+  opts: { settleMs?: number; navTimeoutMs?: number; loginHint?: string; signInTimeoutMs?: number; previewSnippet?: string; injectContainerId?: string; forms?: TaFormSubmit[]; onSignInPrompt?: () => void; onPageProgress?: (page: string, done: number, total: number) => void; onFormProgress?: (page: string, done: number, total: number) => void; shouldStop?: () => boolean } = {},
 ): Promise<TaVerifyResult> {
   const settleMs = opts.settleMs ?? 900;
   const navTimeoutMs = opts.navTimeoutMs ?? 25_000;
@@ -311,8 +315,32 @@ export async function runTaVerify(
   // real Tag Assistant tab IS the "show it in detail" view — and the one-time sign-in happens in context.
   const ctx = await launchProfile(profileDir, false);
   let keepWindowOpen = false; // on success, leave the TA window open for the user to inspect
+  // PREFLIGHT INJECTION (Step 3): the operator hit Proceed past a missing/mismatch gate, so the selected
+  // container is NOT live on this page. Boot it in the driven session ONLY (nothing on the public site
+  // changes) so Tag Assistant sees it. Preview mode wins when a snippet was pasted (it already makes the
+  // container enter debug via the request rewrite below), so we only raw-bootstrap when there is no
+  // preview snippet. Context-level init script → it runs in the debugged popup too; origin-guarded so it
+  // never touches the tagassistant.google.com / sign-in tabs.
+  const injectContainerId = !previewParams && opts.injectContainerId ? opts.injectContainerId.trim().toUpperCase() : '';
+  if (injectContainerId) console.log(`[preflight] step 3: injecting ${injectContainerId} into the Tag Assistant session (not live on the page; session-only) ...`);
   try {
     await ctx.addInitScript(captureFramesInit);
+    if (injectContainerId) {
+      await ctx.addInitScript((id: string) => {
+        try {
+          const o = location.origin;
+          if (o === 'https://tagassistant.google.com' || o.indexOf('https://accounts.google.com') === 0) return; // TA / sign-in tabs only
+          const w = window as unknown as { google_tag_manager?: Record<string, unknown>; dataLayer?: unknown[] };
+          if (w.google_tag_manager && w.google_tag_manager[id]) return; // already booted → never double-load
+          w.dataLayer = w.dataLayer || [];
+          w.dataLayer.push({ 'gtm.start': Date.now(), event: 'gtm.js' });
+          const s = document.createElement('script');
+          s.async = true;
+          s.src = 'https://www.googletagmanager.com/gtm.js?id=' + id;
+          (document.head || document.documentElement).appendChild(s);
+        } catch { /* injection is best-effort; Step 4 confirms whether TA actually saw it */ }
+      }, injectContainerId);
+    }
     // Abort analytics collectors so driving tags never delivers a real hit (the TA stream, not beacons,
     // is the verdict source). In PREVIEW mode, rewrite the container's gtm.js request to carry the preview
     // creds (page-URL params are ignored by a normal loader, so the request itself must be rewritten) so
@@ -586,6 +614,23 @@ export async function runTaVerify(
     const firedCount = evs.reduce((n, e) => n + e.tags.filter((t) => t.status === 'fired').length, 0);
     console.log(`[tag-assistant] captured ${frames.length} debug frame(s) -> ${evs.length} event(s) for ${containerPublicId}, ${firedCount} tag-fire(s)${problem ? ` -- ${problem}` : ''}`);
 
+    // STEP 4 — confirm the injection took: if we injected the selected container but Tag Assistant STILL
+    // does not see it on the page, STOP with retry guidance rather than verify against nothing. A guard
+    // (CSP / consent) or an indirect serve can block the injected loader. No verdicts are produced.
+    if (injectContainerId) {
+      const seen = onPage.includes(injectContainerId);
+      console.log(`[preflight] step 4: after injection, Tag Assistant ${seen ? 'SEES' : 'does NOT see'} ${injectContainerId} on the page.`);
+      if (!seen) {
+        return {
+          pagesOk: false, perTag, pagesDriven, ...(containersSeen.length ? { containersSeen } : {}),
+          error: `Injected ${containerPublicId} into the verification session, but Tag Assistant still does not see it on ${url}. The page may block it (a Content-Security-Policy or a consent gate) or serve GTM indirectly. Paste this container's GTM Preview snippet in the box above and run again.`,
+        };
+      }
+    }
+    // Results came from a container we injected (it was not live on the page) — flag it so the UI is
+    // honest that this proves the tags fire WHEN the container is present, not that it is deployed live.
+    const injectedContainer = injectContainerId ? true : undefined;
+
     // Proof screenshots were captured DURING the drive (snapNewestTa), each recording the panel's fired-tag
     // text so the IPC attaches it to whichever tags it proves. Fallback = the TA SUMMARY view (the aggregate
     // Tags-Fired list) — a meaningful "everything that fired" panel, NEVER a random empty event — so a fired
@@ -602,7 +647,7 @@ export async function runTaVerify(
 
     console.log('[tag-assistant] leaving the Tag Assistant window OPEN so you can inspect it — it closes automatically when you run verify again or quit the app.');
     keepWindowOpen = true; // reached a real result — keep the TA panel up for the user to review
-    return { pagesOk: true, perTag, pagesDriven, capture, ...(containersSeen.length ? { containersSeen } : {}), ...(captures.length ? { captures } : {}), ...(summaryShot ? { summaryShot } : {}), ...(problem ? { debugProblem: problem } : {}) };
+    return { pagesOk: true, perTag, pagesDriven, capture, ...(containersSeen.length ? { containersSeen } : {}), ...(injectedContainer ? { injectedContainer } : {}), ...(captures.length ? { captures } : {}), ...(summaryShot ? { summaryShot } : {}), ...(problem ? { debugProblem: problem } : {}) };
   } catch (e) {
     return { pagesOk: false, perTag, pagesDriven, error: (e instanceof Error ? e.message : String(e)).slice(0, 300) };
   } finally {

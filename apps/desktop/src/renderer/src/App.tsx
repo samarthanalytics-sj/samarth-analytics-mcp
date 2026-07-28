@@ -17,6 +17,7 @@ import type {
   ChatMediaPart,
   CreateTagOutcome,
   DiscoverResult,
+  PreflightContainerResult,
   Ga4MonitorRun,
   Ga4PropertyAuditResult,
   Ga4PropertyListItem,
@@ -6941,7 +6942,15 @@ function VerifyPanel({
   // The Tag-Assistant wizard stage: idle → scanning (crawl + match forms) → gate (skip/proceed) →
   // filling (edit the shared data). The actual Tag Assistant run (click tags [+ real form submits]) fires
   // when the user picks Skip, Proceed+Submit, or when the scan finds no forms.
-  const [vTaStage, setVTaStage] = useState<'idle' | 'scanning' | 'gate' | 'filling'>('idle');
+  const [vTaStage, setVTaStage] = useState<'idle' | 'preflight' | 'scanning' | 'gate' | 'filling'>('idle');
+  // PREFLIGHT (step 1-2): the container detected live on the URL + the compare verdict, so the flow can
+  // gate on a missing/mismatch before driving Tag Assistant. vPreflightSteps = the visible step trail.
+  const [vPreflight, setVPreflight] = useState<PreflightContainerResult | null>(null);
+  const [vPreflightGate, setVPreflightGate] = useState<'missing' | 'mismatch' | null>(null);
+  const [vPreflightSteps, setVPreflightSteps] = useState<string[]>([]);
+  // Set to the selected container id ONLY when the operator hit Proceed past a missing/mismatch gate, so
+  // the next verify run injects it into the driven session. A ref so it doesn't re-render the buttons.
+  const vInjectContainerRef = useRef<string | undefined>(undefined);
   const [vNote, setVNote] = useState<{ kind: 'info' | 'error'; text: string } | null>(null);
   // Bumped whenever a tag-verify runs; the embedded Forms subsection watches it and auto-discovers the
   // site's forms-with-tags in the same pass - so there's ONE action, not a separate "find forms" button.
@@ -7048,6 +7057,9 @@ function VerifyPanel({
           // auto defaults. Snapshotted above before the panel re-discovered; empty on the first run.
           ...(reviewedForms.length ? { reviewedForms } : {}),
           ...(useMonitor ? { monitor: { accountId: ctx.accountId!, containerId: ctx.containerId!, workspaceId: ctx.workspaceId! } } : {}),
+          // PREFLIGHT PROCEED: inject the selected container into the driven session (the preflight found
+          // it missing / a different one live and the operator hit Proceed). Cleared after this run.
+          ...(useMonitor && vInjectContainerRef.current ? { injectContainerId: vInjectContainerRef.current } : {}),
         },
         (p) => setVProgress(p), // live "scanning <url>" / "verifying <url>" feed
       );
@@ -7068,8 +7080,18 @@ function VerifyPanel({
   // (no Tag Assistant yet). When the scan lands we either gate (forms found → ask skip/proceed) or, if there
   // are none, go straight to click-tag verification. Bumping vRunSignal triggers the Forms panel's scan; the
   // decision is made in the effect below once its status bubbles back.
+  // Continue from the container preflight into the existing forms-scan -> gate -> drive flow. Shared by
+  // the "match" auto-continue and the missing/mismatch "Proceed" button.
+  function continueTaScan(): void {
+    vReviewedFormsRef.current = [];
+    setVPreflightGate(null);
+    setVFormStatus({ loading: true, count: null }); // guards the effect from acting on a prior scan's count
+    setVTaStage('scanning');
+    setVRunSignal((n) => n + 1); // Forms panel crawls + matches forms-with-tags for this URL
+  }
+
   async function startTaFlow(): Promise<void> {
-    if (!ready || !ctx || vVerifying || vTaStage === 'scanning') return;
+    if (!ready || !ctx || vVerifying || vTaStage === 'scanning' || vTaStage === 'preflight') return;
     const target = verifyTarget();
     if (!target) { setVNote({ kind: 'error', text: 'Enter the site URL to verify against (or paste an absolute URL in “Pages to verify”).' }); return; }
     if (!(ctx.accountId && ctx.containerId && ctx.workspaceId)) {
@@ -7078,10 +7100,32 @@ function VerifyPanel({
     }
     vCancelRef.current = false; setVStopping(false); // fresh run - clear any prior Stop
     setVNote(null); onError(''); setVResult(null);
-    vReviewedFormsRef.current = [];
-    setVFormStatus({ loading: true, count: null }); // guards the effect from acting on a prior scan's count
-    setVTaStage('scanning');
-    setVRunSignal((n) => n + 1); // Forms panel crawls + matches forms-with-tags for this URL
+    vInjectContainerRef.current = undefined; setVPreflight(null); setVPreflightGate(null);
+
+    // STEP 1-2: detect the container LIVE on the URL and compare to the SELECTED one, BEFORE Tag Assistant,
+    // so we never verify against the wrong container. No public id to compare against -> skip the gate.
+    const selected = ctx.containerPublicId ?? '';
+    if (!selected) { continueTaScan(); return; }
+    setVPreflightSteps(['Detecting the GTM container live on the page...']);
+    setVTaStage('preflight');
+    let pf: PreflightContainerResult;
+    try {
+      pf = await window.desktop.tags.preflightContainer(target, (m) => setVPreflightSteps((s) => [...s, m]));
+    } catch (e) {
+      pf = { liveContainers: [], measurementIds: [], detected: false, pageOk: false, error: e instanceof Error ? e.message : String(e) };
+    }
+    if (vCancelRef.current) { setVTaStage('idle'); setVStopping(false); setVNote({ kind: 'info', text: 'Container check stopped.' }); return; }
+    setVPreflight(pf);
+    const live = pf.liveContainers.map((s) => s.trim().toUpperCase()).filter(Boolean);
+    const decision: 'match' | 'missing' | 'mismatch' =
+      live.length === 0 ? 'missing' : live.includes(selected.trim().toUpperCase()) ? 'match' : 'mismatch';
+    setVPreflightSteps((s) => [...s, decision === 'match'
+      ? `Your container ${selected} is live on the page. Continuing to verification.`
+      : decision === 'mismatch'
+        ? `Your container ${selected} is NOT the one live on the page.`
+        : 'No GTM container is live on the page.']);
+    if (decision === 'match') { continueTaScan(); return; }
+    setVPreflightGate(decision); // stay on 'preflight' and render the Proceed / Cancel gate below
   }
 
   // Once STEP 1's scan finishes: forms found → open the skip/proceed gate; none → verify click tags only.
@@ -7268,14 +7312,67 @@ function VerifyPanel({
               then gates on skip/proceed (below), then drives every tag + reads GTM's own firing. */}
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
             <button
-              style={{ ...styles.primaryBtn, ...(!ready || vVerifying || vTaStage === 'scanning' || !verifyTarget() ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
+              style={{ ...styles.primaryBtn, ...(!ready || vVerifying || vTaStage === 'scanning' || vTaStage === 'preflight' || !verifyTarget() ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
               onClick={() => void startTaFlow()}
-              disabled={!ready || vVerifying || vTaStage === 'scanning' || !verifyTarget()}
-              title="Automates the REAL Tag Assistant - connects it to the site, drives your tags, and reads GTM's own per-event firing. First it scans the site for forms with tags and asks whether to verify those too (a real lead per form) or just the click tags. ZERO GTM writes. Signs in to Tag Assistant ONCE (saved after that, so it never asks again) and your normal Chrome can stay open."
+              disabled={!ready || vVerifying || vTaStage === 'scanning' || vTaStage === 'preflight' || !verifyTarget()}
+              title="Automates the REAL Tag Assistant - connects it to the site, drives your tags, and reads GTM's own per-event firing. First it checks which GTM container is live on the page and confirms it is the one you selected, then scans the site for forms with tags and asks whether to verify those too (a real lead per form) or just the click tags. ZERO GTM writes. Signs in to Tag Assistant ONCE (saved after that, so it never asks again) and your normal Chrome can stay open."
             >
-              {vVerifyKind === 'ta' ? 'Verifying with Tag Assistant…' : vTaStage === 'scanning' ? 'Scanning site for forms…' : 'Verify with Tag Assistant'}
+              {vVerifyKind === 'ta' ? 'Verifying with Tag Assistant…' : vTaStage === 'preflight' ? 'Checking the live container…' : vTaStage === 'scanning' ? 'Scanning site for forms…' : 'Verify with Tag Assistant'}
             </button>
           </div>
+          {/* STEP 1-2 - the container preflight: a live step trail while we detect the container on the page,
+              and (on missing/mismatch) a Proceed/Cancel gate that injects the selected container. */}
+          {vTaStage === 'preflight' && vPreflightSteps.length > 0 && (
+            <div style={{ marginTop: 10, padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface-2)' }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-dim)', marginBottom: 6 }}>Container check</div>
+              {vPreflightSteps.map((s, i) => (
+                <div key={i} style={{ fontSize: 12.5, color: 'var(--text)', lineHeight: 1.5, display: 'flex', gap: 6 }}>
+                  <span aria-hidden>{i === vPreflightSteps.length - 1 && !vPreflightGate ? '⏳' : '•'}</span>
+                  <span>{s}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {vTaStage === 'preflight' && vPreflightGate && (
+            <div style={{ marginTop: 10, padding: '10px 12px', borderRadius: 8, border: '1px solid var(--c-amber)', background: 'rgba(230,160,30,0.08)' }}>
+              <div style={{ fontSize: 13, color: 'var(--text)', marginBottom: 8, lineHeight: 1.5 }}>
+                {vPreflightGate === 'mismatch' ? (
+                  <>
+                    The container live on this page is <b style={{ fontFamily: 'var(--font-mono)' }}>{vPreflight?.liveContainers.join(', ')}</b>, not your selected <b style={{ fontFamily: 'var(--font-mono)' }}>{ctx?.containerPublicId}</b>. Verifying as-is would test a different container.
+                  </>
+                ) : (
+                  <>
+                    {vPreflight?.pageOk === false
+                      ? `The page could not be loaded to detect its GTM container${vPreflight?.error ? ` (${vPreflight.error})` : ''}. `
+                      : ''}
+                    No GTM container was detected live on this page for your selected <b style={{ fontFamily: 'var(--font-mono)' }}>{ctx?.containerPublicId}</b>. It may not be published here, or it loads indirectly (via dataLayer, a consent tool, or server-side GTM).
+                  </>
+                )}
+                <div style={{ marginTop: 6 }}>
+                  Proceed to inject <b style={{ fontFamily: 'var(--font-mono)' }}>{ctx?.containerPublicId}</b> into the verification session only (the live site is not changed), then confirm Tag Assistant connects to it. Or cancel.
+                </div>
+                {vSnippet.trim() && (
+                  <div style={{ ...styles.muted, fontSize: 12, marginTop: 6 }}>
+                    A Preview snippet is pasted above, so Proceed uses that (it already targets your container) instead of a plain injection.
+                  </div>
+                )}
+              </div>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                <button
+                  style={styles.primaryBtn}
+                  onClick={() => {
+                    // Preview snippet wins: when one is pasted it already targets the container, so don't
+                    // also raw-inject. Otherwise inject the selected container into the driven session.
+                    vInjectContainerRef.current = vSnippet.trim() ? undefined : (ctx?.containerPublicId ?? undefined);
+                    continueTaScan();
+                  }}
+                >
+                  Proceed and inject my container
+                </button>
+                <button style={styles.toggleOff} onClick={() => { setVTaStage('idle'); setVPreflightGate(null); setVPreflight(null); }}>Cancel</button>
+              </div>
+            </div>
+          )}
           {/* STEP 2 - the skip/proceed gate, shown once the up-front form scan finds forms with tags. */}
           {vTaStage === 'gate' && (
             <div style={{ marginTop: 10, padding: '10px 12px', borderRadius: 8, border: '1px solid var(--c-blue)', background: 'rgba(70,130,240,0.06)' }}>
@@ -7380,7 +7477,7 @@ function VerifyPanel({
                 ⚠ The snippet has no preview auth (gtm_auth/gtm_preview) - it loaded the PUBLISHED container, so DRAFT tags won’t fire. Use “Auto”, or paste the GTM Preview / Environment snippet.
               </div>
             )}
-            {!vResult.injected && (
+            {!vResult.injected && !vResult.verifiedByMonitor && !vResult.injectedContainer && (
               <div style={{ ...styles.muted, color: 'var(--c-amber)', marginBottom: 6 }}>
                 ⚠ Tested the page as-is (no container injected) - a tag can only fire if its container is already published on this URL. Use “Auto” or a Preview snippet to load DRAFT tags.
               </div>
@@ -7397,6 +7494,15 @@ function VerifyPanel({
               <div style={{ marginBottom: 8, padding: '8px 10px', borderRadius: 8, fontSize: 12.5, lineHeight: 1.45, border: '1px solid var(--c-green)', background: 'rgba(60,180,90,0.08)', color: 'var(--text)', display: 'flex', gap: 6, alignItems: 'flex-start' }}>
                 <span aria-hidden>✓</span>
                 <span><b>Authoritative</b> - read from the real Tag Assistant debug stream: each tag below is exactly what GTM fired on the driven events, not inferred from network hits. Nothing was created in your container (no version, no workspace).</span>
+              </div>
+            )}
+            {/* PREFLIGHT INJECTION honesty: the selected container was not live on the page, so it was
+                injected into the driven session only. Results prove the tags fire WHEN the container is
+                present, not that it is currently deployed on the public site. */}
+            {vResult.injectedContainer && !vResult.error && (
+              <div style={{ marginBottom: 8, padding: '8px 10px', borderRadius: 8, fontSize: 12.5, lineHeight: 1.45, border: '1px solid var(--c-amber)', background: 'rgba(230,160,30,0.08)', color: 'var(--text)', display: 'flex', gap: 6, alignItems: 'flex-start' }}>
+                <span aria-hidden>⚠️</span>
+                <span>Your container <b style={{ fontFamily: 'var(--font-mono)' }}>{ctx?.containerPublicId}</b> was <b>injected into this verification session only</b> - it was not detected live on {vResult.url}. These results confirm the tags fire when the container is present; they do not prove it is currently deployed on the public site.</span>
               </div>
             )}
             {vResult.error ? (

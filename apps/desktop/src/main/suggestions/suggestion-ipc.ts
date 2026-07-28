@@ -16,13 +16,13 @@ import type { GoogleDataService } from '../google/data-service';
 import { findGa4BaseTag, plainDashes } from '../google/gtm-builders';
 import { reportHtmlDocument } from '../google/ga4-report-export';
 import { buildToolRegistry, type ConfirmFn } from '../tools/registry';
-import type { CreateTagOutcome, SuggestedTagView, TagScanOptions, VerifyTagInput, VerifyTagsOptions, VerifyTagsResult, VerifyProgressView, DetectedElementView, FormsForFillOptions, FormsForFillResult, SubmitFormVerifyOptions, SubmitFormVerifyResult, FormTagVerifyPlanOptions, FormTagVerifyPlanResult, SuggestionScreenshotResult } from '../../shared/ipc';
+import type { CreateTagOutcome, SuggestedTagView, TagScanOptions, VerifyTagInput, VerifyTagsOptions, VerifyTagsResult, VerifyProgressView, DetectedElementView, FormsForFillOptions, FormsForFillResult, SubmitFormVerifyOptions, SubmitFormVerifyResult, FormTagVerifyPlanOptions, FormTagVerifyPlanResult, SuggestionScreenshotResult, PreflightContainerResult } from '../../shared/ipc';
 import { crawlAndSuggest, scanUrls, type ScanProgress } from './scan-core';
 import type { MemoryStore } from '../storage/memory-store';
 import type { RegistryService } from '../services/registry-service';
 import { memoryApplies } from '../../shared/chat-memory';
 import { deriveSuggestionRules, applySuggestionRules, describeAppliedRules } from '../../shared/suggestion-rules';
-import { runVerifyDriver, runSuggestionScreenshots, type SuggestionShotTag } from './verify-driver';
+import { runVerifyDriver, runSuggestionScreenshots, detectLiveContainers, type SuggestionShotTag } from './verify-driver';
 import { runFormSubmitDriver, type FormSubmitFieldInput } from './form-submit-driver';
 import { evaluateVerify, verdictsFromMonitor } from './verify-tags';
 import { routeTagsToPages, normalizeVerifyPages } from './verify-routing';
@@ -250,6 +250,31 @@ export function registerSuggestionsIpc(data: GoogleDataService, memory?: MemoryS
   // Verify FIRING: inject the pasted (preview) container onto the page, drive each
   // tag's trigger (click/submit), and report whether it fired — with a corrected
   // trigger when it didn't. Never delivers a real hit (abort-first capture).
+  // PREFLIGHT (step 1-2 of the verify flow): headless-load the URL and report the GTM container(s) that
+  // are actually live on it, so the renderer can compare against the SELECTED container and gate on a
+  // missing/mismatch BEFORE driving Tag Assistant. Read-only: it loads the page and reads which containers
+  // booted; it drives nothing and aborts every analytics collector. Streams step lines to the panel.
+  ipcMain.handle('suggestions:preflightContainer', async (event, requestId: unknown, url: unknown): Promise<PreflightContainerResult> => {
+    const target = String(url ?? '').trim();
+    const verdict = urlAllowed(target, []);
+    if (!verdict.ok) throw new Error(`Cannot check that URL: ${verdict.reason}`);
+    verifyCancelled = false; // fresh preflight — clear any stale Stop
+    const reqId = String(requestId ?? '');
+    const step = (message: string): void => {
+      try { if (reqId && !event.sender.isDestroyed()) event.sender.send('suggestions:preflight:event', { requestId: reqId, message }); } catch { /* window gone */ }
+    };
+    step('Loading the page to detect the live GTM container...');
+    const res = await detectLiveContainers(target, { shouldStop: shouldStopVerify });
+    step(
+      res.error
+        ? `Could not load the page: ${res.error}`
+        : res.detected
+          ? `Live on the page: ${res.liveContainers.join(', ')}`
+          : 'No GTM container detected live on the page.',
+    );
+    return res;
+  });
+
   ipcMain.handle(
     'suggestions:verifyTags',
     async (event, requestId: unknown, url: unknown, tags: unknown, elements: unknown, opts?: VerifyTagsOptions): Promise<VerifyTagsResult> => {
@@ -370,13 +395,17 @@ export function registerSuggestionsIpc(data: GoogleDataService, memory?: MemoryS
           // The GTM Preview snippet (gtm_auth/gtm_preview) makes the published GTM container enter Tag
           // Assistant debug — without it, connect only debugs Google tags. Reuses the existing snippet box.
           ...(o.containerSnippet ? { previewSnippet: o.containerSnippet } : {}),
+          // PREFLIGHT PROCEED: inject the selected container into this session so TA sees it (the preflight
+          // found it missing / a different container live). Ignored inside runTaVerify when a Preview
+          // snippet is present (that path already targets the container).
+          ...(o.injectContainerId ? { injectContainerId: o.injectContainerId } : {}),
           ...(taForms.length ? { forms: taForms } : {}),
           onSignInPrompt: () => emit({ phase: 'monitor', message: 'ONE-TIME Tag Assistant sign-in: complete it in the window that just opened (your email is pre-filled). It is saved after this, so verify never asks again.' }),
           onPageProgress: (page, done, total) => emit({ phase: 'drive', message: 'Driving tags in the Tag Assistant window', page, done, total }),
           onFormProgress: (page, done, total) => emit({ phase: 'drive', message: 'Submitting a form for real in Tag Assistant', page, done, total }),
           shouldStop: shouldStopVerify,
         });
-        const base = { url: target, injected: false, previewAuth: false, pagesOk: ta.pagesOk, verifiedByMonitor: true as const, ...(ta.pagesDriven.length ? { pagesDriven: ta.pagesDriven } : {}), ...(pagesCrawled ? { pagesCrawled } : {}), ...(pagesTotal ? { pagesTotal } : {}), ...(ta.containersSeen?.length ? { containersSeen: ta.containersSeen } : {}) };
+        const base = { url: target, injected: false, previewAuth: false, pagesOk: ta.pagesOk, verifiedByMonitor: true as const, ...(ta.pagesDriven.length ? { pagesDriven: ta.pagesDriven } : {}), ...(pagesCrawled ? { pagesCrawled } : {}), ...(pagesTotal ? { pagesTotal } : {}), ...(ta.containersSeen?.length ? { containersSeen: ta.containersSeen } : {}), ...(ta.injectedContainer ? { injectedContainer: true } : {}) };
         if (ta.needSignIn || ta.error) return { ...base, verdicts: [], error: ta.error ?? 'Tag Assistant run failed.', ...(ta.needSignIn ? { needTaSignIn: true } : {}) };
         if (ta.debugProblem) return { ...base, verdicts: [], error: ta.debugProblem };
         const taEvents = eventsForContainer(ta.capture!, publicId);
