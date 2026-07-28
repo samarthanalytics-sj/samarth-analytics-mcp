@@ -7322,7 +7322,9 @@ function VerifyPanel({
           {/* BOX 2 - GTM Preview snippet, with clear guidance on WHICH snippet + how much to paste */}
           <div style={styles.fieldLabel}>GTM Preview snippet <span style={{ fontWeight: 400, ...styles.muted }}>(needed to debug your GTM container's tags)</span></div>
           <div style={{ ...styles.muted, fontSize: 12, lineHeight: 1.55 }}>
-            <b>Easiest: click "Auto-generate" below</b> and the app builds this for you (nothing published). Or paste it yourself: this is <b>not</b> the plain <b>Install</b> snippet from GTM's "Install Google Tag Manager" box (that one has no <code style={styles.codeChip}>gtm_auth</code> / <code style={styles.codeChip}>gtm_preview</code>). Get the Preview one from GTM &rarr; <b>Admin</b> &rarr; <b>Environments</b> &rarr; your environment &rarr; <b>Get snippet</b>, or from Preview &rarr; <b>Share</b>. Paste the <b>head</b> <code style={styles.codeChip}>{'<script>…</script>'}</code> part only (not the <code style={styles.codeChip}>{'<noscript>'}</code> body); a trimmed paste is fine as long as it still contains <code style={styles.codeChip}>id=GTM-XXXX</code>, <code style={styles.codeChip}>gtm_auth</code> and <code style={styles.codeChip}>gtm_preview</code>.
+            To check <b>draft (unpublished)</b> tags you need a <b>Preview</b> snippet, <b>not</b> the plain <b>Install</b> snippet (that one has no <code style={styles.codeChip}>gtm_auth</code> / <code style={styles.codeChip}>gtm_preview</code> and loads only the published container). A Preview is <b>not</b> a publish - your live site and published container are untouched. Two ways:
+            <div style={{ marginTop: 4 }}><b>Zero GTM changes:</b> in GTM click <b>Preview</b> (this creates <b>no version</b>), then <b>Share</b> and paste the preview <b>link</b> here (it carries <code style={styles.codeChip}>gtm_auth</code> &amp; <code style={styles.codeChip}>gtm_preview</code>).</div>
+            <div style={{ marginTop: 2 }}><b>One click:</b> the <b>Auto-generate</b> button below - fastest, but it snapshots your workspace into a <b>draft version</b> (still not a publish).</div>
           </div>
           <textarea
             value={vSnippet}
@@ -7340,7 +7342,7 @@ function VerifyPanel({
             >
               {vMinting ? 'Generating preview…' : '✨ Auto-generate preview snippet'}
             </button>
-            <span style={{ ...styles.muted, fontSize: 12 }}>No copying needed - creates a draft version, nothing published.</span>
+            <span style={{ ...styles.muted, fontSize: 12 }}>Creates a draft version, nothing published. For zero GTM changes, paste a GTM Preview &rarr; Share link instead (see above).</span>
           </div>
           {vSnippet.trim() && (
             <div style={{ fontSize: 12, marginTop: 4, color: /gtm_auth=/.test(vSnippet) && /gtm_preview=/.test(vSnippet) ? 'var(--c-green)' : 'var(--c-amber)' }}>
