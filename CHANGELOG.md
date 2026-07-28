@@ -1,3 +1,9 @@
+## [1.419.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.419.2...v1.419.3) (2026-07-28)
+
+### Bug Fixes
+
+* **desktop:** tag verify - read TA's on-page container list so the diagnostic stops claiming "no container" when yours IS present ([#737](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/737)) ([b9b8848](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/b9b8848c497d50eb112ccab3cf1b4e37c2e40e32))
+
 ## [1.419.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.419.1...v1.419.2) (2026-07-28)
 
 ### Bug Fixes
