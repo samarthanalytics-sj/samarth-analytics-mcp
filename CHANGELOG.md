@@ -1,3 +1,9 @@
+## [1.421.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.420.2...v1.421.0) (2026-07-28)
+
+### Features
+
+* **desktop:** one-click "Auto-generate preview snippet" for tag verification ([#741](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/741)) ([b4f6938](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/b4f6938eeece771ae731529826dce8da33c4a67a))
+
 ## [1.420.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.420.1...v1.420.2) (2026-07-28)
 
 ### Bug Fixes
