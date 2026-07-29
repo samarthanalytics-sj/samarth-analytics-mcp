@@ -6956,6 +6956,9 @@ function VerifyPanel({
   // it does the one-time Google sign-in on the published container (a reliable debug path) instead of the
   // link path. Consumed + reset in runVerify.
   const vTaSignInOnceRef = useRef(false);
+  // What to verify, chosen at the forms gate: 'forms' (submit forms, drive ONLY form tags - fast), 'clicks'
+  // (drive click tags, no form submit), or 'both'. Consumed + reset to 'both' in runVerify.
+  const vVerifyModeRef = useRef<'forms' | 'clicks' | 'both'>('both');
   const [vNote, setVNote] = useState<{ kind: 'info' | 'error'; text: string } | null>(null);
   // Bumped whenever a tag-verify runs; the embedded Forms subsection watches it and auto-discovers the
   // site's forms-with-tags in the same pass - so there's ONE action, not a separate "find forms" button.
@@ -7032,8 +7035,19 @@ function VerifyPanel({
     // (startTaFlow), so there's no re-discovery here and the edited values are read straight off the ref.
     const reviewedForms = useMonitor && withForms ? [...vReviewedFormsRef.current] : [];
     setVFormsVerified(reviewedForms.length > 0); // this run submitted forms → show per-form fired status
+    // Verify mode (from the forms gate): 'forms' drives ONLY the form tags (fast - skips the click-tag
+    // driving), 'clicks'/'both' drive everything. Reset to the default after reading.
+    const verifyMode = vVerifyModeRef.current;
+    vVerifyModeRef.current = 'both';
     try {
-      const { tags, skipped } = await window.desktop.gtm.verifiableTags(ctx.accountId!, ctx.containerId!, ctx.workspaceId!);
+      const { tags: allTags, skipped } = await window.desktop.gtm.verifiableTags(ctx.accountId!, ctx.containerId!, ctx.workspaceId!);
+      // FORMS ONLY: keep just the form tags - those matched to a form this run (reviewedForms.expectedTags),
+      // plus any custom_event tag firing on a form event - so no click tags are driven.
+      const formTagNames = new Set(reviewedForms.flatMap((f) => (Array.isArray(f.expectedTags) ? f.expectedTags : [])));
+      const isFormTag = (t: VerifyTagInput): boolean =>
+        formTagNames.has(t.tagName) ||
+        (t.trigger?.kind === 'custom_event' && /form[_-]?(submi|start)|generate[_-]?lead/i.test(String((t.trigger as { eventName?: string }).eventName ?? '')));
+      const tags = verifyMode === 'forms' ? allTags.filter(isFormTag) : allTags;
       setVSkipped(skipped);
       if (tags.length === 0) {
         setVResult(null);
@@ -7528,11 +7542,12 @@ function VerifyPanel({
           {vTaStage === 'gate' && (
             <div style={{ marginTop: 10, padding: '10px 12px', borderRadius: 8, border: '1px solid var(--c-blue)', background: 'rgba(70,130,240,0.06)' }}>
               <div style={{ fontSize: 13, color: 'var(--text)', marginBottom: 8, lineHeight: 1.45 }}>
-                Found <b>{vFormStatus.count}</b> form(s) with a tracking tag. Verifying them submits each form <b>for real</b> (a real lead per form). Verify the forms too, or just the click tags?
+                Found <b>{vFormStatus.count}</b> form(s) with a tracking tag. Verifying forms submits each one <b>for real</b> (a real lead per form). What do you want to verify?
               </div>
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                <button style={styles.primaryBtn} onClick={() => setVTaStage('filling')}>Proceed with form verification</button>
-                <button style={styles.toggleOff} onClick={() => { setVTaStage('idle'); void runVerify(undefined, true, false); }}>Skip forms - verify click tags only</button>
+                <button style={styles.primaryBtn} onClick={() => { vVerifyModeRef.current = 'both'; setVTaStage('filling'); }} title="Submit the forms for real AND drive the click tags - full coverage.">Both (forms + clicks)</button>
+                <button style={styles.toggleOff} onClick={() => { vVerifyModeRef.current = 'forms'; setVTaStage('filling'); }} title="Submit the forms for real and verify ONLY the form tags - skips the click-tag driving, so it is much faster.">Forms only</button>
+                <button style={styles.toggleOff} onClick={() => { vVerifyModeRef.current = 'clicks'; setVTaStage('idle'); void runVerify(undefined, true, false); }} title="Drive the click tags only - no form is submitted (form tags stay untested).">Clicks only</button>
               </div>
             </div>
           )}
