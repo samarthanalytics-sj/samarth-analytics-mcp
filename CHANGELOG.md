@@ -1,3 +1,9 @@
+## [1.430.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.429.0...v1.430.0) (2026-07-29)
+
+### Features
+
+* **desktop:** non-live TA inject uses a clean incognito-like profile + no live-container blocking (A+B+C) ([#756](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/756)) ([2d5f2f6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/2d5f2f6c6d97188fe5fb0c564e266215bdb49e43))
+
 ## [1.429.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.428.0...v1.429.0) (2026-07-29)
 
 ### Features
