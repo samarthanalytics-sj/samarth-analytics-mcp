@@ -6947,7 +6947,7 @@ function VerifyPanel({
   // PREFLIGHT (step 1-2): the container detected live on the URL + the compare verdict, so the flow can
   // gate on a missing/mismatch before driving Tag Assistant. vPreflightSteps = the visible step trail.
   const [vPreflight, setVPreflight] = useState<PreflightContainerResult | null>(null);
-  const [vPreflightGate, setVPreflightGate] = useState<'missing' | 'mismatch' | null>(null);
+  const [vPreflightGate, setVPreflightGate] = useState<'missing' | 'mismatch' | 'match' | null>(null);
   const [vPreflightSteps, setVPreflightSteps] = useState<string[]>([]);
   // Set to the selected container id ONLY when the operator hit Proceed past a missing/mismatch gate, so
   // the next verify run injects it into the driven session. A ref so it doesn't re-render the buttons.
@@ -7151,12 +7151,13 @@ function VerifyPanel({
     const decision: 'match' | 'missing' | 'mismatch' =
       live.length === 0 ? 'missing' : live.includes(selected.trim().toUpperCase()) ? 'match' : 'mismatch';
     setVPreflightSteps((s) => [...s, decision === 'match'
-      ? `Your container ${selected} is live on the page. Continuing to verification.`
+      ? `Your container ${selected} is live on the page.`
       : decision === 'mismatch'
         ? `Your container ${selected} is NOT the one live on the page.`
         : 'No GTM container is live on the page.']);
-    if (decision === 'match') { continueTaScan(); return; }
-    setVPreflightGate(decision); // stay on 'preflight' and render the Proceed / Cancel gate below
+    // Stay on 'preflight' and render the gate. match -> verify the live container in Tag Assistant
+    // (preview link skips sign-in, else one-time sign-in); missing/mismatch -> inject + beacon verify.
+    setVPreflightGate(decision);
   }
 
   // Once STEP 1's scan finishes: forms found → open the skip/proceed gate; none → verify click tags only.
@@ -7368,21 +7369,32 @@ function VerifyPanel({
           {vTaStage === 'preflight' && vPreflightGate && (
             <div style={{ marginTop: 10, padding: '10px 12px', borderRadius: 8, border: '1px solid var(--c-amber)', background: 'rgba(230,160,30,0.08)' }}>
               <div style={{ fontSize: 13, color: 'var(--text)', marginBottom: 8, lineHeight: 1.5 }}>
-                {vPreflightGate === 'mismatch' ? (
+                {vPreflightGate === 'match' ? (
                   <>
-                    The container live on this page is <b style={{ fontFamily: 'var(--font-mono)' }}>{vPreflight?.liveContainers.join(', ')}</b>, not your selected <b style={{ fontFamily: 'var(--font-mono)' }}>{ctx?.containerPublicId}</b>. Verifying as-is would test a different container.
+                    Your container <b style={{ fontFamily: 'var(--font-mono)' }}>{ctx?.containerPublicId}</b> IS the one live on this page. Verify it in Tag Assistant now.
+                    <div style={{ marginTop: 6 }}>
+                      To <b>skip the one-time Google sign-in</b>, load a Preview below (a Share link makes <b>no GTM changes</b>) - it also lets you verify UNPUBLISHED draft edits before you publish. Or leave it empty and complete the one-time sign-in (saved forever, so it never asks again).
+                    </div>
                   </>
                 ) : (
                   <>
-                    {vPreflight?.pageOk === false
-                      ? `The page could not be loaded to detect its GTM container${vPreflight?.error ? ` (${vPreflight.error})` : ''}. `
-                      : ''}
-                    No GTM container was detected live on this page for your selected <b style={{ fontFamily: 'var(--font-mono)' }}>{ctx?.containerPublicId}</b>. It may not be published here, or it loads indirectly (via dataLayer, a consent tool, or server-side GTM).
+                    {vPreflightGate === 'mismatch' ? (
+                      <>
+                        The container live on this page is <b style={{ fontFamily: 'var(--font-mono)' }}>{vPreflight?.liveContainers.join(', ')}</b>, not your selected <b style={{ fontFamily: 'var(--font-mono)' }}>{ctx?.containerPublicId}</b>. Verifying as-is would test a different container.
+                      </>
+                    ) : (
+                      <>
+                        {vPreflight?.pageOk === false
+                          ? `The page could not be loaded to detect its GTM container${vPreflight?.error ? ` (${vPreflight.error})` : ''}. `
+                          : ''}
+                        No GTM container was detected live on this page for your selected <b style={{ fontFamily: 'var(--font-mono)' }}>{ctx?.containerPublicId}</b>. It may not be published here, or it loads indirectly (via dataLayer, a consent tool, or server-side GTM).
+                      </>
+                    )}
+                    <div style={{ marginTop: 6 }}>
+                      To debug <b style={{ fontFamily: 'var(--font-mono)' }}>{ctx?.containerPublicId}</b> we load it into the verification session only (the live site is never changed). Pick how to load your container's tags (drafts included) - a Preview is <b>not</b> a publish - then Proceed:
+                    </div>
                   </>
                 )}
-                <div style={{ marginTop: 6 }}>
-                  To debug <b style={{ fontFamily: 'var(--font-mono)' }}>{ctx?.containerPublicId}</b> we load it into the verification session only (the live site is never changed). Pick how to load your container's tags (drafts included) - a Preview is <b>not</b> a publish - then Proceed:
-                </div>
               </div>
               {/* Preview options - three ways, only shown HERE (mismatch / no live container). Option A is
                   the paste box; Option B (Share) and Option C (Auto-generate) both fill it. */}
@@ -7441,25 +7453,47 @@ function VerifyPanel({
                     : '⚠ That is the Install snippet, not a Preview link (no gtm_auth / gtm_preview): only the PUBLISHED container loads. Use Share or Auto-generate to get a real Preview link.'}
                 </div>
               )}
-              <div style={{ ...styles.muted, fontSize: 11.5, marginTop: 8 }}>
-                Because your container is not the one live here, Tag Assistant can not debug it. Proceed injects your container into a headless session and confirms each tag fires by catching its network call - aborted, so nothing is really sent and nothing is published. Paste multiple page URLs in "Pages to verify" above to check them one by one.
-              </div>
+              {vPreflightGate === 'match' ? (
+                <div style={{ ...styles.muted, fontSize: 11.5, marginTop: 8 }}>
+                  Nothing is published either way. With a Preview link above, Tag Assistant opens WITHOUT signing in (and shows your unpublished draft edits). Without one, it does the one-time Google sign-in - saved forever, so future runs need no link. You get the real Tag Assistant panel and per-tag firing.
+                </div>
+              ) : (
+                <div style={{ ...styles.muted, fontSize: 11.5, marginTop: 8 }}>
+                  Because your container is not the one live here, Tag Assistant can not debug it. Proceed injects your container into a headless session and confirms each tag fires by catching its network call - aborted, so nothing is really sent and nothing is published. Paste multiple page URLs in "Pages to verify" above to check them one by one.
+                </div>
+              )}
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 10 }}>
-                <button
-                  style={styles.primaryBtn}
-                  onClick={() => {
-                    // Your container isn't the one live on this page, so Tag Assistant can't attribute it.
-                    // Verify by INJECTING it (preview link -> draft tags in debug; bare id -> published build)
-                    // and catching each tag's network beacon. This is the headless firing path (useMonitor
-                    // false), which drives every pasted page and pushes a synthetic event for form tags.
-                    const snip = vSnippet.trim() || (ctx?.containerPublicId ?? '');
-                    vInjectContainerRef.current = undefined;
-                    setVPreflightGate(null); setVPreflight(null);
-                    void runVerify(snip || undefined, false, false);
-                  }}
-                >
-                  {vSnippet.trim() ? 'Proceed - inject & verify (debug)' : 'Proceed - inject & verify (published)'}
-                </button>
+                {vPreflightGate === 'match' ? (
+                  <button
+                    style={styles.primaryBtn}
+                    onClick={() => {
+                      // Container IS live here. Verify it in Tag Assistant. A pasted Preview link is used as the
+                      // container snippet, so ta-driver serves the preview build (your draft edits) AND skips the
+                      // Google sign-in. Empty -> Tag Assistant does the one-time sign-in on the published container.
+                      setVPreflightGate(null); setVPreflight(null);
+                      continueTaScan();
+                    }}
+                    title="Opens the real Tag Assistant. With a Preview link above it needs no sign-in and shows your draft edits; without one it does the one-time Google sign-in."
+                  >
+                    {vSnippet.trim() ? 'Verify with Tag Assistant (no sign-in)' : 'Verify with Tag Assistant (sign in once)'}
+                  </button>
+                ) : (
+                  <button
+                    style={styles.primaryBtn}
+                    onClick={() => {
+                      // Your container isn't the one live on this page, so Tag Assistant can't attribute it.
+                      // Verify by INJECTING it (preview link -> draft tags in debug; bare id -> published build)
+                      // and catching each tag's network beacon. This is the headless firing path (useMonitor
+                      // false), which drives every pasted page and pushes a synthetic event for form tags.
+                      const snip = vSnippet.trim() || (ctx?.containerPublicId ?? '');
+                      vInjectContainerRef.current = undefined;
+                      setVPreflightGate(null); setVPreflight(null);
+                      void runVerify(snip || undefined, false, false);
+                    }}
+                  >
+                    {vSnippet.trim() ? 'Proceed - inject & verify (debug)' : 'Proceed - inject & verify (published)'}
+                  </button>
+                )}
                 <button style={styles.toggleOff} onClick={() => { setVTaStage('idle'); setVPreflightGate(null); setVPreflight(null); }}>Cancel</button>
               </div>
             </div>
