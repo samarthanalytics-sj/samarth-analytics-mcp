@@ -7518,21 +7518,40 @@ function VerifyPanel({
                     </button>
                   </>
                 ) : (
-                  <button
-                    style={styles.primaryBtn}
-                    onClick={() => {
-                      // Your container isn't the one live on this page, so Tag Assistant can't attribute it.
-                      // Verify by INJECTING it (preview link -> draft tags in debug; bare id -> published build)
-                      // and catching each tag's network beacon. This is the headless firing path (useMonitor
-                      // false), which drives every pasted page and pushes a synthetic event for form tags.
-                      const snip = vSnippet.trim() || (ctx?.containerPublicId ?? '');
-                      vInjectContainerRef.current = undefined;
-                      setVPreflightGate(null); setVPreflight(null);
-                      void runVerify(snip || undefined, false, false);
-                    }}
-                  >
-                    {vSnippet.trim() ? 'Proceed - inject & verify (debug)' : 'Proceed - inject & verify (published)'}
-                  </button>
+                  <>
+                    {vSnippet.trim() && (
+                      <button
+                        style={styles.primaryBtn}
+                        onClick={() => {
+                          // Your container isn't the one live here. With a Preview link, drive it in Tag
+                          // Assistant: ta-driver navigates to your Preview link (starts the debug session),
+                          // INJECTS your container into the debugged page, and blocks the live container's
+                          // gtm.js - so TA debugs YOURS. This automates the manual flow (open the TA link +
+                          // inject the script in a clean Incognito window).
+                          vInjectContainerRef.current = ctx?.containerPublicId ?? undefined;
+                          setVPreflightGate(null); setVPreflight(null);
+                          continueTaScan();
+                        }}
+                        title="Injects your container into a Tag Assistant debug session started from your Preview link, and blocks the live container - so TA shows YOUR tags firing on this site. Needs a Preview link above."
+                      >
+                        Verify in Tag Assistant (inject my container)
+                      </button>
+                    )}
+                    <button
+                      style={vSnippet.trim() ? styles.toggleOff : styles.primaryBtn}
+                      onClick={() => {
+                        // No Tag Assistant: INJECT the container and confirm firing by network beacon (works
+                        // without a Preview link too). Headless firing path (useMonitor false); drives every
+                        // pasted page and pushes a synthetic event for form tags.
+                        const snip = vSnippet.trim() || (ctx?.containerPublicId ?? '');
+                        vInjectContainerRef.current = undefined;
+                        setVPreflightGate(null); setVPreflight(null);
+                        void runVerify(snip || undefined, false, false);
+                      }}
+                    >
+                      {vSnippet.trim() ? 'Or verify without Tag Assistant (beacon)' : 'Proceed - inject & verify (published)'}
+                    </button>
+                  </>
                 )}
                 <button style={styles.toggleOff} onClick={() => { setVTaStage('idle'); setVPreflightGate(null); setVPreflight(null); }}>Cancel</button>
               </div>
