@@ -7549,7 +7549,7 @@ function VerifyPanel({
                         void runVerify(snip || undefined, false, false);
                       }}
                     >
-                      {vSnippet.trim() ? 'Or verify without Tag Assistant (beacon)' : 'Proceed - inject & verify (published)'}
+                      {vSnippet.trim() ? 'Or verify without Tag Assistant (beacon)' : 'Proceed - inject & verify (no publish)'}
                     </button>
                   </>
                 )}
