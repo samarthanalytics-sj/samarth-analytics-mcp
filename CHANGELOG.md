@@ -1,3 +1,9 @@
+## [1.430.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.430.0...v1.430.1) (2026-07-29)
+
+### Bug Fixes
+
+* **desktop:** drop the "published" word from the inject-verify button ([#757](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/757)) ([f0047cd](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/f0047cd5149280cf3ae854f048f2b281a18ecd54))
+
 ## [1.430.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.429.0...v1.430.0) (2026-07-29)
 
 ### Features
