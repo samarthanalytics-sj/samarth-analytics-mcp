@@ -1,3 +1,9 @@
+## [1.427.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.426.1...v1.427.0) (2026-07-29)
+
+### Features
+
+* **desktop:** match gate keeps a one-time sign-in button alongside the preview-link path ([#752](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/752)) ([5acead9](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/5acead93cf844df760bea7a33eac8cfe743e27f8))
+
 ## [1.426.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.426.0...v1.426.1) (2026-07-29)
 
 ### Bug Fixes
