@@ -1,3 +1,9 @@
+## [1.424.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.424.0...v1.424.1) (2026-07-29)
+
+### Bug Fixes
+
+* **desktop:** paste box inside the Share card + clarify nothing is published ([#746](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/746)) ([a1fe2ab](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a1fe2ab6416a519e71e957637f01402c9438e9d5))
+
 ## [1.424.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.423.0...v1.424.0) (2026-07-29)
 
 ### Features
