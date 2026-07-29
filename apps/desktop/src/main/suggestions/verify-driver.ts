@@ -298,18 +298,33 @@ export async function detectLiveContainers(
       void requestAllowed(reqUrl).then((ok) => (ok ? route.continue() : route.abort()), () => route.abort());
     });
     const page = await context.newPage();
-    console.log(`[preflight] navigating (nav timeout ${navTimeoutMs}ms, settle ${settleMs}ms) ...`);
+    console.log(`[preflight] navigating (nav timeout ${navTimeoutMs}ms) ...`);
+    // domcontentloaded (not networkidle): many sites LAZY-load GTM (requestIdleCallback / setTimeout, 2s+)
+    // for performance, so networkidle can resolve BEFORE GTM ever loads. We poll for the container below
+    // instead, which is both faster on quick sites and correct on slow/deferred ones.
     const resp = await page
-      .goto(url, { waitUntil: 'networkidle', timeout: navTimeoutMs })
+      .goto(url, { waitUntil: 'domcontentloaded', timeout: navTimeoutMs })
       .catch((e: unknown) => { console.log(`[preflight] navigation issue: ${e instanceof Error ? e.message : String(e)}`); return null; });
     const status = resp ? resp.status() : null;
-    const pageOk = status === null || status < 400; // networkidle can resolve with a null response on some SPAs
-    await page.waitForTimeout(settleMs);
+    const pageOk = status === null || status < 400; // goto can resolve with a null response on some SPAs
+    // POLL for GTM to actually appear rather than reading once after a fixed delay: a fixed short settle
+    // misses a container the site defers (e.g. get.chownow.com and samarthanalytics.com load GTM ~2s after
+    // idle). Return as soon as a container is seen, then wait a short grace so a NESTED container (one GTM
+    // that loads another) also registers. Overall cap keeps a genuinely container-less page from hanging.
+    const pollDeadline = Date.now() + Math.max(settleMs, 7000);
+    let booted: { containerIds: string[] } = { containerIds: [] };
+    let firstSeenAt = 0;
+    while (Date.now() < pollDeadline) {
+      if (opts.shouldStop?.()) break;
+      booted = await page.evaluate<{ containerIds: string[] }>(readGtmDebugInPage).catch(() => booted);
+      if (booted.containerIds.length > 0 || netContainers.size > 0) {
+        if (!firstSeenAt) firstSeenAt = Date.now();
+        if (Date.now() - firstSeenAt >= 1500) break; // grace for a nested/sibling container, then stop
+      }
+      await page.waitForTimeout(350);
+    }
     // window.google_tag_manager keys = the containers that actually BOOTED (the ground truth), unioned
     // with the gtm.js loader requests seen above.
-    const booted = await page
-      .evaluate<{ containerIds: string[] }>(readGtmDebugInPage)
-      .catch(() => ({ containerIds: [] as string[] }));
     const liveContainers = Array.from(new Set([...booted.containerIds.map((s) => s.toUpperCase()), ...netContainers]));
     const measurementIds = Array.from(netMeasurement);
     console.log(`[preflight] booted=[${booted.containerIds.join(', ')}] gtm.js-requests=[${[...netContainers].join(', ')}] -> live=[${liveContainers.join(', ')}] measurement=[${measurementIds.join(', ')}] pageOk=${pageOk}`);
