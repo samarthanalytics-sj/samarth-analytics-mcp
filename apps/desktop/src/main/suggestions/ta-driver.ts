@@ -434,12 +434,29 @@ export async function runTaVerify(
         await btn.click({ timeout: 6_000, force: true }).catch(() => undefined);
       });
     };
-    await clickRobust('button:has-text("Add domain")');
-    await ta.waitForTimeout(1000);
-    await ta.locator('input').first().fill(url, { timeout: 12_000 });
+    // Two different connect UIs:
+    //  - taDebugUrl set (a pasted GTM Preview / Share link): TA opens a "Tag Assistant will connect to
+    //    <site>" screen that ALREADY carries the destination URL. There is NO "Add domain" field and NO
+    //    input to fill - trying to fill a non-existent input just times out (12s) and kills the run. Click
+    //    the Connect / Continue button and let the debugged popup open.
+    //  - no link (bare TA app): the classic Add domain -> type the URL -> Connect flow.
     const popupP = ctx.waitForEvent('page', { timeout: 30_000 }).catch(() => null);
-    await clickRobust('button:has-text("Connect")');
-    const popup = await popupP;
+    if (taDebugUrl) {
+      await clickRobust('button:has-text("Connect")');
+      await clickRobust('button:has-text("Continue")');
+      await clickRobust('button:has-text("Start")');
+    } else {
+      await clickRobust('button:has-text("Add domain")');
+      await ta.waitForTimeout(1000);
+      // Best-effort: if TA's UI variant has no input here, don't let a missing field abort the run.
+      await ta.locator('input').first().fill(url, { timeout: 12_000 }).catch(() => undefined);
+      await clickRobust('button:has-text("Connect")');
+    }
+    let popup = await popupP;
+    if (!popup) {
+      // The debug link may have opened the site in an already-present tab rather than a fresh popup.
+      popup = ctx.pages().find((p) => p !== ta && !/tagassistant\.google\.com|accounts\.google\.com/i.test(p.url())) ?? null;
+    }
     if (!popup) return { pagesOk: false, perTag, pagesDriven, error: 'Tag Assistant did not open the debug window - reconnect and retry.' };
     console.log('[tag-assistant] debug window opened; waiting for the container to enter debug...');
     await popup.waitForLoadState('networkidle', { timeout: navTimeoutMs }).catch(() => undefined);
