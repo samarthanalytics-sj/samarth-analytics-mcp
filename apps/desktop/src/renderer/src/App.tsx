@@ -7319,38 +7319,56 @@ function VerifyPanel({
             style={{ ...styles.input, width: '100%', marginTop: 4 }}
             disabled={!ready}
           />
-          {/* BOX 2 - GTM Preview snippet, with clear guidance on WHICH snippet + how much to paste */}
-          <div style={styles.fieldLabel}>GTM Preview snippet <span style={{ fontWeight: 400, ...styles.muted }}>(needed to debug your GTM container's tags)</span></div>
+          {/* BOX 2 - GTM Preview snippet. Your container may not be on the live site, so load it via a
+              Preview (NOT the Install snippet). Two optional ways to get the Preview creds. */}
+          <div style={styles.fieldLabel}>GTM Preview snippet <span style={{ fontWeight: 400, ...styles.muted }}>(loads your container's tags, incl. drafts)</span></div>
           <div style={{ ...styles.muted, fontSize: 12, lineHeight: 1.55 }}>
-            To check <b>draft (unpublished)</b> tags you need a <b>Preview</b> snippet, <b>not</b> the plain <b>Install</b> snippet (that one has no <code style={styles.codeChip}>gtm_auth</code> / <code style={styles.codeChip}>gtm_preview</code> and loads only the published container). A Preview is <b>not</b> a publish - your live site and published container are untouched. Two ways:
-            <div style={{ marginTop: 4 }}><b>Zero GTM changes:</b> in GTM click <b>Preview</b> (this creates <b>no version</b>), then <b>Share</b> and paste the preview <b>link</b> here (it carries <code style={styles.codeChip}>gtm_auth</code> &amp; <code style={styles.codeChip}>gtm_preview</code>).</div>
-            <div style={{ marginTop: 2 }}><b>One click:</b> the <b>Auto-generate</b> button below - fastest, but it snapshots your workspace into a <b>draft version</b> (still not a publish).</div>
+            To check <b>draft (unpublished)</b> tags you need a <b>Preview</b> - <b>not</b> the plain <b>Install</b> snippet (that only loads the published container). A Preview is <b>not</b> a publish; your live site and published container stay untouched. Pick either way:
           </div>
-          <textarea
-            value={vSnippet}
-            onChange={(e) => setVSnippet(e.target.value)}
-            placeholder={'Paste the head <script> GTM Preview snippet here (must include gtm_auth & gtm_preview), or click "Auto-generate" below. e.g.\n<!-- Google Tag Manager -->\n<script>(function(w,d,s,l,i){...})(window,document,\'script\',\'dataLayer\',\'GTM-XXXXXXX&gtm_auth=...&gtm_preview=env-...&gtm_cookies_win=x\');</script>'}
-            style={{ ...styles.input, width: '100%', minHeight: 72, marginTop: 4, fontFamily: 'monospace', fontSize: 12 }}
-            disabled={!ready}
-          />
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 6 }}>
+          {/* Option A - paste a GTM Preview / Share link. Zero GTM changes. */}
+          <div style={{ marginTop: 8, padding: '10px 12px', borderRadius: 10, border: '0.5px solid var(--border-2)', background: 'var(--surface-2)' }}>
+            <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)' }}>Option A &middot; Paste a GTM Preview link <span style={{ fontWeight: 400, color: 'var(--c-green)' }}>(no GTM changes)</span></div>
+            <div style={{ ...styles.muted, fontSize: 12, lineHeight: 1.5, marginTop: 2 }}>
+              Open GTM, click <b>Preview</b> (creates no version), then in Tag Assistant click <b>Share</b> and <b>Copy</b> the link. Paste it below.
+            </div>
             <button
-              style={{ ...styles.toggleOff, ...(!ready || vMinting || vVerifying ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
+              style={{ ...styles.toggleOff, marginTop: 6, ...(!ready ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
+              onClick={() => { if (ready && ctx?.accountId && ctx?.containerId && ctx?.workspaceId) window.open(gtmTagUrl(ctx.accountId, ctx.containerId, ctx.workspaceId), '_blank'); }}
+              disabled={!ready}
+              title="Opens this container's workspace in GTM in your browser. Click Preview (top right), then Share in Tag Assistant, and copy the link back here."
+            >
+              ↗ Open GTM (then Preview &rarr; Share &rarr; Copy)
+            </button>
+            <textarea
+              value={vSnippet}
+              onChange={(e) => setVSnippet(e.target.value)}
+              placeholder={'Paste your GTM Preview / Share link here (it contains gtm_auth & gtm_preview). A head <script> Preview snippet works too.'}
+              style={{ ...styles.input, width: '100%', minHeight: 64, marginTop: 6, fontFamily: 'monospace', fontSize: 12 }}
+              disabled={!ready}
+            />
+            {vSnippet.trim() && (
+              <div style={{ fontSize: 12, marginTop: 4, color: /gtm_auth=/.test(vSnippet) && /gtm_preview=/.test(vSnippet) ? 'var(--c-green)' : 'var(--c-amber)' }}>
+                {/gtm_auth=/.test(vSnippet) && /gtm_preview=/.test(vSnippet)
+                  ? '✓ Preview link detected (gtm_auth + gtm_preview present) - your container will load in debug mode.'
+                  : '⚠ That is the Install snippet, not a Preview link: gtm_auth / gtm_preview are missing, so only the PUBLISHED container loads (draft tags will not show). Use the Open GTM button above, or Option B.'}
+              </div>
+            )}
+          </div>
+          {/* Option B - auto-generate (one click; creates a draft version). */}
+          <div style={{ marginTop: 8, padding: '10px 12px', borderRadius: 10, border: '0.5px solid var(--border-2)', background: 'var(--surface-2)' }}>
+            <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)' }}>Option B &middot; Auto-generate <span style={{ fontWeight: 400, ...styles.muted }}>(one click; creates a draft version, nothing published)</span></div>
+            <div style={{ ...styles.muted, fontSize: 12, lineHeight: 1.5, marginTop: 2 }}>
+              The app builds the Preview for you and fills Option A above. Fastest, but it snapshots your workspace into a draft version (still not a publish).
+            </div>
+            <button
+              style={{ ...styles.toggleOff, marginTop: 6, ...(!ready || vMinting || vVerifying ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
               onClick={() => void autoGeneratePreview()}
               disabled={!ready || vMinting || vVerifying}
-              title="Builds the GTM Preview snippet for the selected container automatically (creates a DRAFT container version - nothing is published) and fills it in above. No copying from GTM needed."
+              title="Builds the GTM Preview snippet for the selected container automatically (creates a DRAFT container version - nothing is published) and fills it in above."
             >
               {vMinting ? 'Generating preview…' : '✨ Auto-generate preview snippet'}
             </button>
-            <span style={{ ...styles.muted, fontSize: 12 }}>Creates a draft version, nothing published. For zero GTM changes, paste a GTM Preview &rarr; Share link instead (see above).</span>
           </div>
-          {vSnippet.trim() && (
-            <div style={{ fontSize: 12, marginTop: 4, color: /gtm_auth=/.test(vSnippet) && /gtm_preview=/.test(vSnippet) ? 'var(--c-green)' : 'var(--c-amber)' }}>
-              {/gtm_auth=/.test(vSnippet) && /gtm_preview=/.test(vSnippet)
-                ? '✓ Preview snippet detected (gtm_auth + gtm_preview present) - your container will load in debug mode.'
-                : '⚠ That is the Install snippet, not the Preview snippet: gtm_auth / gtm_preview are missing, so only the PUBLISHED container loads (draft tags will not show, and Tag Assistant cannot stream this container). Click "Auto-generate preview snippet" above, or get the Preview snippet from GTM Admin > Environments > Get snippet.'}
-            </div>
-          )}
           {/* BOX 3 - Pages to verify (URLs only) */}
           <div style={styles.fieldLabel}>Pages to verify <span style={{ fontWeight: 400, ...styles.muted }}>(optional, URLs only)</span></div>
           <div style={{ ...styles.muted, fontSize: 12, lineHeight: 1.55 }}>
