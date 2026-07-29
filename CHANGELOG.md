@@ -1,3 +1,9 @@
+## [1.422.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.421.0...v1.422.0) (2026-07-29)
+
+### Features
+
+* **desktop:** present two preview options for tag verification (Share link vs Auto-generate) ([#743](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/743)) ([a348c47](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a348c475bfc47ed316e82d8ca64c832ffe8ab791))
+
 ## [1.421.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.420.2...v1.421.0) (2026-07-28)
 
 ### Features
