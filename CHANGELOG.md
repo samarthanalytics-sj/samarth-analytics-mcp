@@ -1,3 +1,9 @@
+## [1.426.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.426.0...v1.426.1) (2026-07-29)
+
+### Bug Fixes
+
+* **desktop:** open Tag Assistant via the pasted Preview LINK so the container enters debug ([#751](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/751)) ([3c3fa23](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/3c3fa23fe165542b35aa315b8828c59fa3fe6293))
+
 ## [1.426.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.425.1...v1.426.0) (2026-07-29)
 
 ### Features
