@@ -1,3 +1,9 @@
+## [1.423.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.422.0...v1.423.0) (2026-07-29)
+
+### Features
+
+* **desktop:** ask for a preview snippet only after the container check (reordered verify flow) ([#744](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/744)) ([7d2b87b](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/7d2b87b41160ea0cdd63a1b550ab1f04aa8b7b6d))
+
 ## [1.422.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.421.0...v1.422.0) (2026-07-29)
 
 ### Features
