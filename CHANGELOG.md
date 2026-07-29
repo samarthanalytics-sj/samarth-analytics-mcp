@@ -1,3 +1,9 @@
+## [1.428.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.427.1...v1.428.0) (2026-07-29)
+
+### Features
+
+* **desktop:** forms gate offers Both / Forms only / Clicks only ([#754](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/754)) ([14d8dd2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/14d8dd230128566cd80f99f6f1963737e24220d6))
+
 ## [1.427.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.427.0...v1.427.1) (2026-07-29)
 
 ### Bug Fixes
