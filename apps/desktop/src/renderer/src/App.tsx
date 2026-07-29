@@ -7398,27 +7398,27 @@ function VerifyPanel({
                   style={{ ...styles.input, width: '100%', minHeight: 60, marginTop: 6, fontFamily: 'monospace', fontSize: 12 }}
                   disabled={!ready}
                 />
-                {vSnippet.trim() && (
-                  <div style={{ fontSize: 12, marginTop: 4, color: /gtm_auth=/.test(vSnippet) && /gtm_preview=/.test(vSnippet) ? 'var(--c-green)' : 'var(--c-amber)' }}>
-                    {/gtm_auth=/.test(vSnippet) && /gtm_preview=/.test(vSnippet)
-                      ? '✓ Preview link detected - your container will load in debug mode.'
-                      : '⚠ That is the Install snippet, not a Preview link (no gtm_auth / gtm_preview): only the PUBLISHED container loads. Use Option B (Share) or Option C (Auto-generate).'}
-                  </div>
-                )}
               </div>
               <div style={{ marginTop: 8, padding: '10px 12px', borderRadius: 10, border: '0.5px solid var(--border-2)', background: 'var(--surface-2)' }}>
                 <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)' }}>Option B &middot; Share from GTM <span style={{ fontWeight: 400, color: 'var(--c-green)' }}>(no GTM changes)</span></div>
                 <div style={{ ...styles.muted, fontSize: 12, lineHeight: 1.5, marginTop: 2 }}>
-                  Open GTM, click <b>Preview</b> (creates no version), then in Tag Assistant click <b>Share</b> and <b>Copy</b>. Paste the copied link into Option A above.
+                  Open GTM, click <b>Preview</b> (creates no version), then in Tag Assistant click <b>Share</b> and <b>Copy</b> the link, then paste it in the box below.
                 </div>
                 <button
                   style={{ ...styles.toggleOff, marginTop: 6, ...(!ready ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
                   onClick={() => { if (ready && ctx?.accountId && ctx?.containerId && ctx?.workspaceId) window.open(gtmTagUrl(ctx.accountId, ctx.containerId, ctx.workspaceId), '_blank'); }}
                   disabled={!ready}
-                  title="Opens this container's workspace in GTM in your browser. Click Preview (top right), then Share in Tag Assistant, and copy the link into Option A."
+                  title="Opens this container's workspace in GTM in your browser. Click Preview (top right), then Share in Tag Assistant, and copy the link, then paste it in the box below."
                 >
                   ↗ Open GTM (then Preview &rarr; Share &rarr; Copy)
                 </button>
+                <textarea
+                  value={vSnippet}
+                  onChange={(e) => setVSnippet(e.target.value)}
+                  placeholder={'Paste the copied Preview / Share link here.'}
+                  style={{ ...styles.input, width: '100%', minHeight: 60, marginTop: 6, fontFamily: 'monospace', fontSize: 12 }}
+                  disabled={!ready}
+                />
               </div>
               <div style={{ marginTop: 8, padding: '10px 12px', borderRadius: 10, border: '0.5px solid var(--border-2)', background: 'var(--surface-2)' }}>
                 <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)' }}>Option C &middot; Auto-generate <span style={{ fontWeight: 400, ...styles.muted }}>(one click; creates a draft version, nothing published)</span></div>
@@ -7434,18 +7434,28 @@ function VerifyPanel({
                   {vMinting ? 'Generating preview…' : '✨ Auto-generate preview snippet'}
                 </button>
               </div>
+              {vSnippet.trim() && (
+                <div style={{ fontSize: 12, marginTop: 8, color: /gtm_auth=/.test(vSnippet) && /gtm_preview=/.test(vSnippet) ? 'var(--c-green)' : 'var(--c-amber)' }}>
+                  {/gtm_auth=/.test(vSnippet) && /gtm_preview=/.test(vSnippet)
+                    ? '✓ Preview link detected - your container will load in debug mode.'
+                    : '⚠ That is the Install snippet, not a Preview link (no gtm_auth / gtm_preview): only the PUBLISHED container loads. Use Share or Auto-generate to get a real Preview link.'}
+                </div>
+              )}
+              <div style={{ ...styles.muted, fontSize: 11.5, marginTop: 8 }}>
+                None of these publishes anything - your live site and published container are never modified. Auto-generate creates a private draft version (a snapshot), not a publish.
+              </div>
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 10 }}>
                 <button
                   style={styles.primaryBtn}
                   onClick={() => {
                     // Inject the selected container into the driven session. With a Preview link, ta-driver
                     // loads it in debug mode and blocks the live container, so TA debugs YOURS. Without one,
-                    // it loads the published build.
+                    // it loads the published build (read-only - nothing is published).
                     vInjectContainerRef.current = ctx?.containerPublicId ?? undefined;
                     continueTaScan();
                   }}
                 >
-                  {vSnippet.trim() ? 'Proceed - debug my container' : 'Proceed with published container'}
+                  {vSnippet.trim() ? 'Proceed - debug my container' : 'Proceed without a preview'}
                 </button>
                 <button style={styles.toggleOff} onClick={() => { setVTaStage('idle'); setVPreflightGate(null); setVPreflight(null); }}>Cancel</button>
               </div>
