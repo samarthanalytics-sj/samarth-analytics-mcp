@@ -1,3 +1,9 @@
+## [1.425.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.424.2...v1.425.0) (2026-07-29)
+
+### Features
+
+* **desktop:** verify a non-live (injected) container by beacon capture, not Tag Assistant ([#748](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/748)) ([2b33bcd](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/2b33bcd88ae02bf3dee5325a3e42e0c43a0fc011))
+
 ## [1.424.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.424.1...v1.424.2) (2026-07-29)
 
 ### Bug Fixes
