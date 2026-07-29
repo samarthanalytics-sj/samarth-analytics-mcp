@@ -383,11 +383,14 @@ export async function runTaVerify(
     // Reuse the profile's initial page (launchPersistentContext opened one) — no stray blank window.
     const ta = ctx.pages()[0] ?? (await ctx.newPage());
 
-    // ONE-TIME sign-in IN THIS SAME VISIBLE WINDOW, then SAVED FOREVER for this account. This is the
-    // deliberate trade (chosen over "use real Chrome, close it every time"): sign in once here, and the
-    // session persists in this account's profile so verify never asks again — and the user never has to
-    // close their normal Chrome. login_hint pre-fills the account email on the sign-in form.
-    if (await hasGoogleSession(ctx)) {
+    // Sign-in is ONLY needed to debug a PUBLISHED container via signed-in GTM access. When a GTM Preview /
+    // Share link is provided, its gtm_auth/gtm_preview ARE the authorization (a shared preview opens in any
+    // Chrome with no Google login), so skip the one-time sign-in entirely and connect straight away.
+    // ONE-TIME sign-in (no-preview path only) happens IN THIS SAME VISIBLE WINDOW, then SAVED FOREVER for
+    // this account, so verify never asks again. login_hint pre-fills the account email on the sign-in form.
+    if (previewParams) {
+      console.log('[tag-assistant] preview link provided (gtm_auth/gtm_preview) - no Google sign-in needed.');
+    } else if (await hasGoogleSession(ctx)) {
       console.log('[tag-assistant] using your saved Tag Assistant sign-in (no sign-in needed).');
     } else {
       console.log('[tag-assistant] first run for this account -> opening the ONE-TIME Tag Assistant sign-in...');
