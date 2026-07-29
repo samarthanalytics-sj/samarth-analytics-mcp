@@ -1,3 +1,9 @@
+## [1.426.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.425.1...v1.426.0) (2026-07-29)
+
+### Features
+
+* **desktop:** live-container (match) gate - preview to skip sign-in, or one-time sign-in ([#750](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/750)) ([1d63031](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/1d63031b9e3e231887d4b2cb7334b07e4eb36beb))
+
 ## [1.425.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.425.0...v1.425.1) (2026-07-29)
 
 ### Bug Fixes
