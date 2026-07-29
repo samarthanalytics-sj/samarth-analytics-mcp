@@ -1,3 +1,9 @@
+## [1.424.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.423.0...v1.424.0) (2026-07-29)
+
+### Features
+
+* **desktop:** split the preview gate into three cards (Paste / Share from GTM / Auto-generate) ([#745](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/745)) ([c59fd7f](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c59fd7f798d939fc7f8ed7ad5067a4c0bcdca1a3))
+
 ## [1.423.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.422.0...v1.423.0) (2026-07-29)
 
 ### Features
