@@ -7442,20 +7442,23 @@ function VerifyPanel({
                 </div>
               )}
               <div style={{ ...styles.muted, fontSize: 11.5, marginTop: 8 }}>
-                None of these publishes anything - your live site and published container are never modified. Auto-generate creates a private draft version (a snapshot), not a publish.
+                Because your container is not the one live here, Tag Assistant can not debug it. Proceed injects your container into a headless session and confirms each tag fires by catching its network call - aborted, so nothing is really sent and nothing is published. Paste multiple page URLs in "Pages to verify" above to check them one by one.
               </div>
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 10 }}>
                 <button
                   style={styles.primaryBtn}
                   onClick={() => {
-                    // Inject the selected container into the driven session. With a Preview link, ta-driver
-                    // loads it in debug mode and blocks the live container, so TA debugs YOURS. Without one,
-                    // it loads the published build (read-only - nothing is published).
-                    vInjectContainerRef.current = ctx?.containerPublicId ?? undefined;
-                    continueTaScan();
+                    // Your container isn't the one live on this page, so Tag Assistant can't attribute it.
+                    // Verify by INJECTING it (preview link -> draft tags in debug; bare id -> published build)
+                    // and catching each tag's network beacon. This is the headless firing path (useMonitor
+                    // false), which drives every pasted page and pushes a synthetic event for form tags.
+                    const snip = vSnippet.trim() || (ctx?.containerPublicId ?? '');
+                    vInjectContainerRef.current = undefined;
+                    setVPreflightGate(null); setVPreflight(null);
+                    void runVerify(snip || undefined, false, false);
                   }}
                 >
-                  {vSnippet.trim() ? 'Proceed - debug my container' : 'Proceed without a preview'}
+                  {vSnippet.trim() ? 'Proceed - inject & verify (debug)' : 'Proceed - inject & verify (published)'}
                 </button>
                 <button style={styles.toggleOff} onClick={() => { setVTaStage('idle'); setVPreflightGate(null); setVPreflight(null); }}>Cancel</button>
               </div>
