@@ -7384,24 +7384,17 @@ function VerifyPanel({
                   To debug <b style={{ fontFamily: 'var(--font-mono)' }}>{ctx?.containerPublicId}</b> we load it into the verification session only (the live site is never changed). Pick how to load your container's tags (drafts included) - a Preview is <b>not</b> a publish - then Proceed:
                 </div>
               </div>
-              {/* Preview options - only shown HERE, when the selected container is missing / a mismatch. */}
+              {/* Preview options - three ways, only shown HERE (mismatch / no live container). Option A is
+                  the paste box; Option B (Share) and Option C (Auto-generate) both fill it. */}
               <div style={{ padding: '10px 12px', borderRadius: 10, border: '0.5px solid var(--border-2)', background: 'var(--surface-2)' }}>
-                <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)' }}>Option A &middot; Paste a GTM Preview link <span style={{ fontWeight: 400, color: 'var(--c-green)' }}>(no GTM changes)</span></div>
+                <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)' }}>Option A &middot; Paste a preview link <span style={{ fontWeight: 400, color: 'var(--c-green)' }}>(no GTM changes)</span></div>
                 <div style={{ ...styles.muted, fontSize: 12, lineHeight: 1.5, marginTop: 2 }}>
-                  Open GTM, click <b>Preview</b> (creates no version), then in Tag Assistant click <b>Share</b> and <b>Copy</b> the link. Paste it below.
+                  Already have a GTM Preview / Share link (or a head &lt;script&gt; Preview snippet)? Paste it here. Option B or C below fill this for you.
                 </div>
-                <button
-                  style={{ ...styles.toggleOff, marginTop: 6, ...(!ready ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
-                  onClick={() => { if (ready && ctx?.accountId && ctx?.containerId && ctx?.workspaceId) window.open(gtmTagUrl(ctx.accountId, ctx.containerId, ctx.workspaceId), '_blank'); }}
-                  disabled={!ready}
-                  title="Opens this container's workspace in GTM in your browser. Click Preview (top right), then Share in Tag Assistant, and copy the link back here."
-                >
-                  ↗ Open GTM (then Preview &rarr; Share &rarr; Copy)
-                </button>
                 <textarea
                   value={vSnippet}
                   onChange={(e) => setVSnippet(e.target.value)}
-                  placeholder={'Paste your GTM Preview / Share link here (it contains gtm_auth & gtm_preview). A head <script> Preview snippet works too.'}
+                  placeholder={'Paste your GTM Preview / Share link here (it contains gtm_auth & gtm_preview).'}
                   style={{ ...styles.input, width: '100%', minHeight: 60, marginTop: 6, fontFamily: 'monospace', fontSize: 12 }}
                   disabled={!ready}
                 />
@@ -7409,12 +7402,26 @@ function VerifyPanel({
                   <div style={{ fontSize: 12, marginTop: 4, color: /gtm_auth=/.test(vSnippet) && /gtm_preview=/.test(vSnippet) ? 'var(--c-green)' : 'var(--c-amber)' }}>
                     {/gtm_auth=/.test(vSnippet) && /gtm_preview=/.test(vSnippet)
                       ? '✓ Preview link detected - your container will load in debug mode.'
-                      : '⚠ That is the Install snippet, not a Preview link (no gtm_auth / gtm_preview): only the PUBLISHED container loads. Use Open GTM above, or Option B.'}
+                      : '⚠ That is the Install snippet, not a Preview link (no gtm_auth / gtm_preview): only the PUBLISHED container loads. Use Option B (Share) or Option C (Auto-generate).'}
                   </div>
                 )}
               </div>
               <div style={{ marginTop: 8, padding: '10px 12px', borderRadius: 10, border: '0.5px solid var(--border-2)', background: 'var(--surface-2)' }}>
-                <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)' }}>Option B &middot; Auto-generate <span style={{ fontWeight: 400, ...styles.muted }}>(one click; creates a draft version, nothing published)</span></div>
+                <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)' }}>Option B &middot; Share from GTM <span style={{ fontWeight: 400, color: 'var(--c-green)' }}>(no GTM changes)</span></div>
+                <div style={{ ...styles.muted, fontSize: 12, lineHeight: 1.5, marginTop: 2 }}>
+                  Open GTM, click <b>Preview</b> (creates no version), then in Tag Assistant click <b>Share</b> and <b>Copy</b>. Paste the copied link into Option A above.
+                </div>
+                <button
+                  style={{ ...styles.toggleOff, marginTop: 6, ...(!ready ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
+                  onClick={() => { if (ready && ctx?.accountId && ctx?.containerId && ctx?.workspaceId) window.open(gtmTagUrl(ctx.accountId, ctx.containerId, ctx.workspaceId), '_blank'); }}
+                  disabled={!ready}
+                  title="Opens this container's workspace in GTM in your browser. Click Preview (top right), then Share in Tag Assistant, and copy the link into Option A."
+                >
+                  ↗ Open GTM (then Preview &rarr; Share &rarr; Copy)
+                </button>
+              </div>
+              <div style={{ marginTop: 8, padding: '10px 12px', borderRadius: 10, border: '0.5px solid var(--border-2)', background: 'var(--surface-2)' }}>
+                <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)' }}>Option C &middot; Auto-generate <span style={{ fontWeight: 400, ...styles.muted }}>(one click; creates a draft version, nothing published)</span></div>
                 <div style={{ ...styles.muted, fontSize: 12, lineHeight: 1.5, marginTop: 2 }}>
                   The app builds the Preview and fills Option A. Fastest, but it snapshots your workspace into a draft version (still not a publish).
                 </div>
