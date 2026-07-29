@@ -7303,11 +7303,10 @@ function VerifyPanel({
             </div>
           )}
           <div style={{ ...styles.muted, marginTop: 8 }}>
-            <b>Verify with Tag Assistant</b> first scans the site for forms that have a tracking tag, then asks
-            whether to submit those forms too (a real lead each) or just verify the click tags. It then drives
-            every tag on the live site and reads GTM’s <b>own</b> per-event firing - <b>nothing is created in
-            your container</b> (no version, no preview). To test UNPUBLISHED <b>draft</b> tags, paste a GTM
-            <b> Preview</b> snippet below - that loads your drafts and still creates nothing.
+            <b>Verify with Tag Assistant</b> first checks which GTM container is live on the page. If it is the
+            one you selected, it goes straight to verification. If not (or none is live), it asks how to load
+            YOUR container - a Preview, which is <b>not</b> a publish. It then drives every tag and reads GTM’s
+            <b>own</b> per-event firing; <b>nothing is created in your container</b> unless you choose Auto-generate.
           </div>
           {/* BOX 1 - Main website URL */}
           <div style={styles.fieldLabel}>Main website URL</div>
@@ -7319,60 +7318,11 @@ function VerifyPanel({
             style={{ ...styles.input, width: '100%', marginTop: 4 }}
             disabled={!ready}
           />
-          {/* BOX 2 - GTM Preview snippet. Your container may not be on the live site, so load it via a
-              Preview (NOT the Install snippet). Two optional ways to get the Preview creds. */}
-          <div style={styles.fieldLabel}>GTM Preview snippet <span style={{ fontWeight: 400, ...styles.muted }}>(loads your container's tags, incl. drafts)</span></div>
-          <div style={{ ...styles.muted, fontSize: 12, lineHeight: 1.55 }}>
-            To check <b>draft (unpublished)</b> tags you need a <b>Preview</b> - <b>not</b> the plain <b>Install</b> snippet (that only loads the published container). A Preview is <b>not</b> a publish; your live site and published container stay untouched. Pick either way:
-          </div>
-          {/* Option A - paste a GTM Preview / Share link. Zero GTM changes. */}
-          <div style={{ marginTop: 8, padding: '10px 12px', borderRadius: 10, border: '0.5px solid var(--border-2)', background: 'var(--surface-2)' }}>
-            <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)' }}>Option A &middot; Paste a GTM Preview link <span style={{ fontWeight: 400, color: 'var(--c-green)' }}>(no GTM changes)</span></div>
-            <div style={{ ...styles.muted, fontSize: 12, lineHeight: 1.5, marginTop: 2 }}>
-              Open GTM, click <b>Preview</b> (creates no version), then in Tag Assistant click <b>Share</b> and <b>Copy</b> the link. Paste it below.
-            </div>
-            <button
-              style={{ ...styles.toggleOff, marginTop: 6, ...(!ready ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
-              onClick={() => { if (ready && ctx?.accountId && ctx?.containerId && ctx?.workspaceId) window.open(gtmTagUrl(ctx.accountId, ctx.containerId, ctx.workspaceId), '_blank'); }}
-              disabled={!ready}
-              title="Opens this container's workspace in GTM in your browser. Click Preview (top right), then Share in Tag Assistant, and copy the link back here."
-            >
-              ↗ Open GTM (then Preview &rarr; Share &rarr; Copy)
-            </button>
-            <textarea
-              value={vSnippet}
-              onChange={(e) => setVSnippet(e.target.value)}
-              placeholder={'Paste your GTM Preview / Share link here (it contains gtm_auth & gtm_preview). A head <script> Preview snippet works too.'}
-              style={{ ...styles.input, width: '100%', minHeight: 64, marginTop: 6, fontFamily: 'monospace', fontSize: 12 }}
-              disabled={!ready}
-            />
-            {vSnippet.trim() && (
-              <div style={{ fontSize: 12, marginTop: 4, color: /gtm_auth=/.test(vSnippet) && /gtm_preview=/.test(vSnippet) ? 'var(--c-green)' : 'var(--c-amber)' }}>
-                {/gtm_auth=/.test(vSnippet) && /gtm_preview=/.test(vSnippet)
-                  ? '✓ Preview link detected (gtm_auth + gtm_preview present) - your container will load in debug mode.'
-                  : '⚠ That is the Install snippet, not a Preview link: gtm_auth / gtm_preview are missing, so only the PUBLISHED container loads (draft tags will not show). Use the Open GTM button above, or Option B.'}
-              </div>
-            )}
-          </div>
-          {/* Option B - auto-generate (one click; creates a draft version). */}
-          <div style={{ marginTop: 8, padding: '10px 12px', borderRadius: 10, border: '0.5px solid var(--border-2)', background: 'var(--surface-2)' }}>
-            <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)' }}>Option B &middot; Auto-generate <span style={{ fontWeight: 400, ...styles.muted }}>(one click; creates a draft version, nothing published)</span></div>
-            <div style={{ ...styles.muted, fontSize: 12, lineHeight: 1.5, marginTop: 2 }}>
-              The app builds the Preview for you and fills Option A above. Fastest, but it snapshots your workspace into a draft version (still not a publish).
-            </div>
-            <button
-              style={{ ...styles.toggleOff, marginTop: 6, ...(!ready || vMinting || vVerifying ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
-              onClick={() => void autoGeneratePreview()}
-              disabled={!ready || vMinting || vVerifying}
-              title="Builds the GTM Preview snippet for the selected container automatically (creates a DRAFT container version - nothing is published) and fills it in above."
-            >
-              {vMinting ? 'Generating preview…' : '✨ Auto-generate preview snippet'}
-            </button>
-          </div>
-          {/* BOX 3 - Pages to verify (URLs only) */}
+          {/* Pages to verify (URLs only). The GTM Preview snippet options are NOT shown here - they only
+              appear in the container gate below, and only when the live container is missing / a mismatch. */}
           <div style={styles.fieldLabel}>Pages to verify <span style={{ fontWeight: 400, ...styles.muted }}>(optional, URLs only)</span></div>
           <div style={{ ...styles.muted, fontSize: 12, lineHeight: 1.55 }}>
-            One URL per line. When set, verify skips the auto-crawl and drives every tag on <b>only</b> these pages, so forms/tags on pages the crawl missed still get tested. Use the <b>public</b> page URLs (not wp-admin / editor URLs).
+            One URL per line (single pages or sitemap URLs). When set, verify skips the auto-crawl and drives every tag on <b>only</b> these pages, so forms/tags on pages the crawl missed still get tested. Use the <b>public</b> page URLs (not wp-admin / editor URLs).
           </div>
           <textarea
             value={vVerifyPages}
@@ -7431,30 +7381,64 @@ function VerifyPanel({
                   </>
                 )}
                 <div style={{ marginTop: 6 }}>
-                  Proceed to inject <b style={{ fontFamily: 'var(--font-mono)' }}>{ctx?.containerPublicId}</b> into the verification session only (the live site is not changed), then confirm Tag Assistant connects to it. Or cancel.
+                  To debug <b style={{ fontFamily: 'var(--font-mono)' }}>{ctx?.containerPublicId}</b> we load it into the verification session only (the live site is never changed). Pick how to load your container's tags (drafts included) - a Preview is <b>not</b> a publish - then Proceed:
                 </div>
-                {vSnippet.trim() ? (
-                  <div style={{ ...styles.muted, fontSize: 12, marginTop: 6 }}>
-                    Your pasted Preview snippet is used to load this container in DEBUG mode, and the live container is blocked, so Tag Assistant debugs YOUR container.
-                  </div>
-                ) : (
-                  <div style={{ ...styles.muted, fontSize: 12, marginTop: 6, color: 'var(--c-amber)' }}>
-                    To reliably see YOUR container fire its tags in Tag Assistant, first cancel, click <b>Auto-generate preview snippet</b> in the box above (or paste your own Preview snippet), then run again. Without it only the published build loads and may not stream tag data.
+              </div>
+              {/* Preview options - only shown HERE, when the selected container is missing / a mismatch. */}
+              <div style={{ padding: '10px 12px', borderRadius: 10, border: '0.5px solid var(--border-2)', background: 'var(--surface-2)' }}>
+                <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)' }}>Option A &middot; Paste a GTM Preview link <span style={{ fontWeight: 400, color: 'var(--c-green)' }}>(no GTM changes)</span></div>
+                <div style={{ ...styles.muted, fontSize: 12, lineHeight: 1.5, marginTop: 2 }}>
+                  Open GTM, click <b>Preview</b> (creates no version), then in Tag Assistant click <b>Share</b> and <b>Copy</b> the link. Paste it below.
+                </div>
+                <button
+                  style={{ ...styles.toggleOff, marginTop: 6, ...(!ready ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
+                  onClick={() => { if (ready && ctx?.accountId && ctx?.containerId && ctx?.workspaceId) window.open(gtmTagUrl(ctx.accountId, ctx.containerId, ctx.workspaceId), '_blank'); }}
+                  disabled={!ready}
+                  title="Opens this container's workspace in GTM in your browser. Click Preview (top right), then Share in Tag Assistant, and copy the link back here."
+                >
+                  ↗ Open GTM (then Preview &rarr; Share &rarr; Copy)
+                </button>
+                <textarea
+                  value={vSnippet}
+                  onChange={(e) => setVSnippet(e.target.value)}
+                  placeholder={'Paste your GTM Preview / Share link here (it contains gtm_auth & gtm_preview). A head <script> Preview snippet works too.'}
+                  style={{ ...styles.input, width: '100%', minHeight: 60, marginTop: 6, fontFamily: 'monospace', fontSize: 12 }}
+                  disabled={!ready}
+                />
+                {vSnippet.trim() && (
+                  <div style={{ fontSize: 12, marginTop: 4, color: /gtm_auth=/.test(vSnippet) && /gtm_preview=/.test(vSnippet) ? 'var(--c-green)' : 'var(--c-amber)' }}>
+                    {/gtm_auth=/.test(vSnippet) && /gtm_preview=/.test(vSnippet)
+                      ? '✓ Preview link detected - your container will load in debug mode.'
+                      : '⚠ That is the Install snippet, not a Preview link (no gtm_auth / gtm_preview): only the PUBLISHED container loads. Use Open GTM above, or Option B.'}
                   </div>
                 )}
               </div>
-              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              <div style={{ marginTop: 8, padding: '10px 12px', borderRadius: 10, border: '0.5px solid var(--border-2)', background: 'var(--surface-2)' }}>
+                <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)' }}>Option B &middot; Auto-generate <span style={{ fontWeight: 400, ...styles.muted }}>(one click; creates a draft version, nothing published)</span></div>
+                <div style={{ ...styles.muted, fontSize: 12, lineHeight: 1.5, marginTop: 2 }}>
+                  The app builds the Preview and fills Option A. Fastest, but it snapshots your workspace into a draft version (still not a publish).
+                </div>
+                <button
+                  style={{ ...styles.toggleOff, marginTop: 6, ...(!ready || vMinting || vVerifying ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
+                  onClick={() => void autoGeneratePreview()}
+                  disabled={!ready || vMinting || vVerifying}
+                  title="Builds the GTM Preview snippet for the selected container automatically (creates a DRAFT container version - nothing is published) and fills Option A."
+                >
+                  {vMinting ? 'Generating preview…' : '✨ Auto-generate preview snippet'}
+                </button>
+              </div>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 10 }}>
                 <button
                   style={styles.primaryBtn}
                   onClick={() => {
-                    // Always inject the selected container into the driven session (Step 3). When a Preview
-                    // snippet is pasted, ta-driver loads this container WITH its preview creds (debug mode)
-                    // and blocks the live container's gtm.js, so Tag Assistant debugs YOURS not the live one.
+                    // Inject the selected container into the driven session. With a Preview link, ta-driver
+                    // loads it in debug mode and blocks the live container, so TA debugs YOURS. Without one,
+                    // it loads the published build.
                     vInjectContainerRef.current = ctx?.containerPublicId ?? undefined;
                     continueTaScan();
                   }}
                 >
-                  Proceed and inject my container
+                  {vSnippet.trim() ? 'Proceed - debug my container' : 'Proceed with published container'}
                 </button>
                 <button style={styles.toggleOff} onClick={() => { setVTaStage('idle'); setVPreflightGate(null); setVPreflight(null); }}>Cancel</button>
               </div>
