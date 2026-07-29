@@ -425,11 +425,21 @@ export async function runTaVerify(
     console.log(`[tag-assistant] connecting to ${url} ${taDebugUrl ? '(via your pasted GTM Preview link - starts the container debug session)' : previewParams ? '(GTM PREVIEW mode)' : '(connect mode - Google tags only; paste your GTM Preview link to debug the GTM container)'} ...`);
     await ta.goto(taDebugUrl ?? TA_URL, { waitUntil: 'domcontentloaded', timeout: 45_000 });
     await ta.waitForTimeout(2500);
-    const addBtn = ta.locator('button:has-text("Add domain")').first();
-    if (await addBtn.count()) { await addBtn.click({ timeout: 8_000 }); await ta.waitForTimeout(1200); }
-    await ta.locator('input').first().fill(url, { timeout: 8_000 });
+    // The Add domain / Connect buttons occasionally resolve but aren't yet click-actionable (TA's UI is
+    // still animating in), which times out an 8s click. Give them longer, and retry with force so a
+    // transient overlay/animation doesn't fail the whole run.
+    const clickRobust = async (sel: string): Promise<void> => {
+      const btn = ta.locator(sel).first();
+      if (!(await btn.count())) return;
+      await btn.click({ timeout: 15_000 }).catch(async () => {
+        await btn.click({ timeout: 6_000, force: true }).catch(() => undefined);
+      });
+    };
+    await clickRobust('button:has-text("Add domain")');
+    await ta.waitForTimeout(1000);
+    await ta.locator('input').first().fill(url, { timeout: 12_000 });
     const popupP = ctx.waitForEvent('page', { timeout: 30_000 }).catch(() => null);
-    await ta.locator('button:has-text("Connect")').first().click({ timeout: 8_000 });
+    await clickRobust('button:has-text("Connect")');
     const popup = await popupP;
     if (!popup) return { pagesOk: false, perTag, pagesDriven, error: 'Tag Assistant did not open the debug window - reconnect and retry.' };
     console.log('[tag-assistant] debug window opened; waiting for the container to enter debug...');
