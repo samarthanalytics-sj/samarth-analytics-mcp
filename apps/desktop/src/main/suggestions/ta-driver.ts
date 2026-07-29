@@ -306,6 +306,15 @@ export async function runTaVerify(
   // only (Google-tag events, no GTM-container tags). Zero footprint (Quick Preview creates nothing).
   const previewParams = previewParamsFromAny(opts.previewSnippet);
   const withPreview = (u: string): string => withPreviewParams(u, previewParams);
+  // If the operator pasted a FULL Tag Assistant link (the URL GTM's Preview button opens, e.g.
+  // tagassistant.google.com/?...#/?source=TAG_MANAGER&id=GTM-XXXX&gtm_auth=...&gtm_preview=...), navigate
+  // to THAT directly to start the container's real debug session. Our own "Add domain -> Connect" flow is
+  // TA's inspect-a-live-site mode, which only surfaces Google tags and shows "not enabled for debugging"
+  // for a GTM container - because a container only enters TA debug from a genuine Preview/debug session.
+  const taDebugUrl = (() => {
+    const m = (opts.previewSnippet || '').match(/https?:\/\/tagassistant\.google\.com\/[^\s"'<>]*/i);
+    return m ? m[0] : null;
+  })();
   // Serialize with any other profile access: the exclusive ta-profile lock means one at a time.
   return serializeProfile(async () => {
   // Close a window left open from a PREVIOUS run first — it still holds the profile's exclusive lock.
@@ -411,9 +420,10 @@ export async function runTaVerify(
       console.log('[tag-assistant] signed in and saved for next time.');
     }
 
-    // Connect: Add domain -> URL -> Connect -> the debugged popup.
-    console.log(`[tag-assistant] connecting to ${url} ${previewParams ? '(GTM PREVIEW mode - your container will enter debug)' : '(connect mode - Google tags only; paste your GTM Preview snippet to debug the GTM container)'} ...`);
-    await ta.goto(TA_URL, { waitUntil: 'domcontentloaded', timeout: 45_000 });
+    // Connect: navigate TA to the pasted Preview LINK (starts the container's debug session) when we have
+    // one, else the bare TA app. Then Add domain -> URL -> Connect -> the debugged popup.
+    console.log(`[tag-assistant] connecting to ${url} ${taDebugUrl ? '(via your pasted GTM Preview link - starts the container debug session)' : previewParams ? '(GTM PREVIEW mode)' : '(connect mode - Google tags only; paste your GTM Preview link to debug the GTM container)'} ...`);
+    await ta.goto(taDebugUrl ?? TA_URL, { waitUntil: 'domcontentloaded', timeout: 45_000 });
     await ta.waitForTimeout(2500);
     const addBtn = ta.locator('button:has-text("Add domain")').first();
     if (await addBtn.count()) { await addBtn.click({ timeout: 8_000 }); await ta.waitForTimeout(1200); }
