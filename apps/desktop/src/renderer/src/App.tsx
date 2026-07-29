@@ -6952,6 +6952,10 @@ function VerifyPanel({
   // Set to the selected container id ONLY when the operator hit Proceed past a missing/mismatch gate, so
   // the next verify run injects it into the driven session. A ref so it doesn't re-render the buttons.
   const vInjectContainerRef = useRef<string | undefined>(undefined);
+  // Set by the match gate's "sign in once" button: run Tag Assistant IGNORING any pasted preview link, so
+  // it does the one-time Google sign-in on the published container (a reliable debug path) instead of the
+  // link path. Consumed + reset in runVerify.
+  const vTaSignInOnceRef = useRef(false);
   const [vNote, setVNote] = useState<{ kind: 'info' | 'error'; text: string } | null>(null);
   // Bumped whenever a tag-verify runs; the embedded Forms subsection watches it and auto-discovers the
   // site's forms-with-tags in the same pass - so there's ONE action, not a separate "find forms" button.
@@ -7042,7 +7046,11 @@ function VerifyPanel({
         });
         return;
       }
-      const snippet = (snippetOverride ?? vSnippet).trim();
+      // "Sign in once" was chosen at the match gate: ignore the pasted preview link so Tag Assistant does
+      // the one-time Google sign-in (the reliable debug path) rather than the link path.
+      const signInOnce = vTaSignInOnceRef.current;
+      vTaSignInOnceRef.current = false;
+      const snippet = (snippetOverride ?? (signInOnce ? '' : vSnippet)).trim();
       // "Pages to verify" - one URL per line. When present, verify drives every tag on each of these pages
       // (skips the auto-crawl), so forms/tags on pages the crawl missed get exercised.
       const verifyPages = vVerifyPages.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean);
@@ -7464,19 +7472,37 @@ function VerifyPanel({
               )}
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 10 }}>
                 {vPreflightGate === 'match' ? (
-                  <button
-                    style={styles.primaryBtn}
-                    onClick={() => {
-                      // Container IS live here. Verify it in Tag Assistant. A pasted Preview link is used as the
-                      // container snippet, so ta-driver serves the preview build (your draft edits) AND skips the
-                      // Google sign-in. Empty -> Tag Assistant does the one-time sign-in on the published container.
-                      setVPreflightGate(null); setVPreflight(null);
-                      continueTaScan();
-                    }}
-                    title="Opens the real Tag Assistant. With a Preview link above it needs no sign-in and shows your draft edits; without one it does the one-time Google sign-in."
-                  >
-                    {vSnippet.trim() ? 'Verify with Tag Assistant (no sign-in)' : 'Verify with Tag Assistant (sign in once)'}
-                  </button>
+                  <>
+                    {vSnippet.trim() && (
+                      <button
+                        style={styles.primaryBtn}
+                        onClick={() => {
+                          // Use the pasted Preview link: ta-driver navigates Tag Assistant to it (starts the
+                          // container debug session) and skips the Google sign-in.
+                          vTaSignInOnceRef.current = false;
+                          setVPreflightGate(null); setVPreflight(null);
+                          continueTaScan();
+                        }}
+                        title="Opens Tag Assistant via your pasted Preview link - no sign-in, and shows your unpublished draft edits."
+                      >
+                        Verify with Tag Assistant (use link, no sign-in)
+                      </button>
+                    )}
+                    <button
+                      style={vSnippet.trim() ? styles.toggleOff : styles.primaryBtn}
+                      onClick={() => {
+                        // Sign in once: ignore any pasted link and do the one-time Google sign-in on the
+                        // published container. The most reliable debug path, and saved forever so future runs
+                        // need no link.
+                        vTaSignInOnceRef.current = true;
+                        setVPreflightGate(null); setVPreflight(null);
+                        continueTaScan();
+                      }}
+                      title="Does the one-time Google sign-in and debugs the published live container in Tag Assistant. Saved forever - future runs need no preview link."
+                    >
+                      Verify with Tag Assistant (sign in once)
+                    </button>
+                  </>
                 ) : (
                   <button
                     style={styles.primaryBtn}
