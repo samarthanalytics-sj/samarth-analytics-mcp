@@ -1,3 +1,9 @@
+## [1.424.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.424.1...v1.424.2) (2026-07-29)
+
+### Bug Fixes
+
+* **desktop:** skip the Tag Assistant Google sign-in when a Preview link is provided ([#747](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/747)) ([4336aee](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/4336aeec6a72b507d5e0f5160208c39e6e82d3f7))
+
 ## [1.424.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.424.0...v1.424.1) (2026-07-29)
 
 ### Bug Fixes
