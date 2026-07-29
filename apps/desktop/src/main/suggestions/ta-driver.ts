@@ -14,6 +14,9 @@
 // window.opener link to the TA page (the debug channel), so all driving happens by NAVIGATING THE SAME
 // POPUP sequentially — never a fresh context.
 
+import os from 'node:os';
+import path from 'node:path';
+import { rm } from 'node:fs/promises';
 import { requestAllowed } from './ssrf';
 import { classifyCollector } from '../../shared/runtime-capture';
 import { PlaywrightUnavailableError } from './playwright-driver';
@@ -320,25 +323,29 @@ export async function runTaVerify(
   // Close a window left open from a PREVIOUS run first — it still holds the profile's exclusive lock.
   // If we did close one, wait out the brief Windows lock-release lag before relaunching the same profile.
   if (await closeOpenTaWindow()) await new Promise((r) => setTimeout(r, 1200));
-  // HEADED (visible): the user WATCHES Tag Assistant sign in (once), connect, and show tags firing — that
-  // real Tag Assistant tab IS the "show it in detail" view — and the one-time sign-in happens in context.
-  const ctx = await launchProfile(profileDir, false);
-  let keepWindowOpen = false; // on success, leave the TA window open for the user to inspect
   // PREFLIGHT INJECTION (Step 3): the operator hit Proceed past a missing/mismatch gate, so the selected
-  // container is NOT the one live on this page. Make Tag Assistant debug YOUR container instead of the live
-  // one, in the driven session ONLY (nothing on the public site changes), in two parts:
-  //  (a) inject the selected container's gtm.js here, carrying the pasted GTM Preview creds
-  //      (gtm_auth/gtm_preview) when present so it loads in DEBUG/preview mode and streams tag-firing
-  //      frames — without those creds it can only load the published build (paste the snippet for debug);
-  //  (b) in the route handler below, abort every OTHER GTM container's gtm.js so the live container cannot
-  //      also boot and steal the Tag Assistant debug view.
-  // Context-level init script → it runs in the debugged popup too; origin-guarded so it never touches the
-  // tagassistant.google.com / sign-in tabs.
+  // container is NOT the one live on this page. Make Tag Assistant debug YOUR container by injecting its
+  // gtm.js (carrying the pasted GTM Preview creds so it loads in DEBUG/preview mode) - this mirrors the
+  // manual flow (inject the snippet + open the Preview link in a clean Incognito window).
   const injectContainerId = opts.injectContainerId ? opts.injectContainerId.trim().toUpperCase() : '';
+  // (B) When we inject a non-live container with a Preview link, no Google sign-in is needed - so run in a
+  // FRESH, cleared profile (incognito-like) rather than the saved TA profile. This removes stale cookies /
+  // a prior session that can stop the injected container from entering debug, matching the user's Incognito
+  // test exactly. Cleared each run so state never carries over.
+  const useCleanProfile = Boolean(injectContainerId && previewParams);
+  let launchDir = profileDir;
+  if (useCleanProfile) {
+    launchDir = path.join(os.tmpdir(), 'samarth-ta-inject');
+    await rm(launchDir, { recursive: true, force: true }).catch(() => undefined);
+    console.log('[preflight] using a fresh, cleared profile (incognito-like) for the injected-container run.');
+  }
+  // HEADED (visible): the user WATCHES Tag Assistant connect and show tags firing.
+  const ctx = await launchProfile(launchDir, false);
+  let keepWindowOpen = false; // on success, leave the TA window open for the user to inspect
   const injectPreviewQs = injectContainerId && previewParams
     ? `&gtm_auth=${previewParams.gtm_auth}&gtm_preview=${previewParams.gtm_preview}&gtm_cookies_win=${previewParams.gtm_cookies_win}`
     : '';
-  if (injectContainerId) console.log(`[preflight] step 3: injecting ${injectContainerId} into the Tag Assistant session${injectPreviewQs ? ' in PREVIEW/debug mode (from your pasted snippet)' : ' (published build; paste its GTM Preview snippet for full debug)'}, and blocking other containers' gtm.js so TA debugs YOURS ...`);
+  if (injectContainerId) console.log(`[preflight] step 3: injecting ${injectContainerId} into the Tag Assistant session${injectPreviewQs ? ' in PREVIEW/debug mode (from your pasted snippet)' : ' (published build; paste its GTM Preview snippet for full debug)'} ...`);
   try {
     await ctx.addInitScript(captureFramesInit);
     if (injectContainerId) {
@@ -364,18 +371,10 @@ export async function runTaVerify(
     await ctx.route('**/*', (route) => {
       const reqUrl = route.request().url();
       if (classifyCollector(reqUrl)) { void route.abort(); return; }
-      // ISOLATE the injected container: when we injected YOUR container (Step 3), abort every OTHER GTM
-      // container's gtm.js so the live container cannot also boot and take over the Tag Assistant debug
-      // view — TA then debugs only YOURS. Our own injected request (id === injected) passes through (and
-      // already carries the preview creds we built into it).
-      if (injectContainerId) {
-        const other = reqUrl.match(/googletagmanager\.com\/gtm\.js\?[^"'\s]*id=(GTM-[A-Z0-9]+)/i);
-        if (other && other[1].toUpperCase() !== injectContainerId) {
-          console.log(`[preflight] blocking live container ${other[1].toUpperCase()} gtm.js so Tag Assistant debugs ${injectContainerId}.`);
-          void route.abort();
-          return;
-        }
-      }
+      // (C) Do NOT block the live container. The user's manual Incognito test had BOTH the live container
+      // and the injected one on the page, and Tag Assistant still debugged the injected one (it has the
+      // Preview session). Blocking the live gtm.js was a guess that could change page behaviour, so let
+      // everything load and let TA attribute to the previewed container.
       if (
         previewParams &&
         /googletagmanager\.com\/gtm\.js/i.test(reqUrl) &&
