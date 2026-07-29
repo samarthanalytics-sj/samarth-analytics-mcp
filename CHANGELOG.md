@@ -1,3 +1,9 @@
+## [1.427.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.427.0...v1.427.1) (2026-07-29)
+
+### Bug Fixes
+
+* **desktop:** robust Tag Assistant Add-domain/Connect clicks + trim preflight grace ([#753](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/753)) ([846c112](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/846c1123f343381605d17e7ae88480fad984ad39))
+
 ## [1.427.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.426.1...v1.427.0) (2026-07-29)
 
 ### Features
