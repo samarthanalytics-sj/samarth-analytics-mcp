@@ -1,3 +1,9 @@
+## [1.429.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.428.0...v1.429.0) (2026-07-29)
+
+### Features
+
+* **desktop:** Tag Assistant option for a non-live container (inject into the debug session) ([#755](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/755)) ([2744b79](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/2744b79ba6dc77ba1ced670431c51f6b2bd99616)), closes [#751](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/751)
+
 ## [1.428.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.427.1...v1.428.0) (2026-07-29)
 
 ### Features
