@@ -319,7 +319,7 @@ export async function detectLiveContainers(
       booted = await page.evaluate<{ containerIds: string[] }>(readGtmDebugInPage).catch(() => booted);
       if (booted.containerIds.length > 0 || netContainers.size > 0) {
         if (!firstSeenAt) firstSeenAt = Date.now();
-        if (Date.now() - firstSeenAt >= 1500) break; // grace for a nested/sibling container, then stop
+        if (Date.now() - firstSeenAt >= 800) break; // brief grace for a nested/sibling container, then stop
       }
       await page.waitForTimeout(350);
     }
