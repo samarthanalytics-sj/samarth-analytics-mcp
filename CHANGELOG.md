@@ -1,3 +1,9 @@
+## [1.425.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.425.0...v1.425.1) (2026-07-29)
+
+### Bug Fixes
+
+* **desktop:** preflight polls for lazy-loaded GTM instead of a fixed short settle ([#749](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/749)) ([3da0249](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/3da024957a12dd16a9c98660e50310401040e8a8))
+
 ## [1.425.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.424.2...v1.425.0) (2026-07-29)
 
 ### Features
