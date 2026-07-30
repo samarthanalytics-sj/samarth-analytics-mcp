@@ -1,3 +1,9 @@
+## [1.436.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.435.0...v1.436.0) (2026-07-30)
+
+### Features
+
+* **desktop:** simplify the live-container (match) verify gate to two options ([#765](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/765)) ([41867e6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/41867e6812a3611fbc4fec6508a1cf4f50f220ff))
+
 ## [1.435.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.434.0...v1.435.0) (2026-07-30)
 
 ### Features
