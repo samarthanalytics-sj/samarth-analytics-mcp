@@ -351,6 +351,9 @@ const api = {
     // Save ONE verification proof screenshot (a JPEG/PNG data-URI) to a user-chosen file → saved path or null.
     exportProofImage: (defaultName: string, dataUrl: string): Promise<string | null> =>
       ipcRenderer.invoke('suggestions:exportProofImage', defaultName, dataUrl),
+    // Copy ONE verification proof screenshot (a JPEG/PNG data-URI) to the OS clipboard → whether it worked.
+    copyProofImage: (dataUrl: string): Promise<boolean> =>
+      ipcRenderer.invoke('suggestions:copyProofImage', dataUrl),
     // Save the (renderer-built) install runbook to a user-chosen file (Markdown or PDF) → saved path or null.
     exportRunbook: (defaultName: string, markdown: string, format?: 'md' | 'pdf'): Promise<string | null> =>
       ipcRenderer.invoke('suggestions:exportRunbook', defaultName, markdown, format),

@@ -10,7 +10,7 @@
 // is not a way to bypass approval — write tools still only exist because a
 // confirm fn is supplied, and nothing is ever published.
 
-import { ipcMain, dialog, BrowserWindow, app } from 'electron';
+import { ipcMain, dialog, BrowserWindow, app, clipboard, nativeImage } from 'electron';
 import { writeFile } from 'node:fs/promises';
 import type { GoogleDataService } from '../google/data-service';
 import { findGa4BaseTag, plainDashes } from '../google/gtm-builders';
@@ -152,6 +152,18 @@ export function registerSuggestionsIpc(data: GoogleDataService, memory?: MemoryS
     if (canceled || !filePath) return null;
     await writeFile(filePath, Buffer.from(m[2], 'base64'));
     return filePath;
+  });
+
+  // Copy ONE verification proof screenshot to the OS clipboard as an image (to paste into a doc / chat).
+  // Read-only - decodes the data-URI to a nativeImage and writes it to the clipboard. Returns whether the
+  // value was a usable image.
+  ipcMain.handle('suggestions:copyProofImage', (_e, dataUrl: unknown) => {
+    const src = String(dataUrl ?? '');
+    if (!/^data:image\/(png|jpe?g|webp);base64,[A-Za-z0-9+/=]+$/i.test(src)) return false;
+    const img = nativeImage.createFromDataURL(src);
+    if (img.isEmpty()) return false;
+    clipboard.writeImage(img);
+    return true;
   });
 
   // Save the install runbook (already rendered to Markdown in the renderer) to a
