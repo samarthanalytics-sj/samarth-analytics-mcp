@@ -17,7 +17,6 @@
 import os from 'node:os';
 import path from 'node:path';
 import { rm } from 'node:fs/promises';
-import { writeInjectorExtension } from './gtm-injector-extension';
 import { requestAllowed } from './ssrf';
 import { classifyCollector } from '../../shared/runtime-capture';
 import { PlaywrightUnavailableError } from './playwright-driver';
@@ -86,6 +85,7 @@ interface PwContext {
   close(): Promise<void>;
   pages(): PwPage[];
   cookies(urls?: string | string[]): Promise<Array<{ name: string }>>;
+  addCookies(cookies: Array<{ name: string; value: string; domain: string; path: string }>): Promise<void>;
 }
 
 async function loadPw(): Promise<{ chromium: { launchPersistentContext(dir: string, opts: Record<string, unknown>): Promise<PwContext> } } | null> {
@@ -108,39 +108,20 @@ async function loadPw(): Promise<{ chromium: { launchPersistentContext(dir: stri
  *  drops "--enable-automation" (the "controlled by automated software" infobar), and
  *  "--disable-blink-features=AutomationControlled" flips navigator.webdriver from true→false — Google's
  *  sign-in refuses browsers that report webdriver=true ("this browser or app may not be secure"). */
-async function launchProfile(profileDir: string, headless: boolean, extensionDir?: string): Promise<PwContext> {
+async function launchProfile(profileDir: string, headless: boolean): Promise<PwContext> {
   const pw = await loadPw();
   if (!pw) throw new PlaywrightUnavailableError();
-  const args = ['--disable-blink-features=AutomationControlled'];
-  const ignore = ['--enable-automation'];
-  if (extensionDir) {
-    // The GTM-injector extension (the Adswerve-style injector) loads only in a HEADED context, and only if
-    // Chromium's default "--disable-extensions" is not applied. These two switches are Chromium's supported
-    // way to side-load one unpacked extension.
-    args.push(`--disable-extensions-except=${extensionDir}`, `--load-extension=${extensionDir}`);
-    ignore.push('--disable-extensions');
-  }
   const base = {
     headless,
     viewport: { width: 1440, height: 900 },
-    ignoreDefaultArgs: ignore,
-    args,
+    ignoreDefaultArgs: ['--enable-automation'],
+    args: ['--disable-blink-features=AutomationControlled'],
   };
-  // Extension side-loading: bundled Chromium honours --load-extension most reliably (recent Chrome builds
-  // restrict command-line extensions), so try it FIRST when loading the injector. Otherwise prefer the real
-  // Chrome channel (Google sign-in trusts it far more). Each path falls back to the other.
-  const order = extensionDir
-    ? [base, { ...base, channel: 'chrome' }]
-    : [{ ...base, channel: 'chrome' }, base];
-  let lastErr: unknown;
-  for (const opts of order) {
-    try {
-      return await pw.chromium.launchPersistentContext(profileDir, opts);
-    } catch (e) {
-      lastErr = e;
-    }
+  try {
+    return await pw.chromium.launchPersistentContext(profileDir, { ...base, channel: 'chrome' });
+  } catch {
+    return await pw.chromium.launchPersistentContext(profileDir, base);
   }
-  throw lastErr;
 }
 
 // A Chromium persistent profile takes an EXCLUSIVE lock on its user-data-dir: two launchPersistentContext
@@ -359,32 +340,37 @@ export async function runTaVerify(
     await rm(launchDir, { recursive: true, force: true }).catch(() => undefined);
     console.log('[preflight] using a fresh, cleared profile (incognito-like) for the injected-container run.');
   }
-  // Build the Adswerve-style injector extension for the selected (non-live) container and load it into a
-  // HEADED Chrome. The extension puts the container's PLAIN gtm.js on every page; the Tag Assistant link
-  // opened below establishes the PREVIEW/debug session in the SAME browser - together they reproduce the
-  // operator's proven manual flow (Adswerve Inject Code + open the TA link in one window). If the extension
-  // can't be built/loaded we fall back to the older in-page (addInitScript) injection.
-  let injectorDir: string | undefined;
+  // Inject the selected (non-live) container with addInitScript (runs in the page's MAIN world before any
+  // page script) - the reliable, extension-free equivalent of the Adswerve "Inject Code" step. Chrome 137
+  // removed --load-extension for real Chrome, so a side-loaded extension is unreliable; addInitScript is not.
+  // The injected gtm.js carries the pasted Preview creds (gtm_auth/gtm_preview) so Google serves the debug
+  // build, plus gtm_debug=x. Per how Tag Assistant preview actually works, a container enters DEBUG mode from
+  // ANY of three signals - gtm_debug in the URL, a tagassistant.google.com referrer (the popup TA opens), or
+  // the __TAG_ASSISTANT first-party cookie - so we set all we can, no manual "Connect" click required.
+  const injectQs = injectContainerId
+    ? (previewParams ? `&gtm_auth=${previewParams.gtm_auth}&gtm_preview=${previewParams.gtm_preview}&gtm_cookies_win=${previewParams.gtm_cookies_win}` : '') + '&gtm_debug=x'
+    : '';
+  // HEADED (visible): the user WATCHES Tag Assistant connect and show tags firing.
+  const ctx = await launchProfile(launchDir, false);
+  let keepWindowOpen = false; // on success, leave the TA window open for the user to inspect
   if (injectContainerId) {
+    console.log(`[preflight] step 3: injecting ${injectContainerId} in DEBUG mode via addInitScript (gtm_debug=x${previewParams ? ' + preview creds' : ' + published build'}) ...`);
+    // Set the __TAG_ASSISTANT first-party cookie on the target site so its gtm.js seeks a Tag Assistant
+    // connection - one of the three debug signals, and it does not depend on the Connect handshake timing.
     try {
-      injectorDir = await writeInjectorExtension(injectContainerId);
-      console.log(`[preflight] step 3: loading the GTM injector extension for ${injectContainerId} (Adswerve-style inject) - the pasted GTM Preview link puts it into DEBUG/preview mode ...`);
+      const host = new URL(url).hostname;
+      await ctx.addCookies([
+        { name: '__TAG_ASSISTANT', value: 'x', domain: host, path: '/' },
+        { name: '__TAG_ASSISTANT', value: 'x', domain: '.' + host, path: '/' },
+      ]);
+      console.log(`[preflight] set the __TAG_ASSISTANT debug cookie on ${host}.`);
     } catch (e) {
-      console.log(`[preflight] injector extension build failed (${(e as Error).message}); falling back to in-page injection.`);
+      console.log(`[preflight] could not set __TAG_ASSISTANT cookie (${(e as Error).message}); relying on gtm_debug + the tagassistant referrer.`);
     }
   }
-  // HEADED (visible): the user WATCHES Tag Assistant connect and show tags firing.
-  const ctx = await launchProfile(launchDir, false, injectorDir);
-  let keepWindowOpen = false; // on success, leave the TA window open for the user to inspect
-  // Fallback in-page injection creds (used only when the injector extension is NOT loaded): carry the
-  // preview params on the gtm.js URL so it still boots in debug mode.
-  const injectPreviewQs = injectContainerId && previewParams
-    ? `&gtm_auth=${previewParams.gtm_auth}&gtm_preview=${previewParams.gtm_preview}&gtm_cookies_win=${previewParams.gtm_cookies_win}`
-    : '';
-  if (injectContainerId && !injectorDir) console.log(`[preflight] step 3: injecting ${injectContainerId} into the Tag Assistant session${injectPreviewQs ? ' in PREVIEW/debug mode (from your pasted snippet)' : ' (published build; paste its GTM Preview snippet for full debug)'} ...`);
   try {
     await ctx.addInitScript(captureFramesInit);
-    if (injectContainerId && !injectorDir) {
+    if (injectContainerId) {
       await ctx.addInitScript((arg: { id: string; qs: string }) => {
         try {
           const o = location.origin;
@@ -398,7 +384,7 @@ export async function runTaVerify(
           s.src = 'https://www.googletagmanager.com/gtm.js?id=' + arg.id + arg.qs;
           (document.head || document.documentElement).appendChild(s);
         } catch { /* injection is best-effort; Step 4 confirms whether TA actually saw it */ }
-      }, { id: injectContainerId, qs: injectPreviewQs });
+      }, { id: injectContainerId, qs: injectQs });
     }
     // Abort analytics collectors so driving tags never delivers a real hit (the TA stream, not beacons,
     // is the verdict source). In PREVIEW mode, rewrite the container's gtm.js request to carry the preview
@@ -413,7 +399,6 @@ export async function runTaVerify(
       // everything load and let TA attribute to the previewed container.
       if (
         previewParams &&
-        !injectorDir && // the injector extension handles the container load itself (plain snippet + cookie)
         /googletagmanager\.com\/gtm\.js/i.test(reqUrl) &&
         reqUrl.includes(`id=${containerPublicId}`) &&
         !/[?&]gtm_auth=/i.test(reqUrl)
