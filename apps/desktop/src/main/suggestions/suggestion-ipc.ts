@@ -25,7 +25,7 @@ import { deriveSuggestionRules, applySuggestionRules, describeAppliedRules } fro
 import { runVerifyDriver, runSuggestionScreenshots, detectLiveContainers, type SuggestionShotTag } from './verify-driver';
 import { runFormSubmitDriver, type FormSubmitFieldInput } from './form-submit-driver';
 import { evaluateVerify, verdictsFromMonitor } from './verify-tags';
-import { routeTagsToPages, normalizeVerifyPages } from './verify-routing';
+import { routeTagsToPages, normalizeVerifyPages, expandTagsOverPages } from './verify-routing';
 import { runTaVerify, taProfileDirFor, type TaFormSubmit } from './ta-driver';
 import { eventsForContainer, taEventsToMonitorEvents, toTaEventViews, buildTriggerSuggestions, pageScopeToPath } from './ta-stream';
 import { toFormFillViews, localeOptions, classifyFiredContainerTags } from './form-fill-plan';
@@ -356,12 +356,20 @@ export function registerSuggestionsIpc(data: GoogleDataService, memory?: MemoryS
           /* crawl is best-effort — fall back to single-page driving */
         }
       }
+      // Explicit-pages mode skips the crawl, but the Forms scan already cached a click-CTA inventory.
+      // Reuse it (READ-only - it never changes which pages we drive) to spot GLOBAL header/footer CTAs so
+      // each is driven ONCE instead of on every chosen page. No inventory → nothing is deduped (safe).
+      if (explicitPages.length && els.length === 0) {
+        const cached = takeVerifyEls(target);
+        if (cached && cached.els.length) els = cached.els;
+      }
       const routed = routeTagsToPages(tagList, els, target);
-      // Default: each tag on its routed page. Explicit-pages mode: drive EVERY tag on EACH chosen page, so
-      // a form/tag on a page the crawl missed is still exercised (the user's direct coverage control).
+      // Default: each tag on its routed page. Explicit-pages mode: drive every tag on EACH chosen page so a
+      // form/tag on a page the crawl missed is still exercised (the user's direct coverage control) - EXCEPT
+      // a global site-wide click CTA (header/footer/nav or a repeated href), which is driven ONCE.
       const nameById = new Map(tagList.map((t) => [t.id, t.tagName] as const));
       const routedTags = explicitPages.length
-        ? explicitPages.flatMap((page) => tagList.map((t) => ({ id: t.id, name: t.tagName, page, trigger: t.trigger })))
+        ? expandTagsOverPages(tagList, explicitPages, els)
         : routed.map((t) => ({ id: t.id, ...(nameById.get(t.id) ? { name: nameById.get(t.id)! } : {}), ...(t.page ? { page: t.page } : {}), trigger: t.trigger }));
       if (explicitPages.length) { pagesTotal = explicitPages.length; pagesCrawled = explicitPages.length; }
 
