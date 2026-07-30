@@ -6515,11 +6515,22 @@ function VerifyResultsTable({ rows, onProof }: { rows: VVerdict[]; onProof: (v: 
 /** Full-screen overlay showing one verification screenshot. Close via the ✕ button, clicking the backdrop, or Esc. */
 function ProofLightbox({ shot, onClose }: { shot: { src: string; name: string }; onClose: () => void }): JSX.Element {
   const [hoverClose, setHoverClose] = useState(false);
+  const [hoverDl, setHoverDl] = useState(false);
+  const [saving, setSaving] = useState(false);
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
+  // Save this proof screenshot to a file the user picks (native Save dialog in the main process).
+  const download = (): void => {
+    if (saving) return;
+    setSaving(true);
+    void window.desktop.tags
+      .exportProofImage(shot.name || 'proof', shot.src)
+      .catch(() => undefined)
+      .finally(() => setSaving(false));
+  };
   return (
     <div
       onClick={onClose}
@@ -6544,6 +6555,26 @@ function ProofLightbox({ shot, onClose }: { shot: { src: string; name: string };
         }}
       >
         ✕
+      </button>
+      {/* Download this screenshot to a file (native Save dialog). */}
+      <button
+        type="button"
+        aria-label="Download screenshot"
+        title="Download this screenshot"
+        onClick={(e) => { e.stopPropagation(); download(); }}
+        onMouseEnter={() => setHoverDl(true)}
+        onMouseLeave={() => setHoverDl(false)}
+        style={{
+          position: 'fixed', top: 16, right: 68, zIndex: 1001,
+          height: 40, padding: '0 16px', borderRadius: 20, cursor: 'pointer',
+          display: 'flex', alignItems: 'center', gap: 6,
+          fontSize: 13.5, fontWeight: 600, color: '#fff',
+          background: hoverDl ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.12)',
+          border: '1px solid rgba(255,255,255,0.35)',
+          transition: 'background 0.12s ease',
+        }}
+      >
+        {saving ? '…' : '⬇'} Download
       </button>
       <div style={{ color: '#fff', fontSize: 13, marginBottom: 8, fontWeight: 600, maxWidth: '92vw', textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         📸 {shot.name} <span style={{ opacity: 0.6, fontWeight: 400 }}>· click ✕, the backdrop, or press Esc to close</span>
