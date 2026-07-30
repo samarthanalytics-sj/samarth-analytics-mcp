@@ -1,3 +1,9 @@
+## [1.430.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.430.1...v1.430.2) (2026-07-30)
+
+### Bug Fixes
+
+* **desktop:** non-live TA verify hung on a phantom input fill ([#758](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/758)) ([358de92](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/358de92345e2bac2f5d129312d4184cd29d17560))
+
 ## [1.430.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.430.0...v1.430.1) (2026-07-29)
 
 ### Bug Fixes
