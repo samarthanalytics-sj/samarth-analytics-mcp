@@ -446,40 +446,75 @@ export async function runTaVerify(
     console.log(`[tag-assistant] connecting to ${url} ${taDebugUrl ? '(via your pasted GTM Preview link - starts the container debug session)' : previewParams ? '(GTM PREVIEW mode)' : '(connect mode - Google tags only; paste your GTM Preview link to debug the GTM container)'} ...`);
     await ta.goto(taDebugUrl ?? TA_URL, { waitUntil: 'domcontentloaded', timeout: 45_000 });
     await ta.waitForTimeout(2500);
-    // The Add domain / Connect buttons occasionally resolve but aren't yet click-actionable (TA's UI is
-    // still animating in), which times out an 8s click. Give them longer, and retry with force so a
-    // transient overlay/animation doesn't fail the whole run.
-    const clickRobust = async (sel: string): Promise<void> => {
+    // DIAGNOSTIC: dump what the Tag Assistant landing actually shows (url + clickable labels), so a failed
+    // connect is fixable from the log - button labels vary by TA version / locale, and a fresh profile can
+    // land on a different first screen.
+    const dumpTa = async (tag: string): Promise<void> => {
+      try {
+        const info = await ta.evaluate<{ url: string; clickables: string[] }>(() => ({
+          url: location.href,
+          clickables: Array.prototype.slice
+            .call(document.querySelectorAll('button,[role="button"],a'))
+            .map((b) => ((b as HTMLElement).textContent || '').trim())
+            .filter((t) => t && t.length < 40)
+            .slice(0, 30),
+        }));
+        console.log(`[tag-assistant] ${tag}: url=${info.url}`);
+        console.log(`[tag-assistant] ${tag}: clickables=${JSON.stringify(info.clickables)}`);
+      } catch { /* diagnostic only */ }
+    };
+    await dumpTa('landing');
+    // A button can resolve but not be click-actionable yet while TA animates in. Give it longer + a force
+    // retry so a transient overlay doesn't fail the run.
+    const clickRobust = async (sel: string): Promise<boolean> => {
       const btn = ta.locator(sel).first();
-      if (!(await btn.count())) return;
+      if (!(await btn.count())) return false;
       await btn.click({ timeout: 15_000 }).catch(async () => {
         await btn.click({ timeout: 6_000, force: true }).catch(() => undefined);
       });
+      return true;
+    };
+    // Wait up to 15s for ANY connect-like control to appear, then click it (labels differ across TA versions
+    // and locales). Returns whether something was clicked.
+    const clickConnect = async (): Promise<boolean> => {
+      const labels = ['Connect', 'Continue', 'Start debugging', 'Start', 'Debug', 'Confirm'];
+      const deadline = Date.now() + 15_000;
+      while (Date.now() < deadline) {
+        for (const label of labels) {
+          if (await clickRobust(`button:has-text("${label}"), [role="button"]:has-text("${label}")`)) {
+            console.log(`[tag-assistant] clicked "${label}".`);
+            return true;
+          }
+        }
+        await ta.waitForTimeout(500);
+      }
+      return false;
     };
     // Two different connect UIs:
-    //  - taDebugUrl set (a pasted GTM Preview / Share link): TA opens a "Tag Assistant will connect to
-    //    <site>" screen that ALREADY carries the destination URL. There is NO "Add domain" field and NO
-    //    input to fill - trying to fill a non-existent input just times out (12s) and kills the run. Click
-    //    the Connect / Continue button and let the debugged popup open.
+    //  - taDebugUrl set (a pasted Preview / Share link): TA opens a "connect to <site>" screen that ALREADY
+    //    carries the destination - just click Connect and let the debugged popup open.
     //  - no link (bare TA app): the classic Add domain -> type the URL -> Connect flow.
     const popupP = ctx.waitForEvent('page', { timeout: 30_000 }).catch(() => null);
     if (taDebugUrl) {
-      await clickRobust('button:has-text("Connect")');
-      await clickRobust('button:has-text("Continue")');
-      await clickRobust('button:has-text("Start")');
+      if (!(await clickConnect())) {
+        await dumpTa('no-connect-button');
+        console.log('[tag-assistant] no Connect-like button found - TA may auto-connect; waiting for the popup...');
+      }
     } else {
       await clickRobust('button:has-text("Add domain")');
       await ta.waitForTimeout(1000);
       // Best-effort: if TA's UI variant has no input here, don't let a missing field abort the run.
       await ta.locator('input').first().fill(url, { timeout: 12_000 }).catch(() => undefined);
-      await clickRobust('button:has-text("Connect")');
+      await clickConnect();
     }
     let popup = await popupP;
     if (!popup) {
       // The debug link may have opened the site in an already-present tab rather than a fresh popup.
+      const openUrls = ctx.pages().map((p) => p.url());
+      console.log(`[tag-assistant] no debug popup within 30s. Open pages: ${JSON.stringify(openUrls)}`);
       popup = ctx.pages().find((p) => p !== ta && !/tagassistant\.google\.com|accounts\.google\.com/i.test(p.url())) ?? null;
     }
-    if (!popup) return { pagesOk: false, perTag, pagesDriven, error: 'Tag Assistant did not open the debug window - reconnect and retry.' };
+    if (!popup) return { pagesOk: false, perTag, pagesDriven, error: 'Tag Assistant did not open the debug window - reconnect and retry. (The log now lists the buttons the Tag Assistant page showed - send it and I will wire the right one.)' };
     console.log('[tag-assistant] debug window opened; waiting for the container to enter debug...');
     await popup.waitForLoadState('networkidle', { timeout: navTimeoutMs }).catch(() => undefined);
     await popup.waitForTimeout(Math.max(settleMs, 4000)); // debug handshake + container debug reload
