@@ -348,6 +348,9 @@ const api = {
     // Save the (renderer-built) template CSV to a user-chosen file → saved path or null.
     exportCsv: (defaultName: string, csv: string): Promise<string | null> =>
       ipcRenderer.invoke('suggestions:exportCsv', defaultName, csv),
+    // Save ONE verification proof screenshot (a JPEG/PNG data-URI) to a user-chosen file → saved path or null.
+    exportProofImage: (defaultName: string, dataUrl: string): Promise<string | null> =>
+      ipcRenderer.invoke('suggestions:exportProofImage', defaultName, dataUrl),
     // Save the (renderer-built) install runbook to a user-chosen file (Markdown or PDF) → saved path or null.
     exportRunbook: (defaultName: string, markdown: string, format?: 'md' | 'pdf'): Promise<string | null> =>
       ipcRenderer.invoke('suggestions:exportRunbook', defaultName, markdown, format),

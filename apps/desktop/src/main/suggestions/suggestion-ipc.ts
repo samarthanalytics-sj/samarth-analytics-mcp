@@ -135,6 +135,25 @@ export function registerSuggestionsIpc(data: GoogleDataService, memory?: MemoryS
     return filePath;
   });
 
+  // Save ONE verification proof screenshot (a JPEG/PNG data-URI captured during the run) to a file the
+  // user picks. Read-only export - decodes the base64 data-URI and writes the bytes. Returns the saved
+  // path, or null if the user cancelled or the value isn't a usable image data-URI.
+  ipcMain.handle('suggestions:exportProofImage', async (e, defaultName: unknown, dataUrl: unknown) => {
+    const m = String(dataUrl ?? '').match(/^data:image\/(png|jpe?g|webp);base64,([A-Za-z0-9+/=]+)$/i);
+    if (!m) return null;
+    const ext = /^jpe?g$/i.test(m[1]) ? 'jpg' : m[1].toLowerCase();
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const base = String(defaultName ?? 'proof')
+      .replace(/[\\/:*?"<>|]/g, '_')
+      .replace(/\.(png|jpe?g|webp)$/i, '')
+      .trim() || 'proof';
+    const opts = { title: 'Save proof screenshot', defaultPath: `${base}.${ext}`, filters: [{ name: 'Image', extensions: [ext] }] };
+    const { canceled, filePath } = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
+    if (canceled || !filePath) return null;
+    await writeFile(filePath, Buffer.from(m[2], 'base64'));
+    return filePath;
+  });
+
   // Save the install runbook (already rendered to Markdown in the renderer) to a
   // file the user picks. Read-only export — no GTM access (just a local file save).
   // Returns the saved path, or null if the user cancelled. The 'md' branch writes
