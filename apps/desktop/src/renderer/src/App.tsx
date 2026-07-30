@@ -7419,6 +7419,27 @@ function VerifyPanel({
                 <div style={{ ...styles.muted, fontSize: 11, lineHeight: 1.5, marginTop: 4 }}>
                   Opens in your real Chrome (where you inject your container via Adswerve, so the site + Tag Assistant connect). This is a manual visual check - you read Tag Assistant yourself; the app's results table below fills in only from <b>Verify in Tag Assistant</b> / <b>Proceed</b>.
                 </div>
+                <button
+                  style={{ ...styles.toggleOff, marginTop: 8, ...(!ready || !ctx?.containerPublicId ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
+                  onClick={() => {
+                    const id = (ctx?.containerPublicId ?? '').trim();
+                    if (!id) return;
+                    const snippet = `(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src='https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);})(window,document,'script','dataLayer','${id}');`;
+                    void navigator.clipboard.writeText(snippet);
+                    setVNote({ kind: 'info', text: `Container script for ${id} copied - paste it into your Adswerve "Inject Code" box, Save & Reload, then open the link in your Chrome.` });
+                  }}
+                  disabled={!ready || !ctx?.containerPublicId}
+                  title="Copies the plain gtm.js snippet for your selected container, ready to paste into the Adswerve DataLayer Inspector's Inject Code box."
+                >
+                  ⧉ Copy container script (for Adswerve Inject Code)
+                </button>
+                <ol style={{ ...styles.muted, fontSize: 11, lineHeight: 1.6, marginTop: 6, paddingLeft: 18 }}>
+                  <li>Copy the container script (button above).</li>
+                  <li>In your Chrome: open your site, click the <b>Adswerve DataLayer Inspector</b>, turn on <b>Inject Code</b>, paste the script, then <b>Save &amp; Reload</b>.</li>
+                  <li>Paste your Tag Assistant <b>Preview / Share</b> link in the box above.</li>
+                  <li>Click <b>Open this link in my Chrome</b> - Tag Assistant opens in that same Chrome and connects to your injected container.</li>
+                  <li>Confirm Tag Assistant shows your container connected, then read the tags firing.</li>
+                </ol>
               </div>
               <div style={{ marginTop: 8, padding: '10px 12px', borderRadius: 10, border: '0.5px solid var(--border-2)', background: 'var(--surface-2)' }}>
                 <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)' }}>Option B &middot; Share from GTM <span style={{ fontWeight: 400, color: 'var(--c-green)' }}>(no GTM changes)</span></div>
