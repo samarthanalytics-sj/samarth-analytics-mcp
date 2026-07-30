@@ -384,5 +384,8 @@ function describeTrigger(t: VerifyTagInput['trigger']): string {
   if (t.clickTextValue) return `${t.clickTextOperator ?? 'equals'} click text "${t.clickTextValue}"`;
   if (t.clickUrlValue) return `${t.clickUrlOperator ?? 'contains'} click URL "${t.clickUrlValue}"`;
   if (t.formIdValue || t.formClassesValue) return `form ${t.formIdValue ?? t.formClassesValue}`;
+  if (t.kind === 'scroll') return 'scroll depth';
+  if (t.kind === 'element_visibility') return t.clickElementValue ? `element visible "${t.clickElementValue}"` : 'element visibility';
+  if (t.kind === 'history_change') return 'history change';
   return t.kind;
 }

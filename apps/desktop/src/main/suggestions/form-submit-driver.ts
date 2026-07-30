@@ -117,7 +117,8 @@ function grantConsentInPage(): void {
 }
 
 /** Fill the reviewed values and submit the ONE reviewed form. Two paths:
- *   - native `<form>` (method != 'js'): scope to the resolved form, validate, requestSubmit().
+ *   - native `<form>` (method != 'js'): scope to the resolved form, then CLICK its real submit control
+ *     (falling back to requestSubmit()) so click-bound form_submission handlers fire like a real user.
  *   - div/JS widget (method === 'js', no `<form>`): scope to the host container and CLICK its
  *     Submit/Send control so the widget's own JS handler runs.
  *  Scoping to one element is the safety guarantee: a same-named field on another form is never
@@ -236,13 +237,54 @@ export function fillAndSubmitInPage(spec: { formId: string; formClasses: string;
   }
   if (!form) return { filled: 0, submitted: false, note: 'could not locate the reviewed form on the page (its fields matched no <form>)' };
   const filled = fillWithin(form);
-  if (filled === 0) return { filled, submitted: false, note: 'none of the reviewed fields were found in the form — nothing submitted' };
+  if (filled === 0) return { filled, submitted: false, note: 'none of the reviewed fields were found in the form - nothing submitted' };
   ring(form);
   const fe = form as HTMLFormElement & { requestSubmit?: () => void; checkValidity?: () => boolean };
-  // Don't claim "submitted" when the browser will block it: requestSubmit() silently no-ops on an
-  // invalid form (a required field we didn't fill), so a green "Submitted" would be a lie.
+  // Prefer a REAL click on the form's own submit control. requestSubmit()/submit() fire the form's
+  // `submit` event (so GTM's native gtm.formSubmit listener sees it) but they do NOT dispatch a click
+  // on the submit button - so a site that pushes its form_submission event from the button's click
+  // handler (or a click-delegated listener, very common on React/JS forms) never fires. A real click
+  // reproduces what a human does: the button's click handlers run (firing any click-bound
+  // form_submission / CTA push) AND native submission proceeds (the submit event), covering both
+  // styles of form tracking. This is exactly why a manual submit fires tags that requestSubmit() misses.
+  const SUBMIT_RE = /\b(submit|send|subscribe|sign\s*up|sign\s*me\s*up|get\s+started|register|join\b|request|contact\s+us|book\b|apply|continue|next)\b/i;
+  const findSubmitControl = (): HTMLElement | null => {
+    // 1. An explicit, enabled submit control inside the form.
+    const explicit = fe.querySelector(
+      'button[type="submit"]:not([disabled]), input[type="submit"]:not([disabled]), input[type="image"]:not([disabled])',
+    );
+    if (explicit) return explicit as HTMLElement;
+    // 2. A <button> with no (or empty) type attribute defaults to type="submit".
+    const bareButton = (Array.prototype.slice.call(fe.querySelectorAll('button')) as HTMLButtonElement[])
+      .find((b) => !b.disabled && ['', 'submit'].includes((b.getAttribute('type') || '').toLowerCase()));
+    if (bareButton) return bareButton;
+    // 3. A control whose label reads like a submit action (a JS-handled type="button").
+    const ctrls = Array.prototype.slice.call(fe.querySelectorAll('button, [role="button"], input[type="button"]')) as HTMLElement[];
+    for (const c of ctrls) {
+      if ((c as HTMLButtonElement).disabled) continue;
+      const label = ((c.textContent || '') + ' ' + ((c as HTMLInputElement).value || '') + ' ' + (c.getAttribute('aria-label') || '')).trim();
+      if (SUBMIT_RE.test(label)) return c;
+    }
+    return null;
+  };
+  const submitBtn = findSubmitControl();
+  if (submitBtn) {
+    // The click event (and its handlers) fire BEFORE the browser runs constraint validation, so a
+    // click-bound form_submission push fires even when the form is ultimately invalid. We still report
+    // `submitted` by validity, so we never claim a real POST the browser actually blocked.
+    const valid = typeof fe.checkValidity === 'function' ? fe.checkValidity() : true;
+    try {
+      submitBtn.click();
+    } catch (e) {
+      return { filled, submitted: false, note: String(e).slice(0, 150) };
+    }
+    if (valid) return { filled, submitted: true };
+    return { filled, submitted: false, note: 'clicked the submit button (so click-bound handlers like form_submission still fired), but the form failed HTML validation so the native submission did not complete' };
+  }
+  // No clickable submit control (rare - an Enter-only or fully JS-driven form): fall back to a
+  // programmatic submit, keeping the validity guard so we never claim a submit the browser blocks.
   if (typeof fe.checkValidity === 'function' && !fe.checkValidity()) {
-    return { filled, submitted: false, note: 'the form failed HTML validation (a required field is empty or invalid) — nothing was submitted' };
+    return { filled, submitted: false, note: 'the form failed HTML validation (a required field is empty or invalid) and has no clickable submit control - nothing was submitted' };
   }
   try {
     if (typeof fe.requestSubmit === 'function') fe.requestSubmit();

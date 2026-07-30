@@ -73,6 +73,10 @@ export interface DriverTrigger {
   formIdOperator?: string;
   formClassesValue?: string;
   formClassesOperator?: string;
+  /** For click / element-visibility triggers scoped by a {{Click Element}} / {{Element}} CSS selector
+   *  (or a derived #id): the driver locates the element by this selector. */
+  clickElementValue?: string;
+  clickElementOperator?: string;
   /** For custom_event triggers: the dataLayer event name to push. */
   eventName?: string;
   /** For custom_event triggers whose tag keys off form-specific data (a shared `form_submission`
@@ -569,6 +573,49 @@ export function driveInPage(spec: DriveSpec): DriveOutcome {
     }
   };
 
+  // Scroll-depth trigger: drive it by ACTUALLY scrolling the page, so the container's scroll listener
+  // fires its thresholds (25/50/75/90/100 %) exactly as for a real user. One jump to the bottom crosses
+  // every threshold (GTM fires all thresholds it has passed in a single evaluation). No target element.
+  if (spec.kind === 'scroll') {
+    if (spec.locateOnly) return { targetFound: true, performed: false }; // screenshot pass: never actually scroll
+    try {
+      const bottom = (): number => Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0);
+      window.scrollTo(0, bottom());
+      window.scrollTo(0, bottom()); // a second jump in case lazy content extended the page on the first
+      return { targetFound: true, performed: true };
+    } catch (e) { return { targetFound: false, performed: false, note: String(e).slice(0, 150) }; }
+  }
+
+  // History-change trigger (SPA route change): GTM wraps history.pushState/replaceState AND listens to
+  // popstate + hashchange. Call the wrapped pushState and fire a hashchange so gtm.historyChange fires.
+  if (spec.kind === 'history_change') {
+    if (spec.locateOnly) return { targetFound: true, performed: false }; // screenshot pass: never change history
+    try {
+      const base = location.pathname + location.search;
+      history.pushState({ sx: 1 }, '', base + '#sx-verify');
+      try { window.dispatchEvent(new Event('popstate')); } catch { /* older engines */ }
+      try { location.hash = 'sx-verify-2'; window.dispatchEvent(new Event('hashchange')); } catch { /* older engines */ }
+      return { targetFound: true, performed: true };
+    } catch (e) { return { targetFound: false, performed: false, note: String(e).slice(0, 150) }; }
+  }
+
+  // Element-visibility trigger: bring the target element into view (a real IntersectionObserver hit) —
+  // do NOT click it. With no locatable selector, scroll the page so below-the-fold items become visible.
+  if (spec.kind === 'element_visibility') {
+    let el: Element | null = null;
+    if (spec.cssSelector) { try { el = document.querySelector(spec.cssSelector); } catch { el = null; } }
+    if (el) {
+      highlight(el); // highlight() already scrolls it to centre → into view
+      if (spec.locateOnly) return { targetFound: true, performed: false };
+      return { targetFound: true, performed: true };
+    }
+    if (spec.locateOnly) return { targetFound: false, performed: false }; // screenshot pass: no element, don't scroll
+    try {
+      window.scrollTo(0, Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0));
+      return { targetFound: false, performed: true, note: 'no element matched the visibility selector - scrolled the page to reveal below-the-fold content' };
+    } catch (e) { return { targetFound: false, performed: false, note: String(e).slice(0, 150) }; }
+  }
+
   // A CSS-selector-scoped trigger ({{Click Element}} cssSelector, e.g. an FAQ accordion header): ring
   // the first match. Falls through to text/URL matching below if the selector finds nothing.
   if (spec.cssSelector) {
@@ -592,6 +639,16 @@ export function driveInPage(spec: DriveSpec): DriveOutcome {
     highlight(f);
     if (spec.locateOnly) return { targetFound: true, performed: false };
     try {
+      // Prefer a REAL click on the form's submit control: many sites push their form_submission event
+      // from the button's own click handler, which requestSubmit()/submit() never fire (they only raise
+      // the form's `submit` event). Native submission still runs after the click; the in-page guards
+      // neutralise the real POST/navigation. Fall back to requestSubmit() when there's no submit button.
+      const submitBtn =
+        f.querySelector('button[type="submit"]:not([disabled]), input[type="submit"]:not([disabled]), input[type="image"]:not([disabled])') ||
+        (Array.prototype.slice.call(f.querySelectorAll('button')) as HTMLButtonElement[]).find(
+          (b) => !b.disabled && ['', 'submit'].includes((b.getAttribute('type') || '').toLowerCase()),
+        ) || null;
+      if (submitBtn) { (submitBtn as HTMLElement).click(); return { targetFound: true, performed: true }; }
       const form = f as HTMLFormElement & { requestSubmit?: () => void };
       if (typeof form.requestSubmit === 'function') form.requestSubmit();
       else form.submit();
@@ -782,6 +839,9 @@ export function specFor(trigger: DriverTrigger): DriveSpec {
     ...(trigger.clickUrlValue ? { clickUrl: trigger.clickUrlValue, clickUrlOp: trigger.clickUrlOperator } : {}),
     ...(trigger.formIdValue ? { formId: trigger.formIdValue, formIdOp: trigger.formIdOperator } : {}),
     ...(trigger.formClassesValue ? { formClasses: trigger.formClassesValue, formClassesOp: trigger.formClassesOperator } : {}),
+    // A {{Click Element}}/{{Element}} CSS selector (element-visibility, or a class/id-scoped click) →
+    // the driver locates the element by this selector.
+    ...(trigger.clickElementValue && (trigger.clickElementOperator === 'cssSelector' || !trigger.clickElementOperator) ? { cssSelector: trigger.clickElementValue } : {}),
   };
 }
 

@@ -6,7 +6,7 @@
 // `form_submission` event on the same page, a prior tag's `form_name` must NOT leak into a later
 // tag's evaluation and falsely credit it. The builder blanks prior keys the current tag isn't setting.
 
-import { buildCustomEventPayload, formLocatorFor, formLocatorForSubmit, specForShot, waitForLocate } from '../verify-driver';
+import { buildCustomEventPayload, formLocatorFor, formLocatorForSubmit, specFor, specForShot, waitForLocate } from '../verify-driver';
 
 let passed = 0;
 let failed = 0;
@@ -145,6 +145,26 @@ function check(name: string, ok: boolean, detail?: string): void {
   check('formLocatorForSubmit: never null (always routes to a form locate → primary-form fallback)', typeof bare === 'object' && bare !== null);
 }
 
+// ── specFor: build the DRIVE spec from a container trigger — carries {{Click Element}} cssSelector ─
+{
+  // An element-visibility (or class/id-scoped click) trigger carries a CSS selector → spec.cssSelector,
+  // so the driver locates the element by it (element-visibility scrolls it into view; a click clicks it).
+  const s = specFor({ kind: 'element_visibility', clickElementValue: '.promo-banner', clickElementOperator: 'cssSelector' });
+  check('specFor: clickElement cssSelector → spec.cssSelector', s.cssSelector === '.promo-banner');
+  check('specFor: element_visibility kind carried through', s.kind === 'element_visibility');
+}
+{
+  // scroll / history_change carry only their kind (no element to locate).
+  const sc = specFor({ kind: 'scroll' });
+  check('specFor: scroll kind carried, no target fields', sc.kind === 'scroll' && sc.cssSelector === undefined && sc.clickText === undefined);
+  check('specFor: history_change kind carried', specFor({ kind: 'history_change' }).kind === 'history_change');
+}
+{
+  // A non-cssSelector clickElement operator is NOT mapped to cssSelector (avoids a bad querySelector).
+  const s = specFor({ kind: 'all_clicks', clickElementValue: 'signup', clickElementOperator: 'equals' });
+  check('specFor: non-cssSelector clickElement not mapped', s.cssSelector === undefined);
+}
+
 // ── waitForLocate: poll a pure in-page locate until found (capture immediately), bounded, never hangs ─
 // (async — kept off the module top level so the transform stays plain ESM; summary runs in .then).
 async function waitForLocateChecks(): Promise<void> {
@@ -179,5 +199,5 @@ async function waitForLocateChecks(): Promise<void> {
 void waitForLocateChecks().then(() => {
   console.log(`\nverify-driver-payload: ${passed} passed, ${failed} failed`);
   if (failed) { console.error(failures.join('\n')); process.exit(1); }
-  if (passed < 37) { console.error(`expected >= 37 checks, got ${passed}`); process.exit(1); }
+  if (passed < 42) { console.error(`expected >= 42 checks, got ${passed}`); process.exit(1); }
 });
