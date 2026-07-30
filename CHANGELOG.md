@@ -1,3 +1,9 @@
+## [1.435.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.434.0...v1.435.0) (2026-07-30)
+
+### Features
+
+* **desktop:** inject-script helper + steps for the manual "Open in my Chrome" flow ([#764](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/764)) ([f82b7f6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/f82b7f6ff76f1df9606f6125d86f178a2dfaff06))
+
 ## [1.434.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.433.1...v1.434.0) (2026-07-30)
 
 ### Features
