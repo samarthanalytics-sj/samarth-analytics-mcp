@@ -6516,7 +6516,9 @@ function VerifyResultsTable({ rows, onProof }: { rows: VVerdict[]; onProof: (v: 
 function ProofLightbox({ shot, onClose }: { shot: { src: string; name: string }; onClose: () => void }): JSX.Element {
   const [hoverClose, setHoverClose] = useState(false);
   const [hoverDl, setHoverDl] = useState(false);
+  const [hoverCopy, setHoverCopy] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [copied, setCopied] = useState(false);
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
@@ -6530,6 +6532,13 @@ function ProofLightbox({ shot, onClose }: { shot: { src: string; name: string };
       .exportProofImage(shot.name || 'proof', shot.src)
       .catch(() => undefined)
       .finally(() => setSaving(false));
+  };
+  // Copy this proof screenshot to the OS clipboard as an image (paste into a doc / chat / email).
+  const copy = (): void => {
+    void window.desktop.tags
+      .copyProofImage(shot.src)
+      .then((ok) => { if (ok) { setCopied(true); window.setTimeout(() => setCopied(false), 1500); } })
+      .catch(() => undefined);
   };
   return (
     <div
@@ -6556,26 +6565,45 @@ function ProofLightbox({ shot, onClose }: { shot: { src: string; name: string };
       >
         ✕
       </button>
-      {/* Download this screenshot to a file (native Save dialog). */}
-      <button
-        type="button"
-        aria-label="Download screenshot"
-        title="Download this screenshot"
-        onClick={(e) => { e.stopPropagation(); download(); }}
-        onMouseEnter={() => setHoverDl(true)}
-        onMouseLeave={() => setHoverDl(false)}
-        style={{
-          position: 'fixed', top: 16, right: 68, zIndex: 1001,
-          height: 40, padding: '0 16px', borderRadius: 20, cursor: 'pointer',
-          display: 'flex', alignItems: 'center', gap: 6,
-          fontSize: 13.5, fontWeight: 600, color: '#fff',
-          background: hoverDl ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.12)',
-          border: '1px solid rgba(255,255,255,0.35)',
-          transition: 'background 0.12s ease',
-        }}
-      >
-        {saving ? '…' : '⬇'} Download
-      </button>
+      {/* Copy / download this screenshot (top-right, left of the close button). */}
+      <div style={{ position: 'fixed', top: 16, right: 68, zIndex: 1001, display: 'flex', gap: 8 }}>
+        <button
+          type="button"
+          aria-label="Copy screenshot"
+          title="Copy this screenshot to the clipboard"
+          onClick={(e) => { e.stopPropagation(); copy(); }}
+          onMouseEnter={() => setHoverCopy(true)}
+          onMouseLeave={() => setHoverCopy(false)}
+          style={{
+            height: 40, padding: '0 16px', borderRadius: 20, cursor: 'pointer',
+            display: 'flex', alignItems: 'center', gap: 6,
+            fontSize: 13.5, fontWeight: 600, color: '#fff',
+            background: copied ? 'rgba(60,180,110,0.32)' : hoverCopy ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.12)',
+            border: '1px solid rgba(255,255,255,0.35)',
+            transition: 'background 0.12s ease',
+          }}
+        >
+          {copied ? '✓ Copied' : '⧉ Copy'}
+        </button>
+        <button
+          type="button"
+          aria-label="Download screenshot"
+          title="Download this screenshot"
+          onClick={(e) => { e.stopPropagation(); download(); }}
+          onMouseEnter={() => setHoverDl(true)}
+          onMouseLeave={() => setHoverDl(false)}
+          style={{
+            height: 40, padding: '0 16px', borderRadius: 20, cursor: 'pointer',
+            display: 'flex', alignItems: 'center', gap: 6,
+            fontSize: 13.5, fontWeight: 600, color: '#fff',
+            background: hoverDl ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.12)',
+            border: '1px solid rgba(255,255,255,0.35)',
+            transition: 'background 0.12s ease',
+          }}
+        >
+          {saving ? '…' : '⬇'} Download
+        </button>
+      </div>
       <div style={{ color: '#fff', fontSize: 13, marginBottom: 8, fontWeight: 600, maxWidth: '92vw', textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         📸 {shot.name} <span style={{ opacity: 0.6, fontWeight: 400 }}>· click ✕, the backdrop, or press Esc to close</span>
       </div>
