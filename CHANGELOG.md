@@ -1,3 +1,9 @@
+## [1.434.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.433.1...v1.434.0) (2026-07-30)
+
+### Features
+
+* **desktop:** Option A "Open in my Chrome" for a manual Tag Assistant check ([#763](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/763)) ([56b0f86](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/56b0f86d766229fc382cc58a0aabe0b49bcc8b49))
+
 ## [1.433.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.433.0...v1.433.1) (2026-07-30)
 
 ### Bug Fixes
