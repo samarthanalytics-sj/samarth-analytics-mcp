@@ -1,3 +1,9 @@
+## [1.433.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.432.0...v1.433.0) (2026-07-30)
+
+### Features
+
+* **desktop:** load React DevTools extension in dev (Components / Profiler tabs) ([#761](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/761)) ([cdd9983](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/cdd99836640447f57c3d6a10574dd1a532865386))
+
 ## [1.432.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.431.0...v1.432.0) (2026-07-30)
 
 ### Features
