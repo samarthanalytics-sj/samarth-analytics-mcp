@@ -129,11 +129,11 @@ const dlv = (name: string, key: string): AuditVariable => ({ variableId: name, n
 // ── multi firing triggers: a non-drivable trigger BEFORE a built-in id resolves to pageview ───────
 {
   const base = { tagId: 'm1', name: 'Base', type: 'gaawe', parameter: ga4EventParams('G-1', 'page_view') } as const;
-  const scroll = trig({ triggerId: 'ts', type: 'scrollDepth' });
-  const fwd = snapshotToVerifyInputs(snap([tag({ ...base, firingTriggerId: ['ts', '2147479553'] })], [scroll]));
-  const rev = snapshotToVerifyInputs(snap([tag({ ...base, firingTriggerId: ['2147479553', 'ts'] })], [scroll]));
-  check('multi-trigger [scroll, builtin] → pageview', fwd.tags.length === 1 && fwd.tags[0]?.trigger.kind === 'pageview');
-  check('multi-trigger [builtin, scroll] → pageview', rev.tags.length === 1 && rev.tags[0]?.trigger.kind === 'pageview');
+  const nonDrivable = trig({ triggerId: 'tt', type: 'timer' }); // timer stays non-drivable in a headless pass
+  const fwd = snapshotToVerifyInputs(snap([tag({ ...base, firingTriggerId: ['tt', '2147479553'] })], [nonDrivable]));
+  const rev = snapshotToVerifyInputs(snap([tag({ ...base, firingTriggerId: ['2147479553', 'tt'] })], [nonDrivable]));
+  check('multi-trigger [timer, builtin] → pageview', fwd.tags.length === 1 && fwd.tags[0]?.trigger.kind === 'pageview');
+  check('multi-trigger [builtin, timer] → pageview', rev.tags.length === 1 && rev.tags[0]?.trigger.kind === 'pageview');
 }
 
 // ── custom-event trigger with no concrete event name → skipped ────────────────────────────────────
@@ -152,14 +152,14 @@ const dlv = (name: string, key: string): AuditVariable => ({ variableId: name, n
     [
       tag({ tagId: 'sp', name: 'Paused', type: 'gaawe', firingTriggerId: ['t1'], paused: true }),
       tag({ tagId: 'sa', name: 'Conversion Linker', type: 'gclidw', firingTriggerId: ['t1'] }),
-      tag({ tagId: 'ss', name: 'Scroll Tag', type: 'gaawe', firingTriggerId: ['ts'] }),
+      tag({ tagId: 'ss', name: 'Timer Tag', type: 'gaawe', firingTriggerId: ['ts'] }),
     ],
-    [trig({ triggerId: 't1', type: 'linkClick', filter: [cond('{{Click Text}}', 'equals', 'Go')] }), trig({ triggerId: 'ts', type: 'scrollDepth' })],
+    [trig({ triggerId: 't1', type: 'linkClick', filter: [cond('{{Click Text}}', 'equals', 'Go')] }), trig({ triggerId: 'ts', type: 'timer' })],
   );
   const r = snapshotToVerifyInputs(s);
   check('paused tag skipped', r.skipped.some((x) => x.tagId === 'sp' && /paused/.test(x.reason)));
   check('unsupported tag type skipped', r.skipped.some((x) => x.tagId === 'sa' && /not verifiable/.test(x.reason)));
-  check('unmappable trigger (scrollDepth) skipped', r.skipped.some((x) => x.tagId === 'ss'));
+  check('unmappable trigger (timer) skipped', r.skipped.some((x) => x.tagId === 'ss'));
   check('all three tags skipped, none survive', r.tags.length === 0 && r.skipped.length === 3, `tags=${r.tags.length} skipped=${r.skipped.length}`);
 }
 
@@ -277,6 +277,58 @@ const dlv = (name: string, key: string): AuditVariable => ({ variableId: name, n
   check('non-beacon type (gclidw) → still skipped', r.tags.length === 0 && r.skipped.some((x) => x.tagId === 'cl'));
 }
 
+// ── NEWLY DRIVABLE interaction triggers: scroll / element visibility / history change ─────────────
+// These used to be skipped ("no firing trigger maps to a drivable interaction"); the driver now
+// performs the REAL interaction (scroll the page, bring the element into view, change history), so the
+// tags fire like they do for a real user instead of being reported as untested.
+{
+  const s = snap(
+    [tag({ tagId: 'sd', name: 'Scroll Depth Tag', type: 'gaawe', firingTriggerId: ['tsd'], parameter: ga4EventParams('G-1', 'scroll') })],
+    [trig({ triggerId: 'tsd', type: 'scrollDepth' })],
+  );
+  const r = snapshotToVerifyInputs(s);
+  check('scrollDepth → scroll kind (drivable, not skipped)', r.tags.length === 1 && r.tags[0]?.trigger.kind === 'scroll');
+  check('scrollDepth → nothing skipped', r.skipped.length === 0);
+}
+{
+  const s = snap(
+    [tag({ tagId: 'ev', name: 'Element Visibility Tag', type: 'gaawe', firingTriggerId: ['tev'], parameter: ga4EventParams('G-1', 'view_promo') })],
+    [trig({ triggerId: 'tev', type: 'elementVisibility', parameter: [{ type: 'template', key: 'elementSelector', value: '.promo-banner' }, { type: 'template', key: 'selectorType', value: 'CSS' }] })],
+  );
+  const r = snapshotToVerifyInputs(s);
+  check('elementVisibility → element_visibility kind', r.tags[0]?.trigger.kind === 'element_visibility');
+  check('elementVisibility CSS selector captured', r.tags[0]?.trigger.clickElementValue === '.promo-banner' && r.tags[0]?.trigger.clickElementOperator === 'cssSelector');
+}
+{
+  // selectorType ID → the driver needs a CSS selector, so a bare id is prefixed with '#'.
+  const s = snap(
+    [tag({ tagId: 'ev2', name: 'Visibility By Id', type: 'gaawe', firingTriggerId: ['tev2'], parameter: ga4EventParams('G-1', 'view_promo') })],
+    [trig({ triggerId: 'tev2', type: 'elementVisibility', parameter: [{ type: 'template', key: 'elementSelector', value: 'hero' }, { type: 'template', key: 'selectorType', value: 'ID' }] })],
+  );
+  const r = snapshotToVerifyInputs(s);
+  check('elementVisibility ID selector → #id', r.tags[0]?.trigger.clickElementValue === '#hero');
+}
+{
+  const s = snap(
+    [tag({ tagId: 'hc', name: 'History Change Tag', type: 'gaawe', firingTriggerId: ['thc'], parameter: ga4EventParams('G-1', 'virtual_page_view') })],
+    [trig({ triggerId: 'thc', type: 'historyChange' })],
+  );
+  const r = snapshotToVerifyInputs(s);
+  check('historyChange → history_change kind (drivable)', r.tags[0]?.trigger.kind === 'history_change' && r.skipped.length === 0);
+}
+{
+  // timer / youTubeVideo remain honestly non-drivable (need real elapsed time / media playback).
+  const s = snap(
+    [
+      tag({ tagId: 'tm', name: 'Timer Tag', type: 'gaawe', firingTriggerId: ['ttm'] }),
+      tag({ tagId: 'yt', name: 'YouTube Tag', type: 'gaawe', firingTriggerId: ['tyt'] }),
+    ],
+    [trig({ triggerId: 'ttm', type: 'timer' }), trig({ triggerId: 'tyt', type: 'youTubeVideo' })],
+  );
+  const r = snapshotToVerifyInputs(s);
+  check('timer + youTubeVideo → still skipped (honest)', r.tags.length === 0 && r.skipped.length === 2);
+}
+
 console.log(`\ncontainer-verify: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }
-if (passed < 39) { console.error(`expected >= 39 checks, got ${passed}`); process.exit(1); }
+if (passed < 46) { console.error(`expected >= 46 checks, got ${passed}`); process.exit(1); }

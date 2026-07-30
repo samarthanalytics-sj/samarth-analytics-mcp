@@ -81,6 +81,13 @@ function tagParam(tag: AuditTag, key: string): string | undefined {
   return p && typeof p.value === 'string' ? (p.value as string) : undefined;
 }
 
+/** A trigger-level parameter value by key (GTM Trigger.parameter = [{type,key,value}, …]) — where an
+ *  Element Visibility trigger stores its target selector (elementSelector/selectorType). */
+function triggerParam(trig: AuditTrigger, key: string): string | undefined {
+  const p = (trig.parameter ?? []).find((x) => (x as Rec).key === key) as Rec | undefined;
+  return p && typeof p.value === 'string' ? p.value : undefined;
+}
+
 /** First non-empty (present + non-whitespace) value. GA4 event tags ship an EMPTY
  *  measurementId tagReference plus measurementIdOverride holding the real G-XXXX, so a
  *  bare ?? chain over tagParam (which returns '' not undefined) would shadow the real id. */
@@ -105,8 +112,13 @@ function kindOf(type: string): VerifyTagInput['trigger']['kind'] | null {
   if (t === 'click') return 'all_clicks';
   if (t === 'formsubmission' || t === 'formsubmit') return 'form_submit';
   if (t === 'customevent') return 'custom_event';
+  // Interaction triggers the driver now performs FOR REAL: scroll the page, bring the element into
+  // view, change history — so these tags fire like they do for a real user (not skipped as before).
+  if (t === 'scrolldepth') return 'scroll';
+  if (t === 'elementvisibility') return 'element_visibility';
+  if (t === 'historychange') return 'history_change';
   if (['pageview', 'domready', 'windowloaded', 'init', 'consentinit', 'serverpageview'].includes(t)) return 'pageview';
-  return null; // scrollDepth, timer, elementVisibility, historyChange, youTubeVideo, jsError, triggerGroup …
+  return null; // timer, youTubeVideo, jsError, triggerGroup … (not faithfully drivable in a headless pass)
 }
 
 /** Built-in trigger ids (All Pages / Init / DOM Ready / …) live in the 2147479xxx range and are not
@@ -167,6 +179,18 @@ function triggerFrom(trig: AuditTrigger, dlvMap: Map<string, string>): VerifyTag
     // when many tags share one form_submission event (split by {{form_name}}/{{form_id}}/…).
     const data = customEventDataFrom(trig, dlvMap);
     if (Object.keys(data).length) out.customEventData = data;
+  }
+
+  if (kind === 'element_visibility') {
+    // The visibility trigger names its target by ID or CSS selector in the trigger's own parameters.
+    // Capture it so the driver scrolls the RIGHT element into view; no selector still drives (the
+    // driver falls back to a full-page scroll that reveals below-the-fold content).
+    const sel = triggerParam(trig, 'elementSelector');
+    if (sel) {
+      const selType = (triggerParam(trig, 'selectorType') || '').toUpperCase();
+      out.clickElementValue = selType === 'ID' && !sel.startsWith('#') ? '#' + sel : sel;
+      out.clickElementOperator = 'cssSelector';
+    }
   }
 
   // Click triggers need a text/URL the driver can locate on the page. A click scoped ONLY by
