@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { existsSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { installConsoleBridge, installHttpLogging, installIpcLogging, setDevLogSink } from './devtools/dev-logger';
+import { installReactDevtools } from './devtools/react-devtools';
 import { AccountRepository } from './storage/account-repository';
 import { SecretStore } from './storage/secret-store';
 import { SafeStorageCryptor } from './storage/safe-storage-cryptor';
@@ -198,6 +199,12 @@ app.whenReady().then(() => {
     installConsoleBridge();
     installIpcLogging(ipcMain);
     void installHttpLogging();
+    // Load the React DevTools extension (Components / Profiler tabs). Best-effort: it downloads on
+    // first run, so failures just log and are skipped. Fired before createWindow so it is registered
+    // when the renderer loads.
+    void installReactDevtools((ok, detail) =>
+      ok ? log.success('React DevTools loaded', detail) : log.warn('React DevTools not loaded', detail),
+    );
   }
 
   // Lock down the renderer's CSP in packaged builds. Left open in dev so the
