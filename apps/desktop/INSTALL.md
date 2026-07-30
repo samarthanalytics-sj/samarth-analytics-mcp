@@ -14,6 +14,45 @@ There are two ways to use it:
 
 ---
 
+## Quick start (run from source)
+
+Already have **Node.js 18+** and **Git**? Clone into your **home folder** and run:
+
+**macOS / Linux**
+```bash
+cd ~
+git clone https://github.com/samarthanalytics-sj/samarth-analytics-mcp.git
+cd samarth-analytics-mcp/apps/desktop
+npm install
+npm run dev
+```
+
+**Windows (PowerShell)**
+```powershell
+cd ~
+git clone https://github.com/samarthanalytics-sj/samarth-analytics-mcp.git
+cd samarth-analytics-mcp\apps\desktop
+npm install
+npm run dev
+```
+
+After the one-time setup, your **everyday launch** is just:
+
+```bash
+# macOS / Linux
+cd ~/samarth-analytics-mcp/apps/desktop && npm run dev
+```
+```powershell
+# Windows (PowerShell)
+cd ~\samarth-analytics-mcp\apps\desktop; npm run dev
+```
+
+> First run? Do the one-time **[First-run setup](#4-first-run-setup-once)** (Google
+> OAuth client + LLM key). New to Node/OAuth, or hit an `Error: Electron uninstall`?
+> Read the full sections below.
+
+---
+
 ## 1. Prerequisites (both OS)
 
 - **Node.js 18 or newer** and **Git**
