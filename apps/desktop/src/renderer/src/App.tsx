@@ -6902,7 +6902,6 @@ function VerifyPanel({
   const ready = Boolean(active?.hasGoogleToken && ctx?.accountId && ctx?.containerId && ctx?.workspaceId);
   const [vUrl, setVUrl] = useState('');
   const [vSnippet, setVSnippet] = useState('');
-  const [vMinting, setVMinting] = useState(false); // auto-generating a Preview snippet from the container
   const [vVerifyPages, setVVerifyPages] = useState('');
   const [vVerifying, setVVerifying] = useState(false);
   const [vVerifyKind, setVVerifyKind] = useState<'firing' | 'ta' | null>(null);
@@ -7096,36 +7095,6 @@ function VerifyPanel({
       setVVerifyKind(null);
       setVProgress(null);
       setVStopping(false);
-    }
-  }
-
-  // AUTO-GENERATE the GTM Preview snippet for the SELECTED container, so the user never has to hunt for it
-  // in GTM. Reuses the same mint the auto-heal uses: it snapshots the workspace into a DRAFT container
-  // version (nothing published) and reads the built-in "Latest" preview environment, returning a snippet
-  // that carries gtm_auth/gtm_preview. That snapshot SUBMITS the workspace (GTM hands back a fresh editable
-  // one), so we confirm first, then follow the app's active workspace to the new one.
-  async function autoGeneratePreview(): Promise<void> {
-    if (!ready || !ctx?.accountId || !ctx?.containerId || !ctx?.workspaceId || !active) {
-      setVNote({ kind: 'error', text: 'Pick a GTM account, container and draft workspace first.' });
-      return;
-    }
-    if (vMinting) return;
-    if (!window.confirm('Auto-generate a GTM Preview snippet for this container?\n\nThis creates a DRAFT container version to load your tags in debug mode. NOTHING is published. GTM then hands your workspace a fresh editable copy (the app switches to it automatically).')) return;
-    setVMinting(true);
-    setVNote(null);
-    onError('');
-    try {
-      const { snippet, newWorkspaceId, environmentName } = await window.desktop.tags.mintPreview(ctx.accountId, ctx.containerId, ctx.workspaceId);
-      setVSnippet(snippet);
-      // The mint submitted the workspace; follow GTM to the fresh editable one so later reads/writes work.
-      if (newWorkspaceId) {
-        try { await window.desktop.accounts.setGtmContext(active.id, { ...ctx, workspaceId: newWorkspaceId, workspaceName: 'Workspace (auto)' }); } catch { /* best-effort */ }
-      }
-      setVNote({ kind: 'info', text: `Preview snippet generated from the "${environmentName}" environment and filled in below. It loads your container in debug mode; nothing was published.` });
-    } catch (e) {
-      setVNote({ kind: 'error', text: e instanceof Error ? e.message : String(e) });
-    } finally {
-      setVMinting(false);
     }
   }
 
@@ -7418,8 +7387,8 @@ function VerifyPanel({
                   </>
                 )}
               </div>
-              {/* Preview options - three ways, only shown HERE (mismatch / no live container). Option A is
-                  the paste box; Option B (Share) and Option C (Auto-generate) both fill it. */}
+              {/* Preview options, only shown HERE (mismatch / no live container). Option A is the paste box;
+                  Option B (Share from GTM) fills it. */}
               <div style={{ padding: '10px 12px', borderRadius: 10, border: '0.5px solid var(--border-2)', background: 'var(--surface-2)' }}>
                 <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)' }}>Option A &middot; Paste a preview link <span style={{ fontWeight: 400, color: 'var(--c-green)' }}>(no GTM changes)</span></div>
                 <div style={{ ...styles.muted, fontSize: 12, lineHeight: 1.5, marginTop: 2 }}>
@@ -7454,25 +7423,11 @@ function VerifyPanel({
                   disabled={!ready}
                 />
               </div>
-              <div style={{ marginTop: 8, padding: '10px 12px', borderRadius: 10, border: '0.5px solid var(--border-2)', background: 'var(--surface-2)' }}>
-                <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)' }}>Option C &middot; Auto-generate <span style={{ fontWeight: 400, ...styles.muted }}>(one click; creates a draft version, nothing published)</span></div>
-                <div style={{ ...styles.muted, fontSize: 12, lineHeight: 1.5, marginTop: 2 }}>
-                  The app builds the Preview and fills Option A. Fastest, but it snapshots your workspace into a draft version (still not a publish).
-                </div>
-                <button
-                  style={{ ...styles.toggleOff, marginTop: 6, ...(!ready || vMinting || vVerifying ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
-                  onClick={() => void autoGeneratePreview()}
-                  disabled={!ready || vMinting || vVerifying}
-                  title="Builds the GTM Preview snippet for the selected container automatically (creates a DRAFT container version - nothing is published) and fills Option A."
-                >
-                  {vMinting ? 'Generating preview…' : '✨ Auto-generate preview snippet'}
-                </button>
-              </div>
               {vSnippet.trim() && (
                 <div style={{ fontSize: 12, marginTop: 8, color: /gtm_auth=/.test(vSnippet) && /gtm_preview=/.test(vSnippet) ? 'var(--c-green)' : 'var(--c-amber)' }}>
                   {/gtm_auth=/.test(vSnippet) && /gtm_preview=/.test(vSnippet)
                     ? '✓ Preview link detected - your container will load in debug mode.'
-                    : '⚠ That is the Install snippet, not a Preview link (no gtm_auth / gtm_preview): only the PUBLISHED container loads. Use Share or Auto-generate to get a real Preview link.'}
+                    : '⚠ That is the Install snippet, not a Preview link (no gtm_auth / gtm_preview): only the PUBLISHED container loads. Use Share to get a real Preview link.'}
                 </div>
               )}
               {vPreflightGate === 'match' ? (
