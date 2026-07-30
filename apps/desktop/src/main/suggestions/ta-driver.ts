@@ -72,7 +72,7 @@ interface PwPage {
   waitForTimeout(ms: number): Promise<void>;
   waitForLoadState(state?: string, opts?: Record<string, unknown>): Promise<void>;
   click(sel: string, opts?: Record<string, unknown>): Promise<void>;
-  locator(sel: string): { first(): { count(): Promise<number>; click(o?: Record<string, unknown>): Promise<void>; fill(v: string, o?: Record<string, unknown>): Promise<void> } };
+  locator(sel: string): { first(): { count(): Promise<number>; click(o?: Record<string, unknown>): Promise<void>; fill(v: string, o?: Record<string, unknown>): Promise<void>; isVisible(): Promise<boolean>; press(key: string, o?: Record<string, unknown>): Promise<void> } };
   screenshot(opts?: { type?: 'jpeg' | 'png'; quality?: number; fullPage?: boolean; timeout?: number }): Promise<Buffer>;
   isClosed(): boolean;
   url(): string;
@@ -490,22 +490,54 @@ export async function runTaVerify(
       }
       return false;
     };
-    // Two different connect UIs:
-    //  - taDebugUrl set (a pasted Preview / Share link): TA opens a "connect to <site>" screen that ALREADY
-    //    carries the destination - just click Connect and let the debugged popup open.
-    //  - no link (bare TA app): the classic Add domain -> type the URL -> Connect flow.
+    // ONE connect UI, both paths: the "Connect Tag Assistant to your site" modal. Its Connect button
+    // stays DISABLED until the site URL is typed into the field (confirmed live: clicking Connect with
+    // an empty field just leaves the modal open and no debug window ever opens - that was the "no debug
+    // popup within 30s" failure). A pasted Preview/Share link pre-loads the container's debug creds but
+    // still shows this same modal, so BOTH paths: open the modal -> TYPE the URL -> click the modal's
+    // now-enabled Connect, which opens the debugged popup ("Opens your site in a new window").
     const popupP = ctx.waitForEvent('page', { timeout: 30_000 }).catch(() => null);
-    if (taDebugUrl) {
-      if (!(await clickConnect())) {
-        await dumpTa('no-connect-button');
-        console.log('[tag-assistant] no Connect-like button found - TA may auto-connect; waiting for the popup...');
-      }
-    } else {
+    // The modal's URL text field (placeholder "e.g. https://www.google.com") - never the
+    // "Include debug signal in the URL" checkbox.
+    const urlField = ta.locator('input[placeholder*="http" i], [role="dialog"] input[type="url"], [role="dialog"] input[type="text"]').first();
+    // 1) Make the modal appear if it is not already up: the bare app opens it from "Add domain", the
+    //    preview-link landing from the header "Connect". A single click each (not the Connect loop, whose
+    //    label also matches the modal's own disabled button).
+    if (!(await urlField.isVisible().catch(() => false))) {
       await clickRobust('button:has-text("Add domain")');
-      await ta.waitForTimeout(1000);
-      // Best-effort: if TA's UI variant has no input here, don't let a missing field abort the run.
-      await ta.locator('input').first().fill(url, { timeout: 12_000 }).catch(() => undefined);
-      await clickConnect();
+      await ta.waitForTimeout(600);
+    }
+    if (!(await urlField.isVisible().catch(() => false))) {
+      await clickRobust('button:has-text("Connect")');
+      await ta.waitForTimeout(600);
+    }
+    // 2) Type the site URL so the modal's Connect enables. Tab blurs the field for builds that only
+    //    validate/enable on change or blur.
+    const urlFilled = await urlField.fill(url, { timeout: 12_000 }).then(() => true).catch(() => false);
+    if (urlFilled) {
+      await urlField.press('Tab').catch(() => undefined);
+      await ta.waitForTimeout(400);
+      console.log(`[tag-assistant] entered site URL in the connect modal: ${url}`);
+    } else {
+      await dumpTa('no-url-field');
+      console.log('[tag-assistant] connect modal URL field not found - clicking Connect anyway.');
+    }
+    // 3) Click the modal's (now-enabled) Connect. Prefer the dialog-scoped button so a landing "Connect"
+    //    behind the overlay is never clicked instead; fall back to the generic label search.
+    const clickModalConnect = async (): Promise<boolean> => {
+      const scoped = ta.locator('[role="dialog"] button:has-text("Connect"), mat-dialog-container button:has-text("Connect")').first();
+      if (await scoped.count()) {
+        await scoped.click({ timeout: 12_000 }).catch(async () => {
+          await scoped.click({ timeout: 5_000, force: true }).catch(() => undefined);
+        });
+        console.log('[tag-assistant] clicked the modal Connect.');
+        return true;
+      }
+      return clickConnect();
+    };
+    if (!(await clickModalConnect())) {
+      await dumpTa('no-connect-button');
+      console.log('[tag-assistant] no Connect-like button found - TA may auto-connect; waiting for the popup...');
     }
     let popup = await popupP;
     if (!popup) {
