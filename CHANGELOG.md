@@ -1,3 +1,9 @@
+## [1.437.6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.437.5...v1.437.6) (2026-07-30)
+
+### Bug Fixes
+
+* **desktop:** verify tags by REAL interactions for every trigger type ([#774](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/774)) ([fd3f21d](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/fd3f21d8f83fdace2505f82f865890ea854f1d47))
+
 ## [1.437.5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.437.4...v1.437.5) (2026-07-30)
 
 ### Bug Fixes
