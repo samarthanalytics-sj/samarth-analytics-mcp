@@ -1,3 +1,9 @@
+## [1.431.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.430.2...v1.431.0) (2026-07-30)
+
+### Features
+
+* **desktop:** open the GTM Preview link in Chrome, not the default browser ([#759](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/759)) ([7224d54](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/7224d54260e4c8aa833d834cf8d70ef8f43017a0))
+
 ## [1.430.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.430.1...v1.430.2) (2026-07-30)
 
 ### Bug Fixes
