@@ -1,7 +1,5 @@
 import { app, shell, BrowserWindow, ipcMain, session } from 'electron';
 import { join } from 'node:path';
-import { existsSync } from 'node:fs';
-import { spawn } from 'node:child_process';
 import { installConsoleBridge, installHttpLogging, installIpcLogging, setDevLogSink } from './devtools/dev-logger';
 import { installReactDevtools } from './devtools/react-devtools';
 import { AccountRepository } from './storage/account-repository';
@@ -139,40 +137,7 @@ function createWindow(): void {
   }
 }
 
-// Open a URL specifically in Google Chrome rather than the OS default browser. Used for the GTM
-// Preview / "Open GTM" link so the operator lands in Chrome - where they are signed into GTM and
-// where Tag Assistant's Preview -> Share -> Copy flow works. Chrome dedupes to a running instance,
-// so this opens a new tab in the user's existing Chrome. Falls back to the default browser if no
-// Chrome binary is found. Returns true only when Chrome was actually launched.
-function openInChrome(url: string): boolean {
-  const safe = /^https?:\/\//i.test(url) ? url : ''; // http(s) only: never let a value become a chrome flag
-  if (!safe) return false;
-  const candidates: string[] = [];
-  if (process.platform === 'win32') {
-    for (const base of [process.env['PROGRAMFILES'], process.env['PROGRAMFILES(X86)'], process.env['LOCALAPPDATA']]) {
-      if (base) candidates.push(join(base, 'Google', 'Chrome', 'Application', 'chrome.exe'));
-    }
-  } else if (process.platform === 'darwin') {
-    candidates.push('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome');
-  } else {
-    candidates.push('/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium', '/usr/bin/chromium-browser');
-  }
-  const exe = candidates.find((p) => { try { return existsSync(p); } catch { return false; } });
-  if (!exe) { void shell.openExternal(safe); return false; }
-  try {
-    const child = spawn(exe, [safe], { detached: true, stdio: 'ignore' });
-    child.unref();
-    return true;
-  } catch {
-    void shell.openExternal(safe);
-    return false;
-  }
-}
-
 function registerIpcHandlers(): void {
-  // shell:openInChrome — open a URL in Google Chrome specifically (GTM Preview flow), not the default browser.
-  ipcMain.handle('shell:openInChrome', (_e, url: string) => ({ chrome: openInChrome(String(url ?? '')) }));
-
   // app:getInfo — basic environment readout, also a liveness probe for the bridge.
   ipcMain.handle('app:getInfo', () => ({
     name: app.getName(),
