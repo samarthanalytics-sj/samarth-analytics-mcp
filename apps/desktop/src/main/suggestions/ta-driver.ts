@@ -604,6 +604,25 @@ export async function runTaVerify(
       console.log(`[tag-assistant] boot diagnostic could not read the popup: ${(e as Error).message}`);
     }
 
+    // Keep the injected (non-live) container present on EVERY page of the drive. The per-page init
+    // script can lose the race with a fast `networkidle`, so after each navigation we poll for the
+    // container and re-inject via evaluate until it boots (or a short budget elapses). Without this,
+    // later drive pages flap to "not found" and their tags cannot fire. No-op when not injecting or
+    // once it is already booted (the first poll returns true and the loop exits immediately).
+    const ensureInjectedBooted = async (label: string): Promise<void> => {
+      if (!injectContainerId) return;
+      const want = injectContainerId.toUpperCase();
+      const isBooted = (): Promise<boolean> =>
+        popup
+          .evaluate<boolean>((id: string) => !!((window as unknown as { google_tag_manager?: Record<string, unknown> }).google_tag_manager || {})[id], want)
+          .catch(() => false);
+      for (let i = 0; i < 8 && !(await isBooted()); i++) {
+        await popup.evaluate(gtmInjector, injectArg).catch(() => undefined); // idempotent: guarded by google_tag_manager[id]
+        await popup.waitForTimeout(450);
+      }
+      if (!(await isBooted())) console.log(`[tag-assistant] ${want} did not boot on ${label} in time; its tags cannot fire on this page.`);
+    };
+
     // PROOF: screenshot the Tag Assistant panel DURING the drive. Right after each click / form submit, the
     // event we just caused is the NEWEST rail row, so clicking it shows exactly that event's Tags-Fired
     // panel. This beats a post-hoc rail search, which drowns in the scan's scroll_depth events and misses
@@ -682,6 +701,8 @@ export async function runTaVerify(
         }
         await popup.waitForTimeout(Math.max(settleMs, 2000)); // container + debug re-attach on the new page
       }
+      // Re-establish the injected container on this page before driving its triggers (see above).
+      await ensureInjectedBooted(pageUrl);
       pagesDriven.push(pageUrl);
       await popup.evaluate(installGuardsInPage).catch(() => undefined);
       await popup.evaluate(grantConsentInPage).catch(() => undefined);
@@ -748,6 +769,8 @@ export async function runTaVerify(
       if (!(await requestAllowed(form.page))) continue;
       try { await popup.goto(withPreview(form.page), { waitUntil: 'networkidle', timeout: navTimeoutMs }); } catch { continue; }
       await popup.waitForTimeout(Math.max(settleMs, 1500));
+      // The injected container must be armed on this page too, or its form tags cannot catch the submit.
+      await ensureInjectedBooted(form.page);
       await popup.evaluate(grantConsentInPage).catch(() => undefined);
       await popup.evaluate(hideCookieOverlaysInPage).catch(() => undefined);
       try {
