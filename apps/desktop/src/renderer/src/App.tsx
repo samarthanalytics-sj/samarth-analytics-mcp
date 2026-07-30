@@ -7404,6 +7404,21 @@ function VerifyPanel({
                   style={{ ...styles.input, width: '100%', minHeight: 60, marginTop: 6, fontFamily: 'monospace', fontSize: 12 }}
                   disabled={!ready}
                 />
+                <button
+                  style={{ ...styles.toggleOff, marginTop: 6, ...(!ready || !/https?:\/\//i.test(vSnippet) ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
+                  onClick={() => {
+                    const raw = vSnippet.trim();
+                    const link = (raw.match(/https?:\/\/tagassistant\.google\.com\/[^\s"'<>]*/i) || raw.match(/https?:\/\/[^\s"'<>]+/i) || [''])[0];
+                    if (link) void window.desktop.openInChrome(link);
+                  }}
+                  disabled={!ready || !/https?:\/\//i.test(vSnippet)}
+                  title="Force-opens the pasted Tag Assistant link in your real Chrome (your everyday running instance / signed-in profile), so it lands in the Chrome where you injected your container via Adswerve and the site + Tag Assistant connect. Manual visual check - the app's own results table does not fill in for this."
+                >
+                  ↗ Open this link in my Chrome (manual check)
+                </button>
+                <div style={{ ...styles.muted, fontSize: 11, lineHeight: 1.5, marginTop: 4 }}>
+                  Opens in your real Chrome (where you inject your container via Adswerve, so the site + Tag Assistant connect). This is a manual visual check - you read Tag Assistant yourself; the app's results table below fills in only from <b>Verify in Tag Assistant</b> / <b>Proceed</b>.
+                </div>
               </div>
               <div style={{ marginTop: 8, padding: '10px 12px', borderRadius: 10, border: '0.5px solid var(--border-2)', background: 'var(--surface-2)' }}>
                 <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)' }}>Option B &middot; Share from GTM <span style={{ fontWeight: 400, color: 'var(--c-green)' }}>(no GTM changes)</span></div>
