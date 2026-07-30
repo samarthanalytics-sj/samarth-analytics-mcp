@@ -1,3 +1,9 @@
+## [1.433.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.433.0...v1.433.1) (2026-07-30)
+
+### Bug Fixes
+
+* **desktop:** Open GTM uses the default browser, not forced Chrome ([#762](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/762)) ([734bb2d](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/734bb2db5984d9df56e7424022b2d45f76df330b))
+
 ## [1.433.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.432.0...v1.433.0) (2026-07-30)
 
 ### Features
