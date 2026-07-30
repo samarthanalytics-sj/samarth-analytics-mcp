@@ -1,3 +1,9 @@
+## [1.440.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.439.0...v1.440.0) (2026-07-30)
+
+### Features
+
+* **desktop:** download a single proof screenshot from the lightbox ([#777](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/777)) ([ba19e30](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/ba19e309d67ee38ea2afadae28b5022b82945d90))
+
 ## [1.439.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.438.0...v1.439.0) (2026-07-30)
 
 ### Features
