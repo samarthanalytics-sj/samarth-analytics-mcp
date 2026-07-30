@@ -21,7 +21,7 @@ import { requestAllowed } from './ssrf';
 import { classifyCollector } from '../../shared/runtime-capture';
 import { PlaywrightUnavailableError } from './playwright-driver';
 import {
-  installGuardsInPage, grantConsentInPage, hideCookieOverlaysInPage, pushDataLayerInPage,
+  installGuardsInPage, allowFormSubmitInPage, grantConsentInPage, hideCookieOverlaysInPage, pushDataLayerInPage,
   driveInPage, specFor, buildCustomEventPayload, withPreviewParams,
   type VerifyDriverTag, type DriveOutcome,
 } from './verify-driver';
@@ -672,22 +672,40 @@ export async function runTaVerify(
       } catch { /* proof is best-effort */ }
     };
 
-    // Drive each page's tags IN THE SAME POPUP (sequential — the debug session rides window.opener).
+    // Drive each page ONCE in the SAME popup (sequential; the debug session rides window.opener): its
+    // click/custom/pageview tags first (guards block stray nav), THEN its reviewed form(s) submitted FOR
+    // REAL, so a page that has BOTH is opened a single time, not once per phase.
+    const pageKeyOf = (p: string | undefined): string =>
+      p && /^https?:/i.test(p) ? p : p ? new URL(p, url).href : url;
     const byPage = new Map<string, VerifyDriverTag[]>();
     for (const t of tags) {
-      const page = t.page && /^https?:/i.test(t.page) ? t.page : t.page ? new URL(t.page, url).href : url;
+      const page = pageKeyOf(t.page);
       const arr = byPage.get(page) ?? [];
       arr.push(t);
       byPage.set(page, arr);
     }
-    const groups = [...byPage.entries()];
-    console.log(`[tag-assistant] driving ${tags.length} tag trigger(s) across ${groups.length} page(s)...`);
+    // Group the reviewed forms by the SAME page key, so each page's form(s) submit right after its clicks.
+    const allForms = opts.forms ?? [];
+    const formsByPage = new Map<string, TaFormSubmit[]>();
+    for (const f of allForms) {
+      const key = pageKeyOf(f.page);
+      const arr = formsByPage.get(key) ?? [];
+      arr.push(f);
+      formsByPage.set(key, arr);
+    }
+    // Union of pages to visit: every page that has tags (in order), then any form-only page not listed yet.
+    const pageKeys = [...byPage.keys()];
+    for (const k of formsByPage.keys()) if (!byPage.has(k)) pageKeys.push(k);
+    console.log(`[tag-assistant] driving ${tags.length} tag trigger(s) + ${allForms.length} form(s) across ${pageKeys.length} page(s)...`);
     let done = 0;
-    for (const [pageUrl, groupTags] of groups) {
+    let formDone = 0;
+    for (const pageUrl of pageKeys) {
+      const groupTags = byPage.get(pageUrl) ?? [];
+      const pageForms = formsByPage.get(pageUrl) ?? [];
       if (opts.shouldStop?.()) { console.log('[tag-assistant] Stop pressed — ending the drive early.'); break; } // cancel between pages
       done += 1;
-      console.log(`[tag-assistant]   page ${done}/${groups.length}: ${pageUrl} (${groupTags.length} trigger(s))`);
-      try { opts.onPageProgress?.(pageUrl, done, groups.length); } catch { /* progress is a nicety */ }
+      console.log(`[tag-assistant]   page ${done}/${pageKeys.length}: ${pageUrl} (${groupTags.length} trigger(s), ${pageForms.length} form(s))`);
+      try { opts.onPageProgress?.(pageUrl, done, pageKeys.length); } catch { /* progress is a nicety */ }
       if (!(await requestAllowed(pageUrl))) continue;
       // The first group is often the connect URL, already loaded — normally skip re-navigating it. BUT in
       // PREVIEW mode the connect URL loaded WITHOUT the preview params (no preview cookie set, published
@@ -753,45 +771,48 @@ export async function runTaVerify(
           hits: [],
         });
       }
-    }
 
-    // REAL FORM SUBMITS: for each reviewed form, load its page in the SAME debugged popup, fill the
-    // reviewed values, and submit FOR REAL. The route handler only aborts analytics collectors, so the
-    // form's own POST goes through (a real lead) and the site fires its genuine form_submission event —
-    // which Tag Assistant captures, so the form tag's firing is proven by the REAL submit, not a synthetic
-    // push. Sequential (each submit navigates the page). Screenshots of the TA panel land in Phase 3.
-    const forms = opts.forms ?? [];
-    for (let i = 0; i < forms.length; i += 1) {
-      if (opts.shouldStop?.()) { console.log('[tag-assistant] Stop pressed — skipping remaining form submits.'); break; } // cancel between form submits
-      const form = forms[i];
-      console.log(`[tag-assistant] real form submit ${i + 1}/${forms.length}: ${form.page}`);
-      try { opts.onFormProgress?.(form.page, i + 1, forms.length); } catch { /* progress is a nicety */ }
-      if (!(await requestAllowed(form.page))) continue;
-      try { await popup.goto(withPreview(form.page), { waitUntil: 'networkidle', timeout: navTimeoutMs }); } catch { continue; }
-      await popup.waitForTimeout(Math.max(settleMs, 1500));
-      // The injected container must be armed on this page too, or its form tags cannot catch the submit.
-      await ensureInjectedBooted(form.page);
-      await popup.evaluate(grantConsentInPage).catch(() => undefined);
-      await popup.evaluate(hideCookieOverlaysInPage).catch(() => undefined);
-      try {
-        const outcome = await popup.evaluate<{ filled: number; submitted: boolean; note?: string }>(
-          fillAndSubmitInPage,
-          { formId: form.formId, formClasses: form.formClasses, method: form.method, fields: form.fields },
-        );
-        console.log(`[tag-assistant]   filled ${outcome.filled} field(s), submitted=${outcome.submitted}${outcome.note ? ` (${outcome.note})` : ''}`);
-      } catch (e) {
-        console.log(`[tag-assistant]   form submit failed: ${(e instanceof Error ? e.message : String(e)).slice(0, 120)}`);
+      // REAL FORM SUBMITS for THIS page, right after its clicks and on the SAME already-open page (no
+      // second load). The route handler only aborts analytics collectors, so the form's own POST goes
+      // through (a real lead) and the site fires its genuine form_submission, which Tag Assistant captures,
+      // so the form tag's firing is proven by the REAL submit, not a synthetic push. allowFormSubmitInPage
+      // lifts the submit-guard the click-drive installed; each submit navigates the page, so a 2nd form on
+      // the same page reloads first.
+      for (let fi = 0; fi < pageForms.length; fi += 1) {
+        if (opts.shouldStop?.()) { console.log('[tag-assistant] Stop pressed - skipping remaining form submits.'); break; } // cancel between form submits
+        const form = pageForms[fi];
+        formDone += 1;
+        console.log(`[tag-assistant] real form submit ${formDone}/${allForms.length}: ${pageUrl}`);
+        try { opts.onFormProgress?.(pageUrl, formDone, allForms.length); } catch { /* progress is a nicety */ }
+        if (fi > 0) {
+          // A later form on the SAME page needs a fresh load (the prior submit navigated the page away).
+          try { await popup.goto(withPreview(pageUrl), { waitUntil: 'networkidle', timeout: navTimeoutMs }); } catch { continue; }
+          await popup.waitForTimeout(Math.max(settleMs, 1500));
+          await ensureInjectedBooted(pageUrl);
+          await popup.evaluate(grantConsentInPage).catch(() => undefined);
+          await popup.evaluate(hideCookieOverlaysInPage).catch(() => undefined);
+        }
+        await popup.evaluate(allowFormSubmitInPage).catch(() => undefined); // lift the submit-guard for the real POST
+        try {
+          const outcome = await popup.evaluate<{ filled: number; submitted: boolean; note?: string }>(
+            fillAndSubmitInPage,
+            { formId: form.formId, formClasses: form.formClasses, method: form.method, fields: form.fields },
+          );
+          console.log(`[tag-assistant]   filled ${outcome.filled} field(s), submitted=${outcome.submitted}${outcome.note ? ` (${outcome.note})` : ''}`);
+        } catch (e) {
+          console.log(`[tag-assistant]   form submit failed: ${(e instanceof Error ? e.message : String(e)).slice(0, 120)}`);
+        }
+        // Let the (often AJAX) submit resolve + the success-state form_submission push + the tag fire.
+        await popup.waitForTimeout(Math.max(settleMs, 3000));
+        // Poll briefly for the newest rail event to become form_submission (frames arrive async after the
+        // reload), then snapshot that event's Tags-Fired panel (proof for THIS form's tags).
+        for (let poll = 0; poll < 6; poll += 1) {
+          const ev = await ta.evaluate<{ event: string; fired: string }>(readTaPanel).catch(() => ({ event: '', fired: '' }));
+          if (/form_submission|form_submit/i.test(ev.event)) break;
+          await ta.waitForTimeout(400);
+        }
+        await snapNewestTa({ event: 'form_submission|form_submit' }); // proof of the real form submit we just did
       }
-      // Let the (often AJAX) submit resolve + the success-state form_submission push + the tag fire.
-      await popup.waitForTimeout(Math.max(settleMs, 3000));
-      // Poll briefly for the newest rail event to become form_submission (frames arrive async after the
-      // reload), then snapshot that event's Tags-Fired panel — proof for THIS form's tags.
-      for (let poll = 0; poll < 6; poll += 1) {
-        const ev = await ta.evaluate<{ event: string; fired: string }>(readTaPanel).catch(() => ({ event: '', fired: '' }));
-        if (/form_submission|form_submit/i.test(ev.event)) break;
-        await ta.waitForTimeout(400);
-      }
-      await snapNewestTa({ event: 'form_submission|form_submit' }); // proof of the real form submit we just did
     }
 
     await popup.waitForTimeout(Math.max(settleMs, 1500)); // let the last TAG_STATUS frames arrive
