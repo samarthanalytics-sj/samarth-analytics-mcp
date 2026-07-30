@@ -1,3 +1,9 @@
+## [1.437.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.436.0...v1.437.0) (2026-07-30)
+
+### Features
+
+* **desktop:** non-live TA debug via real debug signals, not an extension ([#766](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/766)) ([92780f6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/92780f64eb5a769189d28545a443270f4385ef3b))
+
 ## [1.436.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.435.0...v1.436.0) (2026-07-30)
 
 ### Features
