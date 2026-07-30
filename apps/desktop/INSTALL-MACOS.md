@@ -5,6 +5,9 @@ and lets you read and edit your Google Tag Manager / GA4 setup by chat (any of
 Anthropic, OpenAI, or Gemini). Everything runs on your machine; secrets are
 encrypted in the macOS Keychain.
 
+> **Looking for the combined Windows + macOS guide?** See **[INSTALL.md](INSTALL.md)**
+> (it has a copy-paste Quick start for both). This page is the macOS-only deep dive.
+
 There are two ways to get it running on a Mac:
 
 - **Option A — Install the packaged app (`.dmg`)** — recommended for normal use.
@@ -34,8 +37,8 @@ There are two ways to get it running on a Mac:
 > A macOS `.dmg` must be built **on a Mac** — it can't be built from Windows.
 
 ```bash
-git clone https://github.com/samarthanalytics-sj/samarth-web-audit-mcp.git
-cd samarth-web-audit-mcp/apps/desktop
+git clone https://github.com/samarthanalytics-sj/samarth-analytics-mcp.git
+cd samarth-analytics-mcp/apps/desktop
 npm install
 npm run dist:mac
 ```
@@ -71,8 +74,8 @@ Now jump to [First-run setup](#first-run-setup).
 ## Option B — Run from source
 
 ```bash
-git clone https://github.com/samarthanalytics-sj/samarth-web-audit-mcp.git
-cd samarth-web-audit-mcp/apps/desktop
+git clone https://github.com/samarthanalytics-sj/samarth-analytics-mcp.git
+cd samarth-analytics-mcp/apps/desktop
 npm install        # downloads the macOS Electron binary automatically
 npm run dev
 ```
@@ -162,7 +165,7 @@ Secrets are encrypted by the **Keychain** and bound to your macOS user — they 
 ## Updating
 
 ```bash
-cd samarth-web-audit-mcp
+cd samarth-analytics-mcp
 git pull
 cd apps/desktop && npm install && npm run dist:mac
 ```
