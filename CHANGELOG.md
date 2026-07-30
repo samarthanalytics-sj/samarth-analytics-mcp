@@ -1,3 +1,9 @@
+## [1.432.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.431.0...v1.432.0) (2026-07-30)
+
+### Features
+
+* **desktop:** inject non-live containers with an Adswerve-style injector extension ([#760](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/760)) ([10b8412](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/10b841231b7cb76a54ac00fe9098ddd3007de87c))
+
 ## [1.431.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.430.2...v1.431.0) (2026-07-30)
 
 ### Features
