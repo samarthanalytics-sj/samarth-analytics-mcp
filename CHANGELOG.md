@@ -1,3 +1,9 @@
+## [1.437.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.437.1...v1.437.2) (2026-07-30)
+
+### Bug Fixes
+
+* **desktop:** fill the Tag Assistant connect-modal URL so the debug window actually opens ([#768](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/768)) ([4426cf1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/4426cf13677fd556e6761a99196cd4d3b460a221))
+
 ## [1.437.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.437.0...v1.437.1) (2026-07-30)
 
 ### Bug Fixes
