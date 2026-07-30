@@ -7364,7 +7364,7 @@ function VerifyPanel({
                   <>
                     Your container <b style={{ fontFamily: 'var(--font-mono)' }}>{ctx?.containerPublicId}</b> IS the one live on this page. Verify it in Tag Assistant now.
                     <div style={{ marginTop: 6 }}>
-                      To <b>skip the one-time Google sign-in</b>, load a Preview below (a Share link makes <b>no GTM changes</b>) - it also lets you verify UNPUBLISHED draft edits before you publish. Or leave it empty and complete the one-time sign-in (saved forever, so it never asks again).
+                      Two ways: do the <b>one-time Google sign-in</b> (saved forever, so it never asks again), <b>or</b> paste a <b>Tag Assistant Preview / Share link</b> below to skip the sign-in (it makes <b>no GTM changes</b> and also shows your UNPUBLISHED draft edits).
                     </div>
                   </>
                 ) : (
@@ -7390,8 +7390,26 @@ function VerifyPanel({
                   </>
                 )}
               </div>
-              {/* Preview options, only shown HERE (mismatch / no live container). Option A is the paste box;
-                  Option B (Share from GTM) fills it. */}
+              {/* MATCH: the container IS live, so no inject / Adswerve cards - just an optional TA-link paste box.
+                  The two buttons below are the only choices (sign in once, or use the pasted link). */}
+              {vPreflightGate === 'match' && (
+                <div style={{ padding: '10px 12px', borderRadius: 10, border: '0.5px solid var(--border-2)', background: 'var(--surface-2)' }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)' }}>Paste a Tag Assistant link <span style={{ fontWeight: 400, ...styles.muted }}>(optional - skips the sign-in)</span></div>
+                  <div style={{ ...styles.muted, fontSize: 12, lineHeight: 1.5, marginTop: 2 }}>
+                    Have a GTM Preview / Share link? Paste it to verify without signing in (and to see unpublished draft edits). Or leave it empty and use the one-time sign-in below.
+                  </div>
+                  <textarea
+                    value={vSnippet}
+                    onChange={(e) => setVSnippet(e.target.value)}
+                    placeholder={'Paste your GTM Preview / Share link here (optional).'}
+                    style={{ ...styles.input, width: '100%', minHeight: 60, marginTop: 6, fontFamily: 'monospace', fontSize: 12 }}
+                    disabled={!ready}
+                  />
+                </div>
+              )}
+              {/* NON-LIVE (mismatch / no live container): the full inject options. Option A is the paste box +
+                  Adswerve inject helper; Option B (Share from GTM) fills it. */}
+              {vPreflightGate !== 'match' && (<>
               <div style={{ padding: '10px 12px', borderRadius: 10, border: '0.5px solid var(--border-2)', background: 'var(--surface-2)' }}>
                 <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)' }}>Option A &middot; Paste a preview link <span style={{ fontWeight: 400, color: 'var(--c-green)' }}>(no GTM changes)</span></div>
                 <div style={{ ...styles.muted, fontSize: 12, lineHeight: 1.5, marginTop: 2 }}>
@@ -7462,6 +7480,7 @@ function VerifyPanel({
                   disabled={!ready}
                 />
               </div>
+              </>)}
               {vSnippet.trim() && (
                 <div style={{ fontSize: 12, marginTop: 8, color: /gtm_auth=/.test(vSnippet) && /gtm_preview=/.test(vSnippet) ? 'var(--c-green)' : 'var(--c-amber)' }}>
                   {/gtm_auth=/.test(vSnippet) && /gtm_preview=/.test(vSnippet)
