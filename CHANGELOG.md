@@ -1,3 +1,9 @@
+## [1.437.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.437.2...v1.437.3) (2026-07-30)
+
+### Bug Fixes
+
+* **desktop:** log which containers boot in the TA debug popup (injected-container diagnostic) ([#769](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/769)) ([7e1e4b6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/7e1e4b636303b044e58e1fb02eb6b88f954cb8f9)), closes [#768](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/768)
+
 ## [1.437.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.437.1...v1.437.2) (2026-07-30)
 
 ### Bug Fixes
