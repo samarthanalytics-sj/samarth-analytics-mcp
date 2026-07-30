@@ -428,7 +428,19 @@ export function installGuardsInPage(): void {
     },
     true,
   );
-  document.addEventListener('submit', (e) => e.preventDefault(), true); // stop the real POST
+  // Block the real POST during click-driving so a driven click never leaves the page. A reviewed form
+  // submit lifts this for its OWN POST via allowFormSubmitInPage() (so its success-callback
+  // form_submission still fires), which lets ONE page load verify both its click tags and its form.
+  document.addEventListener('submit', (e) => {
+    if (!(window as unknown as { __vf_allow_submit?: boolean }).__vf_allow_submit) e.preventDefault();
+  }, true);
+}
+
+/** Lift the submit-guard for the reviewed form submit that follows on this page: installGuardsInPage
+ *  blocks every submit (so a click-driven page never POSTs), but the operator-reviewed form must submit
+ *  FOR REAL. Reset on the next navigation (a fresh document clears the flag). */
+export function allowFormSubmitInPage(): void {
+  (window as unknown as { __vf_allow_submit?: boolean }).__vf_allow_submit = true;
 }
 
 /**
