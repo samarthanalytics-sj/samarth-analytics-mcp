@@ -1,3 +1,9 @@
+## [1.439.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.438.0...v1.439.0) (2026-07-30)
+
+### Features
+
+* **desktop:** verify a page's clicks AND its form in one visit, not two passes ([#776](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/776)) ([9e61837](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/9e61837f28dbfbf19001e08f18f1bb1a094ef205))
+
 ## [1.438.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.437.6...v1.438.0) (2026-07-30)
 
 ### Features
