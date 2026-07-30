@@ -7384,6 +7384,9 @@ function VerifyPanel({
                     <div style={{ marginTop: 6 }}>
                       To debug <b style={{ fontFamily: 'var(--font-mono)' }}>{ctx?.containerPublicId}</b> we load it into the verification session only (the live site is never changed). Pick how to load your container's tags (drafts included) - a Preview is <b>not</b> a publish - then Proceed:
                     </div>
+                    <div style={{ marginTop: 8, padding: '8px 10px', borderRadius: 8, border: '0.5px solid var(--border-2)', background: 'var(--surface-2)', fontSize: 11.5, lineHeight: 1.5 }}>
+                      <b>Signed into GTM in another browser</b> (Comet, Firefox, Edge, a different Chrome profile)? You do <b>not</b> need to sign in here. Grab the Preview / Share link there and paste it in Option A - verification runs in this app's own Chrome and never uses your GTM login.
+                    </div>
                   </>
                 )}
               </div>
@@ -7392,7 +7395,7 @@ function VerifyPanel({
               <div style={{ padding: '10px 12px', borderRadius: 10, border: '0.5px solid var(--border-2)', background: 'var(--surface-2)' }}>
                 <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)' }}>Option A &middot; Paste a preview link <span style={{ fontWeight: 400, color: 'var(--c-green)' }}>(no GTM changes)</span></div>
                 <div style={{ ...styles.muted, fontSize: 12, lineHeight: 1.5, marginTop: 2 }}>
-                  Already have a GTM Preview / Share link (or a head &lt;script&gt; Preview snippet)? Paste it here. Option B or C below fill this for you.
+                  Already have a GTM Preview / Share link (or a head &lt;script&gt; Preview snippet)? Paste it here. Option B below fills this for you.
                 </div>
                 <textarea
                   value={vSnippet}
@@ -7405,13 +7408,13 @@ function VerifyPanel({
               <div style={{ marginTop: 8, padding: '10px 12px', borderRadius: 10, border: '0.5px solid var(--border-2)', background: 'var(--surface-2)' }}>
                 <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)' }}>Option B &middot; Share from GTM <span style={{ fontWeight: 400, color: 'var(--c-green)' }}>(no GTM changes)</span></div>
                 <div style={{ ...styles.muted, fontSize: 12, lineHeight: 1.5, marginTop: 2 }}>
-                  Opens GTM in <b>Chrome</b>: click <b>Preview</b> (creates no version), then in Tag Assistant click <b>Share</b> and <b>Copy</b> the link, then paste it in the box below.
+                  Opens GTM in <b>whichever browser you are signed into GTM in</b> (your default browser): click <b>Preview</b> (creates no version), then in Tag Assistant click <b>Share</b> and <b>Copy</b> the link, then paste it in the box below.
                 </div>
                 <button
                   style={{ ...styles.toggleOff, marginTop: 6, ...(!ready ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
-                  onClick={() => { if (ready && ctx?.accountId && ctx?.containerId && ctx?.workspaceId) void window.desktop.openInChrome(gtmTagUrl(ctx.accountId, ctx.containerId, ctx.workspaceId)); }}
+                  onClick={() => { if (ready && ctx?.accountId && ctx?.containerId && ctx?.workspaceId) window.open(gtmTagUrl(ctx.accountId, ctx.containerId, ctx.workspaceId), '_blank'); }}
                   disabled={!ready}
-                  title="Opens this container's workspace in GTM in Google Chrome. Click Preview (top right), then Share in Tag Assistant, and copy the link, then paste it in the box below."
+                  title="Opens this container's workspace in GTM in your default browser. Click Preview (top right), then Share in Tag Assistant, and copy the link, then paste it in the box below."
                 >
                   ↗ Open GTM (then Preview &rarr; Share &rarr; Copy)
                 </button>
