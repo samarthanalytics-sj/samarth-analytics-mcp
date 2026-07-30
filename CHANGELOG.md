@@ -1,3 +1,9 @@
+## [1.437.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.437.0...v1.437.1) (2026-07-30)
+
+### Bug Fixes
+
+* **desktop:** diagnose + harden the Tag Assistant connect step ([#767](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/767)) ([674b63d](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/674b63d854cb16e8b8800f72380be3b5799847a1))
+
 ## [1.437.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.436.0...v1.437.0) (2026-07-30)
 
 ### Features
