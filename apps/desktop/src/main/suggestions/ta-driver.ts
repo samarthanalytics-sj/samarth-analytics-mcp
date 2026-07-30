@@ -69,6 +69,10 @@ export function taProfileDirFor(userDataDir: string, accountId?: string | null):
 interface PwPage {
   goto(url: string, opts?: Record<string, unknown>): Promise<unknown>;
   evaluate<R = unknown>(fn: unknown, arg?: unknown): Promise<R>;
+  // Per-PAGE init script (runs on every future navigation of THIS page) - used to keep an injected
+  // container present across the multi-page drive when the context-level init script does not reach
+  // the Tag Assistant popup.
+  addInitScript(fn: unknown, arg?: unknown): Promise<void>;
   waitForTimeout(ms: number): Promise<void>;
   waitForLoadState(state?: string, opts?: Record<string, unknown>): Promise<void>;
   click(sel: string, opts?: Record<string, unknown>): Promise<void>;
@@ -368,23 +372,30 @@ export async function runTaVerify(
       console.log(`[preflight] could not set __TAG_ASSISTANT cookie (${(e as Error).message}); relying on gtm_debug + the tagassistant referrer.`);
     }
   }
+  // Injects a GTM container's gtm.js (with the pasted preview creds + gtm_debug) into whatever page
+  // runs it - the extension-free "inject code" step. Self-contained (no outer refs) so Playwright can
+  // serialize it for BOTH addInitScript (future navigations) AND evaluate (an already-loaded page).
+  // Used on the context, and - because the context init script does NOT always reach Tag Assistant's
+  // debug popup - directly on that popup below.
+  const gtmInjector = (arg: { id: string; qs: string }): void => {
+    try {
+      const o = location.origin;
+      if (o === 'https://tagassistant.google.com' || o.indexOf('https://accounts.google.com') === 0) return; // TA / sign-in tabs only
+      const w = window as unknown as { google_tag_manager?: Record<string, unknown>; dataLayer?: unknown[] };
+      if (w.google_tag_manager && w.google_tag_manager[arg.id]) return; // already booted → never double-load
+      w.dataLayer = w.dataLayer || [];
+      w.dataLayer.push({ 'gtm.start': Date.now(), event: 'gtm.js' });
+      const s = document.createElement('script');
+      s.async = true;
+      s.src = 'https://www.googletagmanager.com/gtm.js?id=' + arg.id + arg.qs;
+      (document.head || document.documentElement).appendChild(s);
+    } catch { /* injection is best-effort; the boot diagnostic confirms whether TA actually saw it */ }
+  };
+  const injectArg = { id: injectContainerId, qs: injectQs };
   try {
     await ctx.addInitScript(captureFramesInit);
     if (injectContainerId) {
-      await ctx.addInitScript((arg: { id: string; qs: string }) => {
-        try {
-          const o = location.origin;
-          if (o === 'https://tagassistant.google.com' || o.indexOf('https://accounts.google.com') === 0) return; // TA / sign-in tabs only
-          const w = window as unknown as { google_tag_manager?: Record<string, unknown>; dataLayer?: unknown[] };
-          if (w.google_tag_manager && w.google_tag_manager[arg.id]) return; // already booted → never double-load
-          w.dataLayer = w.dataLayer || [];
-          w.dataLayer.push({ 'gtm.start': Date.now(), event: 'gtm.js' });
-          const s = document.createElement('script');
-          s.async = true;
-          s.src = 'https://www.googletagmanager.com/gtm.js?id=' + arg.id + arg.qs;
-          (document.head || document.documentElement).appendChild(s);
-        } catch { /* injection is best-effort; Step 4 confirms whether TA actually saw it */ }
-      }, { id: injectContainerId, qs: injectQs });
+      await ctx.addInitScript(gtmInjector, injectArg);
     }
     // Abort analytics collectors so driving tags never delivers a real hit (the TA stream, not beacons,
     // is the verdict source). In PREVIEW mode, rewrite the container's gtm.js request to carry the preview
@@ -556,9 +567,8 @@ export async function runTaVerify(
     // two very different failures: an INJECTION problem (the selected container never booted on the page
     // - CSP blocked the script, wrong timing, or the site serves GTM indirectly) vs a TA-ATTRIBUTION
     // problem (it booted but did not join this Tag Assistant session). Best-effort; never fails the run.
-    try {
-      const want = (injectContainerId || containerPublicId).toUpperCase();
-      const boot = await popup.evaluate<{ booted: string[]; injectedOk: boolean; gtmScripts: string[] }>((wantId: string) => {
+    const readBoot = async (): Promise<{ booted: string[]; injectedOk: boolean; gtmScripts: string[] }> =>
+      popup.evaluate<{ booted: string[]; injectedOk: boolean; gtmScripts: string[] }>((wantId: string) => {
         const w = window as unknown as { google_tag_manager?: Record<string, unknown> };
         const booted = Object.keys(w.google_tag_manager || {}).filter((k) => /^(GTM-|G-|AW-|GT-)/.test(k));
         const gtmScripts = Array.prototype.slice
@@ -566,13 +576,28 @@ export async function runTaVerify(
           .map((s) => (s as HTMLScriptElement).src.replace(/([?&]gtm_auth=)[^&]+/i, '$1REDACTED'))
           .slice(0, 6);
         return { booted, injectedOk: !!(w.google_tag_manager && w.google_tag_manager[wantId]), gtmScripts };
-      }, want);
+      }, (injectContainerId || containerPublicId).toUpperCase());
+    try {
+      const want = (injectContainerId || containerPublicId).toUpperCase();
+      let boot = await readBoot();
       console.log(`[tag-assistant] debug popup: containers booted = ${JSON.stringify(boot.booted)}`);
+      // FIX: the context-level addInitScript does not reliably reach Tag Assistant's debug popup (proven
+      // by the injected container being absent from the popup's gtm.js scripts). When the injected
+      // container has NOT booted, inject it straight into the popup: an init script on THIS page (so every
+      // page of the multi-page drive re-injects after navigation) PLUS an immediate evaluate for the page
+      // already loaded. Then re-read so the log reflects the retry.
+      if (injectContainerId && !boot.injectedOk) {
+        console.log(`[tag-assistant] ${want} not present in the popup; injecting it directly into the debug window ...`);
+        await popup.addInitScript(gtmInjector, injectArg).catch(() => undefined);
+        await popup.evaluate(gtmInjector, injectArg).catch(() => undefined);
+        await popup.waitForTimeout(Math.max(settleMs, 3500)); // let the injected gtm.js load + boot
+        boot = await readBoot().catch(() => boot);
+      }
       if (injectContainerId) {
         console.log(`[tag-assistant] injected ${want} booted on the page: ${boot.injectedOk ? 'YES (injection worked; if TA still says not found it is a debug-session/attribution issue)' : 'NO (the injected container never ran on the page)'}`);
         if (!boot.injectedOk) {
           console.log(`[tag-assistant] gtm.js scripts present on the page: ${JSON.stringify(boot.gtmScripts)}`);
-          console.log(`[tag-assistant] -> if ${want} is absent above, the site's Content-Security-Policy or a consent gate blocked the injected script, OR ${want} is not the container this site loads (live = ${JSON.stringify(boot.booted)}). Verify the container that is actually installed, or paste ${want}'s GTM Preview snippet.`);
+          console.log(`[tag-assistant] -> ${want} still would not load. The site's Content-Security-Policy or a consent gate is blocking the injected gtm.js, or ${want} is simply not the container this site serves (live = ${JSON.stringify(boot.booted)}). Verify the installed container, or paste ${want}'s GTM Preview snippet / test it on a page where it is installed.`);
         }
       }
     } catch (e) {
