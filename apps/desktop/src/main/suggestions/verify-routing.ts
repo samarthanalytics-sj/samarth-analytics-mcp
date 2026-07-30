@@ -132,3 +132,52 @@ export function routeTagsToPages<T extends VerifyTagInput>(tags: T[], elements: 
     return page ? { ...t, page } : t;
   });
 }
+
+/**
+ * Classify a click/link tag's control as GLOBAL (site chrome), so the caller can drive it ONCE instead
+ * of on every chosen page. Global = the matched control sits in the header / nav / footer on ANY page,
+ * OR the same href (else the same text) appears on >= minRepeatPages distinct crawled pages - a repeated
+ * site-wide control (the email / phone / WhatsApp / social buttons in the header/footer). Needs the crawl
+ * inventory; with no inventory it returns false (nothing is deduped → the safe fallback). PURE.
+ */
+export function isGlobalClickTag(
+  trigger: VerifyTagInput['trigger'],
+  elements: DetectedElementView[],
+  opts: { minRepeatPages?: number } = {},
+): boolean {
+  if (!isClickTrigger(trigger.kind) || elements.length === 0) return false;
+  const matching = elements.filter((e) => elementMatchesTrigger(trigger, e));
+  if (matching.length === 0) return false;
+  // In the site chrome (header / nav / footer) on ANY page → the control repeats on every page.
+  if (matching.some((e) => e.region === 'header' || e.region === 'nav' || e.region === 'footer')) return true;
+  // The same href (else the same visible text) appears on >= minRepeatPages distinct pages → repeated.
+  const minPages = Math.max(2, opts.minRepeatPages ?? 2);
+  const pagesByKey = new Map<string, Set<string>>();
+  for (const e of matching) {
+    const key = normLabel(e.href ?? '') || normLabel(e.text ?? '');
+    if (!key || !e.page) continue;
+    const set = pagesByKey.get(key) ?? new Set<string>();
+    set.add(e.page);
+    pagesByKey.set(key, set);
+  }
+  for (const pages of pagesByKey.values()) if (pages.size >= minPages) return true;
+  return false;
+}
+
+/**
+ * Expand each tag across the chosen verify pages (explicit-pages mode). A GLOBAL click tag (its control
+ * repeats site-wide) is emitted ONCE on the first page - driving it on every page just re-fires the same
+ * tag (the header/footer CTA that showed up firing 50x/80x). Every OTHER tag is emitted on EACH page, so
+ * a page-specific CTA (or a form on a page the crawl missed) is still exercised. PURE.
+ */
+export function expandTagsOverPages<T extends { id: string; tagName: string; trigger: VerifyTagInput['trigger'] }>(
+  tags: T[],
+  pages: string[],
+  elements: DetectedElementView[],
+): Array<{ id: string; name: string; page: string; trigger: VerifyTagInput['trigger'] }> {
+  if (pages.length === 0) return [];
+  return tags.flatMap((t) => {
+    const targets = isGlobalClickTag(t.trigger, elements) ? [pages[0]] : pages;
+    return targets.map((page) => ({ id: t.id, name: t.tagName, page, trigger: t.trigger }));
+  });
+}

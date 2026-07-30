@@ -1,7 +1,7 @@
 // Pure tests for the multi-page verify router (no browser).
 // Run: tsx apps/desktop/src/main/suggestions/__tests__/verify-routing.test.ts
 
-import { routeTagsToPages, elementMatchesTrigger, isHomePage, normalizeVerifyPages } from '../verify-routing';
+import { routeTagsToPages, elementMatchesTrigger, isHomePage, normalizeVerifyPages, isGlobalClickTag, expandTagsOverPages } from '../verify-routing';
 import type { VerifyTagInput, DetectedElementView } from '../../../shared/ipc';
 
 let passed = 0;
@@ -151,6 +151,53 @@ check('non-click trigger never matches', !elementMatchesTrigger({ name: 'p', kin
   check('normalizeVerifyPages: empty when target itself is unparseable', normalizeVerifyPages(['/a'], 'not a url').length === 0);
 }
 
+// ── isGlobalClickTag / expandTagsOverPages: dedupe site-wide CTAs to ONE page ─────────────────────
+const elR = (page: string, text: string, href: string | undefined, region: string): DetectedElementView =>
+  ({ page, kind: 'cta', text, ...(href ? { href } : {}), region } as DetectedElementView);
+{
+  // A footer CTA → global (site chrome, repeats on every page).
+  const t = tag({ trigger: { name: 'x', kind: 'link_click', clickTextValue: 'Email us', clickTextOperator: 'equals' } });
+  check('footer CTA → global', isGlobalClickTag(t.trigger, [elR('/', 'Email us', 'mailto:hi@site.com', 'footer')]));
+}
+{
+  // A header nav CTA → global.
+  const t = tag({ trigger: { name: 'x', kind: 'link_click', clickTextValue: 'Contact', clickTextOperator: 'equals' } });
+  check('header CTA → global', isGlobalClickTag(t.trigger, [elR('/', 'Contact', '/contact', 'header')]));
+}
+{
+  // Same href on 2+ pages (no chrome region) → global (a repeated control).
+  const t = tag({ trigger: { name: 'x', kind: 'link_click', clickUrlValue: 'wa.me/123', clickUrlOperator: 'contains' } });
+  const els = [elR('/a', 'WhatsApp', 'https://wa.me/123', ''), elR('/b', 'WhatsApp', 'https://wa.me/123', '')];
+  check('href repeated on 2 pages → global', isGlobalClickTag(t.trigger, els));
+}
+{
+  // Same control on ONE main-content page → NOT global (page-specific, keep per-page coverage).
+  const t = tag({ trigger: { name: 'x', kind: 'link_click', clickTextValue: 'Download Checklist', clickTextOperator: 'equals' } });
+  check('single-page main CTA → not global', !isGlobalClickTag(t.trigger, [elR('/free-audit', 'Download Checklist', '/x.pdf', 'main')]));
+}
+check('no inventory → not global (safe fallback)', !isGlobalClickTag(tag().trigger, []));
+check('custom_event → never global', !isGlobalClickTag({ name: 'F', kind: 'custom_event', eventName: 'form_submission' } as VerifyTagInput['trigger'], [elR('/', 'x', '/x', 'footer')]));
+{
+  // expandTagsOverPages: a global click tag drives ONCE; a page-specific tag drives on every page.
+  const pages = ['https://site.com/a', 'https://site.com/b', 'https://site.com/c'];
+  const globalTag = tag({ id: 'g', tagName: 'Email Click', trigger: { name: 'x', kind: 'link_click', clickTextValue: 'Email us', clickTextOperator: 'equals' } });
+  const pageTag = tag({ id: 'p', tagName: 'Checklist', trigger: { name: 'x', kind: 'link_click', clickTextValue: 'Download Checklist', clickTextOperator: 'equals' } });
+  const els = [elR('/', 'Email us', 'mailto:hi@site.com', 'footer'), elR('/free-audit', 'Download Checklist', '/x.pdf', 'main')];
+  const out = expandTagsOverPages([globalTag, pageTag], pages, els);
+  const gRows = out.filter((r) => r.id === 'g');
+  const pRows = out.filter((r) => r.id === 'p');
+  check('global tag driven ONCE (first page)', gRows.length === 1 && gRows[0].page === pages[0]);
+  check('page-specific tag driven on every page', pRows.length === 3);
+  check('expand output keeps id / name / trigger', gRows[0].name === 'Email Click' && gRows[0].trigger.kind === 'link_click');
+}
+{
+  // A custom_event tag is never "global" → driven on every page (unchanged coverage).
+  const ce = tag({ id: 'ce', tagName: 'Scroll', trigger: { name: 'S', kind: 'custom_event', eventName: 'custom_scroll_depth' } });
+  check('custom_event tag driven on every page (not deduped)', expandTagsOverPages([ce], ['https://site.com/a', 'https://site.com/b'], [elR('/', 'x', '/x', 'footer')]).length === 2);
+}
+check('no inventory → replicate on every page (fallback = old behavior)', expandTagsOverPages([tag({ id: 'z', tagName: 'Z' })], ['https://site.com/a', 'https://site.com/b'], []).length === 2);
+check('empty pages → empty output', expandTagsOverPages([tag()], [], []).length === 0);
+
 console.log(`\nverify-routing: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }
-if (passed < 37) { console.error(`expected >= 37 checks, got ${passed}`); process.exit(1); }
+if (passed < 49) { console.error(`expected >= 49 checks, got ${passed}`); process.exit(1); }
