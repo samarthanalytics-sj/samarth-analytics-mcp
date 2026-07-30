@@ -551,6 +551,34 @@ export async function runTaVerify(
     await popup.waitForLoadState('networkidle', { timeout: navTimeoutMs }).catch(() => undefined);
     await popup.waitForTimeout(Math.max(settleMs, 4000)); // debug handshake + container debug reload
 
+    // DIAGNOSTIC: which containers actually BOOTED in the debug popup, and did the injected one load?
+    // When TA shows "GTM-XXX not found - is it installed on this page?", this line distinguishes the
+    // two very different failures: an INJECTION problem (the selected container never booted on the page
+    // - CSP blocked the script, wrong timing, or the site serves GTM indirectly) vs a TA-ATTRIBUTION
+    // problem (it booted but did not join this Tag Assistant session). Best-effort; never fails the run.
+    try {
+      const want = (injectContainerId || containerPublicId).toUpperCase();
+      const boot = await popup.evaluate<{ booted: string[]; injectedOk: boolean; gtmScripts: string[] }>((wantId: string) => {
+        const w = window as unknown as { google_tag_manager?: Record<string, unknown> };
+        const booted = Object.keys(w.google_tag_manager || {}).filter((k) => /^(GTM-|G-|AW-|GT-)/.test(k));
+        const gtmScripts = Array.prototype.slice
+          .call(document.querySelectorAll('script[src*="gtm.js"]'))
+          .map((s) => (s as HTMLScriptElement).src.replace(/([?&]gtm_auth=)[^&]+/i, '$1REDACTED'))
+          .slice(0, 6);
+        return { booted, injectedOk: !!(w.google_tag_manager && w.google_tag_manager[wantId]), gtmScripts };
+      }, want);
+      console.log(`[tag-assistant] debug popup: containers booted = ${JSON.stringify(boot.booted)}`);
+      if (injectContainerId) {
+        console.log(`[tag-assistant] injected ${want} booted on the page: ${boot.injectedOk ? 'YES (injection worked; if TA still says not found it is a debug-session/attribution issue)' : 'NO (the injected container never ran on the page)'}`);
+        if (!boot.injectedOk) {
+          console.log(`[tag-assistant] gtm.js scripts present on the page: ${JSON.stringify(boot.gtmScripts)}`);
+          console.log(`[tag-assistant] -> if ${want} is absent above, the site's Content-Security-Policy or a consent gate blocked the injected script, OR ${want} is not the container this site loads (live = ${JSON.stringify(boot.booted)}). Verify the container that is actually installed, or paste ${want}'s GTM Preview snippet.`);
+        }
+      }
+    } catch (e) {
+      console.log(`[tag-assistant] boot diagnostic could not read the popup: ${(e as Error).message}`);
+    }
+
     // PROOF: screenshot the Tag Assistant panel DURING the drive. Right after each click / form submit, the
     // event we just caused is the NEWEST rail row, so clicking it shows exactly that event's Tags-Fired
     // panel. This beats a post-hoc rail search, which drowns in the scan's scroll_depth events and misses
