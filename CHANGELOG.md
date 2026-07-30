@@ -1,3 +1,9 @@
+## [1.437.5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.437.4...v1.437.5) (2026-07-30)
+
+### Bug Fixes
+
+* **desktop:** keep the injected container booted on every drive page (non-live verify) ([#771](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/771)) ([6a09fdc](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/6a09fdc39d817bb8349b7ef285d4fbd618f9ec40)), closes [#770](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/770)
+
 ## [1.437.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.437.3...v1.437.4) (2026-07-30)
 
 ### Bug Fixes
