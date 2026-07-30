@@ -93,6 +93,11 @@ const api = {
   getInfo: (): Promise<AppInfo> => ipcRenderer.invoke('app:getInfo'),
   ping: (message: string): Promise<string> => ipcRenderer.invoke('app:ping', message),
 
+  // Open a URL in the user's real Chrome specifically (verify "Open in my Chrome" button, so a pasted Tag
+  // Assistant link lands in the Chrome where they injected their container). Resolves { chrome:false } when
+  // it had to fall back to the default browser (no Chrome found).
+  openInChrome: (url: string): Promise<{ chrome: boolean }> => ipcRenderer.invoke('shell:openInChrome', url),
+
   // Dev-only bridge: the main process mirrors its console logs, IPC calls and Google API HTTP here so
   // they surface in the renderer DevTools Console. Entries are already redacted in main. In a packaged
   // build the main process never sends on this channel, so this is a silent no-op.
