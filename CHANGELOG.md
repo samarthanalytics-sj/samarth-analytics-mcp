@@ -1,3 +1,9 @@
+## [1.437.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.437.3...v1.437.4) (2026-07-30)
+
+### Bug Fixes
+
+* **desktop:** inject the non-live container into the TA debug popup itself, not just the context ([#770](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/770)) ([cb24285](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/cb24285ded94843085413e218ceb2e16cc7e91dd)), closes [#769](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/769)
+
 ## [1.437.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.437.2...v1.437.3) (2026-07-30)
 
 ### Bug Fixes
