@@ -192,6 +192,28 @@ fresh on each computer.
 
 ---
 
+## Which config goes where (desktop app vs MCP server)
+
+This repo ships **two** products, and they read the Google **client id + secret**
+from **different places**. Use the row that matches what you're running:
+
+| You're running | Put the Google **client id + secret** in | How |
+|---|---|---|
+| **Samarth Desktop** (this guide) | `oauth-client.json` in the app's **data folder** | The **Settings** banner shows the exact path. Create the file with `{ "clientId": "…", "clientSecret": "…" }`, then **restart**. |
+| **MCP server** (stdio / HTTP, the **repo root**) | `.env` at the repo root | `cp .env.example .env`, then edit it (`nano .env`) → set `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET`. |
+| **Hosted MCP** (Render / Fly, etc.) | your platform's **secret manager** | Render → service → **Environment**; Fly → `fly secrets set GOOGLE_OAUTH_CLIENT_ID=… GOOGLE_OAUTH_CLIENT_SECRET=…`. Never in a committed file. |
+
+> **Common mix-up:** the **desktop app ignores `.env`** for OAuth. If you edited
+> `.env` but Settings still says *"OAuth client not configured,"* you edited the
+> wrong file — create `oauth-client.json` at the path in the Settings banner
+> instead. (The reverse is also true: the stdio/HTTP server ignores
+> `oauth-client.json` and reads `.env`.)
+
+The same Google client id/secret can be used in all three — only the **location**
+you paste them into differs.
+
+---
+
 ## 5. Where your data lives
 
 | OS | Packaged app | Run from source |
@@ -246,22 +268,66 @@ app), so updating doesn't lose them.
 
 ---
 
-## Appendix A — Create a Google OAuth client
+## Appendix A — Create a Google OAuth client (detailed) & fix sign-in errors
 
-1. [Google Cloud Console](https://console.cloud.google.com) → create / select a project.
-2. **APIs & Services → Library** → enable **Tag Manager API**, **Google Analytics
-   Admin API**, **Google Analytics Data API**.
-3. **OAuth consent screen** → User type **External** → add your Gmail address(es)
-   under **Test users** (required while the app is unverified).
-4. **Credentials → Create credentials → OAuth client ID** → Application type:
-   **Desktop app** → **Create**. Copy the **Client ID** and **Client secret** into
-   `oauth-client.json` (step 4 above). No redirect URIs to register — desktop
-   clients allow the `127.0.0.1` loopback automatically.
+The app signs in with **your own** Google OAuth client, so your GTM/GA4 data
+never passes through anyone else's app. Create it once (about 5 minutes).
 
-> **Getting `access_denied`, or want anyone (not just test users) to sign in?**
-> See [docs/OAUTH_VERIFICATION.md](docs/OAUTH_VERIFICATION.md) — it covers test
-> users, the Testing→Production switch, and Google's (sensitive-scope)
-> verification.
+### 1. Create or pick a Google Cloud project
+[Google Cloud Console](https://console.cloud.google.com) → the project picker at
+the top → **New Project** (or select an existing one). Any project works.
+
+### 2. Enable the three APIs
+**APIs & Services → Library**, search for and **Enable** each:
+- **Tag Manager API** — GTM read/edit
+- **Google Analytics Admin API** — GA4 configuration
+- **Google Analytics Data API** — GA4 reporting
+
+Skip these and sign-in still works, but tool calls fail later with *"… API has
+not been used in project … or it is disabled."*
+
+### 3. Configure the OAuth consent screen
+**APIs & Services → OAuth consent screen**:
+1. **User type: External** → **Create**.
+2. Fill app name + your email → **Save and continue** through **Scopes** (nothing
+   to add here) and **Summary**.
+3. **Test users → + Add users** → add **every Gmail address you'll sign in with**.
+   While the app is in **Testing**, only these addresses can authorize it — any
+   other account gets `access_denied`.
+
+### 4. Create the OAuth client
+**APIs & Services → Credentials → + Create credentials → OAuth client ID**:
+1. **Application type: Desktop app** → name it → **Create**.
+2. Copy the **Client ID** (ends `.apps.googleusercontent.com`) and the **Client
+   secret** (starts `GOCSPX-`).
+3. A **Desktop** client needs **no redirect URI** — the app uses the `127.0.0.1`
+   loopback automatically. (A **Web application** client is the wrong type here
+   and causes `redirect_uri_mismatch`.)
+
+### 5. Give the credentials to the app
+Paste them into the location for the product you're running — see
+**[Which config goes where](#which-config-goes-where-desktop-app-vs-mcp-server)**
+above. For **Samarth Desktop**: create `oauth-client.json` at the path shown in
+the **Settings** banner, then **restart the app**.
+
+### Common Google sign-in errors — and the exact fix
+
+| Error you see | What it means | Fix |
+|---|---|---|
+| **"OAuth client not configured"** (Settings banner) | The app can't find `oauth-client.json`. | Create it at the **exact path** in the banner — **not** `.env`, which the desktop app ignores. Restart the app. |
+| **`invalid_client` / "The OAuth client was not found"** | Wrong/empty **Client ID or secret**, or the secret was pasted into the id field. | Re-copy **both** from **Credentials**. `clientId` must end `.apps.googleusercontent.com`; `clientSecret` starts `GOCSPX-`. Confirm it's a **Desktop** client. |
+| **`access_denied`** | Your Gmail isn't a **Test user** (or a Workspace admin blocks the app). | Add your address under **OAuth consent screen → Test users**. On a Workspace account an admin may need to allow the app — or sign in with a personal Gmail. |
+| **`redirect_uri_mismatch`** | You created a **Web application** client instead of **Desktop**. | Create a new **Desktop app** client and use those credentials (Desktop clients need no redirect URI). |
+| **"This app isn't verified"** screen | Normal for your own unverified app while in **Testing**. | Click **Advanced → Go to \<app name\> (unsafe)** — it's your own app. To remove the warning, publish + verify (below). |
+| **Sign-in window opens then closes / "exits" before finishing** | The window the app opened was closed early, or another browser/profile grabbed the flow. | Complete the sign-in **fully in the window the app opened**. For **verify / Tag Assistant** specifically, pasting a GTM **Preview link** skips this sign-in entirely. |
+| **"Login Required" / 403** on a GTM/GA4 action *after* sign-in worked | The saved token lacks the write/manage scope. | **Disconnect** and **reconnect** the account, approving *"Manage your Google Tag Manager container."* |
+| **"… API has not been used / is disabled"** | An API from step 2 isn't enabled in that project. | Enable **Tag Manager API** / **Analytics Admin API** / **Analytics Data API** in the same project, wait a minute, retry. |
+
+> **Want anyone (not just test users) to sign in, or to drop the "unverified"
+> warning?** On the **OAuth consent screen**, switch **Publishing status** from
+> **Testing** to **In production**. For Google's *sensitive* scopes (GTM edit),
+> production use also needs Google's app **verification** — until then, Testing +
+> Test users is the fastest path and is fine for personal/internal use.
 
 ---
 
