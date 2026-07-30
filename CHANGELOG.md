@@ -1,3 +1,9 @@
+## [1.438.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.437.6...v1.438.0) (2026-07-30)
+
+### Features
+
+* **desktop:** drive site-wide CTAs once in tag verification, not per page ([#775](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/775)) ([610f7bf](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/610f7bf299149c248041df20e7a3845d741c5bd6))
+
 ## [1.437.6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.437.5...v1.437.6) (2026-07-30)
 
 ### Bug Fixes
