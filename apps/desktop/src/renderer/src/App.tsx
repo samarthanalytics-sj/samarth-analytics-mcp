@@ -7436,13 +7436,13 @@ function VerifyPanel({
               <div style={{ marginTop: 8, padding: '10px 12px', borderRadius: 10, border: '0.5px solid var(--border-2)', background: 'var(--surface-2)' }}>
                 <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)' }}>Option B &middot; Share from GTM <span style={{ fontWeight: 400, color: 'var(--c-green)' }}>(no GTM changes)</span></div>
                 <div style={{ ...styles.muted, fontSize: 12, lineHeight: 1.5, marginTop: 2 }}>
-                  Open GTM, click <b>Preview</b> (creates no version), then in Tag Assistant click <b>Share</b> and <b>Copy</b> the link, then paste it in the box below.
+                  Opens GTM in <b>Chrome</b>: click <b>Preview</b> (creates no version), then in Tag Assistant click <b>Share</b> and <b>Copy</b> the link, then paste it in the box below.
                 </div>
                 <button
                   style={{ ...styles.toggleOff, marginTop: 6, ...(!ready ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
-                  onClick={() => { if (ready && ctx?.accountId && ctx?.containerId && ctx?.workspaceId) window.open(gtmTagUrl(ctx.accountId, ctx.containerId, ctx.workspaceId), '_blank'); }}
+                  onClick={() => { if (ready && ctx?.accountId && ctx?.containerId && ctx?.workspaceId) void window.desktop.openInChrome(gtmTagUrl(ctx.accountId, ctx.containerId, ctx.workspaceId)); }}
                   disabled={!ready}
-                  title="Opens this container's workspace in GTM in your browser. Click Preview (top right), then Share in Tag Assistant, and copy the link, then paste it in the box below."
+                  title="Opens this container's workspace in GTM in Google Chrome. Click Preview (top right), then Share in Tag Assistant, and copy the link, then paste it in the box below."
                 >
                   ↗ Open GTM (then Preview &rarr; Share &rarr; Copy)
                 </button>
