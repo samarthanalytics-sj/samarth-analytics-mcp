@@ -1,3 +1,9 @@
+## [1.444.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.443.0...v1.444.0) (2026-07-31)
+
+### Features
+
+* **desktop:** proof screenshot = the fired tag's full detail view, not just the event summary ([#781](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/781)) ([7b73963](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/7b73963933894ece7687e59217117949f0b7ecad))
+
 ## [1.443.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.442.0...v1.443.0) (2026-07-31)
 
 ### Features
