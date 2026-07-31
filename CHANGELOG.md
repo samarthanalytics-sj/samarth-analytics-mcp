@@ -1,3 +1,9 @@
+## [1.443.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.442.0...v1.443.0) (2026-07-31)
+
+### Features
+
+* **desktop:** open account sign-in in your chosen browser, not always Comet ([#780](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/780)) ([e2fc596](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/e2fc5963266847a38789a3ec9b39fae65d390fa9)), closes [#779](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/779) [#779](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/779)
+
 ## [1.442.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.441.0...v1.442.0) (2026-07-31)
 
 ### Features
