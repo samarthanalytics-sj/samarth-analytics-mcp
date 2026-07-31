@@ -797,7 +797,8 @@ export function App(): JSX.Element {
     setError('');
     setConnecting(true);
     try {
-      await window.desktop.google.connect();
+      const browserExe = await resolvePreferredBrowserExe();
+      await window.desktop.google.connect(browserExe);
       await refresh();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -2664,9 +2665,9 @@ function AdsContextBar({
                     style={{ ...styles.ctxChangeBtn, marginTop: 6 }}
                     onClick={() => {
                       // Re-consent adds the adwords scope to the EXISTING grant (google.connectAds), so
-                      // Tag Manager and Analytics access is untouched.
-                      void window.desktop.google
-                        .connectAds()
+                      // Tag Manager and Analytics access is untouched. Opens in the chosen sign-in browser.
+                      void resolvePreferredBrowserExe()
+                        .then((exe) => window.desktop.google.connectAds(exe))
                         .then(async () => { await refresh(); await checkStatus(); })
                         .catch((e: unknown) => onError(e instanceof Error ? e.message : String(e)));
                     }}
@@ -6458,6 +6459,58 @@ function TaEventTimeline({ events }: { events: NonNullable<VerifyTagsResult['taE
 }
 
 type BrowserOpt = { id: string; name: string; exe: string };
+const OPEN_LINK_BROWSER_KEY = 'sx.openLinkBrowser';
+/** Resolve the operator's preferred browser to an exe path for the main process (empty = OS default).
+ *  Shared by account sign-in and the GTM-link picker so one choice drives both. */
+async function resolvePreferredBrowserExe(): Promise<string> {
+  let prefId = 'default';
+  try { prefId = localStorage.getItem(OPEN_LINK_BROWSER_KEY) || 'default'; } catch { /* private mode */ }
+  if (prefId === 'default') return '';
+  try {
+    const bs = await window.desktop.listBrowsers();
+    return bs.find((b) => b.id === prefId)?.exe ?? '';
+  } catch { return ''; }
+}
+/** Settings dropdown to choose which browser opens account sign-in AND the GTM links (one shared pref,
+ *  remembered in localStorage). The app can't know which browser holds the signed-in Google session -
+ *  Comet, Chrome, or Edge - so the operator picks it here. */
+function SignInBrowserPref(): JSX.Element {
+  const [list, setList] = useState<BrowserOpt[] | null>(null);
+  const [menu, setMenu] = useState(false);
+  const [prefId, setPrefId] = useState<string>(() => { try { return localStorage.getItem(OPEN_LINK_BROWSER_KEY) || 'default'; } catch { return 'default'; } });
+  useEffect(() => {
+    let alive = true;
+    void window.desktop.listBrowsers()
+      .then((bs) => { if (alive) setList(bs.length ? bs : [{ id: 'default', name: 'Default browser', exe: '' }]); })
+      .catch(() => { if (alive) setList([{ id: 'default', name: 'Default browser', exe: '' }]); });
+    return () => { alive = false; };
+  }, []);
+  const chosen = (list?.find((b) => b.id === prefId)) ?? list?.[0] ?? { id: 'default', name: 'default browser', exe: '' };
+  const pick = (b: BrowserOpt): void => { try { localStorage.setItem(OPEN_LINK_BROWSER_KEY, b.id); } catch { /* private mode */ } setPrefId(b.id); setMenu(false); };
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
+      <span style={{ fontSize: 12.5, color: 'var(--text-dim)' }}>Sign-in &amp; GTM links open in</span>
+      <span style={{ position: 'relative', display: 'inline-flex' }}>
+        <button type="button" onClick={(e) => { e.stopPropagation(); setMenu((m) => !m); }} title="Choose which browser opens account sign-in and GTM links" style={{ ...styles.toggleOff, padding: '5px 11px', fontSize: 12.5, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          {chosen.name} <span style={{ opacity: 0.7 }}>▾</span>
+        </button>
+        {menu && list ? (
+          <>
+            <div onClick={() => setMenu(false)} style={{ position: 'fixed', inset: 0, zIndex: 60 }} />
+            <div style={{ position: 'absolute', top: '100%', left: 0, marginTop: 4, zIndex: 61, minWidth: 210, background: 'var(--surface-2)', border: '1px solid var(--border-2)', borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.28)', overflow: 'hidden', padding: 4 }}>
+              {list.map((b) => (
+                <button key={b.id} type="button" onClick={() => pick(b)} style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left', padding: '7px 9px', fontSize: 13, borderRadius: 6, background: b.id === chosen.id ? 'var(--surface-1)' : 'transparent', color: 'var(--text)', border: 'none', cursor: 'pointer' }}>
+                  <span style={{ color: b.id === chosen.id ? 'var(--c-green)' : 'var(--text-muted)' }}>{b.id === chosen.id ? '●' : '○'}</span>
+                  {b.name}
+                </button>
+              ))}
+            </div>
+          </>
+        ) : null}
+      </span>
+    </div>
+  );
+}
 /** "Open in [browser]" split button: opens the link in the operator's CHOSEN browser and remembers the
  *  pick (localStorage). The app can't know which browser holds the signed-in Google/GTM session - it can
  *  be Comet, Chrome, or Edge - so the operator picks; the caret lists every installed browser (OS default
@@ -11734,6 +11787,7 @@ function SettingsView({
           ))}
         </div>
         <div style={{ marginTop: 12 }}>
+          <SignInBrowserPref />
           {connecting ? (
             <div style={{ display: 'flex', gap: 8 }}>
               <button style={{ ...styles.connectDashed, flex: 1 }} disabled>Signing in…</button>
@@ -12279,7 +12333,7 @@ function AdsPicker({
   async function reconnect(): Promise<void> {
     setReconnecting(true);
     try {
-      await window.desktop.google.connectAds();
+      await window.desktop.google.connectAds(await resolvePreferredBrowserExe());
       await load();
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
@@ -12755,7 +12809,7 @@ function GrantedScopesCard({ onError }: { onError: (m: string) => void }): JSX.E
   async function grant(): Promise<void> {
     setBusy(true);
     try {
-      await window.desktop.google.connectAds();
+      await window.desktop.google.connectAds(await resolvePreferredBrowserExe());
       await refresh();
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));

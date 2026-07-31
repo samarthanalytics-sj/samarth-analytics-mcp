@@ -9,10 +9,13 @@ import { adsAuthScopes } from '../google/oauth';
 // Tag Assistant sign-in step.
 export function registerGoogleIpc(service: GoogleAuthService): void {
   ipcMain.handle('google:status', () => service.status());
-  ipcMain.handle('google:connect', () => service.connect());
+  // browserExe (optional) = which installed browser to open the consent URL in (empty/undefined = OS
+  // default). The renderer passes the operator's chosen sign-in browser so consent lands where they're
+  // signed into Google, not always the default browser.
+  ipcMain.handle('google:connect', (_e, browserExe?: string) => service.connect(undefined, browserExe));
   // Opt-in Google Ads consent. Requests the UNION of the default scopes plus adwords, so the returned
   // token (which REPLACES the vaulted one) keeps the Tag Manager and Analytics grants.
-  ipcMain.handle('google:connectAds', () => service.connect(adsAuthScopes()));
+  ipcMain.handle('google:connectAds', (_e, browserExe?: string) => service.connect(adsAuthScopes(), browserExe));
   ipcMain.handle('google:cancelConnect', () => {
     service.cancelConnect();
   });

@@ -199,9 +199,9 @@ const api = {
 
   google: {
     status: (): Promise<GoogleClientStatus> => ipcRenderer.invoke('google:status'),
-    connect: (): Promise<AccountView> => ipcRenderer.invoke('google:connect'),
+    connect: (browserExe?: string): Promise<AccountView> => ipcRenderer.invoke('google:connect', browserExe),
     /** Re-consent adding the Google Ads scope (the union with the existing scopes). */
-    connectAds: (): Promise<AccountView> => ipcRenderer.invoke('google:connectAds'),
+    connectAds: (browserExe?: string): Promise<AccountView> => ipcRenderer.invoke('google:connectAds', browserExe),
     cancelConnect: (): Promise<void> => ipcRenderer.invoke('google:cancelConnect'),
     disconnect: (id: string): Promise<void> => ipcRenderer.invoke('google:disconnect', id),
   },
