@@ -268,6 +268,32 @@ function openFiredTagInPage(name: string): string {
     document.querySelectorAll('[data-ta-tag]').forEach((e) => e.removeAttribute('data-ta-tag'));
     const want = (name || '').replace(/\s+/g, ' ').trim().toLowerCase();
     if (!want) return '';
+    // SCOPE the search to the CURRENT panel's "Tags Fired" region (between that heading and "Tags Not
+    // Fired"). Searching the whole document could match the same tag name in the left rail or another
+    // panel and open the tag from the wrong place - a detail opened outside an event has no
+    // "Display Variables as" toggle, so its proof can never show resolved values.
+    const tightHeading = (re: RegExp): Element | null => {
+      let best: Element | null = null;
+      let bestLen = Infinity;
+      const all = Array.prototype.slice.call(document.querySelectorAll('h1,h2,h3,h4,h5,div,span,p')) as HTMLElement[];
+      for (const el of all) {
+        const t = (el.textContent || '').replace(/\s+/g, ' ').trim();
+        if (t.length > 40 || !re.test(t)) continue;
+        if (t.length < bestLen) { bestLen = t.length; best = el; }
+      }
+      return best;
+    };
+    // Prefix-matched, not exact: a heading rendered as "Tags Fired (5)" must still anchor the region, else
+    // inFiredRegion silently falls back to searching the WHOLE document again. "Tags Not Fired" cannot match.
+    const firedHead = tightHeading(/^tags fired\b/i);
+    const notFiredHead = tightHeading(/^tags not fired/i);
+    const FOLLOWING = 4; // Node.DOCUMENT_POSITION_FOLLOWING
+    const inFiredRegion = (el: Element): boolean => {
+      if (!firedHead) return true; // heading not found - fall back to the whole document (old behaviour)
+      if (!(firedHead.compareDocumentPosition(el) & FOLLOWING)) return false; // before the Tags Fired heading
+      if (notFiredHead && (notFiredHead.compareDocumentPosition(el) & FOLLOWING)) return false; // in Tags NOT Fired
+      return true;
+    };
     const nodes = Array.prototype.slice.call(document.querySelectorAll('a,button,[role="button"],div,span,td,li')) as HTMLElement[];
     let bestEl: HTMLElement | null = null;
     let bestLen = Infinity;
@@ -277,6 +303,7 @@ function openFiredTagInPage(name: string): string {
       // Prefer the TIGHTEST element still holding the whole name (the card title/row, not a wrapper that
       // holds the entire Tags-Fired list). Cap the extra chars so a big wrapper is skipped.
       if (t.length > want.length + 48) continue;
+      if (!inFiredRegion(el)) continue;
       if (t.length < bestLen) { bestLen = t.length; bestEl = el; }
     }
     if (!bestEl) return '';
@@ -285,31 +312,73 @@ function openFiredTagInPage(name: string): string {
   } catch { return ''; }
 }
 
-/** In the TA page: true when the TAG DETAIL view is showing (the panel opened by clicking a fired tag) -
- *  it carries "Tag Details" plus firing-trigger / hits headings the event summary never has. */
-function isTaTagDetailInPage(): boolean {
+/** In the TA page: the state of the tag-detail view we may have just opened.
+ *   - isDetail: a "Tag Details" panel is showing.
+ *   - eventContext: it was opened from an EVENT row, so it carries the "Display Variables as" toggle (and a
+ *     Firing Status row). A detail opened from the SUMMARY view has NEITHER, shows only {{variable}} names,
+ *     and can never be switched to values - so the driver must reject it and re-open from the event.
+ *   - valuesActive: the "Values" radio of that toggle is currently selected (resolved values are shown). */
+function readTaTagDetailState(): { isDetail: boolean; eventContext: boolean; valuesActive: boolean } {
+  const out = { isDetail: false, eventContext: false, valuesActive: false };
   try {
     const t = (document.body.textContent || '').replace(/\s+/g, ' ');
-    return /Tag Details/i.test(t) && /(Firing Triggers|Hits sent|Blocking Triggers)/i.test(t);
-  } catch { return false; }
+    out.isDetail = /Tag Details/i.test(t) && /(Firing Triggers|Hits sent|Blocking Triggers)/i.test(t);
+    out.eventContext = /Display Variables as/i.test(t) && !/Messages Where This Tag Fired/i.test(t);
+    // The tight label of a radio: its wrapping <label>, its label[for=id], else its next sibling. Kept tight
+    // (exactly "Values") so the Names radio - whose PARENT text is "Names Values" - can never match.
+    const labelOf = (r: Element): string => {
+      const wrap = r.closest ? r.closest('label') : null;
+      if (wrap && wrap.textContent) return wrap.textContent.replace(/\s+/g, ' ').trim();
+      const id = (r as HTMLInputElement).id;
+      if (id) {
+        const l = document.querySelector('label[for="' + id.replace(/"/g, '\\"') + '"]');
+        if (l && l.textContent) return l.textContent.replace(/\s+/g, ' ').trim();
+      }
+      const sib = r.nextElementSibling;
+      if (sib && sib.textContent) return sib.textContent.replace(/\s+/g, ' ').trim();
+      return '';
+    };
+    const radios = Array.prototype.slice.call(document.querySelectorAll('input[type="radio"],[role="radio"]')) as Element[];
+    for (const r of radios) {
+      if (labelOf(r).toLowerCase() !== 'values') continue;
+      if ((r as HTMLInputElement).checked === true || r.getAttribute('aria-checked') === 'true') { out.valuesActive = true; break; }
+    }
+  } catch { /* best-effort */ }
+  return out;
 }
 
-/** In the TA tag-detail page: tag the "Values" radio of the "Display Variables as: Names | Values" toggle
+/** In the TA tag-detail page: tag the "Values" control of the "Display Variables as: Names | Values" toggle
  *  with data-ta-values="1" and return its selector, so the driver can REAL-click it and the proof shows
- *  RESOLVED values (click_url, page_url, ...) instead of {{variable}} names. Returns '' if not found (the
- *  tightest element whose text is exactly "Values" - the singular "Value" column header won't match). */
+ *  RESOLVED values (click_url, page_url, ...) instead of {{variable}} names. Prefers the radio's own
+ *  <label> (a Material radio input is often invisible, so Playwright cannot click it directly), else the
+ *  tightest element whose text is exactly "Values". Returns '' when the toggle is not on this view. */
 function tagTaValuesRadio(): string {
   try {
     document.querySelectorAll('[data-ta-values]').forEach((e) => e.removeAttribute('data-ta-values'));
-    const cands = Array.prototype.slice.call(document.querySelectorAll('label,[role="radio"],button,span,a,div')) as HTMLElement[];
-    for (const el of cands) {
-      const txt = (el.textContent || '').replace(/\s+/g, ' ').trim();
-      if (txt.toLowerCase() === 'values' && txt.length <= 8) {
-        el.setAttribute('data-ta-values', '1');
-        return '[data-ta-values="1"]';
+    const mark = (el: Element): string => { el.setAttribute('data-ta-values', '1'); return '[data-ta-values="1"]'; };
+    const tight = (s: string | null | undefined): string => (s || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    // 1. The radio labelled exactly "Values" - click its label (reliably toggles the radio).
+    const radios = Array.prototype.slice.call(document.querySelectorAll('input[type="radio"],[role="radio"]')) as Element[];
+    for (const r of radios) {
+      const wrap = r.closest ? r.closest('label') : null;
+      if (wrap && tight(wrap.textContent) === 'values') return mark(wrap);
+      const id = (r as HTMLInputElement).id;
+      if (id) {
+        const l = document.querySelector('label[for="' + id.replace(/"/g, '\\"') + '"]');
+        if (l && tight(l.textContent) === 'values') return mark(l);
       }
+      const sib = r.nextElementSibling;
+      if (sib && tight(sib.textContent) === 'values') return mark(sib);
     }
-    return '';
+    // 2. Fallback: the tightest element whose text is exactly "Values" (the singular "Value" column header
+    //    of the Properties table cannot match).
+    const cands = Array.prototype.slice.call(document.querySelectorAll('label,[role="radio"],button,span,a,div')) as HTMLElement[];
+    let best: HTMLElement | null = null;
+    for (const el of cands) {
+      if (tight(el.textContent) !== 'values') continue;
+      if (!best || el.querySelectorAll('*').length < best.querySelectorAll('*').length) best = el;
+    }
+    return best ? mark(best) : '';
   } catch { return ''; }
 }
 
@@ -686,6 +755,10 @@ export async function runTaVerify(
     // form submit reloading the popup never loses these. Best-effort — a screenshot never fails the run.
     const captures: Array<{ screenshot: string; fired: string; tag?: string }> = [];
     let snapTried = 0; // diagnostic: drive-events we tried to prove vs captures.length that switched to a real event view
+    // Proof-quality counters, logged at the end of the run: how many proofs are this tag's OWN detail view,
+    // how many of those show resolved VALUES, how many detail views we rejected (summary-context / stale),
+    // and how many tags fell back to an event-panel shot. Makes a silent regression here visible.
+    const proofStats = { detail: 0, values: 0, rejected: 0, eventOnly: 0 };
     const firedBodyOf = (fired: string): string => fired.replace(/tags fired/i, '').trim();
     const hasFired = (fired: string): boolean => { const b = firedBodyOf(fired); return !!b && !/^none\b/i.test(b); };
     // Screenshot the TA panel for the EVENT we just drove. Tag the newest rail rows, then REAL-click each via
@@ -731,28 +804,55 @@ export async function runTaVerify(
         // render, fall back to the event-panel shot (no `tag`, so it stays an event-level capture).
         let provenTag: string | undefined;
         const wantTag = (target.names ?? []).find(Boolean);
-        if (wantTag) {
+        // Drill in ONLY when `best` matched, i.e. this event's own Tags-Fired list actually names the tag.
+        // On the `firstFired` fallback the event fired something else, so opening a tag from it would prove
+        // the wrong thing - keep the event-panel shot (no `tag`) instead.
+        if (wantTag && best) {
           const tagSel = await ta.evaluate<string>(openFiredTagInPage, wantTag).catch(() => '');
           if (tagSel) {
             await ta.click(tagSel, { timeout: 1200 }).catch(() => undefined); // REAL click → Angular opens Tag Details
             await ta.waitForTimeout(400); // let the Tag Details view render
-            if (await ta.evaluate<boolean>(isTaTagDetailInPage).catch(() => false)) {
+            const blank = { isDetail: false, eventContext: false, valuesActive: false };
+            let st = await ta.evaluate<typeof blank>(readTaTagDetailState).catch(() => blank);
+            // Accept ONLY an event-context detail: one opened from the SUMMARY has no "Display Variables as"
+            // toggle, so it can only ever show {{variable}} names - reject it and keep the event-panel shot.
+            if (st.isDetail && st.eventContext) {
+              // Flip the toggle to VALUES so the proof shows the RESOLVED values (click_url, page_url, ...).
+              // Verify it actually took (a click can miss / land before the panel settles) and retry once.
+              for (let attempt = 0; attempt < 2 && !st.valuesActive; attempt += 1) {
+                const valSel = await ta.evaluate<string>(tagTaValuesRadio).catch(() => '');
+                if (!valSel) break;
+                await ta.click(valSel, { timeout: 1200 }).catch(() => undefined);
+                await ta.waitForTimeout(300);
+                st = await ta.evaluate<typeof blank>(readTaTagDetailState).catch(() => st);
+              }
               provenTag = wantTag;
-              // Flip the tag-detail "Display Variables as" toggle to VALUES so the proof shows the RESOLVED
-              // values (click_url, page_url, ...) not {{variable}} names. Best-effort; a REAL click is needed.
-              const valSel = await ta.evaluate<string>(tagTaValuesRadio).catch(() => '');
-              if (valSel) { await ta.click(valSel, { timeout: 1200 }).catch(() => undefined); await ta.waitForTimeout(300); }
+              proofStats.detail += 1;
+              if (st.valuesActive) proofStats.values += 1;
+              else console.log(`[ta-proof] "${wantTag}": tag detail opened but the Values toggle did not engage - proof shows variable NAMES.`);
             } else {
+              proofStats.rejected += 1;
+              console.log(`[ta-proof] "${wantTag}": rejected a ${st.isDetail ? 'summary-context' : 'non-'}detail view (no Values toggle) - keeping the event-panel proof.`);
               await ta.click(chosen.sel, { timeout: 1200 }).catch(() => undefined); // detail didn't open → back to the event panel
               await ta.waitForTimeout(180);
             }
           }
         }
+        if (!provenTag) proofStats.eventOnly += 1;
         const buf = await ta.screenshot({ type: 'jpeg', quality: 55, timeout: 5000 });
         captures.push({ screenshot: `data:image/jpeg;base64,${buf.toString('base64')}`, fired: chosen.fired, ...(provenTag ? { tag: provenTag } : {}) });
-        // Return to the event view so the next tag's rail tagging isn't confused by the detail view's
-        // "Messages Where This Tag Fired" rows (which also look like "8 Click").
-        if (provenTag) { await ta.click(chosen.sel, { timeout: 1200 }).catch(() => undefined); await ta.waitForTimeout(150); }
+        // Return to the event view so the NEXT tag's rail tagging isn't confused by the detail view's
+        // "Messages Where This Tag Fired" rows (which also look like "8 Click"). Verify it took: an
+        // unverified restore leaves the next capture starting from a detail page, which is how one bad
+        // drill-down used to poison the tags after it. One bounded retry.
+        if (provenTag) {
+          for (let back = 0; back < 2; back += 1) {
+            await ta.click(chosen.sel, { timeout: 1200 }).catch(() => undefined);
+            await ta.waitForTimeout(150);
+            const still = await ta.evaluate<{ isDetail: boolean }>(readTaTagDetailState).catch(() => ({ isDetail: false }));
+            if (!still.isDetail) break;
+          }
+        }
       } catch { /* proof is best-effort */ }
     };
 
@@ -916,7 +1016,10 @@ export async function runTaVerify(
     try {
       await ta.evaluate(dismissTaOverlays).catch(() => undefined);
       const rows = await ta.evaluate<Array<{ sel: string; num: number }>>(tagNewestTaRows, 40).catch(() => [] as Array<{ sel: string; num: number }>);
-      const seen = new Set<string>(captures.map((c) => firedBodyOf(c.fired).slice(0, 80)));
+      // Seed the dedup from EVENT-LEVEL captures only. A drill-down capture is a picture of ONE tag's detail
+      // page, yet it still records the whole event's Tags-Fired text; seeding from it would make the sweep
+      // skip that event and leave every OTHER tag in it with no event-level fallback proof at all.
+      const seen = new Set<string>(captures.filter((c) => !c.tag).map((c) => firedBodyOf(c.fired).slice(0, 80)));
       let swept = 0;
       for (const row of rows) {
         if (captures.length >= 28) break; // bound the payload / time
@@ -932,6 +1035,7 @@ export async function runTaVerify(
         swept += 1;
       }
       console.log(`[tag-assistant] post-hoc sweep added ${swept} per-event proof(s) from ${rows.length} stable rail row(s).`);
+      console.log(`[ta-proof] tag-detail proofs: ${proofStats.detail} (${proofStats.values} showing resolved VALUES) - event-panel only: ${proofStats.eventOnly} - detail views rejected: ${proofStats.rejected}`);
     } catch { /* proof is best-effort */ }
 
     // Harvest + parse the stream from the TA page.

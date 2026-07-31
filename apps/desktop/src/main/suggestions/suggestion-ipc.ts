@@ -472,17 +472,21 @@ export function registerSuggestionsIpc(data: GoogleDataService, memory?: MemoryS
         // attach a capture to whichever FIRED tags it names. shotFor returns the capture whose panel listed
         // any of the given tag names. Fired verdicts get the capture that proves them (or the summary
         // fallback so every fired tag has SOME proof); timeline events get the capture overlapping their tags.
-        const shotFor = (names: string[]): string | undefined => {
+        const shotFor = (names: string[], mode: 'tag' | 'event' = 'tag'): string | undefined => {
           const caps = ta.captures ?? [];
           // Prefer a capture that is THIS tag's OWN Tag-Details view (exact tag match), so an event that
           // fired several tags (e.g. GA4 + Meta) doesn't cross-assign one tag's detail image to another.
-          const exact = caps.find((c) => c.tag && names.some((n) => n && c.tag === n));
+          // Only for a TAG though: an event row must never be illustrated with one tag's detail page.
+          const exact = mode === 'tag' ? caps.find((c) => c.tag && names.some((n) => n && c.tag === n)) : undefined;
           if (exact) return exact.screenshot;
-          // Else any capture whose event panel listed the tag (event-level fallback proof).
-          return caps.find((c) => names.some((n) => n && c.fired.includes(n)))?.screenshot;
+          // Else an EVENT-PANEL capture whose Tags-Fired list named the tag. A capture that carries `tag` is
+          // a picture of THAT tag's detail page, so it must never be served for a different tag - its
+          // `fired` text is the whole event's tag list, which names many other tags and would hand them all
+          // the same wrong tag's screenshot.
+          return caps.find((c) => !c.tag && names.some((n) => n && c.fired.includes(n)))?.screenshot;
         };
         for (const v of allEventViews) {
-          const s = shotFor(v.tagsFired.filter((t) => t.status === 'fired' || t.status === 'running').map((t) => t.name));
+          const s = shotFor(v.tagsFired.filter((t) => t.status === 'fired' || t.status === 'running').map((t) => t.name), 'event');
           if (s) v.screenshot = s;
         }
         for (const v of verdicts) {
