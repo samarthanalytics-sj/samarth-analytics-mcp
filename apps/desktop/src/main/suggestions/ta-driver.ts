@@ -294,6 +294,25 @@ function isTaTagDetailInPage(): boolean {
   } catch { return false; }
 }
 
+/** In the TA tag-detail page: tag the "Values" radio of the "Display Variables as: Names | Values" toggle
+ *  with data-ta-values="1" and return its selector, so the driver can REAL-click it and the proof shows
+ *  RESOLVED values (click_url, page_url, ...) instead of {{variable}} names. Returns '' if not found (the
+ *  tightest element whose text is exactly "Values" - the singular "Value" column header won't match). */
+function tagTaValuesRadio(): string {
+  try {
+    document.querySelectorAll('[data-ta-values]').forEach((e) => e.removeAttribute('data-ta-values'));
+    const cands = Array.prototype.slice.call(document.querySelectorAll('label,[role="radio"],button,span,a,div')) as HTMLElement[];
+    for (const el of cands) {
+      const txt = (el.textContent || '').replace(/\s+/g, ' ').trim();
+      if (txt.toLowerCase() === 'values' && txt.length <= 8) {
+        el.setAttribute('data-ta-values', '1');
+        return '[data-ta-values="1"]';
+      }
+    }
+    return '';
+  } catch { return ''; }
+}
+
 /** In the TA page: open the rail "Summary" view (the aggregate Tags-Fired list) so the FALLBACK proof
  *  screenshot is meaningful — never a random empty event. Best-effort. */
 // Read the Google-tag ids Tag Assistant lists on the page (its "Google tags found" chip bar). Runs
@@ -719,6 +738,10 @@ export async function runTaVerify(
             await ta.waitForTimeout(400); // let the Tag Details view render
             if (await ta.evaluate<boolean>(isTaTagDetailInPage).catch(() => false)) {
               provenTag = wantTag;
+              // Flip the tag-detail "Display Variables as" toggle to VALUES so the proof shows the RESOLVED
+              // values (click_url, page_url, ...) not {{variable}} names. Best-effort; a REAL click is needed.
+              const valSel = await ta.evaluate<string>(tagTaValuesRadio).catch(() => '');
+              if (valSel) { await ta.click(valSel, { timeout: 1200 }).catch(() => undefined); await ta.waitForTimeout(300); }
             } else {
               await ta.click(chosen.sel, { timeout: 1200 }).catch(() => undefined); // detail didn't open → back to the event panel
               await ta.waitForTimeout(180);
