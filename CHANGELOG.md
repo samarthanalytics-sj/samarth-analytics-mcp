@@ -1,3 +1,9 @@
+## [1.445.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.445.0...v1.445.1) (2026-07-31)
+
+### Bug Fixes
+
+* **desktop:** speed up verify proof capture so a big page doesn't look stuck ([#783](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/783)) ([d5c21c6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d5c21c6ae0577eb5d12d776dba822c60470d1adc)), closes [#781](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/781)
+
 ## [1.445.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.444.0...v1.445.0) (2026-07-31)
 
 ### Features
