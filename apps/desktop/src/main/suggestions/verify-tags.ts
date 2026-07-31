@@ -207,7 +207,7 @@ export function verdictsFromMonitor(tags: VerifyTagInput[], events: MonitorEvent
   const seenEvents = new Set(events.map((e) => e.event).filter(Boolean));
   return reportable.map((tag): VerifyTagVerdict => {
     const m = byId.get(tag.id);
-    const base = { tagId: tag.id, tagName: tag.tagName, verifiedByMonitor: true } as const;
+    const base = { tagId: tag.id, tagName: tag.tagName, verifiedByMonitor: true, ...(tag.trigger?.name ? { triggerName: tag.trigger.name } : {}), ...(tag.eventName ? { tagEventName: tag.eventName } : {}) } as const;
     if (m && m.fired) {
       const clean = m.status === 'success';
       return {
@@ -263,7 +263,7 @@ export function verdictsFromMonitor(tags: VerifyTagInput[], events: MonitorEvent
 function evaluateOne(tag: VerifyTagInput, byId: Map<string, PerTagCapture>, elements: DetectedElementView[]): VerifyTagVerdict {
   {
     const cap = byId.get(tag.id);
-    const base: VerifyTagVerdict = { tagId: tag.id, tagName: tag.tagName, fired: false };
+    const base: VerifyTagVerdict = { tagId: tag.id, tagName: tag.tagName, fired: false, ...(tag.trigger?.name ? { triggerName: tag.trigger.name } : {}), ...(tag.eventName ? { tagEventName: tag.eventName } : {}) };
 
     if (!cap) {
       return { ...base, reason: 'the tag was not exercised by the driver', interaction: { kind: 'none', targetFound: false, performed: false } };

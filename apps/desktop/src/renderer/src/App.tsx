@@ -6345,7 +6345,10 @@ function verdictToExportRow(v: VVerdict): VerifyExportRow {
   return {
     status: V_STATUS[verdictStatus(v)].short,
     tag: v.tagName,
-    ...(v.event ? { triggerEvent: v.event } : {}),
+    // "Event Name" for the export prefers the tag's configured event name (get_a_quote_click) over the
+    // raw dataLayer event it fired on (gtm.linkClick); the on-screen table still shows v.event.
+    ...((v.tagEventName || v.event) ? { triggerEvent: v.tagEventName || v.event } : {}),
+    ...(v.triggerName ? { trigger: v.triggerName } : {}),
     firedVia: verdictKindLabel(v).label,
     signal: verdictSignal(v),
     ...(v.screenshot ? { screenshot: v.screenshot } : {}),

@@ -722,6 +722,12 @@ export interface CapturedHitView {
 export interface VerifyTagVerdict {
   tagId: string;
   tagName: string;
+  /** The GTM firing trigger's name (from the container), e.g. "Get A Quote Click - Global Trigger".
+   *  Carried through for the tag-list export (Tag / Event / Trigger). */
+  triggerName?: string;
+  /** The tag's CONFIGURED event name (e.g. "get_a_quote_click"), for the export's "Event Name" - more
+   *  useful than the raw dataLayer event ("gtm.linkClick") a click tag fires on. */
+  tagEventName?: string;
   /** true = a matching /collect hit fired after the tag's trigger interaction. */
   fired: boolean;
   /** true = the tag fired, but off a SYNTHETIC dataLayer event we pushed (a custom_event trigger) —
@@ -839,6 +845,8 @@ export interface VerifyExportRow {
   tag: string;
   /** The event it fired on (the dataLayer/trigger event, e.g. "gtm.linkClick", in an authoritative run). */
   triggerEvent?: string;
+  /** The GTM firing trigger's NAME (e.g. "Phone Click - Global Trigger"), shown in the tag-list export. */
+  trigger?: string;
   /** How the fire was observed — the interaction-kind label, e.g. "Tag" / "Click" / "Form". */
   firedVia?: string;
   /** The evidence line, e.g. "GTM monitor: success" or the observed beacon host(s). */

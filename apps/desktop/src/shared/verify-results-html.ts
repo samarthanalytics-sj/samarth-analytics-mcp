@@ -1,73 +1,31 @@
-// Tag-verification results export — the styled HTML body the IPC turns into a PDF via Electron printToPDF,
-// or writes as .doc with the MS-Office namespaces (the XLSX export is built separately by verify-results-
-// xlsx.ts). Mirrors the on-screen results table: the scorecard counts, the coverage line, and one row per
-// verdict (Status · Tag · Event · Fired via · Signal · Proof), each with its proof SCREENSHOT embedded as an
-// <img> (data-URI). No I/O, no DOM — safe to run in the main process and unit-testable.
+// Tag-verification results export - a clean, client-facing NUMBERED list of the tags that FIRED, each as
+// "N. <Title>" plus A. Tag Name / B. Event Name / C. Trigger Name, with its proof screenshot embedded.
+// The IPC turns this HTML into a PDF (Electron printToPDF) or writes it as .doc; the XLSX export (the
+// detailed spreadsheet) is built separately. No I/O, no DOM - safe in the main process and unit-testable.
 
 import type { VerifyExportPayload, VerifyExportRow } from './ipc';
 
 const esc = (s: string): string =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
-// Report columns (mirror the on-screen results table header). CSV export was removed — it can't show the
-// proof image; use XLSX (images embedded), PDF, or DOC.
-const COLUMNS = ['Status', 'Tag', 'Event', 'Fired via', 'Signal', 'Proof'] as const;
-
-// Print-safe (light) palette per status label — pill fg/bg + a left accent for the row. Keyed by the
-// human status string the renderer sends (matches the on-screen V_STATUS labels).
-const STATUS_STYLE: Record<string, { fg: string; bg: string }> = {
-  Fired: { fg: '#047857', bg: '#d1fae5' },
-  'Config OK': { fg: '#a16207', bg: '#fef3c7' },
-  'Server-side': { fg: '#1d4ed8', bg: '#dbeafe' },
-  Untested: { fg: '#4b5563', bg: '#f3f4f6' },
-  Issue: { fg: '#b91c1c', bg: '#fee2e2' },
-};
-const statusStyle = (s: string): { fg: string; bg: string } => STATUS_STYLE[s] ?? STATUS_STYLE.Untested;
-
-// A safe, embeddable proof image, or ''. Only base64 image data-URIs are allowed into the document, so a
-// malformed/unexpected `screenshot` value can never inject markup or reference a remote host.
+// Only base64 image data-URIs are embedded, so a malformed/unexpected `screenshot` value can never
+// inject markup or reference a remote host.
 const IMG_DATA_URI = /^data:image\/(?:jpeg|jpg|png|webp|gif);base64,[A-Za-z0-9+/=\s]+$/;
 const proofImg = (screenshot?: string): string =>
   screenshot && IMG_DATA_URI.test(screenshot)
-    ? `<img src="${screenshot}" alt="proof" style="width:132px;height:auto;max-height:96px;object-fit:cover;object-position:top;border:1px solid #d0d5dd;border-radius:4px;display:block" />`
-    : '<span style="color:#9ca3af">—</span>';
+    ? `<img src="${screenshot}" alt="proof" style="width:100%;max-width:540px;height:auto;max-height:440px;object-fit:contain;object-position:top;border:1px solid #d0d5dd;border-radius:6px;margin:8px 0 0;display:block" />`
+    : '';
 
-function statusPill(status: string): string {
-  const s = statusStyle(status);
-  return `<span style="display:inline-block;font-size:11px;font-weight:700;padding:3px 10px;border-radius:999px;background:${s.bg};color:${s.fg};white-space:nowrap">${esc(status)}</span>`;
-}
+// A tag counts as "fired" (belongs in the deliverable) when it fired for real, was config-verified, or
+// relayed server-side - anything that produced a fire. Issue / untested tags are left out.
+const isFired = (status: string): boolean => status === 'Fired' || status === 'Config OK' || status === 'Server-side';
 
-function resultRow(r: VerifyExportRow): string {
-  const cell = (html: string): string => `<td>${html}</td>`;
-  const text = (v?: string): string => (v && v.trim() ? esc(v) : '<span style="color:#9ca3af">—</span>');
-  const code = (v?: string): string => (v && v.trim() ? `<code>${esc(v)}</code>` : '<span style="color:#9ca3af">—</span>');
-  return (
-    '<tr>' +
-    cell(statusPill(r.status)) +
-    cell(`<span style="font-weight:600;color:#1a1a1a">${text(r.tag)}</span>`) +
-    cell(code(r.triggerEvent)) +
-    cell(`<span style="white-space:nowrap">${text(r.firedVia)}</span>`) +
-    cell(`<span style="color:#4b5563;font-size:12px">${text(r.signal)}</span>`) +
-    cell(proofImg(r.screenshot)) +
-    '</tr>'
-  );
-}
-
-/** The scorecard: one big-number card per meaningful outcome. Always shows Fired + Issues; Config OK,
- *  Server-side and Untested only when non-zero — exactly like the on-screen scorecard. */
-function scorecard(counts: VerifyExportPayload['counts']): string {
-  const cards: Array<{ label: string; n: number; fg: string; bg: string }> = [
-    { label: 'Fired', n: counts.fired, ...statusStyle('Fired') },
-    ...(counts.config ? [{ label: 'Config OK', n: counts.config, ...statusStyle('Config OK') }] : []),
-    ...(counts.server ? [{ label: 'Server-side', n: counts.server, ...statusStyle('Server-side') }] : []),
-    { label: 'Issues', n: counts.issues, ...statusStyle(counts.issues ? 'Issue' : 'Fired') },
-    ...(counts.untested ? [{ label: 'Untested', n: counts.untested, ...statusStyle('Untested') }] : []),
-  ];
-  const card = (c: { label: string; n: number; fg: string; bg: string }): string =>
-    `<div style="flex:1;min-width:110px;border:1px solid ${c.fg}22;border-radius:10px;background:${c.bg};padding:12px 14px">` +
-    `<div style="font-size:26px;font-weight:800;color:${c.fg};line-height:1">${c.n}</div>` +
-    `<div style="font-size:12px;color:#374151;margin-top:3px">${esc(c.label)}</div></div>`;
-  return `<div style="display:flex;gap:10px;flex-wrap:wrap;margin:0 0 14px">${cards.map(card).join('')}</div>`;
+/** A clean, human title from a tag name: strip a leading "Vendor - Type - " (e.g. "GA4 - Event - ") and a
+ *  trailing " Tag", so "GA4 - Event - The ChowNow Feed Tag" becomes "The ChowNow Feed". Exported for tests. */
+export function tagTitle(tag?: string): string {
+  const raw = (tag ?? '').trim();
+  const clean = raw.replace(/^[^-]+ - [^-]+ - /, '').replace(/\s+Tag$/i, '').trim();
+  return clean || raw;
 }
 
 /** Host of a URL for the report heading/filename, or '' if it can't be parsed. */
@@ -80,43 +38,43 @@ export function siteLabel(url?: string): string {
   }
 }
 
-/** The full styled report body (heading + scope + scorecard + results table), ready to hand to
- *  reportHtmlDocument() as `execHtml` for the PDF/DOC. Mirrors the on-screen Tag-verification results. */
+/** One fired tag as a numbered entry: "N. <Title>" + A/B/C lines + its proof screenshot. */
+function tagEntry(n: number, r: VerifyExportRow): string {
+  const line = (letter: string, label: string, value?: string): string =>
+    `<div style="margin:2px 0">${letter}. ${esc(label)} : ${value && value.trim() ? esc(value) : '<span style="color:#9ca3af">-</span>'}</div>`;
+  return (
+    '<div style="margin:0 0 20px;page-break-inside:avoid">' +
+    `<div style="font-size:16px;font-weight:700;color:#111;margin:0 0 5px">${n}. ${esc(tagTitle(r.tag))}</div>` +
+    '<div style="font-size:13px;color:#222;line-height:1.6;margin:0 0 0 16px">' +
+    line('A', 'Tag Name', r.tag) +
+    line('B', 'Event Name', r.triggerEvent) +
+    line('C', 'Trigger Name', r.trigger) +
+    '</div>' +
+    proofImg(r.screenshot) +
+    '</div>'
+  );
+}
+
+/** The export body: a numbered list of the FIRED tags (Tag / Event / Trigger + proof screenshot), ready to
+ *  hand to reportHtmlDocument() as `execHtml` for the PDF/DOC. Replaces the old status table - the
+ *  client-facing "verified tags" deliverable format. */
 export function verifyResultsHtml(payload: VerifyExportPayload): string {
-  const rows = payload.rows ?? [];
   const host = siteLabel(payload.url);
+  const fired = (payload.rows ?? []).filter((r) => isFired(r.status));
   const parts: string[] = [];
 
   parts.push(
-    `<h1 style="font-size:24px;font-weight:700;border-bottom:2px solid #2563eb;padding-bottom:7px;margin:0 0 6px">Tag Verification Report${host ? ` — ${esc(host)}` : ''}</h1>`,
+    `<h1 style="font-size:22px;font-weight:700;border-bottom:2px solid #2563eb;padding-bottom:7px;margin:0 0 12px">Verified Tags${host ? ` - ${esc(host)}` : ''}</h1>`,
   );
 
-  const scope: string[] = [];
-  if (payload.url) scope.push(`<b>Site:</b> ${esc(payload.url)}`);
-  if (payload.authoritative) scope.push('Authoritative — read from GTM’s own Tag Assistant debug stream');
-  if (scope.length) parts.push(`<div style="font-size:12.5px;color:#4b5563;margin:0 0 12px">${scope.join(' &nbsp;·&nbsp; ')}</div>`);
-
-  parts.push(scorecard(payload.counts));
-
-  if (payload.pagesDriven) {
-    const crawl =
-      payload.pagesCrawled
-        ? ` (scanned ${payload.pagesCrawled}${payload.pagesTotal && payload.pagesTotal > payload.pagesCrawled ? ` of ${payload.pagesTotal}` : ''} site page${payload.pagesCrawled === 1 ? '' : 's'} to locate each CTA)`
-        : '';
-    parts.push(
-      `<div style="font-size:12px;color:#6b7280;margin:0 0 10px">Drove across ${payload.pagesDriven} page${payload.pagesDriven === 1 ? '' : 's'}${crawl} — each click tag is driven on the page its CTA actually lives on.</div>`,
-    );
-  }
-
-  if (!rows.length) {
-    parts.push('<div style="border:1px solid #e5e7eb;border-radius:8px;background:#f8fafc;color:#4b5563;padding:12px 14px;font-size:13px">No tags were verified in this run.</div>');
+  if (!fired.length) {
+    parts.push('<div style="border:1px solid #e5e7eb;border-radius:8px;background:#f8fafc;color:#4b5563;padding:12px 14px;font-size:13px">No tags fired in this run.</div>');
   } else {
-    const head = COLUMNS.map((c) => `<th>${esc(c)}</th>`).join('');
-    parts.push(`<table><thead><tr>${head}</tr></thead><tbody>${rows.map(resultRow).join('')}</tbody></table>`);
+    parts.push(fired.map((r, i) => tagEntry(i + 1, r)).join('\n'));
   }
 
   parts.push(
-    `<div style="font-size:11px;color:#9ca3af;margin-top:16px">Read-only verification — the tags were exercised as published; nothing was created, changed or published in your container.</div>`,
+    '<div style="font-size:11px;color:#9ca3af;margin-top:16px">Read-only verification - the tags were exercised as published; nothing was created, changed, or published in your container.</div>',
   );
   return parts.join('\n');
 }
