@@ -1,4 +1,4 @@
-import { shell } from 'electron';
+import { openInBrowser } from './browser-launch';
 import type { RegistryService } from './registry-service';
 import { runLoopbackOAuth } from '../google/loopback';
 import { loadGoogleOAuthClient, loadGoogleOAuthClientWithSource } from '../google/oauth-config';
@@ -40,7 +40,7 @@ export class GoogleAuthService {
    *  adsAuthScopes() (the UNION with the defaults, never the Ads scope alone: a second authorization
    *  returns a token that REPLACES the vaulted one, so asking for adwords by itself would silently drop
    *  the Tag Manager and Analytics grants). */
-  async connect(scopes?: string[]): Promise<AccountView> {
+  async connect(scopes?: string[], browserExe?: string): Promise<AccountView> {
     const client = loadGoogleOAuthClient(this.configPath);
     if (!client) {
       throw new Error(
@@ -57,7 +57,9 @@ export class GoogleAuthService {
     this.current = controller;
     try {
       const { token, userinfo } = await runLoopbackOAuth(client, {
-        openBrowser: (url) => shell.openExternal(url),
+        // Open the Google consent URL in the browser the operator chose (empty = OS default) - so
+        // sign-in lands in the browser that holds their signed-in Google session, not always Comet.
+        openBrowser: async (url) => { openInBrowser(url, browserExe ?? ''); },
         signal: controller.signal,
         ...(scopes && scopes.length > 0 ? { scopes } : {}),
       });
