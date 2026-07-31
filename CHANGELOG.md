@@ -1,3 +1,9 @@
+## [1.445.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.444.0...v1.445.0) (2026-07-31)
+
+### Features
+
+* **desktop:** verification PDF/DOC download = numbered fired-tag list (Tag/Event/Trigger + proof) ([#782](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/782)) ([f15b6f0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/f15b6f02486d911d7226a7c0eea3ebdde37028c4)), closes [#781](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/781)
+
 ## [1.444.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.443.0...v1.444.0) (2026-07-31)
 
 ### Features
