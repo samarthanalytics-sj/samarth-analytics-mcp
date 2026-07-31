@@ -680,15 +680,18 @@ export async function runTaVerify(
       snapTried += 1;
       try {
         await ta.evaluate(dismissTaOverlays).catch(() => undefined);
-        const rows = await ta.evaluate<Array<{ sel: string; num: number }>>(tagNewestTaRows).catch(() => [] as Array<{ sel: string; num: number }>);
+        // Only the NEWEST few rail rows can be the event we just drove; scanning all 14 (each a real click
+        // + render wait) made a non-firing tag cost seconds, and ~79 tags/page then looked stuck. The
+        // post-hoc sweep is the backstop for anything not in the top rows.
+        const rows = await ta.evaluate<Array<{ sel: string; num: number }>>(tagNewestTaRows, 6).catch(() => [] as Array<{ sel: string; num: number }>);
         if (!rows.length) return;
         const names = (target.names ?? []).filter(Boolean).map((n) => n.toLowerCase());
         const evRe = target.event ? new RegExp(target.event, 'i') : null;
         let best: { sel: string; fired: string } | null = null;
         let firstFired: { sel: string; fired: string } | null = null;
         for (const row of rows) {
-          await ta.click(row.sel, { timeout: 2500 }).catch(() => undefined); // REAL click → Angular switches the panel
-          await ta.waitForTimeout(350); // let Angular render the switched-to event panel (API Call + Tags Fired)
+          await ta.click(row.sel, { timeout: 1200 }).catch(() => undefined); // REAL click → Angular switches the panel
+          await ta.waitForTimeout(300); // let Angular render the switched-to event panel (API Call + Tags Fired)
           const panel = await ta.evaluate<{ event: string; fired: string }>(readTaPanel).catch(() => ({ event: '', fired: '' }));
           // REQUIRE a real EVENT view: the Summary panel also has a "Tags Fired" list (every fired tag) but NO
           // API-Call event, so panel.event is empty there. Without this check a click that failed to switch the
@@ -702,7 +705,7 @@ export async function runTaVerify(
         }
         const chosen = best ?? firstFired;
         if (!chosen) return; // nothing fired to prove — never screenshot a blank panel
-        if (!best) { await ta.click(chosen.sel, { timeout: 2500 }).catch(() => undefined); await ta.waitForTimeout(220); } // fallback row wasn't the last clicked — re-select it
+        if (!best) { await ta.click(chosen.sel, { timeout: 1200 }).catch(() => undefined); await ta.waitForTimeout(220); } // fallback row wasn't the last clicked - re-select it
         // Drill into the SPECIFIC fired tag's detail view (properties + firing triggers + hits sent), so
         // the proof is that tag's full config like the operator opening it in Tag Assistant, not just the
         // event's tags-fired summary. Best-effort: if the tag card can't be opened or the detail doesn't
@@ -712,13 +715,13 @@ export async function runTaVerify(
         if (wantTag) {
           const tagSel = await ta.evaluate<string>(openFiredTagInPage, wantTag).catch(() => '');
           if (tagSel) {
-            await ta.click(tagSel, { timeout: 2500 }).catch(() => undefined); // REAL click → Angular opens Tag Details
-            await ta.waitForTimeout(500); // let the Tag Details view render
+            await ta.click(tagSel, { timeout: 1200 }).catch(() => undefined); // REAL click → Angular opens Tag Details
+            await ta.waitForTimeout(400); // let the Tag Details view render
             if (await ta.evaluate<boolean>(isTaTagDetailInPage).catch(() => false)) {
               provenTag = wantTag;
             } else {
-              await ta.click(chosen.sel, { timeout: 2500 }).catch(() => undefined); // detail didn't open → back to the event panel
-              await ta.waitForTimeout(220);
+              await ta.click(chosen.sel, { timeout: 1200 }).catch(() => undefined); // detail didn't open → back to the event panel
+              await ta.waitForTimeout(180);
             }
           }
         }
@@ -726,7 +729,7 @@ export async function runTaVerify(
         captures.push({ screenshot: `data:image/jpeg;base64,${buf.toString('base64')}`, fired: chosen.fired, ...(provenTag ? { tag: provenTag } : {}) });
         // Return to the event view so the next tag's rail tagging isn't confused by the detail view's
         // "Messages Where This Tag Fired" rows (which also look like "8 Click").
-        if (provenTag) { await ta.click(chosen.sel, { timeout: 2000 }).catch(() => undefined); await ta.waitForTimeout(150); }
+        if (provenTag) { await ta.click(chosen.sel, { timeout: 1200 }).catch(() => undefined); await ta.waitForTimeout(150); }
       } catch { /* proof is best-effort */ }
     };
 
@@ -785,7 +788,14 @@ export async function runTaVerify(
       await popup.evaluate(hideCookieOverlaysInPage).catch(() => undefined);
 
       const pushedDlKeys = new Set<string>();
+      let driven = 0;
       for (const tag of groupTags) {
+        driven += 1;
+        // Progress heartbeat so a long page (many triggers, each with a proof-capture pass) reads as
+        // moving, not stuck.
+        if (driven === 1 || driven % 15 === 0 || driven === groupTags.length) {
+          console.log(`[tag-assistant]     driving trigger ${driven}/${groupTags.length} on this page...`);
+        }
         const kind = tag.trigger.kind;
         if (kind === 'pageview') {
           perTag.push({ tagId: tag.id, kind: 'navigate', targetFound: true, performed: true, hits: [] });
