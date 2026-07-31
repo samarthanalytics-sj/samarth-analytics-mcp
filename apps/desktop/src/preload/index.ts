@@ -97,6 +97,10 @@ const api = {
   // Assistant link lands in the Chrome where they injected their container). Resolves { chrome:false } when
   // it had to fall back to the default browser (no Chrome found).
   openInChrome: (url: string): Promise<{ chrome: boolean }> => ipcRenderer.invoke('shell:openInChrome', url),
+  // Installed browsers we can open a link in (OS default first), and open a URL in a chosen one
+  // (empty exe = the OS default). Backs the verify gate's "Open in [browser]" picker.
+  listBrowsers: (): Promise<Array<{ id: string; name: string; exe: string }>> => ipcRenderer.invoke('shell:listBrowsers'),
+  openInBrowser: (url: string, exe: string): Promise<{ opened: boolean }> => ipcRenderer.invoke('shell:openInBrowser', url, exe),
 
   // Dev-only bridge: the main process mirrors its console logs, IPC calls and Google API HTTP here so
   // they surface in the renderer DevTools Console. Entries are already redacted in main. In a packaged

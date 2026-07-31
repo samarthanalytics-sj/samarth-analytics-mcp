@@ -6457,6 +6457,59 @@ function TaEventTimeline({ events }: { events: NonNullable<VerifyTagsResult['taE
   );
 }
 
+type BrowserOpt = { id: string; name: string; exe: string };
+/** "Open in [browser]" split button: opens the link in the operator's CHOSEN browser and remembers the
+ *  pick (localStorage). The app can't know which browser holds the signed-in Google/GTM session - it can
+ *  be Comet, Chrome, or Edge - so the operator picks; the caret lists every installed browser (OS default
+ *  first). One click reuses the last pick; the caret changes it. */
+function OpenInBrowserButton({ getUrl, label, btnStyle, disabled }: { getUrl: () => string | null; label: string; btnStyle: React.CSSProperties; disabled?: boolean }): JSX.Element {
+  const [list, setList] = useState<BrowserOpt[] | null>(null);
+  const [menu, setMenu] = useState(false);
+  const [prefId, setPrefId] = useState<string>(() => { try { return localStorage.getItem('sx.openLinkBrowser') || 'default'; } catch { return 'default'; } });
+  useEffect(() => {
+    let alive = true;
+    void window.desktop
+      .listBrowsers()
+      .then((bs) => { if (alive) setList(bs.length ? bs : [{ id: 'default', name: 'Default browser', exe: '' }]); })
+      .catch(() => { if (alive) setList([{ id: 'default', name: 'Default browser', exe: '' }]); });
+    return () => { alive = false; };
+  }, []);
+  const chosen = (list?.find((b) => b.id === prefId)) ?? list?.[0] ?? { id: 'default', name: 'default browser', exe: '' };
+  const openIn = (b: BrowserOpt): void => {
+    const u = getUrl();
+    if (!u) return;
+    try { localStorage.setItem('sx.openLinkBrowser', b.id); } catch { /* private mode - just don't remember */ }
+    setPrefId(b.id);
+    setMenu(false);
+    void window.desktop.openInBrowser(u, b.exe).catch(() => undefined);
+  };
+  const off = disabled ? { opacity: 0.5, cursor: 'not-allowed' as const } : {};
+  return (
+    <span style={{ position: 'relative', display: 'inline-flex', gap: 6, marginTop: 6, verticalAlign: 'middle' }}>
+      <button type="button" onClick={() => openIn(chosen)} disabled={disabled} title={`Open in ${chosen.name}`} style={{ ...btnStyle, marginTop: 0, ...off }}>
+        ↗ {label} in {chosen.name}
+      </button>
+      <button type="button" aria-label="Choose which browser" title="Choose which browser opens the link" onClick={(e) => { e.stopPropagation(); setMenu((m) => !m); }} disabled={disabled} style={{ ...btnStyle, marginTop: 0, padding: '8px 10px', ...off }}>
+        ▾
+      </button>
+      {menu && list ? (
+        <>
+          <div onClick={() => setMenu(false)} style={{ position: 'fixed', inset: 0, zIndex: 60 }} />
+          <div style={{ position: 'absolute', top: '100%', left: 0, marginTop: 4, zIndex: 61, minWidth: 220, background: 'var(--surface-2)', border: '1px solid var(--border-2)', borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.28)', overflow: 'hidden', padding: 4 }}>
+            <div style={{ ...styles.muted, fontSize: 10.5, textTransform: 'uppercase', letterSpacing: 0.4, padding: '4px 8px 6px' }}>Open the link in</div>
+            {list.map((b) => (
+              <button key={b.id} type="button" onClick={() => openIn(b)} style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left', padding: '7px 9px', fontSize: 13, borderRadius: 6, background: b.id === chosen.id ? 'var(--surface-1)' : 'transparent', color: 'var(--text)', border: 'none', cursor: 'pointer' }}>
+                <span style={{ color: b.id === chosen.id ? 'var(--c-green)' : 'var(--text-muted)' }}>{b.id === chosen.id ? '●' : '○'}</span>
+                {b.name}
+              </button>
+            ))}
+          </div>
+        </>
+      ) : null}
+    </span>
+  );
+}
+
 /** A clickable screenshot thumbnail (opens the full image in a lightbox) - the visual proof cell.
  *  Shared by tag verification AND the tag-suggestion panel (both pass a JPEG data-URI + a name). */
 function ProofThumb({ screenshot, name, onOpen }: { screenshot?: string; name: string; onOpen: () => void }): JSX.Element {
@@ -7481,20 +7534,17 @@ function VerifyPanel({
                   style={{ ...styles.input, width: '100%', minHeight: 60, marginTop: 6, fontFamily: 'monospace', fontSize: 12 }}
                   disabled={!ready}
                 />
-                <button
-                  style={{ ...styles.toggleOff, marginTop: 6, ...(!ready || !/https?:\/\//i.test(vSnippet) ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
-                  onClick={() => {
-                    const raw = vSnippet.trim();
-                    const link = (raw.match(/https?:\/\/tagassistant\.google\.com\/[^\s"'<>]*/i) || raw.match(/https?:\/\/[^\s"'<>]+/i) || [''])[0];
-                    if (link) void window.desktop.openInChrome(link);
-                  }}
+                <OpenInBrowserButton
+                  label="Open this link"
+                  btnStyle={styles.toggleOff}
                   disabled={!ready || !/https?:\/\//i.test(vSnippet)}
-                  title="Force-opens the pasted Tag Assistant link in your real Chrome (your everyday running instance / signed-in profile), so it lands in the Chrome where you injected your container via Adswerve and the site + Tag Assistant connect. Manual visual check - the app's own results table does not fill in for this."
-                >
-                  ↗ Open this link in my Chrome (manual check)
-                </button>
+                  getUrl={() => {
+                    const raw = vSnippet.trim();
+                    return (raw.match(/https?:\/\/tagassistant\.google\.com\/[^\s"'<>]*/i) || raw.match(/https?:\/\/[^\s"'<>]+/i) || [''])[0] || null;
+                  }}
+                />
                 <div style={{ ...styles.muted, fontSize: 11, lineHeight: 1.5, marginTop: 4 }}>
-                  Opens in your real Chrome (where you inject your container via Adswerve, so the site + Tag Assistant connect). This is a manual visual check - you read Tag Assistant yourself; the app's results table below fills in only from <b>Verify in Tag Assistant</b> / <b>Proceed</b>.
+                  Pick the browser where you injected your container via Adswerve (the caret lists the ones installed), so the site + Tag Assistant connect there. This is a manual visual check - you read Tag Assistant yourself; the app's results table below fills in only from <b>Verify in Tag Assistant</b> / <b>Proceed</b>.
                 </div>
                 <button
                   style={{ ...styles.toggleOff, marginTop: 8, ...(!ready || !ctx?.containerPublicId ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
@@ -7512,25 +7562,23 @@ function VerifyPanel({
                 </button>
                 <ol style={{ ...styles.muted, fontSize: 11, lineHeight: 1.6, marginTop: 6, paddingLeft: 18 }}>
                   <li>Copy the container script (button above).</li>
-                  <li>In your Chrome: open your site, click the <b>Adswerve DataLayer Inspector</b>, turn on <b>Inject Code</b>, paste the script, then <b>Save &amp; Reload</b>.</li>
+                  <li>In your browser: open your site, click the <b>Adswerve DataLayer Inspector</b>, turn on <b>Inject Code</b>, paste the script, then <b>Save &amp; Reload</b>.</li>
                   <li>Paste your Tag Assistant <b>Preview / Share</b> link in the box above.</li>
-                  <li>Click <b>Open this link in my Chrome</b> - Tag Assistant opens in that same Chrome and connects to your injected container.</li>
+                  <li>Click <b>Open this link</b> (pick that same browser from the caret) - Tag Assistant opens there and connects to your injected container.</li>
                   <li>Confirm Tag Assistant shows your container connected, then read the tags firing.</li>
                 </ol>
               </div>
               <div style={{ marginTop: 8, padding: '10px 12px', borderRadius: 10, border: '0.5px solid var(--border-2)', background: 'var(--surface-2)' }}>
                 <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)' }}>Option B &middot; Share from GTM <span style={{ fontWeight: 400, color: 'var(--c-green)' }}>(no GTM changes)</span></div>
                 <div style={{ ...styles.muted, fontSize: 12, lineHeight: 1.5, marginTop: 2 }}>
-                  Opens GTM in <b>whichever browser you are signed into GTM in</b> (your default browser): click <b>Preview</b> (creates no version), then in Tag Assistant click <b>Share</b> and <b>Copy</b> the link, then paste it in the box below.
+                  Opens GTM in <b>the browser you pick</b> (use the caret to choose the one you're signed into GTM in): click <b>Preview</b> (creates no version), then in Tag Assistant click <b>Share</b> and <b>Copy</b> the link, then paste it in the box below.
                 </div>
-                <button
-                  style={{ ...styles.toggleOff, marginTop: 6, ...(!ready ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
-                  onClick={() => { if (ready && ctx?.accountId && ctx?.containerId && ctx?.workspaceId) window.open(gtmTagUrl(ctx.accountId, ctx.containerId, ctx.workspaceId), '_blank'); }}
+                <OpenInBrowserButton
+                  label="Open GTM"
+                  btnStyle={styles.toggleOff}
                   disabled={!ready}
-                  title="Opens this container's workspace in GTM in your default browser. Click Preview (top right), then Share in Tag Assistant, and copy the link, then paste it in the box below."
-                >
-                  ↗ Open GTM (then Preview &rarr; Share &rarr; Copy)
-                </button>
+                  getUrl={() => (ready && ctx?.accountId && ctx?.containerId && ctx?.workspaceId) ? gtmTagUrl(ctx.accountId, ctx.containerId, ctx.workspaceId) : null}
+                />
                 <textarea
                   value={vSnippet}
                   onChange={(e) => setVSnippet(e.target.value)}
