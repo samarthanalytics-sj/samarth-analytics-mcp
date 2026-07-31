@@ -1,3 +1,9 @@
+## [1.442.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.441.0...v1.442.0) (2026-07-31)
+
+### Features
+
+* **desktop:** pick which browser opens the GTM / sign-in links ([#779](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/779)) ([f07f238](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/f07f238b681cde417b7c7e43172111b439be4b8b))
+
 ## [1.441.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.440.0...v1.441.0) (2026-07-30)
 
 ### Features
