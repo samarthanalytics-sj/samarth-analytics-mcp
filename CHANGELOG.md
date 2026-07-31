@@ -1,3 +1,9 @@
+## [1.445.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.445.1...v1.445.2) (2026-07-31)
+
+### Bug Fixes
+
+* **desktop:** proof captures the tag detail on VALUES, not variable names ([#784](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/784)) ([61797e0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/61797e0affd2be1b2d0edccb338eff4e0da2fdb0)), closes [#781](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/781)
+
 ## [1.445.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.445.0...v1.445.1) (2026-07-31)
 
 ### Bug Fixes
