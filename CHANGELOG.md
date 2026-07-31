@@ -1,3 +1,9 @@
+## [1.445.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.445.2...v1.445.3) (2026-07-31)
+
+### Bug Fixes
+
+* **desktop:** stop cross-assigning tag proofs and reject Summary-context details ([#785](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/785)) ([7eefcad](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/7eefcad4de4a2d66b32642c5ddd4d2048303500c))
+
 ## [1.445.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.445.1...v1.445.2) (2026-07-31)
 
 ### Bug Fixes
