@@ -200,7 +200,7 @@ export interface TaVerifyResult {
   /** Proof screenshots captured DURING the drive: each is the Tag Assistant panel right after an
    *  interaction, with `fired` = the "Tags Fired" text shown, so the IPC attaches it to whichever tags it
    *  proves. Best-effort. */
-  captures?: Array<{ screenshot: string; fired: string }>;
+  captures?: Array<{ screenshot: string; fired: string; tag?: string }>;
   /** One full Tag Assistant panel screenshot taken at the end — a guaranteed fallback so a genuinely-fired
    *  tag always has SOME proof. */
   summaryShot?: string;
@@ -256,6 +256,42 @@ function readTaPanel(): { event: string; fired: string } {
     const fired = fi >= 0 ? all.slice(fi, nfi > fi ? nfi : fi + 1500) : '';
     return { event: m ? m[1] : '', fired };
   } catch { return { event: '', fired: '' }; }
+}
+
+/** In the TA page: open the FIRED TAG named `name` from the current event's "Tags Fired" list, so a
+ *  screenshot shows that tag's FULL detail (properties, firing triggers, hits sent) rather than just the
+ *  event's tags-fired summary. Tags the tightest clickable card whose text carries the tag name with
+ *  data-ta-tag="1" and returns its selector for a REAL Playwright click (a synthetic click won't switch
+ *  Tag Assistant's Angular view). Returns '' when no matching fired-tag card is found. */
+function openFiredTagInPage(name: string): string {
+  try {
+    document.querySelectorAll('[data-ta-tag]').forEach((e) => e.removeAttribute('data-ta-tag'));
+    const want = (name || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    if (!want) return '';
+    const nodes = Array.prototype.slice.call(document.querySelectorAll('a,button,[role="button"],div,span,td,li')) as HTMLElement[];
+    let bestEl: HTMLElement | null = null;
+    let bestLen = Infinity;
+    for (const el of nodes) {
+      const t = (el.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      if (!t || t.indexOf(want) < 0) continue;
+      // Prefer the TIGHTEST element still holding the whole name (the card title/row, not a wrapper that
+      // holds the entire Tags-Fired list). Cap the extra chars so a big wrapper is skipped.
+      if (t.length > want.length + 48) continue;
+      if (t.length < bestLen) { bestLen = t.length; bestEl = el; }
+    }
+    if (!bestEl) return '';
+    bestEl.setAttribute('data-ta-tag', '1');
+    return '[data-ta-tag="1"]';
+  } catch { return ''; }
+}
+
+/** In the TA page: true when the TAG DETAIL view is showing (the panel opened by clicking a fired tag) -
+ *  it carries "Tag Details" plus firing-trigger / hits headings the event summary never has. */
+function isTaTagDetailInPage(): boolean {
+  try {
+    const t = (document.body.textContent || '').replace(/\s+/g, ' ');
+    return /Tag Details/i.test(t) && /(Firing Triggers|Hits sent|Blocking Triggers)/i.test(t);
+  } catch { return false; }
 }
 
 /** In the TA page: open the rail "Summary" view (the aggregate Tags-Fired list) so the FALLBACK proof
@@ -629,7 +665,7 @@ export async function runTaVerify(
     // the form_submission events that run LAST (highest seq). Each capture records the panel's fired-tag
     // text so the IPC attaches it to whichever tags it proves. `ta` is a SEPARATE page from the popup, so a
     // form submit reloading the popup never loses these. Best-effort — a screenshot never fails the run.
-    const captures: Array<{ screenshot: string; fired: string }> = [];
+    const captures: Array<{ screenshot: string; fired: string; tag?: string }> = [];
     let snapTried = 0; // diagnostic: drive-events we tried to prove vs captures.length that switched to a real event view
     const firedBodyOf = (fired: string): string => fired.replace(/tags fired/i, '').trim();
     const hasFired = (fired: string): boolean => { const b = firedBodyOf(fired); return !!b && !/^none\b/i.test(b); };
@@ -667,8 +703,30 @@ export async function runTaVerify(
         const chosen = best ?? firstFired;
         if (!chosen) return; // nothing fired to prove — never screenshot a blank panel
         if (!best) { await ta.click(chosen.sel, { timeout: 2500 }).catch(() => undefined); await ta.waitForTimeout(220); } // fallback row wasn't the last clicked — re-select it
+        // Drill into the SPECIFIC fired tag's detail view (properties + firing triggers + hits sent), so
+        // the proof is that tag's full config like the operator opening it in Tag Assistant, not just the
+        // event's tags-fired summary. Best-effort: if the tag card can't be opened or the detail doesn't
+        // render, fall back to the event-panel shot (no `tag`, so it stays an event-level capture).
+        let provenTag: string | undefined;
+        const wantTag = (target.names ?? []).find(Boolean);
+        if (wantTag) {
+          const tagSel = await ta.evaluate<string>(openFiredTagInPage, wantTag).catch(() => '');
+          if (tagSel) {
+            await ta.click(tagSel, { timeout: 2500 }).catch(() => undefined); // REAL click → Angular opens Tag Details
+            await ta.waitForTimeout(500); // let the Tag Details view render
+            if (await ta.evaluate<boolean>(isTaTagDetailInPage).catch(() => false)) {
+              provenTag = wantTag;
+            } else {
+              await ta.click(chosen.sel, { timeout: 2500 }).catch(() => undefined); // detail didn't open → back to the event panel
+              await ta.waitForTimeout(220);
+            }
+          }
+        }
         const buf = await ta.screenshot({ type: 'jpeg', quality: 55, timeout: 5000 });
-        captures.push({ screenshot: `data:image/jpeg;base64,${buf.toString('base64')}`, fired: chosen.fired });
+        captures.push({ screenshot: `data:image/jpeg;base64,${buf.toString('base64')}`, fired: chosen.fired, ...(provenTag ? { tag: provenTag } : {}) });
+        // Return to the event view so the next tag's rail tagging isn't confused by the detail view's
+        // "Messages Where This Tag Fired" rows (which also look like "8 Click").
+        if (provenTag) { await ta.click(chosen.sel, { timeout: 2000 }).catch(() => undefined); await ta.waitForTimeout(150); }
       } catch { /* proof is best-effort */ }
     };
 
