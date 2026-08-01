@@ -1,3 +1,9 @@
+## [1.446.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.446.0...v1.446.1) (2026-08-01)
+
+### Bug Fixes
+
+* **desktop:** never store another tag's detail as an event-level proof ([#787](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/787)) ([62f1730](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/62f17308b6084c50d61ea0cdc7ace1df0fdd6dd9))
+
 ## [1.446.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.445.3...v1.446.0) (2026-08-01)
 
 ### Features
