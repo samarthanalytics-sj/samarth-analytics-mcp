@@ -1,3 +1,9 @@
+## [1.447.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.446.6...v1.447.0) (2026-08-01)
+
+### Features
+
+* **desktop:** trace every step of the proof capture ([#793](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/793)) ([ec38757](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/ec3875742c156df03b0876f6aecfff556cc18bc7)), closes [#3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/3) [#22](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/22)
+
 ## [1.446.6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.446.5...v1.446.6) (2026-08-01)
 
 ### Bug Fixes
