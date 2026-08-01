@@ -1,3 +1,9 @@
+## [1.447.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.447.1...v1.447.2) (2026-08-01)
+
+### Bug Fixes
+
+* **desktop:** read only the VISIBLE Tag Assistant panel, not stale DOM ([#795](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/795)) ([08fa7af](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/08fa7afa3f9f36c0dd578da29718512454fa0cbf)), closes [#2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/2) [#32](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/32)
+
 ## [1.447.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.447.0...v1.447.1) (2026-08-01)
 
 ### Bug Fixes
