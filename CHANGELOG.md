@@ -1,3 +1,9 @@
+## [1.446.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.446.1...v1.446.2) (2026-08-01)
+
+### Bug Fixes
+
+* **desktop:** verify the opened Tag Details is the tag we asked for ([#788](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/788)) ([1c3168c](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/1c3168cdf550859330c644260753258b30ad3f96))
+
 ## [1.446.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.446.0...v1.446.1) (2026-08-01)
 
 ### Bug Fixes
