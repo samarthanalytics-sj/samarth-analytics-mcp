@@ -759,6 +759,11 @@ export async function runTaVerify(
     // how many of those show resolved VALUES, how many detail views we rejected (summary-context / stale),
     // and how many tags fell back to an event-panel shot. Makes a silent regression here visible.
     const proofStats = { detail: 0, values: 0, rejected: 0, eventOnly: 0 };
+    // Every tag name in this run. An event's Tags-Fired text is matched against these to learn WHICH tags
+    // it fired, so each of them can be opened for its own detail proof - including on a real form submit,
+    // which names no tag up front. Longest first, so a name that contains a shorter one is drilled first.
+    const knownTagNames = [...new Set(tags.map((t) => t.name).filter((n): n is string => Boolean(n)))]
+      .sort((a, b) => b.length - a.length);
     const firedBodyOf = (fired: string): string => fired.replace(/tags fired/i, '').trim();
     const hasFired = (fired: string): boolean => { const b = firedBodyOf(fired); return !!b && !/^none\b/i.test(b); };
     // Screenshot the TA panel for the EVENT we just drove. Tag the newest rail rows, then REAL-click each via
@@ -798,60 +803,65 @@ export async function runTaVerify(
         const chosen = best ?? firstFired;
         if (!chosen) return; // nothing fired to prove — never screenshot a blank panel
         if (!best) { await ta.click(chosen.sel, { timeout: 1200 }).catch(() => undefined); await ta.waitForTimeout(220); } // fallback row wasn't the last clicked - re-select it
-        // Drill into the SPECIFIC fired tag's detail view (properties + firing triggers + hits sent), so
-        // the proof is that tag's full config like the operator opening it in Tag Assistant, not just the
-        // event's tags-fired summary. Best-effort: if the tag card can't be opened or the detail doesn't
-        // render, fall back to the event-panel shot (no `tag`, so it stays an event-level capture).
-        let provenTag: string | undefined;
-        const wantTag = (target.names ?? []).find(Boolean);
-        // Drill in ONLY when `best` matched, i.e. this event's own Tags-Fired list actually names the tag.
-        // On the `firstFired` fallback the event fired something else, so opening a tag from it would prove
-        // the wrong thing - keep the event-panel shot (no `tag`) instead.
-        if (wantTag && best) {
-          const tagSel = await ta.evaluate<string>(openFiredTagInPage, wantTag).catch(() => '');
-          if (tagSel) {
-            await ta.click(tagSel, { timeout: 1200 }).catch(() => undefined); // REAL click → Angular opens Tag Details
-            await ta.waitForTimeout(400); // let the Tag Details view render
-            const blank = { isDetail: false, eventContext: false, valuesActive: false };
-            let st = await ta.evaluate<typeof blank>(readTaTagDetailState).catch(() => blank);
-            // Accept ONLY an event-context detail: one opened from the SUMMARY has no "Display Variables as"
-            // toggle, so it can only ever show {{variable}} names - reject it and keep the event-panel shot.
-            if (st.isDetail && st.eventContext) {
-              // Flip the toggle to VALUES so the proof shows the RESOLVED values (click_url, page_url, ...).
-              // Verify it actually took (a click can miss / land before the panel settles) and retry once.
-              for (let attempt = 0; attempt < 2 && !st.valuesActive; attempt += 1) {
-                const valSel = await ta.evaluate<string>(tagTaValuesRadio).catch(() => '');
-                if (!valSel) break;
-                await ta.click(valSel, { timeout: 1200 }).catch(() => undefined);
-                await ta.waitForTimeout(300);
-                st = await ta.evaluate<typeof blank>(readTaTagDetailState).catch(() => st);
-              }
-              provenTag = wantTag;
+        // Drill into EVERY tag this event fired, so each one gets ITS OWN detail view (properties + firing
+        // triggers + hits sent) like the operator opening that tag in Tag Assistant - not the event's
+        // tags-fired summary. Driving one trigger commonly fires several tags (a GA4 + Meta pair), and a
+        // REAL FORM SUBMIT names no tag at all (target.names is empty), which is why form tags used to get
+        // only the event panel. Names come from the event's own Tags-Fired text matched against the
+        // container's tag names, so we can never drill a tag this event did not fire.
+        const wanted = best ? (target.names ?? []).filter(Boolean) : [];
+        const derived = knownTagNames.filter((n) => chosen.fired.includes(n));
+        const already = new Set(captures.map((c) => c.tag).filter(Boolean) as string[]);
+        // Cap per event so a busy event cannot stretch the run; the rest keep the event-panel proof.
+        const toDrill = [...new Set([...wanted, ...derived])].filter((n) => !already.has(n)).slice(0, 8);
+        let drilled = 0;
+        for (const name of toDrill) {
+          const tagSel = await ta.evaluate<string>(openFiredTagInPage, name).catch(() => '');
+          if (!tagSel) continue;
+          await ta.click(tagSel, { timeout: 1200 }).catch(() => undefined); // REAL click → Angular opens Tag Details
+          await ta.waitForTimeout(400); // let the Tag Details view render
+          const blank = { isDetail: false, eventContext: false, valuesActive: false };
+          let st = await ta.evaluate<typeof blank>(readTaTagDetailState).catch(() => blank);
+          // Accept ONLY an event-context detail: one opened from the SUMMARY has no "Display Variables as"
+          // toggle, so it can only ever show {{variable}} names - reject it and keep the event-panel shot.
+          if (st.isDetail && st.eventContext) {
+            // Flip the toggle to VALUES so the proof shows the RESOLVED values (click_url, page_url, ...).
+            // Verify it actually took (a click can miss / land before the panel settles) and retry once.
+            for (let attempt = 0; attempt < 2 && !st.valuesActive; attempt += 1) {
+              const valSel = await ta.evaluate<string>(tagTaValuesRadio).catch(() => '');
+              if (!valSel) break;
+              await ta.click(valSel, { timeout: 1200 }).catch(() => undefined);
+              await ta.waitForTimeout(300);
+              st = await ta.evaluate<typeof blank>(readTaTagDetailState).catch(() => st);
+            }
+            const shot = await ta.screenshot({ type: 'jpeg', quality: 55, timeout: 5000 }).catch(() => null);
+            if (shot) {
+              captures.push({ screenshot: `data:image/jpeg;base64,${shot.toString('base64')}`, fired: chosen.fired, tag: name });
+              drilled += 1;
               proofStats.detail += 1;
               if (st.valuesActive) proofStats.values += 1;
-              else console.log(`[ta-proof] "${wantTag}": tag detail opened but the Values toggle did not engage - proof shows variable NAMES.`);
-            } else {
-              proofStats.rejected += 1;
-              console.log(`[ta-proof] "${wantTag}": rejected a ${st.isDetail ? 'summary-context' : 'non-'}detail view (no Values toggle) - keeping the event-panel proof.`);
-              await ta.click(chosen.sel, { timeout: 1200 }).catch(() => undefined); // detail didn't open → back to the event panel
-              await ta.waitForTimeout(180);
+              else console.log(`[ta-proof] "${name}": tag detail opened but the Values toggle did not engage - proof shows variable NAMES.`);
             }
+          } else {
+            proofStats.rejected += 1;
+            console.log(`[ta-proof] "${name}": rejected a ${st.isDetail ? 'summary-context' : 'non-'}detail view (no Values toggle) - keeping the event-panel proof.`);
           }
-        }
-        if (!provenTag) proofStats.eventOnly += 1;
-        const buf = await ta.screenshot({ type: 'jpeg', quality: 55, timeout: 5000 });
-        captures.push({ screenshot: `data:image/jpeg;base64,${buf.toString('base64')}`, fired: chosen.fired, ...(provenTag ? { tag: provenTag } : {}) });
-        // Return to the event view so the NEXT tag's rail tagging isn't confused by the detail view's
-        // "Messages Where This Tag Fired" rows (which also look like "8 Click"). Verify it took: an
-        // unverified restore leaves the next capture starting from a detail page, which is how one bad
-        // drill-down used to poison the tags after it. One bounded retry.
-        if (provenTag) {
+          // Back to the event view: the next tag's card is only findable there, and leaving a detail up
+          // would confuse the next capture's rail tagging ("Messages Where This Tag Fired" rows look like
+          // rail rows). Verify it took, with one bounded retry.
           for (let back = 0; back < 2; back += 1) {
             await ta.click(chosen.sel, { timeout: 1200 }).catch(() => undefined);
             await ta.waitForTimeout(150);
             const still = await ta.evaluate<{ isDetail: boolean }>(readTaTagDetailState).catch(() => ({ isDetail: false }));
             if (!still.isDetail) break;
           }
+        }
+        // No tag detail could be opened for this event - keep ONE event-panel proof so the tags it fired
+        // still have some evidence (matched by the Tags-Fired text, never mistaken for a tag's own detail).
+        if (drilled === 0) {
+          proofStats.eventOnly += 1;
+          const buf = await ta.screenshot({ type: 'jpeg', quality: 55, timeout: 5000 });
+          captures.push({ screenshot: `data:image/jpeg;base64,${buf.toString('base64')}`, fired: chosen.fired });
         }
       } catch { /* proof is best-effort */ }
     };
