@@ -417,25 +417,23 @@ function readTaTagDetailState(want?: string): { isDetail: boolean; eventContext:
   try {
     const t = (document.body.textContent || '').replace(/\s+/g, ' ');
     out.isDetail = /Tag Details/i.test(t) && /(Firing Triggers|Hits sent|Blocking Triggers)/i.test(t);
-    out.eventContext = /Display Variables as/i.test(t) && !/Messages Where This Tag Fired/i.test(t);
+    // The toggle IS the discriminator. Live diagnostics proved an event-context detail
+    // (crumb="22 form_submission >", toggle=yes, firingStatus=yes, radios=[Names, Values(on)]) ALSO carries
+    // a "Messages Where This Tag Fired" section, so the earlier rule - which required that section to be
+    // ABSENT - rejected perfectly good views and produced 0 proofs. A Summary-context detail has no toggle
+    // at all, and no toggle means values can never be shown, so presence of the toggle is both the correct
+    // signal and exactly what the next step needs.
+    out.eventContext = /Display Variables as/i.test(t) || /Firing Status/i.test(t);
     const norm = (s: string | null | undefined): string => (s || '').replace(/\s+/g, ' ').trim();
     if (want) {
-      // The title sits BEFORE the "Tag Details" heading in document order; the same name inside the
-      // Tags-Fired list of a still-open event panel comes after it, so position is what separates them.
-      out.nameOk = false;
+      // Identity by the HEADER region: everything before the "Tag Details" heading is the breadcrumb plus
+      // the tag title, so the requested name must appear there. Matching the region (not an element whose
+      // text is exactly the name) survives a title rendered with a "Fired" badge or split across nodes,
+      // while still excluding the same name lower down in a Tags-Fired list.
       const wantN = norm(want).toLowerCase();
-      let detailsHead: Element | null = null;
-      let headLen = Infinity;
-      for (const el of Array.prototype.slice.call(document.querySelectorAll('h1,h2,h3,h4,div,span,p')) as HTMLElement[]) {
-        const s = norm(el.textContent);
-        if (s.toLowerCase() !== 'tag details' || s.length >= headLen) continue;
-        headLen = s.length; detailsHead = el;
-      }
-      const FOLLOWS = 4; // Node.DOCUMENT_POSITION_FOLLOWING
-      for (const el of Array.prototype.slice.call(document.querySelectorAll('h1,h2,h3,h4,div,span,a')) as HTMLElement[]) {
-        if (norm(el.textContent).toLowerCase() !== wantN) continue;
-        if (!detailsHead || (el.compareDocumentPosition(detailsHead) & FOLLOWS)) { out.nameOk = true; break; }
-      }
+      const flatLc = t.toLowerCase();
+      const cut = flatLc.indexOf('tag details');
+      out.nameOk = (cut > 0 ? flatLc.slice(0, cut) : flatLc).indexOf(wantN) >= 0;
     }
     // The tight label of a radio: its wrapping <label>, its label[for=id], else its next sibling. Kept tight
     // (exactly "Values") so the Names radio - whose PARENT text is "Names Values" - can never match.
