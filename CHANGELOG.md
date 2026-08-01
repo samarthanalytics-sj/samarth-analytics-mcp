@@ -1,3 +1,9 @@
+## [1.446.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.445.3...v1.446.0) (2026-08-01)
+
+### Features
+
+* **desktop:** give EVERY fired tag its own Tag Details proof, including form tags ([#786](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/786)) ([e0571aa](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/e0571aa110750af30e0d2703d81a469d3e8bdb48))
+
 ## [1.445.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.445.2...v1.445.3) (2026-07-31)
 
 ### Bug Fixes
