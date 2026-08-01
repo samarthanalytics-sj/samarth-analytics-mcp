@@ -1,3 +1,9 @@
+## [1.447.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.447.3...v1.447.4) (2026-08-01)
+
+### Bug Fixes
+
+* **desktop:** UI audit batch A + C - contrast, tokens, a11y labels ([#797](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/797)) ([6e36b86](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/6e36b86fb7f757243806f013ad1b63ed0a07f03f)), closes [#fff](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/fff) [#993556](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/993556) [#185FA5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/185FA5) [#7c8ba1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/7c8ba1) [#5f6b7d](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/5f6b7d)
+
 ## [1.447.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.447.2...v1.447.3) (2026-08-01)
 
 ### Bug Fixes
