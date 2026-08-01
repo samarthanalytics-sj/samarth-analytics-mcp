@@ -253,8 +253,23 @@ function tagNewestTaRows(limit?: number): Array<{ sel: string; num: number }> {
       if (!byNum[num] || depth < byNum[num].depth) byNum[num] = { el, depth };
     }
   } catch { /* best-effort */ }
+  // The tightest text match is often an inner <span> that has no click handler, so clicking it did nothing
+  // and TA never switched to the per-event panel (the "LOW switch ratio" symptom, which then left every
+  // drill on the Summary and its names-only detail). Climb to the row's real interactive element, stopping
+  // before any ancestor that swallows other rows (text must still start with THIS row's number).
+  const clickable = (el: HTMLElement, num: number): HTMLElement => {
+    let p: HTMLElement | null = el;
+    for (let i = 0; p && i < 5; i += 1, p = p.parentElement) {
+      const t = (p.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!new RegExp('^' + num + '\\b').test(t) || t.length > 60) break; // climbed into a multi-row container
+      const tag = (p.tagName || '').toLowerCase();
+      const role = ((p.getAttribute && p.getAttribute('role')) || '').toLowerCase();
+      if (tag === 'a' || tag === 'li' || tag === 'button' || role === 'button' || role === 'listitem' || role === 'tab' || role === 'option' || (p.hasAttribute && p.hasAttribute('tabindex'))) return p;
+    }
+    return el;
+  };
   const nums = Object.keys(byNum).map(Number).sort((a, b) => b - a).slice(0, limit ?? 14); // newest first
-  return nums.map((num, i) => { byNum[num].el.setAttribute('data-ta-snap', String(i)); return { sel: `[data-ta-snap="${i}"]`, num }; });
+  return nums.map((num, i) => { clickable(byNum[num].el, num).setAttribute('data-ta-snap', String(i)); return { sel: `[data-ta-snap="${i}"]`, num }; });
 }
 
 /** In the TA page: read the panel now showing — the raw dataLayer event from the API Call block + the
@@ -322,6 +337,37 @@ function openFiredTagInPage(name: string): string {
     bestEl.setAttribute('data-ta-tag', '1');
     return '[data-ta-tag="1"]';
   } catch { return ''; }
+}
+
+/** In the TA page: a compact structural readout of the view now on screen, logged ONCE per run when a
+ *  drill-down is rejected. Without it a failure only says "opened from the Summary" and the next fix is a
+ *  guess at Tag Assistant's DOM; this reports what is actually there - the breadcrumb, which marker
+ *  sections exist, the radios found, and whether the message chip is locatable. */
+function readTaDiagnostics(): string {
+  try {
+    const norm = (s: string | null | undefined): string => (s || '').replace(/\s+/g, ' ').trim();
+    const flat = norm(document.body.textContent);
+    const has = (re: RegExp): string => (re.test(flat) ? 'yes' : 'no');
+    // The breadcrumb head: the tightest element ending in ">" near the top, else the first heading text.
+    let crumb = '';
+    for (const el of Array.prototype.slice.call(document.querySelectorAll('h1,h2,h3,h4,a,span,div')) as HTMLElement[]) {
+      const t = norm(el.textContent);
+      if (t.length > 40 || !/>$/.test(t)) continue;
+      if (!crumb || t.length < crumb.length) crumb = t;
+    }
+    const radios: string[] = [];
+    for (const r of Array.prototype.slice.call(document.querySelectorAll('input[type="radio"],[role="radio"]')) as Element[]) {
+      const wrap = r.closest ? r.closest('label') : null;
+      const lbl = norm(wrap ? wrap.textContent : (r.nextElementSibling ? r.nextElementSibling.textContent : ''));
+      const on = (r as HTMLInputElement).checked === true || r.getAttribute('aria-checked') === 'true';
+      radios.push(`${lbl || '?'}${on ? '(on)' : ''}`);
+    }
+    let chips = 0;
+    for (const el of Array.prototype.slice.call(document.querySelectorAll('a,button,[role="button"],div,span,li')) as HTMLElement[]) {
+      if (/^\d+\s+\S/.test(norm(el.textContent)) && norm(el.textContent).length <= 44) chips += 1;
+    }
+    return `crumb="${crumb}" tagDetails=${has(/Tag Details/i)} toggle=${has(/Display Variables as/i)} messages=${has(/Messages Where This Tag Fired/i)} firingStatus=${has(/Firing Status/i)} tagsFired=${has(/Tags Fired/i)} radios=[${radios.join(', ')}] numberedEls=${chips}`;
+  } catch (e) { return 'diagnostics failed: ' + String(e).slice(0, 80); }
 }
 
 /** In the TA SUMMARY-context tag detail: mark the first "Messages Where This Tag Fired" chip (e.g.
@@ -826,6 +872,7 @@ export async function runTaVerify(
     // how many of those show resolved VALUES, how many detail views we rejected (summary-context / stale),
     // and how many tags fell back to an event-panel shot. Makes a silent regression here visible.
     const proofStats = { detail: 0, values: 0, rejected: 0, eventOnly: 0 };
+    let diagLogged = false; // structural readout is logged once per run, on the first rejected drill-down
     // Every tag name in this run. An event's Tags-Fired text is matched against these to learn WHICH tags
     // it fired, so each of them can be opened for its own detail proof - including on a real form submit,
     // which names no tag up front. Longest first, so a name that contains a shorter one is drilled first.
@@ -942,6 +989,13 @@ export async function runTaVerify(
             }
           } else {
             proofStats.rejected += 1;
+            // One structural readout per run, so a persistent failure reports Tag Assistant's real DOM
+            // instead of needing another round of guessing.
+            if (!diagLogged) {
+              diagLogged = true;
+              const diag = await ta.evaluate<string>(readTaDiagnostics).catch(() => 'unavailable');
+              console.log(`[ta-proof] view diagnostics at first reject: ${diag}`);
+            }
             const why = !st.isDetail ? 'the detail view did not open'
               : !st.eventContext ? 'it opened from the Summary (no Values toggle, names only)'
               : 'the detail shown was a DIFFERENT tag';
