@@ -245,6 +245,7 @@ function tagNewestTaRows(limit?: number): Array<{ sel: string; num: number }> {
     const all = Array.prototype.slice.call(document.querySelectorAll('a,li,button,[role="button"],div,span')) as HTMLElement[];
     for (const el of all) {
       if (msgHead && (msgHead.compareDocumentPosition(el) & FOLLOWS)) continue; // a message chip, not a rail row
+      if (el.getClientRects && el.getClientRects().length === 0) continue; // not rendered - cannot be clicked
       const t = (el.textContent || '').replace(/\s+/g, ' ').trim();
       const m = /^(\d+)\s*(\D.*)$/.exec(t);
       if (!m || t.length > 44) continue;
@@ -280,7 +281,11 @@ function tagNewestTaRows(limit?: number): Array<{ sel: string; num: number }> {
  *  "Tags Fired" text region (to confirm the target tag is listed and the event isn't empty). */
 function readTaPanel(): { event: string; fired: string } {
   try {
-    const all = (document.body.textContent || '').replace(/\s+/g, ' ');
+    // innerText, NOT textContent: Angular keeps a closed view's markup in the DOM, and textContent reads
+    // it anyway. That is how page 2's form_submission came back carrying page 1's Tags-Fired names, so the
+    // driver thought both tags were "already proven" and drilled nothing. innerText is layout-aware, so a
+    // hidden leftover panel contributes nothing and this only ever reads what is on screen.
+    const all = (document.body.innerText || document.body.textContent || '').replace(/\s+/g, ' ');
     const m = /dataLayer\.push\(\{\s*event:\s*["']([^"']+)["']/.exec(all);
     const fi = all.indexOf('Tags Fired');
     const nfi = fi >= 0 ? all.indexOf('Tags Not Fired', fi) : -1;
@@ -329,6 +334,9 @@ function openFiredTagInPage(name: string): string {
     let bestEl: HTMLElement | null = null;
     let bestLen = Infinity;
     for (const el of nodes) {
+      // Skip anything not actually rendered: a hidden leftover view can hold the same tag name, and
+      // clicking it does nothing (Playwright would just time out on an invisible element).
+      if (el.getClientRects && el.getClientRects().length === 0) continue;
       const t = (el.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
       if (!t || t.indexOf(want) < 0) continue;
       // Prefer the TIGHTEST element still holding the whole name (the card title/row, not a wrapper that
@@ -350,7 +358,7 @@ function openFiredTagInPage(name: string): string {
 function readTaDiagnostics(): string {
   try {
     const norm = (s: string | null | undefined): string => (s || '').replace(/\s+/g, ' ').trim();
-    const flat = norm(document.body.textContent);
+    const flat = norm(document.body.innerText || document.body.textContent); // visible text only
     const has = (re: RegExp): string => (re.test(flat) ? 'yes' : 'no');
     // The breadcrumb head: the tightest element ending in ">" near the top, else the first heading text.
     let crumb = '';
@@ -450,7 +458,10 @@ function tagTaMessageChip(): string {
 function readTaTagDetailState(want?: string): { isDetail: boolean; eventContext: boolean; valuesActive: boolean; nameOk: boolean } {
   const out = { isDetail: false, eventContext: false, valuesActive: false, nameOk: true };
   try {
-    const t = (document.body.textContent || '').replace(/\s+/g, ' ');
+    // Visible text only (see readTaPanel): a closed detail Angular left in the DOM used to make isDetail
+    // report true on an event panel, which produced the false "could not get back" and "a detail is still
+    // on screen" lines.
+    const t = (document.body.innerText || document.body.textContent || '').replace(/\s+/g, ' ');
     out.isDetail = /Tag Details/i.test(t) && /(Firing Triggers|Hits sent|Blocking Triggers)/i.test(t);
     // The toggle IS the discriminator. Live diagnostics proved an event-context detail
     // (crumb="22 form_submission >", toggle=yes, firingStatus=yes, radios=[Names, Values(on)]) ALSO carries
