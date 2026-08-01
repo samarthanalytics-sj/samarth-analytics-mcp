@@ -231,8 +231,20 @@ function tagNewestTaRows(limit?: number): Array<{ sel: string; num: number }> {
   const byNum: Record<number, { el: HTMLElement; depth: number }> = {};
   try {
     document.querySelectorAll('[data-ta-snap]').forEach((e) => e.removeAttribute('data-ta-snap')); // clear last call's tags so an index never matches two rows
+    // A tag-detail view lists "Messages Where This Tag Fired" chips ("22 form_submission") that look EXACTLY
+    // like rail rows and are shallower, so they used to win the tie-break. Clicking one jumped to an OLD
+    // event, which is how a later page kept re-proving the PREVIOUS page's tags. Exclude that whole region.
+    let msgHead: Element | null = null;
+    let msgLen = Infinity;
+    for (const el of Array.prototype.slice.call(document.querySelectorAll('h1,h2,h3,h4,div,span,p')) as HTMLElement[]) {
+      const t = (el.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!/^messages where this tag fired$/i.test(t) || t.length >= msgLen) continue;
+      msgLen = t.length; msgHead = el;
+    }
+    const FOLLOWS = 4; // Node.DOCUMENT_POSITION_FOLLOWING
     const all = Array.prototype.slice.call(document.querySelectorAll('a,li,button,[role="button"],div,span')) as HTMLElement[];
     for (const el of all) {
+      if (msgHead && (msgHead.compareDocumentPosition(el) & FOLLOWS)) continue; // a message chip, not a rail row
       const t = (el.textContent || '').replace(/\s+/g, ' ').trim();
       const m = /^(\d+)\s*(\D.*)$/.exec(t);
       if (!m || t.length > 44) continue;
@@ -309,6 +321,38 @@ function openFiredTagInPage(name: string): string {
     if (!bestEl) return '';
     bestEl.setAttribute('data-ta-tag', '1');
     return '[data-ta-tag="1"]';
+  } catch { return ''; }
+}
+
+/** In the TA SUMMARY-context tag detail: mark the first "Messages Where This Tag Fired" chip (e.g.
+ *  "22 form_submission") and return its selector. That chip is the route from the tag's GLOBAL detail
+ *  (breadcrumb "Summary >", variable NAMES only, no toggle) into the per-message EVENT-context detail
+ *  (breadcrumb "22 form_submission >", Firing Status + the "Display Variables as" toggle), which is the
+ *  only view that can show resolved values. Returns '' when the section is not present. */
+function tagTaMessageChip(): string {
+  try {
+    document.querySelectorAll('[data-ta-msg]').forEach((e) => e.removeAttribute('data-ta-msg'));
+    const norm = (s: string | null | undefined): string => (s || '').replace(/\s+/g, ' ').trim();
+    let head: Element | null = null;
+    let headLen = Infinity;
+    for (const el of Array.prototype.slice.call(document.querySelectorAll('h1,h2,h3,h4,div,span,p')) as HTMLElement[]) {
+      const t = norm(el.textContent);
+      if (!/^messages where this tag fired$/i.test(t) || t.length >= headLen) continue;
+      headLen = t.length; head = el;
+    }
+    if (!head) return '';
+    const FOLLOWS = 4; // Node.DOCUMENT_POSITION_FOLLOWING
+    let best: Element | null = null;
+    let bestLen = Infinity;
+    for (const el of Array.prototype.slice.call(document.querySelectorAll('a,button,[role="button"],div,span,li')) as HTMLElement[]) {
+      if (!(head.compareDocumentPosition(el) & FOLLOWS)) continue;
+      const t = norm(el.textContent);
+      if (!/^\d+\s+\S/.test(t) || t.length > 44) continue; // "22 form_submission"; long trigger blobs excluded
+      if (t.length < bestLen) { bestLen = t.length; best = el; }
+    }
+    if (!best) return '';
+    best.setAttribute('data-ta-msg', '1');
+    return '[data-ta-msg="1"]';
   } catch { return ''; }
 }
 
@@ -800,6 +844,15 @@ export async function runTaVerify(
       snapTried += 1;
       try {
         await ta.evaluate(dismissTaOverlays).catch(() => undefined);
+        // Start from a NON-detail view. A tag detail left up by the previous capture hides the real rail
+        // behind its own "Messages Where This Tag Fired" chips, so row tagging would pick a stale event
+        // (that is why page 2 kept re-proving page 1's tags). Summary is the one rail item TA never
+        // recycles, so it is the reliable way back.
+        const preView = await ta.evaluate<{ isDetail: boolean }>(readTaTagDetailState).catch(() => ({ isDetail: false }));
+        if (preView.isDetail) {
+          await ta.evaluate(clickTaSummary).catch(() => undefined);
+          await ta.waitForTimeout(250);
+        }
         // Only the NEWEST few rail rows can be the event we just drove; scanning all 14 (each a real click
         // + render wait) made a non-firing tag cost seconds, and ~79 tags/page then looked stuck. The
         // post-hoc sweep is the backstop for anything not in the top rows.
@@ -854,6 +907,18 @@ export async function runTaVerify(
           await ta.waitForTimeout(400); // let the Tag Details view render
           const blank = { isDetail: false, eventContext: false, valuesActive: false, nameOk: false };
           let st = await ta.evaluate<typeof blank>(readTaTagDetailState, name).catch(() => blank);
+          // RECOVER a Summary-context detail: clicking a tag card often lands on the tag's GLOBAL page
+          // (breadcrumb "Summary >", names only, no toggle). Its "Messages Where This Tag Fired" chip jumps
+          // to the per-message EVENT-context view, which is the one that carries the Values toggle. Same
+          // tag either way, so identity is preserved; re-checked below.
+          if (st.isDetail && !st.eventContext) {
+            const msgSel = await ta.evaluate<string>(tagTaMessageChip).catch(() => '');
+            if (msgSel) {
+              await ta.click(msgSel, { timeout: 1200 }).catch(() => undefined);
+              await ta.waitForTimeout(400);
+              st = await ta.evaluate<typeof blank>(readTaTagDetailState, name).catch(() => st);
+            }
+          }
           // Accept ONLY an event-context detail FOR THE TAG WE ASKED FOR: one opened from the SUMMARY has no
           // "Display Variables as" toggle so it can only ever show {{variable}} names, and a detail whose own
           // title is a different tag must never be stored under this name.
