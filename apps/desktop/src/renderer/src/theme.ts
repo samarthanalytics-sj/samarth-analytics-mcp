@@ -116,7 +116,7 @@ const VARS: Record<Theme, Record<string, string>> = {
     '--text': '#0f172a',
     '--text-dim': '#334155',
     '--text-muted': '#5b6776',
-    '--text-faint': '#7c8ba1',
+    '--text-faint': '#5f6b7d',
     '--primary': '#2563eb',
     '--primary-hover': '#1d4ed8',
     '--primary-active': '#1e40af',
