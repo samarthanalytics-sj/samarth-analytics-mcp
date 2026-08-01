@@ -1,3 +1,9 @@
+## [1.446.6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.446.5...v1.446.6) (2026-08-01)
+
+### Bug Fixes
+
+* **desktop:** drill EVERY tag an event fired, not just the first ([#792](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/792)) ([88af33a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/88af33aec77d51cc321281d7b78e9ff1a5f375a0)), closes [#791](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/791)
+
 ## [1.446.5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.446.4...v1.446.5) (2026-08-01)
 
 ### Bug Fixes
