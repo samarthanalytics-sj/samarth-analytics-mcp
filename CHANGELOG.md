@@ -1,3 +1,9 @@
+## [1.446.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.446.2...v1.446.3) (2026-08-01)
+
+### Bug Fixes
+
+* **desktop:** reach the event-context tag detail so proofs show resolved values ([#789](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/789)) ([89f5ee1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/89f5ee186201b9c498b3de01e61d5f502fab34f5)), closes [787/#788](https://github.com/787/samarth-analytics-mcp/issues/788)
+
 ## [1.446.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.446.1...v1.446.2) (2026-08-01)
 
 ### Bug Fixes
