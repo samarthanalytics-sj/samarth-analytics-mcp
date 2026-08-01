@@ -370,6 +370,37 @@ function readTaDiagnostics(): string {
   } catch (e) { return 'diagnostics failed: ' + String(e).slice(0, 80); }
 }
 
+/** In the TA tag-detail page: mark the BREADCRUMB link (e.g. "22 form_submission >") and return its
+ *  selector. Clicking it goes back to exactly the event whose detail we opened, which is how the driver
+ *  returns between tags when one event fired several. More reliable than re-clicking the rail row, whose
+ *  data-ta-snap attribute Angular may have dropped when it rendered the detail - that stale selector is
+ *  why only the FIRST tag of each event was getting its own proof. */
+function tagTaCrumbLink(): string {
+  try {
+    document.querySelectorAll('[data-ta-crumb]').forEach((e) => e.removeAttribute('data-ta-crumb'));
+    const norm = (s: string | null | undefined): string => (s || '').replace(/\s+/g, ' ').trim();
+    let best: HTMLElement | null = null;
+    let bestLen = Infinity;
+    for (const el of Array.prototype.slice.call(document.querySelectorAll('a,button,[role="button"],span,div')) as HTMLElement[]) {
+      const t = norm(el.textContent);
+      if (t.length > 40 || !/>$/.test(t) || t.length <= 1) continue;
+      if (t.length < bestLen) { bestLen = t.length; best = el; }
+    }
+    if (!best) return '';
+    // Prefer a clickable ancestor: the crumb text often sits in a plain span with no handler.
+    let target: HTMLElement = best;
+    let p: HTMLElement | null = best;
+    for (let i = 0; p && i < 4; i += 1, p = p.parentElement) {
+      const tag = (p.tagName || '').toLowerCase();
+      const role = ((p.getAttribute && p.getAttribute('role')) || '').toLowerCase();
+      if (norm(p.textContent).length > 60) break;
+      if (tag === 'a' || tag === 'button' || role === 'button' || role === 'link' || (p.hasAttribute && p.hasAttribute('tabindex'))) { target = p; break; }
+    }
+    target.setAttribute('data-ta-crumb', '1');
+    return '[data-ta-crumb="1"]';
+  } catch { return ''; }
+}
+
 /** In the TA SUMMARY-context tag detail: mark the first "Messages Where This Tag Fired" chip (e.g.
  *  "22 form_submission") and return its selector. That chip is the route from the tag's GLOBAL detail
  *  (breadcrumb "Summary >", variable NAMES only, no toggle) into the per-message EVENT-context detail
@@ -944,10 +975,24 @@ export async function runTaVerify(
           await ta.click(chosen.sel, { timeout: 1200 }).catch(() => undefined);
           await ta.waitForTimeout(180);
         }
+        // Return to THIS event's panel between tags. The breadcrumb ("22 form_submission >") is rendered by
+        // the detail we are on and always points at the right event; the rail row's data-ta-snap attribute
+        // can be dropped when Angular renders the detail, and that stale selector is why only the FIRST tag
+        // of each event used to get a proof. Crumb first, rail row as the fallback, then verify.
+        const backToEvent = async (): Promise<boolean> => {
+          for (let attempt = 0; attempt < 2; attempt += 1) {
+            const crumbSel = attempt === 0 ? await ta.evaluate<string>(tagTaCrumbLink).catch(() => '') : '';
+            await ta.click(crumbSel || chosen.sel, { timeout: 1200 }).catch(() => undefined);
+            await ta.waitForTimeout(200);
+            const v = await ta.evaluate<{ isDetail: boolean }>(readTaTagDetailState).catch(() => ({ isDetail: true }));
+            if (!v.isDetail) return true;
+          }
+          return false;
+        };
         let drilled = 0;
         for (const name of toDrill) {
           const tagSel = await ta.evaluate<string>(openFiredTagInPage, name).catch(() => '');
-          if (!tagSel) continue;
+          if (!tagSel) { console.log(`[ta-proof] "${name}": its card was not found in this event's Tags-Fired list - no detail proof.`); continue; }
           await ta.click(tagSel, { timeout: 1200 }).catch(() => undefined); // REAL click → Angular opens Tag Details
           await ta.waitForTimeout(400); // let the Tag Details view render
           const blank = { isDetail: false, eventContext: false, valuesActive: false, nameOk: false };
@@ -1001,13 +1046,8 @@ export async function runTaVerify(
           }
           // Back to the event view: the next tag's card is only findable there, and leaving a detail up
           // would confuse the next capture's rail tagging ("Messages Where This Tag Fired" rows look like
-          // rail rows). Verify it took, with one bounded retry.
-          for (let back = 0; back < 2; back += 1) {
-            await ta.click(chosen.sel, { timeout: 1200 }).catch(() => undefined);
-            await ta.waitForTimeout(150);
-            const still = await ta.evaluate<{ isDetail: boolean }>(readTaTagDetailState).catch(() => ({ isDetail: false }));
-            if (!still.isDetail) break;
-          }
+          // rail rows).
+          await backToEvent();
         }
         // No tag detail could be opened for this event - keep ONE event-panel proof so the tags it fired
         // still have some evidence (matched by the Tags-Fired text, never mistaken for a tag's own detail).
