@@ -1,3 +1,9 @@
+## [1.447.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.447.0...v1.447.1) (2026-08-01)
+
+### Bug Fixes
+
+* **desktop:** phantom rail row, synthetic Summary click, false back-to-event ([#794](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/794)) ([dc27569](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/dc2756954f968934d5f33da0a5be0de15fb01ca6)), closes [#80](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/80) [#73](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/73) [#71](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/71)
+
 ## [1.447.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.446.6...v1.447.0) (2026-08-01)
 
 ### Features
