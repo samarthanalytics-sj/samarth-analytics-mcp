@@ -1,3 +1,9 @@
+## [1.447.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.447.2...v1.447.3) (2026-08-01)
+
+### Bug Fixes
+
+* **desktop:** confirm the rail click moved the selection before trusting the panel ([#796](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/796)) ([d558bbe](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d558bbe0ab209f76a1afe85df1dd04e8ade88f5f)), closes [#40](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/40) [#22](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/22)
+
 ## [1.447.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.447.1...v1.447.2) (2026-08-01)
 
 ### Bug Fixes
