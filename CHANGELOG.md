@@ -1,3 +1,9 @@
+## [1.446.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.446.3...v1.446.4) (2026-08-01)
+
+### Bug Fixes
+
+* **desktop:** click the rail row's real interactive element so TA switches panels ([#790](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/790)) ([9ba87c8](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/9ba87c8ff879ecbae06bf815bf82c282dc637ef4))
+
 ## [1.446.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.446.2...v1.446.3) (2026-08-01)
 
 ### Bug Fixes
