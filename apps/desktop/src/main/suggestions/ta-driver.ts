@@ -277,6 +277,30 @@ function tagNewestTaRows(limit?: number): Array<{ sel: string; num: number }> {
   return nums.map((num, i) => { clickable(byNum[num].el, num).setAttribute('data-ta-snap', String(i)); return { sel: `[data-ta-snap="${i}"]`, num }; });
 }
 
+/** In the TA page: the NUMBER of the rail row currently selected, or 0 when it cannot be determined.
+ *  Event names repeat across pages - two real form submits both produce "form_submission" - so the name
+ *  alone cannot tell page 2's event from page 1's. When a rail click fails to switch the panel, the stale
+ *  panel still reads "form_submission" and the driver proves the WRONG page's tags. The row number is the
+ *  only identity, so the caller confirms the selection actually moved before trusting the panel. */
+function readTaSelectedRow(): number {
+  try {
+    const cands = Array.prototype.slice.call(
+      document.querySelectorAll('[aria-selected="true"],[aria-current],[class*="select"],[class*="Select"],[class*="active"],[class*="Active"]'),
+    ) as HTMLElement[];
+    let best = 0;
+    let bestLen = Infinity;
+    for (const el of cands) {
+      if (el.getClientRects && el.getClientRects().length === 0) continue; // not rendered
+      const t = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+      if (t.length > 44) continue;
+      const m = /^(\d+)\s*(\D.*)$/.exec(t);
+      if (!m || /\btags?\b/i.test(m[2]) || /\bfire/i.test(m[2])) continue; // skip the "N tags did not fire" counter
+      if (t.length < bestLen) { bestLen = t.length; best = parseInt(m[1], 10); }
+    }
+    return best;
+  } catch { return 0; }
+}
+
 /** In the TA page: read the panel now showing — the raw dataLayer event from the API Call block + the
  *  "Tags Fired" text region (to confirm the target tag is listed and the event isn't empty). */
 function readTaPanel(): { event: string; fired: string } {
@@ -992,10 +1016,22 @@ export async function runTaVerify(
         let best: { sel: string; fired: string } | null = null;
         let firstFired: { sel: string; fired: string } | null = null;
         for (const row of rows) {
-          await ta.click(row.sel, { timeout: 1200 }).catch(() => undefined); // REAL click → Angular switches the panel
-          await ta.waitForTimeout(300); // let Angular render the switched-to event panel (API Call + Tags Fired)
-          const panel = await ta.evaluate<{ event: string; fired: string }>(readTaPanel).catch(() => ({ event: '', fired: '' }));
-          trace(`  row #${row.num} -> event="${panel.event || '(none: panel did not switch)'}" firedTags=${hasFired(panel.fired) ? 'yes' : 'no'}`);
+          // Click, then CONFIRM the selection actually moved to this row. Two pages both produce a
+          // "form_submission" event, so a click that failed to switch leaves a panel that still matches by
+          // name, and the driver would prove the previous page's tags against this page's row. One retry,
+          // re-marking the rows first in case Angular re-rendered the rail and dropped the attribute.
+          let panel = { event: '', fired: '' };
+          let sel = 0;
+          for (let attempt = 0; attempt < 2; attempt += 1) {
+            if (attempt > 0) await ta.evaluate(tagNewestTaRows, 6).catch(() => undefined);
+            await ta.click(row.sel, { timeout: 1200 }).catch(() => undefined); // REAL click → Angular switches the panel
+            await ta.waitForTimeout(300); // let Angular render the switched-to panel (API Call + Tags Fired)
+            panel = await ta.evaluate<{ event: string; fired: string }>(readTaPanel).catch(() => ({ event: '', fired: '' }));
+            sel = await ta.evaluate<number>(readTaSelectedRow).catch(() => 0);
+            if (!sel || sel === row.num) break;
+          }
+          trace(`  row #${row.num} -> event="${panel.event || '(none: panel did not switch)'}" firedTags=${hasFired(panel.fired) ? 'yes' : 'no'} selectedRow=${sel || 'unknown'}`);
+          if (sel && sel !== row.num) { trace(`  row #${row.num}: the panel is still showing row #${sel} - not trusting this read`); continue; }
           // REQUIRE a real EVENT view: the Summary panel also has a "Tags Fired" list (every fired tag) but NO
           // API-Call event, so panel.event is empty there. Without this check a click that failed to switch the
           // panel left us on the Summary, whose all-tags list matched EVERY target → every proof was the Summary.
