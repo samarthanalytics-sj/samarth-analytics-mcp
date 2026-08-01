@@ -51,7 +51,7 @@ export function EmptyState({ icon = '✨', title, hint, action, compact }: { ico
       <div style={{ width: compact ? 44 : 58, height: compact ? 44 : 58, borderRadius: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: compact ? 22 : 28, background: 'var(--surface-3)', border: '1px solid var(--border)' }} aria-hidden>
         {icon}
       </div>
-      <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)' }}>{title}</div>
+      <div role="heading" aria-level={3} style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)' }}>{title}</div>
       {hint && <div style={{ fontSize: 13, color: 'var(--text-muted)', maxWidth: 380, lineHeight: 1.55 }}>{hint}</div>}
       {action && <div style={{ marginTop: 6 }}>{action}</div>}
     </div>

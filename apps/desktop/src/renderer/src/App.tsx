@@ -712,7 +712,7 @@ function ConfirmCard({
         <button
           style={{
             ...(proposal.destructive ? styles.dangerSolid : styles.primaryBtn),
-            ...(typeOk ? {} : { opacity: 0.5, cursor: 'not-allowed' }),
+            ...(typeOk ? {} : { opacity: 0.55, cursor: 'not-allowed' }),
           }}
           onClick={approve}
           disabled={!typeOk}
@@ -1213,7 +1213,7 @@ function MemorySuggestBar({ active, product, messages, onError }: {
                           <input type="checkbox" checked={c.scopeClient} onChange={(e) => edit(c.id, { scopeClient: e.target.checked })} /> only {clientLabel}
                         </label>
                       )}
-                      <button style={{ ...styles.primaryBtn, padding: '3px 10px', fontSize: 12, ...(disabled ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }} disabled={disabled} onClick={() => void keep(c.id)}>{savingId === c.id ? 'Saving…' : 'Keep'}</button>
+                      <button style={{ ...styles.primaryBtn, padding: '3px 10px', fontSize: 12, ...(disabled ? { opacity: 0.55, cursor: 'not-allowed' } : {}) }} disabled={disabled} onClick={() => void keep(c.id)}>{savingId === c.id ? 'Saving…' : 'Keep'}</button>
                       <button style={{ ...styles.linkBtn, fontSize: 12 }} onClick={() => drop(c.id)}>Skip</button>
                     </div>
                   </div>
@@ -1798,6 +1798,7 @@ function ChatView({
           </button>
           <textarea
             ref={taRef}
+            aria-label={product === 'gtm' ? 'Chat message - ask about this GTM container' : 'Chat message - ask about this GA4 property'}
             style={styles.composerInput}
             placeholder={ready ? (product === 'gtm' ? 'Ask about this GTM container, or / for commands…' : 'Ask about this GA4 property, or / for commands…') : hint}
             value={input}
@@ -2244,7 +2245,7 @@ function GtmContextBar({
           onChange={(v) => void pickContainer(v)}
           placeholder={loading === 'containers' ? 'Loading…' : !sel.accountId ? 'Pick an account first' : 'Select container…'}
           searchPlaceholder="Search by name or GTM-ID…"
-          emptyLabel={sel.accountId ? 'No containers for this account — check Google access or use ↻ Retry.' : undefined}
+          emptyLabel={sel.accountId ? 'No containers for this account - check Google access or use ↻ Retry.' : undefined}
           options={containers.map((c) => ({ value: c.containerId, label: c.name, ...(c.publicId ? { hint: c.publicId } : {}) }))}
         />
       </div>
@@ -2437,7 +2438,7 @@ function AdsTokenGuide(): JSX.Element {
         <b>{s.title}</b>
         <span style={{ color: 'var(--text-muted)' }}> {s.detail}</span>
         {s.warning && (
-          <div style={{ marginTop: 4, padding: '6px 9px', borderRadius: 7, border: '1px solid var(--c-amber)', background: 'rgba(230,160,30,0.08)', fontSize: 12, lineHeight: 1.45 }}>
+          <div style={{ marginTop: 4, padding: '6px 9px', borderRadius: 7, border: '1px solid var(--c-amber)', background: 'var(--c-amber-bg)', fontSize: 12, lineHeight: 1.45 }}>
             <b>Do not skip this. </b>{s.warning}
           </div>
         )}
@@ -2813,7 +2814,7 @@ const tplStyles: Record<string, React.CSSProperties> = {
   // "Create listener tag" action row on a listener-tag requirement.
   installActions: { display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, flexWrap: 'wrap' },
   installCreateBtn: { background: 'var(--primary)', color: 'var(--on-primary)', border: 'none', borderRadius: 7, padding: '5px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer' },
-  installCreateBtnDisabled: { opacity: 0.5, cursor: 'not-allowed' },
+  installCreateBtnDisabled: { opacity: 0.55, cursor: 'not-allowed' },
   // An OPTIONAL improvement (html-attribute) - a quiet muted row, NOT a mandatory-looking box, so it
   // never contradicts a "fires natively" line above it.
   installOptional: { display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', marginBottom: 8, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8 },
@@ -6877,7 +6878,7 @@ function FormFillReview({ url, verifyPages, snippet, active, onError, runSignal,
           </div>
         )}
           {note && (
-            <div style={{ marginTop: 10, padding: '8px 10px', borderRadius: 8, fontSize: 13, border: '1px solid var(--c-amber)', background: 'rgba(230,160,30,0.08)', color: 'var(--text)' }}>{note}</div>
+            <div style={{ marginTop: 10, padding: '8px 10px', borderRadius: 8, fontSize: 13, border: '1px solid var(--c-amber)', background: 'var(--c-amber-bg)', color: 'var(--text)' }}>{note}</div>
           )}
         </div>
 
@@ -6910,7 +6911,7 @@ function FormFillReview({ url, verifyPages, snippet, active, onError, runSignal,
               </ul>
               {(touched || Object.keys(results).length > 0 || onSubmitForms) ? (
                 confirming ? (
-                  <div style={{ marginTop: 8, padding: '8px 10px', borderRadius: 8, border: '1px solid var(--c-red)', background: 'rgba(220,60,60,0.08)', fontSize: 13 }}>
+                  <div style={{ marginTop: 8, padding: '8px 10px', borderRadius: 8, border: '1px solid var(--c-red)', background: 'var(--c-red-bg)', fontSize: 13 }}>
                     <div style={{ color: 'var(--text)' }}>
                       ⚠ This <b>really submits all {matched.length} form(s)</b> - a real submission / lead is created for each in your CRM / inbox and can trigger
                       autoresponders, Slack/Zapier automations, or sales-rep assignment. GA4 and known ad-pixel hits are captured (not sent), but a less-common
@@ -7485,6 +7486,7 @@ function VerifyPanel({
             One URL per line (single pages or sitemap URLs). When set, verify skips the auto-crawl and drives every tag on <b>only</b> these pages, so forms/tags on pages the crawl missed still get tested. Use the <b>public</b> page URLs (not wp-admin / editor URLs).
           </div>
           <textarea
+            aria-label="Pages to verify - one URL per line"
             value={vVerifyPages}
             onChange={(e) => setVVerifyPages(e.target.value)}
             placeholder={'https://www.example.com/contact\nhttps://www.example.com/pricing'}
@@ -7504,7 +7506,7 @@ function VerifyPanel({
               then gates on skip/proceed (below), then drives every tag + reads GTM's own firing. */}
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
             <button
-              style={{ ...styles.primaryBtn, ...(!ready || vVerifying || vTaStage === 'scanning' || vTaStage === 'preflight' || !verifyTarget() ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
+              style={{ ...styles.primaryBtn, ...(!ready || vVerifying || vTaStage === 'scanning' || vTaStage === 'preflight' || !verifyTarget() ? { opacity: 0.55, cursor: 'not-allowed' } : {}) }}
               onClick={() => void startTaFlow()}
               disabled={!ready || vVerifying || vTaStage === 'scanning' || vTaStage === 'preflight' || !verifyTarget()}
               title="Automates the REAL Tag Assistant - connects it to the site, drives your tags, and reads GTM's own per-event firing. First it checks which GTM container is live on the page and confirms it is the one you selected, then scans the site for forms with tags and asks whether to verify those too (a real lead per form) or just the click tags. ZERO GTM writes. Signs in to Tag Assistant ONCE (saved after that, so it never asks again) and your normal Chrome can stay open."
@@ -7526,7 +7528,7 @@ function VerifyPanel({
             </div>
           )}
           {vTaStage === 'preflight' && vPreflightGate && (
-            <div style={{ marginTop: 10, padding: '10px 12px', borderRadius: 8, border: '1px solid var(--c-amber)', background: 'rgba(230,160,30,0.08)' }}>
+            <div style={{ marginTop: 10, padding: '10px 12px', borderRadius: 8, border: '1px solid var(--c-amber)', background: 'var(--c-amber-bg)' }}>
               <div style={{ fontSize: 13, color: 'var(--text)', marginBottom: 8, lineHeight: 1.5 }}>
                 {vPreflightGate === 'match' ? (
                   <>
@@ -7569,6 +7571,7 @@ function VerifyPanel({
                   <textarea
                     value={vSnippet}
                     onChange={(e) => setVSnippet(e.target.value)}
+                    aria-label="GTM Preview or Share link (optional)"
                     placeholder={'Paste your GTM Preview / Share link here (optional).'}
                     style={{ ...styles.input, width: '100%', minHeight: 60, marginTop: 6, fontFamily: 'monospace', fontSize: 12 }}
                     disabled={!ready}
@@ -7586,6 +7589,7 @@ function VerifyPanel({
                 <textarea
                   value={vSnippet}
                   onChange={(e) => setVSnippet(e.target.value)}
+                  aria-label="GTM Preview or Share link"
                   placeholder={'Paste your GTM Preview / Share link here (it contains gtm_auth & gtm_preview).'}
                   style={{ ...styles.input, width: '100%', minHeight: 60, marginTop: 6, fontFamily: 'monospace', fontSize: 12 }}
                   disabled={!ready}
@@ -7603,7 +7607,7 @@ function VerifyPanel({
                   Pick the browser where you injected your container via Adswerve (the caret lists the ones installed), so the site + Tag Assistant connect there. This is a manual visual check - you read Tag Assistant yourself; the app's results table below fills in only from <b>Verify in Tag Assistant</b> / <b>Proceed</b>.
                 </div>
                 <button
-                  style={{ ...styles.toggleOff, marginTop: 8, ...(!ready || !ctx?.containerPublicId ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
+                  style={{ ...styles.toggleOff, marginTop: 8, ...(!ready || !ctx?.containerPublicId ? { opacity: 0.55, cursor: 'not-allowed' } : {}) }}
                   onClick={() => {
                     const id = (ctx?.containerPublicId ?? '').trim();
                     if (!id) return;
@@ -7638,6 +7642,7 @@ function VerifyPanel({
                 <textarea
                   value={vSnippet}
                   onChange={(e) => setVSnippet(e.target.value)}
+                  aria-label="GTM Preview or Share link"
                   placeholder={'Paste the copied Preview / Share link here.'}
                   style={{ ...styles.input, width: '100%', minHeight: 60, marginTop: 6, fontFamily: 'monospace', fontSize: 12 }}
                   disabled={!ready}
@@ -7806,7 +7811,7 @@ function VerifyPanel({
               </div>
               {/* Switching tabs UNMOUNTS this panel (it is conditionally rendered), which drops the in-flight
                   run's result - warn so the user doesn't lose a minute-long verification. */}
-              <div style={{ marginTop: 8, padding: '7px 10px', borderRadius: 8, fontSize: 12.5, lineHeight: 1.45, border: '1px solid var(--c-amber)', background: 'rgba(230,160,30,0.08)', color: 'var(--text)', display: 'flex', gap: 6, alignItems: 'flex-start' }}>
+              <div style={{ marginTop: 8, padding: '7px 10px', borderRadius: 8, fontSize: 12.5, lineHeight: 1.45, border: '1px solid var(--c-amber)', background: 'var(--c-amber-bg)', color: 'var(--text)', display: 'flex', gap: 6, alignItems: 'flex-start' }}>
                 <span aria-hidden>⚠️</span>
                 <span>Keep this tab open until it finishes - it loads and drives every page, which can take a minute on a larger site. Leaving or switching tabs cancels the run and you'll have to start over.</span>
               </div>
@@ -7821,7 +7826,7 @@ function VerifyPanel({
               style={{
                 marginTop: 10, padding: '8px 10px', borderRadius: 8, fontSize: 13, lineHeight: 1.45,
                 border: `1px solid ${vNote.kind === 'error' ? 'var(--c-red)' : 'var(--c-amber)'}`,
-                background: vNote.kind === 'error' ? 'rgba(220,60,60,0.08)' : 'rgba(230,160,30,0.08)',
+                background: vNote.kind === 'error' ? 'var(--c-red-bg)' : 'var(--c-amber-bg)',
                 color: 'var(--text)',
               }}
             >
@@ -7861,7 +7866,7 @@ function VerifyPanel({
                 injected into the driven session only. Results prove the tags fire WHEN the container is
                 present, not that it is currently deployed on the public site. */}
             {vResult.injectedContainer && !vResult.error && (
-              <div style={{ marginBottom: 8, padding: '8px 10px', borderRadius: 8, fontSize: 12.5, lineHeight: 1.45, border: '1px solid var(--c-amber)', background: 'rgba(230,160,30,0.08)', color: 'var(--text)', display: 'flex', gap: 6, alignItems: 'flex-start' }}>
+              <div style={{ marginBottom: 8, padding: '8px 10px', borderRadius: 8, fontSize: 12.5, lineHeight: 1.45, border: '1px solid var(--c-amber)', background: 'var(--c-amber-bg)', color: 'var(--text)', display: 'flex', gap: 6, alignItems: 'flex-start' }}>
                 <span aria-hidden>⚠️</span>
                 <span>Your container <b style={{ fontFamily: 'var(--font-mono)' }}>{ctx?.containerPublicId}</b> was <b>injected into this verification session only</b> - it was not detected live on {vResult.url}. These results confirm the tags fire when the container is present; they do not prove it is currently deployed on the public site.</span>
               </div>
@@ -7889,7 +7894,7 @@ function VerifyPanel({
                 {(['xlsx', 'pdf', 'doc'] as const).map((fmt) => (
                   <button
                     key={fmt}
-                    style={{ ...vStyles.dlBtn, ...(vExporting ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
+                    style={{ ...vStyles.dlBtn, ...(vExporting ? { opacity: 0.55, cursor: 'not-allowed' } : {}) }}
                     disabled={!!vExporting}
                     onClick={() => void downloadVerify(fmt)}
                     title={fmt === 'xlsx' ? 'Download an Excel (.xlsx) spreadsheet with each tag’s proof screenshot embedded' : `Download a styled ${fmt.toUpperCase()} report with each tag's proof screenshot`}
@@ -7918,7 +7923,7 @@ function VerifyPanel({
                         <button
                           key={key}
                           onClick={toggleF(g.setter, key)}
-                          style={{ padding: '2px 9px', borderRadius: 20, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap', border: `1px solid ${active ? 'var(--c-blue)' : 'var(--border-2)'}`, background: active ? 'var(--c-blue)' : 'transparent', color: active ? '#fff' : 'var(--text-dim)' }}
+                          style={{ padding: '2px 9px', borderRadius: 20, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap', border: `1px solid ${active ? 'var(--c-blue)' : 'var(--border-2)'}`, background: active ? 'var(--c-blue-bg)' : 'transparent', color: active ? 'var(--c-blue)' : 'var(--text-dim)' }}
                         >
                           {txt}
                         </button>
@@ -7975,7 +7980,7 @@ function VerifyPanel({
                       <ul style={{ ...styles.resultList, fontFamily: 'monospace', fontSize: 11.5 }}>
                         {log.map((h, i) => (
                           <li key={i} style={{ ...styles.resultRow, display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
-                            <span style={{ minWidth: 74, fontWeight: 700, color: h.vendor === 'meta' ? '#993556' : h.vendor === 'ga4' || h.vendor === 'sgtm' ? '#185FA5' : 'var(--text)' }}>{h.vendor}</span>
+                            <span style={{ minWidth: 74, fontWeight: 700, color: h.vendor === 'meta' ? 'var(--c-red)' : h.vendor === 'ga4' || h.vendor === 'sgtm' ? 'var(--c-blue)' : 'var(--text)' }}>{h.vendor}</span>
                             <span style={{ color: 'var(--text)' }}>{h.endpoint}</span>
                             {h.params ? <span style={styles.muted}>{h.params}</span> : null}
                           </li>
@@ -8003,7 +8008,7 @@ function VerifyPanel({
                       <ul style={{ ...styles.resultList, fontFamily: 'monospace', fontSize: 11.5 }}>
                         {dl.map((e, i) => (
                           <li key={i} style={{ ...styles.resultRow, display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
-                            <span style={{ minWidth: 150, fontWeight: 700, color: e.synthetic ? 'var(--c-amber)' : '#185FA5' }}>{e.event}</span>
+                            <span style={{ minWidth: 150, fontWeight: 700, color: e.synthetic ? 'var(--c-amber)' : 'var(--c-blue)' }}>{e.event}</span>
                             {e.params ? <span style={{ color: 'var(--text)' }}>{e.params}</span> : <span style={styles.muted}>(no params)</span>}
                             {e.synthetic ? <span style={{ ...styles.muted, fontStyle: 'italic' }}>· pushed by verifier (test)</span> : null}
                           </li>
@@ -8350,7 +8355,7 @@ function WorkspaceComparison({
                 })}
               </ul>
               <div style={{ marginTop: 8 }}>
-                <button style={{ ...styles.primaryBtn, ...(selected.length < 2 || comparing ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }} onClick={compare} disabled={selected.length < 2 || comparing}>
+                <button style={{ ...styles.primaryBtn, ...(selected.length < 2 || comparing ? { opacity: 0.55, cursor: 'not-allowed' } : {}) }} onClick={compare} disabled={selected.length < 2 || comparing}>
                   {comparing ? 'Comparing…' : `Compare ${selected.length || ''} workspace(s)`}
                 </button>
               </div>
@@ -8474,7 +8479,7 @@ function WorkspaceDiffResults({
   const toggle = <T,>(set: React.Dispatch<React.SetStateAction<Set<T>>>, v: T): void =>
     set((s) => { const n = new Set(s); n.has(v) ? n.delete(v) : n.add(v); return n; });
   const chip = (on: boolean, label: string, color: string, onClick: () => void): JSX.Element => (
-    <button onClick={onClick} style={{ fontSize: 12, padding: '3px 10px', borderRadius: 999, cursor: 'pointer', border: `1px solid ${on ? color : 'var(--border-2)'}`, background: on ? color : 'transparent', color: on ? '#fff' : 'var(--text-muted)' }}>{label}</button>
+    <button onClick={onClick} style={{ fontSize: 12, padding: '3px 10px', borderRadius: 999, cursor: 'pointer', border: `1px solid ${on ? color : 'var(--border-2)'}`, background: on ? color.replace(/\)\s*$/, '-bg)') : 'transparent', color: on ? color : 'var(--text-muted)' }}>{label}</button>
   );
   const nameMatch = (name: string): boolean => !q || name.toLowerCase().includes(q);
   // Per-entity variant number per workspace (1,2,3…) - so the common table shows which workspaces agree.
@@ -8697,9 +8702,9 @@ function WorkspaceDiffResults({
         <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text)' }}>Report generation</div>
         <div style={{ ...styles.muted, fontSize: 12, margin: '2px 0 8px' }}>Generate a detailed comparison report - summary, common + uncommon items, merge recommendations and differences (separate from the on-screen comparison).</div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-          <button style={{ ...styles.primaryBtn, ...(exporting ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }} onClick={() => onReport('xlsx')} disabled={exporting} title="Native Excel workbook - Summary, Common, Uncommon and Detailed-diff sheets with full config values">⬇ Export Excel (.xlsx)</button>
-          <button style={{ ...styles.toggleOff, ...(exporting ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }} onClick={() => onReport('pdf')} disabled={exporting}>Generate PDF report</button>
-          <button style={{ ...styles.toggleOff, ...(exporting ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }} onClick={() => onReport('csv')} disabled={exporting}>Export CSV</button>
+          <button style={{ ...styles.primaryBtn, ...(exporting ? { opacity: 0.55, cursor: 'not-allowed' } : {}) }} onClick={() => onReport('xlsx')} disabled={exporting} title="Native Excel workbook - Summary, Common, Uncommon and Detailed-diff sheets with full config values">⬇ Export Excel (.xlsx)</button>
+          <button style={{ ...styles.toggleOff, ...(exporting ? { opacity: 0.55, cursor: 'not-allowed' } : {}) }} onClick={() => onReport('pdf')} disabled={exporting}>Generate PDF report</button>
+          <button style={{ ...styles.toggleOff, ...(exporting ? { opacity: 0.55, cursor: 'not-allowed' } : {}) }} onClick={() => onReport('csv')} disabled={exporting}>Export CSV</button>
           {exportNote && <span style={{ ...styles.muted, fontSize: 12 }}>{exportNote}</span>}
         </div>
       </div>
@@ -8996,7 +9001,7 @@ function ContainerAuditPanel({
 
   // A disabled button keeps its inline background, so Chromium won't auto-fade it - apply this when
   // a control is disabled so destructive buttons never look armed when they're inert.
-  const disabledStyle = (d: boolean): React.CSSProperties => (d ? { opacity: 0.5, cursor: 'not-allowed' } : {});
+  const disabledStyle = (d: boolean): React.CSSProperties => (d ? { opacity: 0.55, cursor: 'not-allowed' } : {});
 
   return (
     <div style={styles.reviewWrap}>
@@ -11053,7 +11058,7 @@ function SettingSwitch({ on, onChange, label }: { on: boolean; onChange: (v: boo
         cursor: 'pointer',
       }}
     >
-      <span style={{ position: 'absolute', top: 2, left: on ? 19 : 2, width: 14, height: 14, borderRadius: 999, background: '#fff', transition: 'left 0.15s ease', boxShadow: 'var(--shadow-1)' }} />
+      <span style={{ position: 'absolute', top: 2, left: on ? 19 : 2, width: 14, height: 14, borderRadius: 999, background: on ? 'var(--on-primary)' : 'var(--text-dim)', transition: 'left 0.15s ease, background 0.15s ease', boxShadow: 'var(--shadow-1)' }} />
     </button>
   );
 }
@@ -11469,7 +11474,7 @@ function MemoryCard({ active, onError }: { active: AccountView | undefined; onEr
                 <option value="account">All of this account</option>
                 {canClientScope && <option value="client">Only {clientLabel}</option>}
               </select>
-              <button style={{ ...styles.primaryBtn, ...(busy || !text.trim() ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }} disabled={busy || !text.trim()} onClick={() => void add()}>Remember</button>
+              <button style={{ ...styles.primaryBtn, ...(busy || !text.trim() ? { opacity: 0.55, cursor: 'not-allowed' } : {}) }} disabled={busy || !text.trim()} onClick={() => void add()}>Remember</button>
               {gtm?.containerId && (
                 <button
                   style={{ ...styles.toggleOff, ...(seeding ? { opacity: 0.6, cursor: 'wait' } : {}) }}
@@ -11579,7 +11584,7 @@ function MemoryCard({ active, onError }: { active: AccountView | undefined; onEr
                   ))}
                 </div>
                 <div style={{ marginTop: 8, display: 'flex', gap: 8, alignItems: 'center' }}>
-                  <button style={{ ...styles.primaryBtn, padding: '4px 12px', fontSize: 12.5, ...(busy ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }} disabled={busy} onClick={() => void addSeeds(seeds)}>Add all {seeds.length}</button>
+                  <button style={{ ...styles.primaryBtn, padding: '4px 12px', fontSize: 12.5, ...(busy ? { opacity: 0.55, cursor: 'not-allowed' } : {}) }} disabled={busy} onClick={() => void addSeeds(seeds)}>Add all {seeds.length}</button>
                   <button style={{ ...styles.linkBtn, fontSize: 12 }} onClick={() => setSeeds(null)}>Dismiss</button>
                 </div>
               </div>
