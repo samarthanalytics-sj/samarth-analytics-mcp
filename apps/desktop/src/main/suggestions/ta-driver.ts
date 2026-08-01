@@ -814,6 +814,15 @@ export async function runTaVerify(
         const already = new Set(captures.map((c) => c.tag).filter(Boolean) as string[]);
         // Cap per event so a busy event cannot stretch the run; the rest keep the event-panel proof.
         const toDrill = [...new Set([...wanted, ...derived])].filter((n) => !already.has(n)).slice(0, 8);
+        // Start from the EVENT panel: a detail view left up by the previous capture hides this event's
+        // Tags-Fired list, so the first card lookup would search the wrong page (and a detail opened from
+        // there carries no Values toggle). Bounded, and harmless when we are already on the event.
+        for (let back = 0; back < 2; back += 1) {
+          const view = await ta.evaluate<{ isDetail: boolean }>(readTaTagDetailState).catch(() => ({ isDetail: false }));
+          if (!view.isDetail) break;
+          await ta.click(chosen.sel, { timeout: 1200 }).catch(() => undefined);
+          await ta.waitForTimeout(180);
+        }
         let drilled = 0;
         for (const name of toDrill) {
           const tagSel = await ta.evaluate<string>(openFiredTagInPage, name).catch(() => '');
@@ -858,10 +867,19 @@ export async function runTaVerify(
         }
         // No tag detail could be opened for this event - keep ONE event-panel proof so the tags it fired
         // still have some evidence (matched by the Tags-Fired text, never mistaken for a tag's own detail).
+        // GUARD: only when the event panel is really back on screen. If a rejected detail is still up (both
+        // restore clicks missed), shooting now would store THAT tag's detail as an event-level capture, and
+        // the Tags-Fired fallback would then hand one tag's page to every other tag in the event - exactly
+        // the "wrong tag's screenshot" the operator reported. No proof beats a misleading proof.
         if (drilled === 0) {
-          proofStats.eventOnly += 1;
-          const buf = await ta.screenshot({ type: 'jpeg', quality: 55, timeout: 5000 });
-          captures.push({ screenshot: `data:image/jpeg;base64,${buf.toString('base64')}`, fired: chosen.fired });
+          const view = await ta.evaluate<{ isDetail: boolean }>(readTaTagDetailState).catch(() => ({ isDetail: false }));
+          if (view.isDetail) {
+            console.log('[ta-proof] could not return to the event panel - skipping the event-level proof rather than storing another tag\'s detail.');
+          } else {
+            proofStats.eventOnly += 1;
+            const buf = await ta.screenshot({ type: 'jpeg', quality: 55, timeout: 5000 });
+            captures.push({ screenshot: `data:image/jpeg;base64,${buf.toString('base64')}`, fired: chosen.fired });
+          }
         }
       } catch { /* proof is best-effort */ }
     };
