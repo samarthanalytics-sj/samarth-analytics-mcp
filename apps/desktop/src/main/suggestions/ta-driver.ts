@@ -918,6 +918,10 @@ export async function runTaVerify(
     // proof is still that event's own panel — never a blank "Tags Fired: None" and never the Summary.
     const snapNewestTa = async (target: { names?: string[]; event?: string } = {}): Promise<void> => {
       snapTried += 1;
+      const step = snapTried; // this capture attempt's number, so interleaved lines stay readable
+      const trace = (msg: string): void => console.log(`[ta-proof] #${step} ${msg}`);
+      const want = (target.names ?? []).filter(Boolean);
+      trace(`START target=${want.length ? `tag "${want[0]}"` : target.event ? `event /${target.event}/` : '(newest fired)'}`);
       try {
         await ta.evaluate(dismissTaOverlays).catch(() => undefined);
         // Start from a NON-detail view. A tag detail left up by the previous capture hides the real rail
@@ -926,6 +930,7 @@ export async function runTaVerify(
         // recycles, so it is the reliable way back.
         const preView = await ta.evaluate<{ isDetail: boolean }>(readTaTagDetailState).catch(() => ({ isDetail: false }));
         if (preView.isDetail) {
+          trace('a tag detail was still open from the last capture - clicking Summary to get back to the rail');
           await ta.evaluate(clickTaSummary).catch(() => undefined);
           await ta.waitForTimeout(250);
         }
@@ -933,7 +938,8 @@ export async function runTaVerify(
         // + render wait) made a non-firing tag cost seconds, and ~79 tags/page then looked stuck. The
         // post-hoc sweep is the backstop for anything not in the top rows.
         const rows = await ta.evaluate<Array<{ sel: string; num: number }>>(tagNewestTaRows, 6).catch(() => [] as Array<{ sel: string; num: number }>);
-        if (!rows.length) return;
+        if (!rows.length) { trace('STOP no rail rows found - Tag Assistant has no event list on screen.'); return; }
+        trace(`rail rows (newest first): [${rows.map((r) => r.num).join(', ')}]`);
         const names = (target.names ?? []).filter(Boolean).map((n) => n.toLowerCase());
         const evRe = target.event ? new RegExp(target.event, 'i') : null;
         let best: { sel: string; fired: string } | null = null;
@@ -942,6 +948,7 @@ export async function runTaVerify(
           await ta.click(row.sel, { timeout: 1200 }).catch(() => undefined); // REAL click → Angular switches the panel
           await ta.waitForTimeout(300); // let Angular render the switched-to event panel (API Call + Tags Fired)
           const panel = await ta.evaluate<{ event: string; fired: string }>(readTaPanel).catch(() => ({ event: '', fired: '' }));
+          trace(`  row #${row.num} -> event="${panel.event || '(none: panel did not switch)'}" firedTags=${hasFired(panel.fired) ? 'yes' : 'no'}`);
           // REQUIRE a real EVENT view: the Summary panel also has a "Tags Fired" list (every fired tag) but NO
           // API-Call event, so panel.event is empty there. Without this check a click that failed to switch the
           // panel left us on the Summary, whose all-tags list matched EVERY target → every proof was the Summary.
@@ -953,7 +960,8 @@ export async function runTaVerify(
           if (nameHit || evHit) { best = { sel: row.sel, fired: panel.fired }; break; } // this event proves the target
         }
         const chosen = best ?? firstFired;
-        if (!chosen) return; // nothing fired to prove — never screenshot a blank panel
+        if (!chosen) { trace('STOP none of those rows showed an event that fired a tag - nothing to prove here.'); return; } // never screenshot a blank panel
+        trace(`chosen event via ${best ? 'MATCH (its Tags-Fired names the target)' : 'FALLBACK (newest event that fired anything)'}`);
         if (!best) { await ta.click(chosen.sel, { timeout: 1200 }).catch(() => undefined); await ta.waitForTimeout(220); } // fallback row wasn't the last clicked - re-select it
         // Drill into EVERY tag this event fired, so each one gets ITS OWN detail view (properties + firing
         // triggers + hits sent) like the operator opening that tag in Tag Assistant - not the event's
@@ -966,6 +974,8 @@ export async function runTaVerify(
         const already = new Set(captures.map((c) => c.tag).filter(Boolean) as string[]);
         // Cap per event so a busy event cannot stretch the run; the rest keep the event-panel proof.
         const toDrill = [...new Set([...wanted, ...derived])].filter((n) => !already.has(n)).slice(0, 8);
+        const skipped = [...new Set([...wanted, ...derived])].filter((n) => already.has(n));
+        trace(`this event fired ${derived.length} known tag(s); to drill now: ${toDrill.length ? toDrill.map((n) => `"${n}"`).join(', ') : '(none)'}${skipped.length ? ` | already proven earlier: ${skipped.length}` : ''}`);
         // Start from the EVENT panel: a detail view left up by the previous capture hides this event's
         // Tags-Fired list, so the first card lookup would search the wrong page (and a detail opened from
         // there carries no Values toggle). Bounded, and harmless when we are already on the event.
@@ -991,22 +1001,28 @@ export async function runTaVerify(
         };
         let drilled = 0;
         for (const name of toDrill) {
+          trace(`  DRILL "${name}"`);
           const tagSel = await ta.evaluate<string>(openFiredTagInPage, name).catch(() => '');
-          if (!tagSel) { console.log(`[ta-proof] "${name}": its card was not found in this event's Tags-Fired list - no detail proof.`); continue; }
+          if (!tagSel) { trace('    x its card was not found in this event\'s Tags-Fired list - no detail proof.'); continue; }
           await ta.click(tagSel, { timeout: 1200 }).catch(() => undefined); // REAL click → Angular opens Tag Details
           await ta.waitForTimeout(400); // let the Tag Details view render
           const blank = { isDetail: false, eventContext: false, valuesActive: false, nameOk: false };
           let st = await ta.evaluate<typeof blank>(readTaTagDetailState, name).catch(() => blank);
+          const show = (s: typeof blank): string => `detail=${s.isDetail ? 'y' : 'n'} eventContext=${s.eventContext ? 'y' : 'n'} nameMatches=${s.nameOk ? 'y' : 'n'} values=${s.valuesActive ? 'ON' : 'off'}`;
+          trace(`    opened: ${show(st)}`);
           // RECOVER a Summary-context detail: clicking a tag card often lands on the tag's GLOBAL page
           // (breadcrumb "Summary >", names only, no toggle). Its "Messages Where This Tag Fired" chip jumps
           // to the per-message EVENT-context view, which is the one that carries the Values toggle. Same
           // tag either way, so identity is preserved; re-checked below.
           if (st.isDetail && !st.eventContext) {
             const msgSel = await ta.evaluate<string>(tagTaMessageChip).catch(() => '');
-            if (msgSel) {
+            if (!msgSel) {
+              trace('    landed on the tag\'s global page and found no "Messages Where This Tag Fired" chip to jump from');
+            } else {
               await ta.click(msgSel, { timeout: 1200 }).catch(() => undefined);
               await ta.waitForTimeout(400);
               st = await ta.evaluate<typeof blank>(readTaTagDetailState, name).catch(() => st);
+              trace(`    recovered via the message chip: ${show(st)}`);
             }
           }
           // Accept ONLY an event-context detail FOR THE TAG WE ASKED FOR: one opened from the SUMMARY has no
@@ -1017,18 +1033,21 @@ export async function runTaVerify(
             // Verify it actually took (a click can miss / land before the panel settles) and retry once.
             for (let attempt = 0; attempt < 2 && !st.valuesActive; attempt += 1) {
               const valSel = await ta.evaluate<string>(tagTaValuesRadio).catch(() => '');
-              if (!valSel) break;
+              if (!valSel) { trace('    the Values radio was not locatable on this detail'); break; }
               await ta.click(valSel, { timeout: 1200 }).catch(() => undefined);
               await ta.waitForTimeout(300);
               st = await ta.evaluate<typeof blank>(readTaTagDetailState, name).catch(() => st);
+              trace(`    clicked Values (try ${attempt + 1}): values=${st.valuesActive ? 'ON' : 'still off'}`);
             }
             const shot = await ta.screenshot({ type: 'jpeg', quality: 55, timeout: 5000 }).catch(() => null);
-            if (shot) {
+            if (!shot) {
+              trace('    x the screenshot failed - no proof stored for this tag');
+            } else {
               captures.push({ screenshot: `data:image/jpeg;base64,${shot.toString('base64')}`, fired: chosen.fired, tag: name });
               drilled += 1;
               proofStats.detail += 1;
               if (st.valuesActive) proofStats.values += 1;
-              else console.log(`[ta-proof] "${name}": tag detail opened but the Values toggle did not engage - proof shows variable NAMES.`);
+              trace(`    OK captured this tag's own detail${st.valuesActive ? ' with resolved VALUES' : ' but showing variable NAMES (Values did not engage)'}`);
             }
           } else {
             proofStats.rejected += 1;
@@ -1042,12 +1061,12 @@ export async function runTaVerify(
             const why = !st.isDetail ? 'the detail view did not open'
               : !st.eventContext ? 'it opened from the Summary (no Values toggle, names only)'
               : 'the detail shown was a DIFFERENT tag';
-            console.log(`[ta-proof] "${name}": rejected - ${why}. Keeping the event-panel proof.`);
+            trace(`    x REJECTED - ${why}. No image is stored for this tag rather than a wrong one.`);
           }
           // Back to the event view: the next tag's card is only findable there, and leaving a detail up
           // would confuse the next capture's rail tagging ("Messages Where This Tag Fired" rows look like
           // rail rows).
-          await backToEvent();
+          if (!(await backToEvent())) trace('    ! could not get back to the event panel - the next tag in this event may be unreachable');
         }
         // No tag detail could be opened for this event - keep ONE event-panel proof so the tags it fired
         // still have some evidence (matched by the Tags-Fired text, never mistaken for a tag's own detail).
@@ -1058,14 +1077,19 @@ export async function runTaVerify(
         if (drilled === 0) {
           const view = await ta.evaluate<{ isDetail: boolean }>(readTaTagDetailState).catch(() => ({ isDetail: false }));
           if (view.isDetail) {
-            console.log('[ta-proof] could not return to the event panel - skipping the event-level proof rather than storing another tag\'s detail.');
+            trace('END no tag detail captured, and a detail is still on screen - skipping the event-level proof rather than storing another tag\'s picture.');
           } else {
             proofStats.eventOnly += 1;
             const buf = await ta.screenshot({ type: 'jpeg', quality: 55, timeout: 5000 });
             captures.push({ screenshot: `data:image/jpeg;base64,${buf.toString('base64')}`, fired: chosen.fired });
+            trace('END no tag detail captured - stored one event-panel proof for the tags this event fired.');
           }
+        } else {
+          trace(`END captured ${drilled} tag detail proof(s) from this event.`);
         }
-      } catch { /* proof is best-effort */ }
+      } catch (e) {
+        trace(`END aborted by an error: ${(e instanceof Error ? e.message : String(e)).slice(0, 120)}`);
+      }
     };
 
     // Drive each page ONCE in the SAME popup (sequential; the debug session rides window.opener): its
