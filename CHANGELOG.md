@@ -1,3 +1,9 @@
+## [1.446.5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.446.4...v1.446.5) (2026-08-01)
+
+### Bug Fixes
+
+* **desktop:** accept the event-context tag detail (the reject rule was inverted) ([#791](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/791)) ([c847846](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c847846dafb3abf5b1b4ad58d40fa3f1958c3901)), closes [#790](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/790)
+
 ## [1.446.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.446.3...v1.446.4) (2026-08-01)
 
 ### Bug Fixes
