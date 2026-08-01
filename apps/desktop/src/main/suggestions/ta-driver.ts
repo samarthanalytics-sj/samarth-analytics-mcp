@@ -317,13 +317,36 @@ function openFiredTagInPage(name: string): string {
  *   - eventContext: it was opened from an EVENT row, so it carries the "Display Variables as" toggle (and a
  *     Firing Status row). A detail opened from the SUMMARY view has NEITHER, shows only {{variable}} names,
  *     and can never be switched to values - so the driver must reject it and re-open from the event.
- *   - valuesActive: the "Values" radio of that toggle is currently selected (resolved values are shown). */
-function readTaTagDetailState(): { isDetail: boolean; eventContext: boolean; valuesActive: boolean } {
-  const out = { isDetail: false, eventContext: false, valuesActive: false };
+ *   - valuesActive: the "Values" radio of that toggle is currently selected (resolved values are shown).
+ *   - nameOk: the detail's own TITLE (the heading above "Tag Details", after the breadcrumb) is the tag we
+ *     asked for. Without this a click that landed on the wrong card still gets stored under the requested
+ *     tag's name, which is the "tag name and screenshot do not match" the operator saw. Pass the wanted
+ *     name to check it; omit it (state-only probes) and nameOk is reported true. */
+function readTaTagDetailState(want?: string): { isDetail: boolean; eventContext: boolean; valuesActive: boolean; nameOk: boolean } {
+  const out = { isDetail: false, eventContext: false, valuesActive: false, nameOk: true };
   try {
     const t = (document.body.textContent || '').replace(/\s+/g, ' ');
     out.isDetail = /Tag Details/i.test(t) && /(Firing Triggers|Hits sent|Blocking Triggers)/i.test(t);
     out.eventContext = /Display Variables as/i.test(t) && !/Messages Where This Tag Fired/i.test(t);
+    const norm = (s: string | null | undefined): string => (s || '').replace(/\s+/g, ' ').trim();
+    if (want) {
+      // The title sits BEFORE the "Tag Details" heading in document order; the same name inside the
+      // Tags-Fired list of a still-open event panel comes after it, so position is what separates them.
+      out.nameOk = false;
+      const wantN = norm(want).toLowerCase();
+      let detailsHead: Element | null = null;
+      let headLen = Infinity;
+      for (const el of Array.prototype.slice.call(document.querySelectorAll('h1,h2,h3,h4,div,span,p')) as HTMLElement[]) {
+        const s = norm(el.textContent);
+        if (s.toLowerCase() !== 'tag details' || s.length >= headLen) continue;
+        headLen = s.length; detailsHead = el;
+      }
+      const FOLLOWS = 4; // Node.DOCUMENT_POSITION_FOLLOWING
+      for (const el of Array.prototype.slice.call(document.querySelectorAll('h1,h2,h3,h4,div,span,a')) as HTMLElement[]) {
+        if (norm(el.textContent).toLowerCase() !== wantN) continue;
+        if (!detailsHead || (el.compareDocumentPosition(detailsHead) & FOLLOWS)) { out.nameOk = true; break; }
+      }
+    }
     // The tight label of a radio: its wrapping <label>, its label[for=id], else its next sibling. Kept tight
     // (exactly "Values") so the Names radio - whose PARENT text is "Names Values" - can never match.
     const labelOf = (r: Element): string => {
@@ -829,11 +852,12 @@ export async function runTaVerify(
           if (!tagSel) continue;
           await ta.click(tagSel, { timeout: 1200 }).catch(() => undefined); // REAL click → Angular opens Tag Details
           await ta.waitForTimeout(400); // let the Tag Details view render
-          const blank = { isDetail: false, eventContext: false, valuesActive: false };
-          let st = await ta.evaluate<typeof blank>(readTaTagDetailState).catch(() => blank);
-          // Accept ONLY an event-context detail: one opened from the SUMMARY has no "Display Variables as"
-          // toggle, so it can only ever show {{variable}} names - reject it and keep the event-panel shot.
-          if (st.isDetail && st.eventContext) {
+          const blank = { isDetail: false, eventContext: false, valuesActive: false, nameOk: false };
+          let st = await ta.evaluate<typeof blank>(readTaTagDetailState, name).catch(() => blank);
+          // Accept ONLY an event-context detail FOR THE TAG WE ASKED FOR: one opened from the SUMMARY has no
+          // "Display Variables as" toggle so it can only ever show {{variable}} names, and a detail whose own
+          // title is a different tag must never be stored under this name.
+          if (st.isDetail && st.eventContext && st.nameOk) {
             // Flip the toggle to VALUES so the proof shows the RESOLVED values (click_url, page_url, ...).
             // Verify it actually took (a click can miss / land before the panel settles) and retry once.
             for (let attempt = 0; attempt < 2 && !st.valuesActive; attempt += 1) {
@@ -841,7 +865,7 @@ export async function runTaVerify(
               if (!valSel) break;
               await ta.click(valSel, { timeout: 1200 }).catch(() => undefined);
               await ta.waitForTimeout(300);
-              st = await ta.evaluate<typeof blank>(readTaTagDetailState).catch(() => st);
+              st = await ta.evaluate<typeof blank>(readTaTagDetailState, name).catch(() => st);
             }
             const shot = await ta.screenshot({ type: 'jpeg', quality: 55, timeout: 5000 }).catch(() => null);
             if (shot) {
@@ -853,7 +877,10 @@ export async function runTaVerify(
             }
           } else {
             proofStats.rejected += 1;
-            console.log(`[ta-proof] "${name}": rejected a ${st.isDetail ? 'summary-context' : 'non-'}detail view (no Values toggle) - keeping the event-panel proof.`);
+            const why = !st.isDetail ? 'the detail view did not open'
+              : !st.eventContext ? 'it opened from the Summary (no Values toggle, names only)'
+              : 'the detail shown was a DIFFERENT tag';
+            console.log(`[ta-proof] "${name}": rejected - ${why}. Keeping the event-panel proof.`);
           }
           // Back to the event view: the next tag's card is only findable there, and leaving a detail up
           // would confuse the next capture's rail tagging ("Messages Where This Tag Fired" rows look like
@@ -908,6 +935,10 @@ export async function runTaVerify(
     // Union of pages to visit: every page that has tags (in order), then any form-only page not listed yet.
     const pageKeys = [...byPage.keys()];
     for (const k of formsByPage.keys()) if (!byPage.has(k)) pageKeys.push(k);
+    // Engine marker: proves at a glance WHICH proof engine is running. If this line is missing from a run's
+    // log, the app is on an older build (the main process does not hot-reload - it needs a full restart),
+    // so any "wrong screenshot" seen in that run is stale output, not a live defect.
+    console.log('[ta-proof] proof engine: per-tag Tag Details, Values mode, identity-checked.');
     console.log(`[tag-assistant] driving ${tags.length} tag trigger(s) + ${allForms.length} form(s) across ${pageKeys.length} page(s)...`);
     let done = 0;
     let formDone = 0;
