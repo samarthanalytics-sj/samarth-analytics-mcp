@@ -248,6 +248,10 @@ function tagNewestTaRows(limit?: number): Array<{ sel: string; num: number }> {
       const t = (el.textContent || '').replace(/\s+/g, ' ').trim();
       const m = /^(\d+)\s*(\D.*)$/.exec(t);
       if (!m || t.length > 44) continue;
+      // The panel's own counters have the same shape as a rail row: "80 tags did not fire" parsed as row
+      // #80, sorted FIRST (highest number), and clicking it switches nothing - the observed phantom rows
+      // #73 and #71 that wasted the first pick every time. A real rail row is an event name, never a count.
+      if (/\btags?\b/i.test(m[2]) || /\bfire/i.test(m[2])) continue;
       const num = parseInt(m[1], 10);
       const depth = el.querySelectorAll('*').length;
       if (!byNum[num] || depth < byNum[num].depth) byNum[num] = { el, depth };
@@ -538,6 +542,29 @@ function readTaContainerChips(): string[] {
   } catch {
     return [];
   }
+}
+
+/** In the TA page: mark the rail's "Summary" item and return its selector, so the driver can REAL-click it.
+ *  clickTaSummary below does an IN-PAGE synthetic click, which (as this file documents for rail rows) does
+ *  NOT switch Tag Assistant's Angular view - so the reset it was meant to perform silently did nothing and
+ *  the next capture started from whatever was already showing. */
+function tagTaSummaryItem(): string {
+  try {
+    document.querySelectorAll('[data-ta-sum]').forEach((e) => e.removeAttribute('data-ta-sum'));
+    const el = (Array.prototype.slice.call(document.querySelectorAll('a,li,button,[role="button"],div,span')) as HTMLElement[])
+      .find((e) => (e.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase() === 'summary');
+    if (!el) return '';
+    let t: HTMLElement = el;
+    let p: HTMLElement | null = el;
+    for (let k = 0; k < 4 && p; k += 1, p = p.parentElement) {
+      const tag = (p.tagName || '').toLowerCase();
+      const role = ((p.getAttribute && p.getAttribute('role')) || '').toLowerCase();
+      if ((p.textContent || '').replace(/\s+/g, ' ').trim().length > 30) break;
+      if (tag === 'a' || tag === 'li' || tag === 'button' || role === 'button' || role === 'listitem' || (p.hasAttribute && p.hasAttribute('tabindex'))) { t = p; break; }
+    }
+    t.setAttribute('data-ta-sum', '1');
+    return '[data-ta-sum="1"]';
+  } catch { return ''; }
 }
 
 function clickTaSummary(): void {
@@ -928,11 +955,20 @@ export async function runTaVerify(
         // behind its own "Messages Where This Tag Fired" chips, so row tagging would pick a stale event
         // (that is why page 2 kept re-proving page 1's tags). Summary is the one rail item TA never
         // recycles, so it is the reliable way back.
+        // "Am I on an EVENT panel?" is a POSITIVE signal: only an event view renders the API-Call block that
+        // readTaPanel parses. Testing for the absence of a detail gave false alarms, because Angular can
+        // keep a closed detail's markup in the DOM.
+        const onEventPanel = async (): Promise<boolean> => {
+          const p = await ta.evaluate<{ event: string; fired: string }>(readTaPanel).catch(() => ({ event: '', fired: '' }));
+          return Boolean(p.event);
+        };
         const preView = await ta.evaluate<{ isDetail: boolean }>(readTaTagDetailState).catch(() => ({ isDetail: false }));
-        if (preView.isDetail) {
+        if (preView.isDetail && !(await onEventPanel())) {
           trace('a tag detail was still open from the last capture - clicking Summary to get back to the rail');
-          await ta.evaluate(clickTaSummary).catch(() => undefined);
-          await ta.waitForTimeout(250);
+          const sumSel = await ta.evaluate<string>(tagTaSummaryItem).catch(() => '');
+          if (sumSel) await ta.click(sumSel, { timeout: 1200 }).catch(() => undefined); // REAL click: a synthetic one does not switch TA
+          else await ta.evaluate(clickTaSummary).catch(() => undefined);
+          await ta.waitForTimeout(300);
         }
         // Only the NEWEST few rail rows can be the event we just drove; scanning all 14 (each a real click
         // + render wait) made a non-firing tag cost seconds, and ~79 tags/page then looked stuck. The
@@ -980,8 +1016,7 @@ export async function runTaVerify(
         // Tags-Fired list, so the first card lookup would search the wrong page (and a detail opened from
         // there carries no Values toggle). Bounded, and harmless when we are already on the event.
         for (let back = 0; back < 2; back += 1) {
-          const view = await ta.evaluate<{ isDetail: boolean }>(readTaTagDetailState).catch(() => ({ isDetail: false }));
-          if (!view.isDetail) break;
+          if (await onEventPanel()) break; // positive check, same reason as backToEvent
           await ta.click(chosen.sel, { timeout: 1200 }).catch(() => undefined);
           await ta.waitForTimeout(180);
         }
@@ -994,8 +1029,9 @@ export async function runTaVerify(
             const crumbSel = attempt === 0 ? await ta.evaluate<string>(tagTaCrumbLink).catch(() => '') : '';
             await ta.click(crumbSel || chosen.sel, { timeout: 1200 }).catch(() => undefined);
             await ta.waitForTimeout(200);
-            const v = await ta.evaluate<{ isDetail: boolean }>(readTaTagDetailState).catch(() => ({ isDetail: true }));
-            if (!v.isDetail) return true;
+            // Confirm by the API-Call block, not by the absence of a detail: the old check reported a
+            // failure on page 1 even though the return had worked and the next tag drilled fine.
+            if (await onEventPanel()) return true;
           }
           return false;
         };
