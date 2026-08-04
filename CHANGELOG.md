@@ -1,3 +1,9 @@
+## [1.448.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.448.1...v1.448.2) (2026-08-04)
+
+### Bug Fixes
+
+* **desktop:** recover a stuck TA panel so pages 2/3 get real per-tag proofs ([#802](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/802)) ([a53228d](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a53228d7c317d6db7829a4435359484988a30812))
+
 ## [1.448.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.448.0...v1.448.1) (2026-08-04)
 
 ### Bug Fixes
