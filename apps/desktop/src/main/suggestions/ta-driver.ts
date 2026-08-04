@@ -324,7 +324,7 @@ function readTaPanel(): { event: string; fired: string } {
  *  the Summary. Heuristic + DOM-shape guarded: anchor on a content-only heading, climb to the widest
  *  sensible ancestor that is NOT the full viewport width (that would re-include the rail). null when it
  *  can't find a plausible panel, so the caller falls back to a full-page shot. */
-function taContentRect(): { x: number; y: number; width: number; height: number } | null {
+function taContentRect(): { rect: { x: number; y: number; width: number; height: number } | null; debug: string } {
   try {
     const vw = window.innerWidth, vh = window.innerHeight;
     const anchors = ['api call', 'tags fired', 'output of', 'container loaded', 'data layer'];
@@ -335,19 +335,24 @@ function taContentRect(): { x: number; y: number; width: number; height: number 
       const t = (el.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
       if (t.length < 40 && anchors.some((a) => t.startsWith(a))) { head = el; break; }
     }
-    if (!head) return null;
+    if (!head) return { rect: null, debug: `no content anchor heading on screen (looked for ${anchors.join('/')}); vw=${vw} vh=${vh}` };
+    const anchorText = (head.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 40);
     let node: HTMLElement | null = head;
     let best: DOMRect | null = null;
+    const cands: string[] = []; // every ancestor considered, with a '*' when it matched the content-column shape
     while (node && node !== document.body) {
       const r = node.getBoundingClientRect();
       // The content column: wide but not the whole window, tall, and starting right of the rail.
-      if (r.width >= vw * 0.4 && r.width <= vw * 0.85 && r.height >= vh * 0.3 && r.left >= vw * 0.1) best = r;
+      const ok = r.width >= vw * 0.4 && r.width <= vw * 0.85 && r.height >= vh * 0.3 && r.left >= vw * 0.1;
+      cands.push(`${node.tagName.toLowerCase()}:${Math.round(r.width)}x${Math.round(r.height)}@${Math.round(r.left)}${ok ? '*' : ''}`);
+      if (ok) best = r;
       node = node.parentElement;
     }
-    if (!best) return null;
+    const debug = `anchor="${anchorText}" vw=${vw} vh=${vh} ancestors=[${cands.slice(0, 12).join(' ')}]`;
+    if (!best) return { rect: null, debug: `${debug} -> no ancestor matched the content-column shape (w 0.4-0.85*vw, h>=0.3*vh, left>=0.1*vw)` };
     const x = Math.max(0, best.left), y = Math.max(0, best.top);
-    return { x, y, width: Math.min(best.width, vw - x), height: Math.min(best.height, vh - y) };
-  } catch { return null; }
+    return { rect: { x, y, width: Math.min(best.width, vw - x), height: Math.min(best.height, vh - y) }, debug };
+  } catch (e) { return { rect: null, debug: `taContentRect error: ${(e as Error).message}` }; }
 }
 
 /** In the TA page: open the FIRED TAG named `name` from the current event's "Tags Fired" list, so a
@@ -1019,14 +1024,23 @@ export async function runTaVerify(
       // Clip the proof to the CONTENT column so the left rail (with "Summary") is never in the frame - this is
       // why full-page shots read like the Summary even when we are on the right event. Falls back to a
       // full-page shot when the panel rect can't be found, and logs which path it took.
-      const snapPanel = async (): Promise<Buffer | null> => {
-        const rect = await ta.evaluate<{ x: number; y: number; width: number; height: number } | null>(taContentRect).catch(() => null);
+      const snapPanel = async (label: string): Promise<Buffer | null> => {
+        // WHAT view are we about to shoot? event="" means we are on the Summary (no API-Call block) - that is
+        // the exact "proof came out as the Summary" case, now visible in the log instead of only in the image.
+        const view = await ta.evaluate<{ event: string; fired: string }>(readTaPanel).catch(() => ({ event: '', fired: '' }));
+        const firedHead = (view.fired || '').replace(/\s+/g, ' ').trim().slice(0, 140);
+        trace(`    [${label}] view: event=${view.event ? `"${view.event}"` : '(EMPTY = Summary / not an event panel)'} | firedText="${firedHead}"`);
+        const detail = await ta.evaluate<{ isDetail: boolean; eventContext: boolean; valuesActive: boolean; nameOk: boolean }>(readTaTagDetailState).catch(() => ({ isDetail: false, eventContext: false, valuesActive: false, nameOk: false }));
+        trace(`    [${label}] detail: isDetail=${detail.isDetail} eventContext=${detail.eventContext} valuesActive=${detail.valuesActive}`);
+        const { rect, debug } = await ta.evaluate<{ rect: { x: number; y: number; width: number; height: number } | null; debug: string }>(taContentRect).catch(() => ({ rect: null as { x: number; y: number; width: number; height: number } | null, debug: 'taContentRect evaluate failed' }));
+        trace(`    [${label}] panel-rect: ${debug}`);
         if (rect && rect.width > 200 && rect.height > 150) {
-          trace(`    clip proof to content panel ${Math.round(rect.width)}x${Math.round(rect.height)} @ ${Math.round(rect.x)},${Math.round(rect.y)}`);
+          trace(`    [${label}] -> CLIP to content panel ${Math.round(rect.width)}x${Math.round(rect.height)} @ ${Math.round(rect.x)},${Math.round(rect.y)}`);
           const clipped = await ta.screenshot({ type: 'jpeg', quality: 60, clip: rect, timeout: 5000 }).catch(() => null);
-          if (clipped) return clipped;
+          if (clipped) { trace(`    [${label}] clip OK (${clipped.length} bytes)`); return clipped; }
+          trace(`    [${label}] clip screenshot failed - falling back to full page`);
         }
-        trace('    content-panel rect not found - full-page proof (left rail may be in frame)');
+        trace(`    [${label}] -> FULL-PAGE proof (rect ${rect ? 'too small' : 'not found'}; left rail may be in frame)`);
         return ta.screenshot({ type: 'jpeg', quality: 55, timeout: 5000 }).catch(() => null);
       };
       try {
@@ -1167,7 +1181,7 @@ export async function runTaVerify(
               st = await ta.evaluate<typeof blank>(readTaTagDetailState, name).catch(() => st);
               trace(`    clicked Values (try ${attempt + 1}): values=${st.valuesActive ? 'ON' : 'still off'}`);
             }
-            const shot = await snapPanel();
+            const shot = await snapPanel(`tag:${name}`);
             if (!shot) {
               trace('    x the screenshot failed - no proof stored for this tag');
             } else {
@@ -1208,7 +1222,7 @@ export async function runTaVerify(
             trace('END no tag detail captured, and a detail is still on screen - skipping the event-level proof rather than storing another tag\'s picture.');
           } else {
             proofStats.eventOnly += 1;
-            const buf = await snapPanel();
+            const buf = await snapPanel('event-panel');
             if (!buf) { trace('END the event-panel screenshot failed - no proof stored.'); return; }
             captures.push({ screenshot: `data:image/jpeg;base64,${buf.toString('base64')}`, fired: chosen.fired });
             trace('END no tag detail captured - stored one event-panel proof for the tags this event fired.');
