@@ -491,10 +491,17 @@ export function registerSuggestionsIpc(data: GoogleDataService, memory?: MemoryS
           const s = shotFor(v.tagsFired.filter((t) => t.status === 'fired' || t.status === 'running').map((t) => t.name), 'event');
           if (s) v.screenshot = s;
         }
+        const capIndex = new Map((ta.captures ?? []).map((c, i) => [c.screenshot, i] as const));
         for (const v of verdicts) {
           if (!v.fired) continue;
+          const own = (ta.captures ?? []).find((c) => c.tag === v.tagName);
           const s = shotFor([v.tagName]) ?? ta.summaryShot;
           if (s) v.screenshot = s;
+          // DIAGNOSTIC: how each fired tag got its proof - "own-detail" is ideal; "shared/event" or
+          // "summary" means it reused another tag's picture (the GA4+Meta pair-sharing case). capture #
+          // makes byte-identical reuse across two tags visible.
+          const src = own ? 'own-detail' : s && s === ta.summaryShot ? 'summary-fallback' : s ? 'shared/event-panel' : 'none';
+          console.log(`[proof-attach] "${v.tagName}" -> ${src} (capture #${s ? capIndex.get(s) ?? '?' : '-'})`);
         }
         {
           const firedForLog = verdicts.filter((v) => v.fired);
