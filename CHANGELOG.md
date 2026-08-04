@@ -1,3 +1,9 @@
+## [1.449.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.449.1...v1.449.2) (2026-08-04)
+
+### Performance Improvements
+
+* **desktop:** fail fast on a stuck TA panel instead of grinding every row ([#807](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/807)) ([9c66bd5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/9c66bd5f4a1225a2b9f2cae2a8c3691b166dbb30))
+
 ## [1.449.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.449.0...v1.449.1) (2026-08-04)
 
 ### Bug Fixes
