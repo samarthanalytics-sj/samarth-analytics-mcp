@@ -456,6 +456,7 @@ export function registerSuggestionsIpc(data: GoogleDataService, memory?: MemoryS
         }
         const monitorEvents = taEventsToMonitorEvents(taEvents, tagList.map((t) => ({ id: t.id, tagName: t.tagName })));
         const verdicts = verdictsFromMonitor(tagList, monitorEvents, ta.perTag, { scopedPages: explicitPages.length });
+        log.info('Preparing verification records', `${verdicts.length} tag(s) evaluated, ${verdicts.filter((v) => v.fired).length} fired`);
         // DIAGNOSTIC: per-event fired tags (after the not-fired exclusion) + each fired tag's event list.
         // Confirms attribution is correct (a click tag should show gtm.linkClick, not the synthetic
         // form_submission). Concise — one line per non-empty event + one per fired tag.
@@ -494,6 +495,12 @@ export function registerSuggestionsIpc(data: GoogleDataService, memory?: MemoryS
           if (!v.fired) continue;
           const s = shotFor([v.tagName]) ?? ta.summaryShot;
           if (s) v.screenshot = s;
+        }
+        {
+          const firedForLog = verdicts.filter((v) => v.fired);
+          const ownProofs = (ta.captures ?? []).filter((c) => c.tag).length;
+          const withShot = firedForLog.filter((v) => v.screenshot).length;
+          log.info('Attaching proof images', `${ownProofs} per-tag detail proof(s) captured; ${withShot}/${firedForLog.length} fired tag(s) have an image`);
         }
         // Timeline UI: show meaningful events only — those that fired a tag, or carry a real (non-internal)
         // push. Hides the many empty gtm.init/gtm.dom/gtm.load ticks per page nav. (Suggestions still match
