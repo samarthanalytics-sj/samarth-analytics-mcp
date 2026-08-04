@@ -1099,8 +1099,18 @@ export async function runTaVerify(
             // shows tagDetails=yes / a "... >" breadcrumb here.
             const diag = await ta.evaluate<string>(readTaDiagnostics).catch(() => 'n/a');
             trace(`  stuck-state: ${diag}`);
-            // Close any open detail overlay FIRST (Escape, then the breadcrumb "Summary" link if present) -
-            // both live ON the overlay, unlike the rail's Summary item which sits behind it.
+            // THE FIX: close the open detail overlay by walking ITS OWN breadcrumb back. Those "... >" links
+            // live ON the overlay, so they are clickable; the rail's Summary sits BEHIND the overlay, which is
+            // why the previous reset never moved selectedRow off the stale row. Up to 3 hops (detail -> event
+            // -> Summary) re-marking the crumb each time since the DOM changes.
+            for (let hop = 0; hop < 3; hop += 1) {
+              const crumbSel = await ta.evaluate<string>(tagTaCrumbLink).catch(() => '');
+              if (!crumbSel) break;
+              await ta.click(crumbSel, { timeout: 1200 }).catch(() => undefined);
+              await ta.waitForTimeout(250);
+              trace(`  crumb hop ${hop + 1}: clicked "${crumbSel}"`);
+            }
+            // Belt and suspenders: Escape, then the rail Summary if it is reachable now.
             await ta.locator('body').first().press('Escape').catch(() => undefined);
             await ta.waitForTimeout(200);
             const sumSel = await ta.evaluate<string>(tagTaSummaryItem).catch(() => '');
