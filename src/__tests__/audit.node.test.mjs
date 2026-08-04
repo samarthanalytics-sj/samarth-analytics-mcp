@@ -97,5 +97,72 @@ await test('ga4_config: TWO GA4 googtags (both G-) DO trip the duplicate-config 
   assert.strictEqual(byCat(res, 'ga4_config').length, 1, 'two G- config tags should trip the error');
 });
 
+// ── Built-in triggers ────────────────────────────────────────────────────────
+// GTM's reserved built-ins (All Pages 2147479553, Consent Init 2147479572, Init 2147479573, ...) are
+// never returned by triggers.list, so every one of these audits runs with an EMPTY triggers page -
+// exactly what a real container looks like when the only trigger a tag uses is a built-in.
+
+await test('REGRESSION: a tag firing on the built-in All Pages trigger is NOT a broken reference', async () => {
+  const server = buildServer({
+    tags: [[{ tagId: 't1', name: 'GA4 Config', type: 'googtag', parameter: [{ type: 'template', key: 'tagId', value: 'G-ABC' }], firingTriggerId: ['2147479553'] }]],
+    triggers: [[]],
+  });
+  const res = await audit(server);
+  assert.strictEqual(
+    byCat(res, 'broken_reference').length,
+    0,
+    `built-in All Pages should not be reported missing, got ${JSON.stringify(byCat(res, 'broken_reference'))}`
+  );
+});
+
+await test('REGRESSION: a built-in BLOCKING trigger is not a broken reference either', async () => {
+  const server = buildServer({
+    tags: [[{ tagId: 't1', name: 'GA4 Config', type: 'gaawc', firingTriggerId: ['2147479553'], blockingTriggerId: ['2147479572'] }]],
+    triggers: [[]],
+  });
+  const res = await audit(server);
+  assert.strictEqual(byCat(res, 'broken_reference').length, 0, 'built-in blocking trigger should not be reported missing');
+});
+
+await test('REGRESSION: a variable enabled by a built-in trigger is not a broken reference', async () => {
+  const server = buildServer({
+    variables: [[{ variableId: 'v1', name: 'Scoped Var', type: 'c', enablingTriggerId: ['2147479553'] }]],
+    triggers: [[]],
+  });
+  const res = await audit(server);
+  assert.strictEqual(byCat(res, 'broken_reference').length, 0, 'built-in enabling trigger should not be reported missing');
+});
+
+await test('a genuinely missing trigger id IS still a broken reference', async () => {
+  const server = buildServer({
+    tags: [[{ tagId: 't1', name: 'Orphan', type: 'gaawe', firingTriggerId: ['999'] }]],
+    triggers: [[]],
+  });
+  const res = await audit(server);
+  assert.strictEqual(byCat(res, 'broken_reference').length, 1, 'a normal missing id must still be flagged');
+  assert.match(byCat(res, 'broken_reference')[0].message, /999/);
+});
+
+await test('an id NEAR the built-in range but outside it is still a broken reference', async () => {
+  const server = buildServer({
+    tags: [[{ tagId: 't1', name: 'Almost', type: 'gaawe', firingTriggerId: ['2147478553', '21474795530'] }]],
+    triggers: [[]],
+  });
+  const res = await audit(server);
+  assert.strictEqual(byCat(res, 'broken_reference').length, 2, 'only 2147479xxx is reserved');
+});
+
+await test('a Custom HTML tag on the built-in All Pages trigger IS flagged as a broad trigger', async () => {
+  // The old code built allPagesIds only from listed no-filter pageview triggers, and the built-in is
+  // never listed - so the single most common "custom HTML on every page" case slipped the check.
+  const server = buildServer({
+    tags: [[{ tagId: 't1', name: 'Legacy Pixel', type: 'html', firingTriggerId: ['2147479553'] }]],
+    triggers: [[]],
+  });
+  const res = await audit(server);
+  assert.strictEqual(byCat(res, 'broad_trigger').length, 1, 'custom HTML on built-in All Pages should warn');
+  assert.match(byCat(res, 'broad_trigger')[0].message, /Legacy Pixel/);
+});
+
 console.log(`\naudit: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

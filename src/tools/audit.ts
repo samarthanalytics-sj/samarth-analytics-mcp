@@ -21,6 +21,10 @@ import { z } from 'zod';
 import type { GtmClient } from '../utils/gtmClient.js';
 import { jsonResult, errorResult } from '../utils/toolResponse.js';
 import { paginate } from '../utils/pagination.js';
+import {
+  isBuiltinTriggerId,
+  BUILTIN_ALL_PAGES_TRIGGER_ID,
+} from '../utils/builtinTriggers.js';
 import type { tagmanager_v2 } from 'googleapis';
 
 export interface AuditFinding {
@@ -81,6 +85,11 @@ export function registerAuditTools(server: McpServer, getClient: () => GtmClient
 
         // Build lookup sets
         const triggerIdSet = new Set(triggers.map((t) => t.triggerId ?? ''));
+        // `triggers.list` never returns GTM's reserved built-in triggers (All Pages, Initialization,
+        // Consent Initialization, ...), so an id in that range is real even though it is absent above.
+        // Treating it as missing flagged every GA4 config tag - which fires on All Pages - as a broken
+        // reference, an error-severity false positive in essentially every container audited.
+        const triggerExists = (tid: string): boolean => triggerIdSet.has(tid) || isBuiltinTriggerId(tid);
         const variableIdSet = new Set(variables.map((v) => v.variableId ?? ''));
         const builtInVarTypes = new Set(builtInVars.map((b) => b.type ?? ''));
 
@@ -137,7 +146,7 @@ export function registerAuditTools(server: McpServer, getClient: () => GtmClient
 
           // Validate referenced trigger IDs exist
           for (const tid of tag.firingTriggerId ?? []) {
-            if (!triggerIdSet.has(tid)) {
+            if (!triggerExists(tid)) {
               findings.push({
                 severity: 'error',
                 category: 'broken_reference',
@@ -150,7 +159,7 @@ export function registerAuditTools(server: McpServer, getClient: () => GtmClient
           }
 
           for (const tid of tag.blockingTriggerId ?? []) {
-            if (!triggerIdSet.has(tid)) {
+            if (!triggerExists(tid)) {
               findings.push({
                 severity: 'warning',
                 category: 'broken_reference',
@@ -194,7 +203,13 @@ export function registerAuditTools(server: McpServer, getClient: () => GtmClient
         const allPagesTriggers = triggers.filter(
           (t) => t.type === 'pageview' && (!t.filter || t.filter.length === 0)
         );
-        const allPagesIds = new Set(allPagesTriggers.map((t) => t.triggerId ?? ''));
+        // Seed with the built-in All Pages id: it is what tags actually reference, and it is never in
+        // `triggers.list`, so a Custom HTML tag on the real All Pages trigger used to slip this check
+        // entirely. The filter above only catches user-created no-filter pageview triggers.
+        const allPagesIds = new Set([
+          ...allPagesTriggers.map((t) => t.triggerId ?? ''),
+          BUILTIN_ALL_PAGES_TRIGGER_ID,
+        ]);
         for (const tag of tags) {
           if (tag.type === 'html' || tag.type === 'img') {
             const firesOnAll = (tag.firingTriggerId ?? []).some((tid) => allPagesIds.has(tid));
@@ -242,7 +257,7 @@ export function registerAuditTools(server: McpServer, getClient: () => GtmClient
 
           // Check enabling/disabling trigger refs
           for (const tid of variable.enablingTriggerId ?? []) {
-            if (!triggerIdSet.has(tid)) {
+            if (!triggerExists(tid)) {
               findings.push({
                 severity: 'warning',
                 category: 'broken_reference',
