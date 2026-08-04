@@ -1,3 +1,9 @@
+## [1.448.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.447.5...v1.448.0) (2026-08-04)
+
+### Features
+
+* **desktop:** clean report-style verification log (per fired tag + summary) ([#800](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/800)) ([6fde2d5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/6fde2d55a74b67193b49b4b2be7a5be383e3d26d)), closes [#N](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/N)
+
 ## [1.447.5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.447.4...v1.447.5) (2026-08-04)
 
 ### Bug Fixes
