@@ -1094,11 +1094,22 @@ export async function runTaVerify(
         // markup, so this reacts to the actual stuck reads instead.
         for (let pass = 0; pass < 2 && !best && !firstFired; pass += 1) {
           if (pass > 0) {
-            trace('the panel was stuck on a stale event - forcing a Summary reset and rescanning the rail');
+            trace('the panel was stuck on a stale event - forcing a reset and rescanning the rail');
+            // DIAGNOSE what is blocking: a page-1 tag DETAIL overlaying the rail (rail clicks then do nothing)
+            // shows tagDetails=yes / a "... >" breadcrumb here.
+            const diag = await ta.evaluate<string>(readTaDiagnostics).catch(() => 'n/a');
+            trace(`  stuck-state: ${diag}`);
+            // Close any open detail overlay FIRST (Escape, then the breadcrumb "Summary" link if present) -
+            // both live ON the overlay, unlike the rail's Summary item which sits behind it.
+            await ta.locator('body').first().press('Escape').catch(() => undefined);
+            await ta.waitForTimeout(200);
             const sumSel = await ta.evaluate<string>(tagTaSummaryItem).catch(() => '');
             if (sumSel) await ta.click(sumSel, { timeout: 1200 }).catch(() => undefined); // REAL click: a synthetic one does not switch TA
             else await ta.evaluate(clickTaSummary).catch(() => undefined);
             await ta.waitForTimeout(400);
+            const afterSel = await ta.evaluate<number>(readTaSelectedRow).catch(() => -1);
+            const afterDiag = await ta.evaluate<string>(readTaDiagnostics).catch(() => 'n/a');
+            trace(`  after reset: selectedRow=${afterSel} | ${afterDiag}`);
             rows = await ta.evaluate<Array<{ sel: string; num: number }>>(tagNewestTaRows, 6).catch(() => rows);
           }
           let stuck = false;
