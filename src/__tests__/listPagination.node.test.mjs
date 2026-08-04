@@ -29,8 +29,10 @@ import { dirname, join } from 'path';
 const TOOLS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'tools');
 
 /** Endpoints whose Params type has NO pageToken, so a single call is the whole answer. Each needs a
- *  source comment explaining it, checked below - an entry here is a claim, not a way to opt out. */
-const CANNOT_PAGINATE = ['destinations'];
+ *  source comment explaining it, checked below - an entry here is a claim, not a way to opt out.
+ *  Keyed `resource.method` since the scan now covers more than .list: folders.list paginating
+ *  correctly must not silently exempt folders.entities, which is the same receiver identifier. */
+const CANNOT_PAGINATE = ['destinations.list'];
 
 let passed = 0;
 const check = (name, cond, detail) => {
@@ -68,15 +70,21 @@ for (const file of files) {
     // pattern silently matches nothing on Windows checkouts.
     .map((line) => line.replace(/(^|[^:])\/\/.*/, '$1'))
     .join('\n');
+  // Not just `.list(`. folders.entities is a paged GTM endpoint whose Params type carries a
+  // pageToken, and a guard that only knew the word "list" reported the whole tree green while that
+  // call fetched page 1 and stopped. Enumerating the paged method names is the honest bound: this
+  // guard reads source TEXT, so it cannot resolve a receiver chain back to its googleapis Params
+  // type to ask whether a pageToken exists. Checked against tagmanager v2.d.ts: of the Params types
+  // that declare pageToken, the only method names are List and Entities.
   const calls = [];
-  for (const m of code.matchAll(/\.list\(/g)) {
+  for (const m of code.matchAll(/\.(list|entities)\(/g)) {
     const head = code.slice(0, m.index).replace(/\s+$/, '');
     const id = /([A-Za-z0-9_$]+)$/.exec(head);
-    if (id) calls.push({ index: m.index, 1: id[1] });
+    if (id) calls.push({ index: m.index, resource: id[1], method: m[1] });
   }
   for (const m of calls) {
     listCalls += 1;
-    const resource = m[1];
+    const resource = m.resource;
     // Is this call inside a paginate(...) wrapper? The helper takes the fetch as its first arg, so
     // the call site sits within ~400 chars after a `paginate(`.
     const before = code.slice(Math.max(0, m.index - 400), m.index);
@@ -88,7 +96,7 @@ for (const file of files) {
     if (usesHelper && insidePaginate) {
       paginated += 1;
     } else {
-      unpaginated.push({ file, resource, index: m.index });
+      unpaginated.push({ file, resource, method: m.method, index: m.index });
     }
   }
 }
@@ -99,15 +107,15 @@ check('most list calls paginate', paginated >= 6, `${paginated} paginated of ${l
 // The heart of it: an unpaginated call is only acceptable when the endpoint cannot paginate AND the
 // source says so where a future reader will see it.
 for (const u of unpaginated) {
-  const exempt = CANNOT_PAGINATE.includes(u.resource);
+  const exempt = CANNOT_PAGINATE.includes(`${u.resource}.${u.method}`);
   check(
-    `${u.file}: ${u.resource}.list is either paginated or a declared exception`,
+    `${u.file}: ${u.resource}.${u.method} is either paginated or a declared exception`,
     exempt,
-    `${u.resource}.list does not paginate and is not in CANNOT_PAGINATE. If the endpoint takes a pageToken, wrap it in paginate(); if it truly does not, add it to CANNOT_PAGINATE with a source comment.`
+    `${u.resource}.${u.method} does not paginate and is not in CANNOT_PAGINATE. If the endpoint takes a pageToken, wrap it in paginate(); if it truly does not, add it to CANNOT_PAGINATE with a source comment.`
   );
   const src = readFileSync(join(TOOLS_DIR, u.file), 'utf-8');
   check(
-    `${u.file}: the ${u.resource} exception is explained in the source`,
+    `${u.file}: the ${u.resource}.${u.method} exception is explained in the source`,
     /no pageToken|cannot paginate|NOT paginated/i.test(src),
     'an exemption with no explanation is indistinguishable from an oversight'
   );
