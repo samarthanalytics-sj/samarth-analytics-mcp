@@ -1,3 +1,9 @@
+## [1.448.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.448.0...v1.448.1) (2026-08-04)
+
+### Bug Fixes
+
+* **desktop:** clip TA proof to the right of the event rail (message-list) ([#801](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/801)) ([20870db](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/20870dbb1232e213c97737e88c1f00773b4fd028))
+
 ## [1.448.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.447.5...v1.448.0) (2026-08-04)
 
 ### Features
