@@ -1,3 +1,9 @@
+## [1.450.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.450.0...v1.450.1) (2026-08-04)
+
+### Bug Fixes
+
+* **desktop:** never show a paired tag's partner card - fall back to the event proof ([#810](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/810)) ([e7a2d31](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/e7a2d31e934ea5c3d281f1ef1ad96d2f54d4a58d))
+
 ## [1.450.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.449.2...v1.450.0) (2026-08-04)
 
 ### Features
