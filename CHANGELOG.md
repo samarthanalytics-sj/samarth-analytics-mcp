@@ -1,3 +1,9 @@
+## [1.447.5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.447.4...v1.447.5) (2026-08-04)
+
+### Bug Fixes
+
+* **desktop:** clip Tag Assistant proof to the event/tag panel, not full page ([#798](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/798)) ([1346e8e](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/1346e8ee56dd227691379a6b3ba66b81eea8336e))
+
 ## [1.447.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.447.3...v1.447.4) (2026-08-01)
 
 ### Bug Fixes
