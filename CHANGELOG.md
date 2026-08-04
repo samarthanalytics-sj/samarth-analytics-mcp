@@ -1,3 +1,9 @@
+## [1.450.5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.450.4...v1.450.5) (2026-08-04)
+
+### Bug Fixes
+
+* **desktop:** stop the paired-tag proof mismatch (run-level dedup + honest Summary fallback) ([#815](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/815)) ([0766aae](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/0766aaee243261a83363711a77dcaca21744284f))
+
 ## [1.450.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.450.3...v1.450.4) (2026-08-04)
 
 ### Bug Fixes
