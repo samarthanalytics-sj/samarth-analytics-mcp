@@ -26,6 +26,8 @@ import {
   GoogleScopeError,
 } from './auth/googleIdentityResolver.js';
 import { resolveHttpBinding, bindingBanner } from './utils/httpBinding.js';
+import { getGuardrailConfig } from './utils/guardrails.js';
+import { guardrailBanner, guardrailStatus } from './utils/guardrailMode.js';
 import { decidePostRoute, UNKNOWN_SESSION_MESSAGE } from './utils/mcpSession.js';
 import { createStytchTokenValidator } from './auth/stytchTokenValidator.js';
 import type { StytchClaims } from './auth/stytchTokenValidator.js';
@@ -51,10 +53,7 @@ async function startStdioServer(server: Awaited<ReturnType<typeof createGtmMcpSe
   await server.connect(transport);
   // Log to stderr only — stdout is the JSON-RPC transport channel
   console.error('[samarth-gtm-mcp] Server ready on stdio transport');
-  console.error('[samarth-gtm-mcp] Guardrails: writes=' + (process.env.GTM_MCP_ENABLE_WRITES ?? 'false') +
-    ' publish=' + (process.env.GTM_MCP_ENABLE_PUBLISH ?? 'false') +
-    ' deletes=' + (process.env.GTM_MCP_ENABLE_DELETES ?? 'false') +
-    ' dryRun=' + (process.env.DRY_RUN ?? 'false'));
+  console.error('[samarth-gtm-mcp] ' + guardrailBanner(getGuardrailConfig()));
 }
 
 async function startHttpServer(auth: OAuth2Client): Promise<void> {
@@ -422,12 +421,7 @@ async function startHttpServer(auth: OAuth2Client): Promise<void> {
       server: 'samarth-gtm-mcp',
       transport: 'http',
       activeSessions: sessions.size,
-      guardrails: {
-        writesEnabled: process.env.GTM_MCP_ENABLE_WRITES === 'true',
-        publishEnabled: process.env.GTM_MCP_ENABLE_PUBLISH === 'true',
-        deletesEnabled: process.env.GTM_MCP_ENABLE_DELETES === 'true',
-        dryRun: process.env.DRY_RUN === 'true',
-      },
+      guardrails: guardrailStatus(getGuardrailConfig()),
     });
   });
 

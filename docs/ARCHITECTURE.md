@@ -27,7 +27,8 @@ transport selected by `GTM_MCP_TRANSPORT`:
 - **stdio** (default) — for Claude Desktop / Cursor / Claude Code. Logs go to
   stderr because stdout is the JSON-RPC channel.
 - **http** — an Express app exposing `POST/GET/DELETE /mcp` (stateful sessions
-  keyed by `mcp-session-id`), an OAuth callback, and `/health`.
+  keyed by `mcp-session-id`, each with its own `McpServer`) and `/health`. There is deliberately no
+  OAuth callback route here; `npm run auth:google` runs its own loopback listener.
 
 Heavy transport modules (`StreamableHTTPServerTransport`, `express`) are
 imported lazily inside the HTTP branch so stdio startups stay lean.
