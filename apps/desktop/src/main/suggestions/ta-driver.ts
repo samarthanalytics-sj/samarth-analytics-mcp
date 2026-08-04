@@ -1080,39 +1080,56 @@ export async function runTaVerify(
         // Only the NEWEST few rail rows can be the event we just drove; scanning all 14 (each a real click
         // + render wait) made a non-firing tag cost seconds, and ~79 tags/page then looked stuck. The
         // post-hoc sweep is the backstop for anything not in the top rows.
-        const rows = await ta.evaluate<Array<{ sel: string; num: number }>>(tagNewestTaRows, 6).catch(() => [] as Array<{ sel: string; num: number }>);
+        let rows = await ta.evaluate<Array<{ sel: string; num: number }>>(tagNewestTaRows, 6).catch(() => [] as Array<{ sel: string; num: number }>);
         if (!rows.length) { trace('STOP no rail rows found - Tag Assistant has no event list on screen.'); return; }
         trace(`rail rows (newest first): [${rows.map((r) => r.num).join(', ')}]`);
         const names = (target.names ?? []).filter(Boolean).map((n) => n.toLowerCase());
         const evRe = target.event ? new RegExp(target.event, 'i') : null;
         let best: { sel: string; fired: string } | null = null;
         let firstFired: { sel: string; fired: string } | null = null;
-        for (const row of rows) {
-          // Click, then CONFIRM the selection actually moved to this row. Two pages both produce a
-          // "form_submission" event, so a click that failed to switch leaves a panel that still matches by
-          // name, and the driver would prove the previous page's tags against this page's row. One retry,
-          // re-marking the rows first in case Angular re-rendered the rail and dropped the attribute.
-          let panel = { event: '', fired: '' };
-          let sel = 0;
-          for (let attempt = 0; attempt < 2; attempt += 1) {
-            if (attempt > 0) await ta.evaluate(tagNewestTaRows, 6).catch(() => undefined);
-            await ta.click(row.sel, { timeout: 1200 }).catch(() => undefined); // REAL click → Angular switches the panel
-            await ta.waitForTimeout(300); // let Angular render the switched-to panel (API Call + Tags Fired)
-            panel = await ta.evaluate<{ event: string; fired: string }>(readTaPanel).catch(() => ({ event: '', fired: '' }));
-            sel = await ta.evaluate<number>(readTaSelectedRow).catch(() => 0);
-            if (!sel || sel === row.num) break;
+        // Up to two passes. If the whole rail scan came back STUCK (every click left the panel on a stale
+        // earlier row - the pages-2/3 "still showing row #N" case, where a tag detail from the previous page
+        // is up and rail clicks don't switch), a REAL Summary click clears it; then re-tag the rail and rescan.
+        // preView.isDetail (the earlier reset's trigger) is unreliable because Angular keeps a closed detail's
+        // markup, so this reacts to the actual stuck reads instead.
+        for (let pass = 0; pass < 2 && !best && !firstFired; pass += 1) {
+          if (pass > 0) {
+            trace('the panel was stuck on a stale event - forcing a Summary reset and rescanning the rail');
+            const sumSel = await ta.evaluate<string>(tagTaSummaryItem).catch(() => '');
+            if (sumSel) await ta.click(sumSel, { timeout: 1200 }).catch(() => undefined); // REAL click: a synthetic one does not switch TA
+            else await ta.evaluate(clickTaSummary).catch(() => undefined);
+            await ta.waitForTimeout(400);
+            rows = await ta.evaluate<Array<{ sel: string; num: number }>>(tagNewestTaRows, 6).catch(() => rows);
           }
-          trace(`  row #${row.num} -> event="${panel.event || '(none: panel did not switch)'}" firedTags=${hasFired(panel.fired) ? 'yes' : 'no'} selectedRow=${sel || 'unknown'}`);
-          if (sel && sel !== row.num) { trace(`  row #${row.num}: the panel is still showing row #${sel} - not trusting this read`); continue; }
-          // REQUIRE a real EVENT view: the Summary panel also has a "Tags Fired" list (every fired tag) but NO
-          // API-Call event, so panel.event is empty there. Without this check a click that failed to switch the
-          // panel left us on the Summary, whose all-tags list matched EVERY target → every proof was the Summary.
-          if (!panel.event || !hasFired(panel.fired)) continue;
-          if (!firstFired) firstFired = { sel: row.sel, fired: panel.fired };
-          const firedLc = panel.fired.toLowerCase();
-          const nameHit = names.length > 0 && names.some((n) => firedLc.includes(n));
-          const evHit = !!evRe && evRe.test(panel.event);
-          if (nameHit || evHit) { best = { sel: row.sel, fired: panel.fired }; break; } // this event proves the target
+          let stuck = false;
+          for (const row of rows) {
+            // Click, then CONFIRM the selection actually moved to this row. Two pages both produce a
+            // "form_submission" event, so a click that failed to switch leaves a panel that still matches by
+            // name, and the driver would prove the previous page's tags against this page's row. One retry,
+            // re-marking the rows first in case Angular re-rendered the rail and dropped the attribute.
+            let panel = { event: '', fired: '' };
+            let sel = 0;
+            for (let attempt = 0; attempt < 2; attempt += 1) {
+              if (attempt > 0) await ta.evaluate(tagNewestTaRows, 6).catch(() => undefined);
+              await ta.click(row.sel, { timeout: 1200 }).catch(() => undefined); // REAL click → Angular switches the panel
+              await ta.waitForTimeout(300); // let Angular render the switched-to panel (API Call + Tags Fired)
+              panel = await ta.evaluate<{ event: string; fired: string }>(readTaPanel).catch(() => ({ event: '', fired: '' }));
+              sel = await ta.evaluate<number>(readTaSelectedRow).catch(() => 0);
+              if (!sel || sel === row.num) break;
+            }
+            trace(`  row #${row.num} -> event="${panel.event || '(none: panel did not switch)'}" firedTags=${hasFired(panel.fired) ? 'yes' : 'no'} selectedRow=${sel || 'unknown'}`);
+            if (sel && sel !== row.num) { trace(`  row #${row.num}: the panel is still showing row #${sel} - not trusting this read`); stuck = true; continue; }
+            // REQUIRE a real EVENT view: the Summary panel also has a "Tags Fired" list (every fired tag) but NO
+            // API-Call event, so panel.event is empty there. Without this check a click that failed to switch the
+            // panel left us on the Summary, whose all-tags list matched EVERY target → every proof was the Summary.
+            if (!panel.event || !hasFired(panel.fired)) continue;
+            if (!firstFired) firstFired = { sel: row.sel, fired: panel.fired };
+            const firedLc = panel.fired.toLowerCase();
+            const nameHit = names.length > 0 && names.some((n) => firedLc.includes(n));
+            const evHit = !!evRe && evRe.test(panel.event);
+            if (nameHit || evHit) { best = { sel: row.sel, fired: panel.fired }; break; } // this event proves the target
+          }
+          if (best || firstFired || !stuck) break; // got a proof, or the failure wasn't a stuck panel (a reset won't help)
         }
         const chosen = best ?? firstFired;
         if (!chosen) { trace('STOP none of those rows showed an event that fired a tag - nothing to prove here.'); return; } // never screenshot a blank panel
