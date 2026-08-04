@@ -1,3 +1,9 @@
+## [1.450.7](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.450.6...v1.450.7) (2026-08-04)
+
+### Bug Fixes
+
+* **desktop:** identify verify proof cards by platform + switch to the paired tag ([#818](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/818)) ([5de1d48](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/5de1d4861f2da806ac8f4588032c9389e5355cf3))
+
 ## [1.450.6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.450.5...v1.450.6) (2026-08-04)
 
 ### Bug Fixes
