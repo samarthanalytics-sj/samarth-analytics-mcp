@@ -1,3 +1,9 @@
+## [1.450.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.450.3...v1.450.4) (2026-08-04)
+
+### Bug Fixes
+
+* **auth:** choose the OAuth token source whole, never field by field ([#814](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/814)) ([2cedab2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/2cedab20883a71bb7f73a76c4590fc6392c020b1))
+
 ## [1.450.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.450.2...v1.450.3) (2026-08-04)
 
 ### Bug Fixes
