@@ -1,3 +1,9 @@
+## [1.448.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.448.3...v1.448.4) (2026-08-04)
+
+### Bug Fixes
+
+* **desktop:** close the stuck TA detail via its breadcrumb so pages 2/3 get proofs ([#804](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/804)) ([1597988](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/1597988a767692e40e4103b9d11a53e43a91803a)), closes [#22](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/22)
+
 ## [1.448.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.448.2...v1.448.3) (2026-08-04)
 
 ### Bug Fixes
