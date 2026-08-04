@@ -487,6 +487,26 @@ function tagTaCrumbLink(): string {
   } catch { return ''; }
 }
 
+/** In the TA page: mark a CLOSE / BACK / ✕ control (by aria-label or glyph) so a stuck detail overlay can
+ *  be dismissed when the breadcrumb walk doesn't. Returns '' when none is on screen. */
+function tagTaCloseButton(): string {
+  try {
+    document.querySelectorAll('[data-ta-close]').forEach((e) => e.removeAttribute('data-ta-close'));
+    const norm = (s: string | null | undefined): string => (s || '').replace(/\s+/g, ' ').trim();
+    const cands = Array.prototype.slice.call(document.querySelectorAll('button,[role="button"],a,[aria-label]')) as HTMLElement[];
+    for (const el of cands) {
+      if (el.getClientRects && el.getClientRects().length === 0) continue; // on-screen only
+      const al = norm(el.getAttribute && el.getAttribute('aria-label')).toLowerCase();
+      const t = norm(el.textContent);
+      if (/\b(close|back|dismiss)\b/.test(al) || t === '✕' || t === '×' || t === 'X' || /^(back|close)$/i.test(t)) {
+        el.setAttribute('data-ta-close', '1');
+        return '[data-ta-close="1"]';
+      }
+    }
+    return '';
+  } catch { return ''; }
+}
+
 /** In the TA SUMMARY-context tag detail: mark the first "Messages Where This Tag Fired" chip (e.g.
  *  "22 form_submission") and return its selector. That chip is the route from the tag's GLOBAL detail
  *  (breadcrumb "Summary >", variable NAMES only, no toggle) into the per-message EVENT-context detail
@@ -1110,6 +1130,9 @@ export async function runTaVerify(
               await ta.waitForTimeout(250);
               trace(`  crumb hop ${hop + 1}: clicked "${crumbSel}"`);
             }
+            // If the breadcrumb didn't clear it, try a close / back / ✕ control (also ON the overlay).
+            const closeSel = await ta.evaluate<string>(tagTaCloseButton).catch(() => '');
+            if (closeSel) { await ta.click(closeSel, { timeout: 1200 }).catch(() => undefined); await ta.waitForTimeout(250); trace(`  clicked a close/back control "${closeSel}"`); }
             // Belt and suspenders: Escape, then the rail Summary if it is reachable now.
             await ta.locator('body').first().press('Escape').catch(() => undefined);
             await ta.waitForTimeout(200);
@@ -1153,7 +1176,14 @@ export async function runTaVerify(
           if (best || firstFired || !stuck) break; // got a proof, or the failure wasn't a stuck panel (a reset won't help)
         }
         const chosen = best ?? firstFired;
-        if (!chosen) { trace('STOP none of those rows showed an event that fired a tag - nothing to prove here.'); return; } // never screenshot a blank panel
+        if (!chosen) {
+          // Dump the exact stuck state so the blocking control is knowable from the log (a tagDetails=yes /
+          // "... >" breadcrumb here means a detail overlay is still up and needs a different close control).
+          const stopSel = await ta.evaluate<number>(readTaSelectedRow).catch(() => -1);
+          const stopDiag = await ta.evaluate<string>(readTaDiagnostics).catch(() => 'n/a');
+          trace(`STOP none of those rows showed an event that fired a tag - nothing to prove here. selectedRow=${stopSel} | ${stopDiag}`);
+          return; // never screenshot a blank panel
+        }
         trace(`chosen event via ${best ? 'MATCH (its Tags-Fired names the target)' : 'FALLBACK (newest event that fired anything)'}`);
         if (!best) { await ta.click(chosen.sel, { timeout: 1200 }).catch(() => undefined); await ta.waitForTimeout(220); } // fallback row wasn't the last clicked - re-select it
         // Drill into EVERY tag this event fired, so each one gets ITS OWN detail view (properties + firing
@@ -1473,8 +1503,11 @@ export async function runTaVerify(
     } catch { /* proof is best-effort */ }
 
     // Harvest + parse the stream from the TA page.
+    console.log('[tag-assistant] drive complete - preparing results (parsing the debug stream, matching tags to proofs)...');
     const frames = await ta.evaluate<string[]>(() => (window as unknown as { __taFrames?: string[] }).__taFrames ?? []).catch(() => [] as string[]);
+    console.log(`[tag-assistant] parsing ${frames.length} debug frame(s)...`);
     const capture = parseTaFrames(frames);
+    console.log(`[tag-assistant] parsed the stream: ${capture.containers.length} container(s), ${captures.length} proof screenshot(s) captured.`);
     const { containerDebugProblem, eventsForContainer, containersSeenOnPage } = await import('./ta-stream');
     // AUTHORITATIVE on-page list: TA's own "Google tags found" chips (read from the DOM), unioned with
     // the debug-stream containers. Includes containers PRESENT but not debugging — which the stream can't
