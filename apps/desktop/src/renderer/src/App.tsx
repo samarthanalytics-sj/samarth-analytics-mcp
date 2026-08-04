@@ -7082,6 +7082,23 @@ function VerifyPanel({
   // the next "Verify with Tag Assistant" run (Phase 2b). A ref so an edit doesn't re-render the buttons.
   const vReviewedFormsRef = useRef<NonNullable<VerifyTagsOptions['reviewedForms']>>([]);
   const [vProgress, setVProgress] = useState<VerifyProgressView | null>(null);
+  // What this run exercises. 'clicks' skips the forms step entirely (no real lead is created); 'forms'
+  // submits the reviewed forms without driving tag triggers; 'both' is the full run.
+  const [vScope, setVScope] = useState<'both' | 'clicks' | 'forms'>('both');
+  // Pages already finished this run, in order, so the operator can see what has been covered and what is
+  // in flight rather than only the current page. Fed from the same progress events as the live line.
+  const [vPagesDone, setVPagesDone] = useState<string[]>([]);
+  const vPageRef = useRef<string>('');
+  // One entry point for progress: keep the live line AND roll the previous page into the done list.
+  const onVerifyProgress = (p: VerifyProgressView): void => {
+    setVProgress(p);
+    const page = (p.page ?? '').trim();
+    if (!page || page === vPageRef.current) return;
+    const prev = vPageRef.current;
+    vPageRef.current = page;
+    if (prev) setVPagesDone((list) => (list.includes(prev) ? list : [...list, prev]));
+  };
+  const resetVerifyProgress = (): void => { vPageRef.current = ''; setVPagesDone([]); };
   const [vResult, setVResult] = useState<VerifyTagsResult | null>(null);
   const [vSkipped, setVSkipped] = useState<Array<{ tagId: string; name: string; reason: string }>>([]);
   const [vShowSkipped, setVShowSkipped] = useState(false);
@@ -7195,6 +7212,7 @@ function VerifyPanel({
     setVTaStage('idle'); // a run supersedes the scan/gate/fill wizard
     setVVerifying(true);
     setVVerifyKind(useMonitor ? 'ta' : 'firing');
+    resetVerifyProgress();
     setVProgress({ phase: 'prepare', message: 'Preparing verification…' });
     setVNote(null);
     onError('');
@@ -7242,6 +7260,7 @@ function VerifyPanel({
         [],
         {
           gtmDebug: true,
+          verifyScope: vScope,
           ...(snippet ? { containerSnippet: snippet } : {}),
           ...(verifyPages.length ? { verifyPages } : {}),
           // Phase 2b: submit the user's REVIEWED/edited form values (from the Forms panel) instead of the
@@ -7252,7 +7271,7 @@ function VerifyPanel({
           // it missing / a different one live and the operator hit Proceed). Cleared after this run.
           ...(useMonitor && vInjectContainerRef.current ? { injectContainerId: vInjectContainerRef.current } : {}),
         },
-        (p) => setVProgress(p), // live "scanning <url>" / "verifying <url>" feed
+        onVerifyProgress, // live "scanning <url>" / "verifying <url>" feed + the completed-page list
       );
       setVResult(res);
       if (vCancelRef.current) setVNote({ kind: 'info', text: 'Verification stopped - showing what was captured before you pressed Stop.' });
@@ -7276,6 +7295,9 @@ function VerifyPanel({
   function continueTaScan(): void {
     vReviewedFormsRef.current = [];
     setVPreflightGate(null);
+    // CLICKS ONLY: there is nothing to review, so skip the forms scan and the skip/proceed gate entirely
+    // and go straight to driving the tags. No form is submitted, so no real lead is created.
+    if (vScope === 'clicks') { setVTaStage('idle'); void runVerify(undefined, true, false); return; }
     setVFormStatus({ loading: true, count: null }); // guards the effect from acting on a prior scan's count
     setVTaStage('scanning');
     setVRunSignal((n) => n + 1); // Forms panel crawls + matches forms-with-tags for this URL
@@ -7498,6 +7520,41 @@ function VerifyPanel({
               Verifying only {vVerifyPages.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean).length} page(s) - the site crawl is skipped.
             </div>
           )}
+          {/* SCOPE: what this run exercises. Forms submit for REAL, so "Clicks only" is the way to re-run
+              without creating another lead. */}
+          <div style={{ ...styles.fieldLabel, marginTop: 10 }}>What to verify</div>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+            {([
+              { id: 'both', label: 'Clicks + forms', hint: 'Drive every tag trigger AND submit the reviewed forms. Each form submit creates a real lead.' },
+              { id: 'clicks', label: 'Clicks only', hint: 'Drive tag triggers only. No form is submitted, so no real lead is created - the safe way to re-run.' },
+              { id: 'forms', label: 'Forms only', hint: 'Submit the reviewed forms only. Tag triggers are not driven, so the run visits just the form pages and finishes faster.' },
+            ] as const).map((o) => {
+              const on = vScope === o.id;
+              return (
+                <button
+                  key={o.id}
+                  type="button"
+                  onClick={() => setVScope(o.id)}
+                  disabled={!ready || vVerifying || vTaStage === 'scanning' || vTaStage === 'preflight'}
+                  title={o.hint}
+                  aria-pressed={on}
+                  style={{
+                    ...(on ? styles.toggleOn : styles.toggleOff),
+                    padding: '6px 13px',
+                    fontSize: 12.5,
+                    ...(!ready || vVerifying || vTaStage === 'scanning' || vTaStage === 'preflight' ? { opacity: 0.5, cursor: 'not-allowed' } : {}),
+                  }}
+                >
+                  {o.label}
+                </button>
+              );
+            })}
+          </div>
+          <div style={{ ...styles.muted, fontSize: 11.5, marginTop: 4, lineHeight: 1.5 }}>
+            {vScope === 'both' ? 'Drives every tag trigger and submits the reviewed forms. Each form submit creates a REAL lead.'
+              : vScope === 'clicks' ? 'Tag triggers only - the forms step is skipped, so no real lead is created.'
+              : 'Reviewed forms only - tag triggers are not driven, so tags with no form stay "untested here".'}
+          </div>
           {/* Network & Location: the egress this audit runs from, so the operator can confirm the request
               originates from the expected network/VPN before (and while) driving the live site. Re-checks
               automatically when a run starts, so switching VPN server is reflected. */}
@@ -7794,6 +7851,38 @@ function VerifyPanel({
                     <span style={{ flex: 'none', fontVariantNumeric: 'tabular-nums', opacity: 0.7, color: 'var(--text-dim)', whiteSpace: 'nowrap' }}>
                       {vProgress.done}{vProgress.total ? ` / ${vProgress.total}` : ''}
                     </span>
+                  )}
+                </div>
+              )}
+              {/* Which pages are DONE and which one is in flight. The single live line above only ever shows
+                  the current page, so on a multi-page run there was no way to see what had been covered. */}
+              {(vPagesDone.length > 0 || (vProgress && vProgress.page)) && (
+                <div style={{ marginTop: 8, border: '1px solid var(--border)', borderRadius: 8, padding: '8px 10px' }}>
+                  {vProgress && vProgress.page && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, minWidth: 0 }}>
+                      <span style={{ flex: 'none', color: 'var(--c-blue)' }} aria-hidden>▶</span>
+                      <span style={{ flex: 'none', color: 'var(--text-dim)', fontWeight: 600 }}>Running</span>
+                      <span title={vProgress.page} style={{ flex: 1, minWidth: 0, fontFamily: 'monospace', fontSize: 11.5, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {vProgressPageLabel(vProgress.page)}
+                      </span>
+                    </div>
+                  )}
+                  {vPagesDone.length > 0 && (
+                    <div style={{ marginTop: vProgress && vProgress.page ? 6 : 0 }}>
+                      <div style={{ ...styles.muted, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.4 }}>
+                        Completed ({vPagesDone.length})
+                      </div>
+                      <div style={{ maxHeight: 108, overflowY: 'auto', marginTop: 3 }}>
+                        {vPagesDone.map((u) => (
+                          <div key={u} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11.5, minWidth: 0, padding: '1px 0' }}>
+                            <span style={{ flex: 'none', color: 'var(--c-green)' }} aria-hidden>✓</span>
+                            <span title={u} style={{ flex: 1, minWidth: 0, fontFamily: 'monospace', color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {vProgressPageLabel(u)}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
                   )}
                 </div>
               )}
@@ -8146,7 +8235,7 @@ function VerifyPanel({
           </div>
         )}
 
-        <FormFillReview url={verifyTarget()} verifyPages={vVerifyPages.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean)} snippet={vSnippet} active={active} onError={onError} runSignal={vRunSignal} onStatus={setVFormStatus} onReviewedForms={(f) => { vReviewedFormsRef.current = f; }} showFields={vTaStage === 'filling'} onSubmitForms={() => { setVTaStage('idle'); void runVerify(undefined, true, true); }} firedTags={vResult && vResult.verifiedByMonitor && !vResult.error && vFormsVerified ? new Set(fired.map((v) => v.tagName)) : undefined} onScanProgress={(p) => setVProgress(p)} />
+        <FormFillReview url={verifyTarget()} verifyPages={vVerifyPages.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean)} snippet={vSnippet} active={active} onError={onError} runSignal={vRunSignal} onStatus={setVFormStatus} onReviewedForms={(f) => { vReviewedFormsRef.current = f; }} showFields={vTaStage === 'filling'} onSubmitForms={() => { setVTaStage('idle'); void runVerify(undefined, true, true); }} firedTags={vResult && vResult.verifiedByMonitor && !vResult.error && vFormsVerified ? new Set(fired.map((v) => v.tagName)) : undefined} onScanProgress={onVerifyProgress} />
       </div>
       {vLightbox && <ProofLightbox shot={vLightbox} onClose={() => setVLightbox(null)} />}
     </div>

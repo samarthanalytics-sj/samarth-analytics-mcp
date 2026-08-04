@@ -696,7 +696,7 @@ export async function runTaVerify(
   url: string,
   tags: VerifyDriverTag[],
   containerPublicId: string,
-  opts: { settleMs?: number; navTimeoutMs?: number; loginHint?: string; signInTimeoutMs?: number; previewSnippet?: string; injectContainerId?: string; forms?: TaFormSubmit[]; onSignInPrompt?: () => void; onPageProgress?: (page: string, done: number, total: number) => void; onFormProgress?: (page: string, done: number, total: number) => void; shouldStop?: () => boolean } = {},
+  opts: { settleMs?: number; navTimeoutMs?: number; loginHint?: string; signInTimeoutMs?: number; previewSnippet?: string; injectContainerId?: string; forms?: TaFormSubmit[]; driveTriggers?: boolean; onSignInPrompt?: () => void; onPageProgress?: (page: string, done: number, total: number) => void; onFormProgress?: (page: string, done: number, total: number) => void; shouldStop?: () => boolean } = {},
 ): Promise<TaVerifyResult> {
   const settleMs = opts.settleMs ?? 900;
   const navTimeoutMs = opts.navTimeoutMs ?? 25_000;
@@ -1351,12 +1351,18 @@ export async function runTaVerify(
     // REAL, so a page that has BOTH is opened a single time, not once per phase.
     const pageKeyOf = (p: string | undefined): string =>
       p && /^https?:/i.test(p) ? p : p ? new URL(p, url).href : url;
+    // FORMS-ONLY runs skip trigger driving: leaving byPage empty means the union below is just the form
+    // pages, so the run visits only those. `tags` is still used for knownTagNames, so each form tag still
+    // gets its own Tag Details proof. Tags that are never exercised stay honestly "untested here".
+    const driveTriggers = opts.driveTriggers !== false;
     const byPage = new Map<string, VerifyDriverTag[]>();
-    for (const t of tags) {
-      const page = pageKeyOf(t.page);
-      const arr = byPage.get(page) ?? [];
-      arr.push(t);
-      byPage.set(page, arr);
+    if (driveTriggers) {
+      for (const t of tags) {
+        const page = pageKeyOf(t.page);
+        const arr = byPage.get(page) ?? [];
+        arr.push(t);
+        byPage.set(page, arr);
+      }
     }
     // Group the reviewed forms by the SAME page key, so each page's form(s) submit right after its clicks.
     const allForms = opts.forms ?? [];
