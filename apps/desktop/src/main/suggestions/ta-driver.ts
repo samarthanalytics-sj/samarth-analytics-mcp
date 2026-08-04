@@ -327,29 +327,42 @@ function readTaPanel(): { event: string; fired: string } {
 function taContentRect(): { rect: { x: number; y: number; width: number; height: number } | null; debug: string } {
   try {
     const vw = window.innerWidth, vh = window.innerHeight;
-    const anchors = ['api call', 'tags fired', 'output of', 'container loaded', 'data layer'];
+    // PRIMARY (matches the real TA DOM seen in logs): the event rail is a <message-list> pinned to the LEFT
+    // (~240px). Clip everything to its RIGHT so the rail - the "Summary / Click / gtm.formInteract" list - is
+    // never in the proof frame. This is far more reliable than heading heuristics.
+    const rail = document.querySelector('message-list') as HTMLElement | null;
+    if (rail && rail.getClientRects && rail.getClientRects().length) {
+      const r = rail.getBoundingClientRect();
+      if (r.width > 120 && r.width < vw * 0.45 && r.left < vw * 0.25 && r.height > vh * 0.3) {
+        const x = Math.round(r.right);
+        return { rect: { x, y: 0, width: Math.max(0, vw - x), height: vh }, debug: `clip RIGHT of rail: message-list ${Math.round(r.width)}x${Math.round(r.height)}@${Math.round(r.left)} -> x=${x} w=${vw - x} h=${vh}` };
+      }
+    }
+    // FALLBACK: anchor on a CONTENT-only heading (never a rail row like "Container Loaded") that sits to the
+    // right of the rail, then climb to the widest non-full-width ancestor.
+    const anchors = ['tag details', 'api call', 'firing triggers', 'messages where this tag fired', 'properties'];
     const els = Array.prototype.slice.call(document.querySelectorAll('h1,h2,h3,h4,h5,div,span,p')) as HTMLElement[];
     let head: HTMLElement | null = null;
     for (const el of els) {
       if (el.getClientRects && el.getClientRects().length === 0) continue; // on-screen only
+      if (el.getBoundingClientRect().left < vw * 0.2) continue; // must be in the CONTENT area, not the left rail
       const t = (el.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
       if (t.length < 40 && anchors.some((a) => t.startsWith(a))) { head = el; break; }
     }
-    if (!head) return { rect: null, debug: `no content anchor heading on screen (looked for ${anchors.join('/')}); vw=${vw} vh=${vh}` };
+    if (!head) return { rect: null, debug: `rail <message-list> not usable and no content heading right of the rail (looked for ${anchors.join('/')}); vw=${vw} vh=${vh}` };
     const anchorText = (head.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 40);
     let node: HTMLElement | null = head;
     let best: DOMRect | null = null;
-    const cands: string[] = []; // every ancestor considered, with a '*' when it matched the content-column shape
+    const cands: string[] = [];
     while (node && node !== document.body) {
       const r = node.getBoundingClientRect();
-      // The content column: wide but not the whole window, tall, and starting right of the rail.
-      const ok = r.width >= vw * 0.4 && r.width <= vw * 0.85 && r.height >= vh * 0.3 && r.left >= vw * 0.1;
+      const ok = r.width >= vw * 0.4 && r.width <= vw * 0.9 && r.height >= vh * 0.3 && r.left >= vw * 0.1;
       cands.push(`${node.tagName.toLowerCase()}:${Math.round(r.width)}x${Math.round(r.height)}@${Math.round(r.left)}${ok ? '*' : ''}`);
       if (ok) best = r;
       node = node.parentElement;
     }
     const debug = `anchor="${anchorText}" vw=${vw} vh=${vh} ancestors=[${cands.slice(0, 12).join(' ')}]`;
-    if (!best) return { rect: null, debug: `${debug} -> no ancestor matched the content-column shape (w 0.4-0.85*vw, h>=0.3*vh, left>=0.1*vw)` };
+    if (!best) return { rect: null, debug: `${debug} -> no content-column ancestor` };
     const x = Math.max(0, best.left), y = Math.max(0, best.top);
     return { rect: { x, y, width: Math.min(best.width, vw - x), height: Math.min(best.height, vh - y) }, debug };
   } catch (e) { return { rect: null, debug: `taContentRect error: ${(e as Error).message}` }; }
