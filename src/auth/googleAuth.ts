@@ -42,6 +42,7 @@
 import { OAuth2Client, GoogleAuth } from 'google-auth-library';
 import fs from 'fs';
 import path from 'path';
+import { selectTokenSource } from './tokenSource.js';
 
 // GTM required OAuth scopes — least-privilege superset needed by the server's
 // read + edit + publish tool surface. Read-only deployments can trim the
@@ -211,38 +212,36 @@ export async function buildGoogleAuth(opts: AuthOptions = {}): Promise<OAuth2Cli
 
   // ── Mode 2: OAuth2 with stored tokens ───────────────────────────────────
   const clientCreds = resolveOAuthClient();
-  const envAccessToken = process.env.GOOGLE_ACCESS_TOKEN;
-  const envRefreshToken = process.env.GOOGLE_REFRESH_TOKEN;
-  const fileTokens = readStoredTokens();
+  // Env or file, chosen WHOLE. Mixing the two per field paired an env access token with the file's
+  // expiry_date and refresh token, which either wedged refresh entirely or silently swapped identity
+  // on the first refresh. See selectTokenSource.
+  const selection = selectTokenSource(process.env, readStoredTokens());
 
-  const accessToken = envAccessToken || fileTokens?.access_token;
-  const refreshToken = envRefreshToken || fileTokens?.refresh_token;
-
-  if (clientCreds && (accessToken || refreshToken)) {
+  if (clientCreds && selection) {
     console.error(
-      `[auth] Using OAuth2 user credentials (client: ${clientCreds.source}` +
-        `${fileTokens && !envRefreshToken ? ', tokens: file' : ', tokens: env'})`
+      `[auth] Using OAuth2 user credentials (client: ${clientCreds.source}, tokens: ${selection.source})`
     );
     const oauth2Client = new OAuth2Client(
       clientCreds.clientId,
       clientCreds.clientSecret,
       clientCreds.redirectUri
     );
+    const chosen = selection.tokens;
     oauth2Client.setCredentials({
-      access_token: accessToken || undefined,
-      refresh_token: refreshToken || undefined,
-      expiry_date: fileTokens?.expiry_date,
+      access_token: chosen.access_token || undefined,
+      refresh_token: chosen.refresh_token || undefined,
+      expiry_date: chosen.expiry_date,
     });
 
-    // Persist refreshed tokens back to disk if we sourced them from the file.
-    if (fileTokens && !envRefreshToken) {
+    // Persist refreshed tokens back to disk only when the file IS the source.
+    if (selection.persist) {
       oauth2Client.on('tokens', (newTokens) => {
         const merged: StoredTokens = {
-          access_token: (newTokens.access_token ?? fileTokens.access_token) || undefined,
-          refresh_token: (newTokens.refresh_token ?? fileTokens.refresh_token) || undefined,
-          expiry_date: (newTokens.expiry_date ?? fileTokens.expiry_date) || undefined,
-          scope: (newTokens.scope ?? fileTokens.scope) || undefined,
-          token_type: (newTokens.token_type ?? fileTokens.token_type) || undefined,
+          access_token: (newTokens.access_token ?? chosen.access_token) || undefined,
+          refresh_token: (newTokens.refresh_token ?? chosen.refresh_token) || undefined,
+          expiry_date: (newTokens.expiry_date ?? chosen.expiry_date) || undefined,
+          scope: (newTokens.scope ?? chosen.scope) || undefined,
+          token_type: (newTokens.token_type ?? chosen.token_type) || undefined,
         };
         try {
           writeStoredTokens(merged);
