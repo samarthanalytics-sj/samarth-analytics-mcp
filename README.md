@@ -35,7 +35,7 @@ Gives Claude Desktop, Cursor, Claude Code, and any MCP-compatible client full, g
 
 - **Full GTM API v2 surface** — accounts, containers, workspaces, tags, triggers, variables, folders, built-in variables, versions, sync, publish, preview
 - **Server-side & advanced GTM coverage** — environments, user permissions, destinations, clients, transformations, zones, custom templates, gtag config, plus container snippet/lookup/combine/move-tag-id and workspace change-diff status
-- **Read-only GA4 coverage** — GA4 Admin tools (`ga4_*`) plus GA4 Data API reporting (`ga4_run_report`, `ga4_run_realtime_report`) for intent-vs-reality reconciliation, all under a single `analytics.readonly` scope
+- **GA4 coverage** — GA4 Admin tools (`ga4_*`) plus GA4 Data API reporting (`ga4_run_report`, `ga4_run_realtime_report`) for intent-vs-reality reconciliation. Reads and reporting need only `analytics.readonly`; the GA4 Admin **write** tools are off by default behind `GA4_MCP_ENABLE_WRITES` / `GA4_MCP_ENABLE_DELETES` and additionally need `analytics.edit`
 - **Automatic pagination** — every paginated list tool transparently follows `nextPageToken` to return all results, with optional `maxPages`/`pageToken` bounds
 - **Retry with exponential backoff + jitter** — transient Google API failures (HTTP 408/429/5xx, network errors) on read requests are retried automatically; mutations are never auto-retried (tunable via `GTM_MCP_RETRY_*`)
 - **Two transport modes**: stdio (local, for Claude Desktop/Cursor) and Streamable HTTP (cloud/team)
@@ -640,7 +640,8 @@ For cloud deployments, use `GTM_MCP_TRANSPORT=http`. The server exposes:
 - `GET /mcp` — SSE stream for existing sessions
 - `DELETE /mcp` — Session termination
 - `GET /health` — Health check
-- `GET /oauth/callback` — OAuth redirect handler
+
+There is no `/oauth/callback` route on this server. `npm run auth:google` runs its own short-lived listener on `127.0.0.1:3001` for the redirect; an unauthenticated callback on the hosted transport could overwrite the server's stored Google credentials, so it was removed.
 
 ### Connecting Remote Clients
 

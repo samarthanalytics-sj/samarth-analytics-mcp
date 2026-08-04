@@ -16,6 +16,7 @@ import { registerServerSidePrompts } from './prompts/serverSide.js';
 import { registerEcommerceFunnelPrompts } from './prompts/ecommerceFunnel.js';
 import { registerCommandPrompts } from './prompts/commands.js';
 import { getGuardrailConfig } from './utils/guardrails.js';
+import { describeMode } from './utils/guardrailMode.js';
 import { resolveAuth } from './auth/identityContext.js';
 
 export const SERVER_NAME = 'samarth-gtm-mcp';
@@ -49,7 +50,7 @@ export function createGtmMcpServer(auth: OAuth2Client): McpServer {
     getGa4DataClientFn
   );
 
-  // MCP prompts (prompts/list) — user-selectable templates shown in the client's "prompts" tab.
+  // MCP prompts (prompts/list) - user-selectable templates shown in the client's "prompts" tab.
   registerServerSidePrompts(server);
   registerEcommerceFunnelPrompts(server);
   // Short verb-style slash commands: /audit, /report, /create-tag, /debug, /explain.
@@ -58,26 +59,24 @@ export function createGtmMcpServer(auth: OAuth2Client): McpServer {
   return server;
 }
 
-function buildInstructions(config: ReturnType<typeof getGuardrailConfig>): string {
-  const modes: string[] = [];
-  if (!config.writesEnabled) modes.push('READ-ONLY (writes disabled)');
-  if (!config.publishEnabled) modes.push('PUBLISH DISABLED');
-  if (!config.deletesEnabled) modes.push('DELETES DISABLED');
-  if (config.dryRun) modes.push('DRY RUN MODE');
-
+/** Exported so the flag-to-prose contract can be tested without constructing a server. */
+export function buildInstructions(config: ReturnType<typeof getGuardrailConfig>): string {
   return [
-    'Samarth Analytics — Google Tag Manager MCP Server',
+    'Samarth Analytics - Google Tag Manager MCP Server',
     '',
-    'This server provides full access to the Google Tag Manager API v2, plus a ' +
-      'read-only Google Analytics (GA4) Admin API tool surface.',
+    'This server provides full access to the Google Tag Manager API v2, plus a Google Analytics ' +
+      '(GA4) Admin API surface (reads always; config writes/deletes only when GA4_MCP_ENABLE_WRITES / ' +
+      'GA4_MCP_ENABLE_DELETES are set) and read-only GA4 Data API reporting.',
     '',
-    'Current mode: ' + (modes.length > 0 ? modes.join(', ') : 'Full write access enabled'),
+    'Current mode: ' + describeMode(config),
     '',
     'IMPORTANT GUARDRAILS:',
     '- All write/delete/publish tools require confirm=true to proceed.',
     '- Set GTM_MCP_ENABLE_WRITES=true in .env to allow create/update operations.',
     '- Set GTM_MCP_ENABLE_DELETES=true to allow delete operations.',
     '- Set GTM_MCP_ENABLE_PUBLISH=true to allow publish operations.',
+    '- Set GA4_MCP_ENABLE_WRITES=true to allow GA4 Admin creates/updates (also needs the analytics.edit scope).',
+    '- Set GA4_MCP_ENABLE_DELETES=true to allow GA4 Admin deletes/archives (archive is effectively permanent).',
     '- Set DRY_RUN=true to simulate all operations without calling the API.',
     '',
     'TOOL NAMING CONVENTION:',
@@ -94,28 +93,35 @@ function buildInstructions(config: ReturnType<typeof getGuardrailConfig>): strin
     '- versions_list, versions_get, versions_create, versions_publish, versions_set_latest, versions_undelete, versions_delete',
     '- environments_list, environments_get, environments_create, environments_update, environments_reauthorize, environments_delete',
     '- user_permissions_list, user_permissions_get, user_permissions_create, user_permissions_update, user_permissions_delete',
-    '- clients_*, transformations_*, zones_*, templates_* (list/get/create/update/delete/revert), gtag_config_* (no revert) — server-side & advanced container resources',
+    '- clients_*, transformations_*, zones_*, templates_* (list/get/create/update/delete/revert), gtag_config_* (no revert) - server-side & advanced container resources',
     '- containers_snippet, containers_lookup, containers_combine, containers_move_tag_id',
     '- destinations_list, destinations_get, destinations_link',
-    '- workspace_get_status — review the change diff (changed entities + conflicts) before versioning',
-    '- audit_container — inspect for analytics issues',
-    '- export_container — full workspace export as JSON',
+    '- workspace_get_status - review the change diff (changed entities + conflicts) before versioning',
+    '- audit_container - inspect for analytics issues',
+    '- export_container - full workspace export as JSON',
     '',
-    'GA4 ADMIN (READ-ONLY) — Google Analytics Admin API v1beta:',
-    '- ga4_account_summaries_list — discover GA4 accounts + property summaries',
+    'GA4 ADMIN READS - Google Analytics Admin API v1beta:',
+    '- ga4_account_summaries_list - discover GA4 accounts + property summaries',
     '- ga4_properties_list, ga4_property_get',
     '- ga4_data_streams_list, ga4_enhanced_measurement_get (web streams + measurement IDs)',
     '- ga4_custom_dimensions_list, ga4_custom_metrics_list',
     '- ga4_data_retention_get',
     '- ga4_key_events_list (formerly conversion events), ga4_google_ads_links_list',
-    '  These tools never write/delete and need no confirm flag. They require the',
-    "  'analytics.readonly' OAuth scope — re-run npm run auth:google if a 403 mentions scope.",
-    '  Not exposed by Admin API v1beta (documented limitations, not faked): internal-traffic/',
-    '  unwanted-referral data filters, referral exclusions, channel groups, audiences.',
+    '  These READ tools never write/delete and need no confirm flag. They require the',
+    "  'analytics.readonly' OAuth scope - re-run npm run auth:google if a 403 mentions scope.",
+    '  Not READABLE through Admin API v1beta (documented limitations, not faked): internal-traffic/',
+    '  unwanted-referral data filters, referral exclusions, channel groups, audiences. Audiences do',
+    '  have gated v1alpha WRITE tools (see below); there is no audience READ tool.',
     '',
-    'GA4 DATA API (READ-ONLY) — Google Analytics Data API v1beta:',
-    '- ga4_run_report — report dimensions/metrics over a date range (e.g. eventCount by eventName).',
-    '- ga4_run_realtime_report — events in roughly the last 30 minutes for live QA.',
+    'GA4 ADMIN WRITES - always registered, always gated:',
+    '- ga4_create_* / ga4_update_* / ga4_delete_* / ga4_archive_* cover GA4 Admin config CRUD.',
+    '  They appear in tools/list unconditionally and REFUSE unless the matching GA4_MCP_ENABLE_*',
+    '  flag is true AND confirm=true is passed. Check "Current mode" above before telling a user',
+    '  this server cannot change anything.',
+    '',
+    'GA4 DATA API (READ-ONLY) - Google Analytics Data API v1beta:',
+    '- ga4_run_report - report dimensions/metrics over a date range (e.g. eventCount by eventName).',
+    '- ga4_run_realtime_report - events in roughly the last 30 minutes for live QA.',
     '  Read-only; no confirm flag. Same analytics.readonly scope as the Admin tools.',
     '  Use to reconcile configured events vs. events GA4 actually reports.',
     '  Not exposed here (documented gaps, not stubbed): pivots, cohorts, funnels.',

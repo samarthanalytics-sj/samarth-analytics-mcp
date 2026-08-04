@@ -1,10 +1,11 @@
 /**
  * Google Analytics Admin API (GA4) client factory.
  *
- * Wraps the googleapis analyticsadmin v1beta client. The server only ever uses
- * read methods (list/get) on this client — no GA4 resource is created, updated,
- * or deleted. The same OAuth2 credentials used for GTM authorize these calls,
- * provided the `analytics.readonly` scope was granted during onboarding.
+ * Wraps the googleapis analyticsadmin v1beta client. Both the read tools (tools/ga4Admin.ts) and the
+ * GATED write tools (tools/ga4AdminWrite.ts) use this client; the write path additionally requires
+ * GA4_MCP_ENABLE_WRITES / GA4_MCP_ENABLE_DELETES, confirm=true, and the analytics.edit scope. The same
+ * OAuth2 credentials used for GTM authorize these calls, provided the `analytics.readonly` scope was
+ * granted during onboarding.
  */
 
 // Import only the analytics sub-APIs instead of the full `googleapis` aggregate.
@@ -37,8 +38,9 @@ let _dataClients = new WeakMap<OAuth2Client, Ga4DataClient>();
 export function getGa4AdminClient(auth: OAuth2Client): Ga4AdminClient {
   let client = _clients.get(auth);
   if (!client) {
-    // All GA4 tools are read-only (GET), so retry/backoff applies to every
-    // call this client makes. See apiRetry.ts.
+    // Default retry set only, which means no POST. The Admin WRITE tools drive this same client with
+    // POST/PATCH/DELETE, and retrying a non-idempotent create is how you get duplicates. The GA4 Data
+    // client below opts POST in separately because its POSTs are pure reads. See apiRetry.ts.
     client = analyticsadmin({ version: 'v1beta', auth, ...buildRetryOptions() });
     _clients.set(auth, client);
   }
