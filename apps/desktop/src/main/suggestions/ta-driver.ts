@@ -17,6 +17,7 @@
 import os from 'node:os';
 import path from 'node:path';
 import { rm } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { requestAllowed } from './ssrf';
 import { classifyCollector } from '../../shared/runtime-capture';
 import { PlaywrightUnavailableError } from './playwright-driver';
@@ -1231,6 +1232,8 @@ export async function runTaVerify(
           return false;
         };
         let drilled = 0;
+        let needEventProof = false; // a paired tag whose panel didn't switch (duplicate image) - give it the event proof
+        const eventShotHashes = new Set<string>(); // per-tag images already stored for THIS event, to catch duplicates
         for (const name of toDrill) {
           trace(`  DRILL "${name}"`);
           const tagSel = await ta.evaluate<string>(openFiredTagInPage, name).catch(() => '');
@@ -1271,9 +1274,17 @@ export async function runTaVerify(
               trace(`    clicked Values (try ${attempt + 1}): values=${st.valuesActive ? 'ON' : 'still off'}`);
             }
             const shot = await snapPanel(`tag:${name}`);
+            const shotHash = shot ? createHash('md5').update(shot).digest('hex') : '';
             if (!shot) {
               trace('    x the screenshot failed - no proof stored for this tag');
+            } else if (eventShotHashes.has(shotHash)) {
+              // Byte-identical to a sibling tag already captured in THIS event = the panel never switched to
+              // this tag (the paired GA4+Meta case: the 2nd drill re-shot the 1st tag's card). Storing it would
+              // put the WRONG platform's card under this tag. Skip it; this tag gets the event-panel proof.
+              needEventProof = true;
+              trace('    x image is identical to a sibling tag just captured (panel did not switch) - using the event-panel proof for this tag, not a wrong card.');
             } else {
+              eventShotHashes.add(shotHash);
               captures.push({ screenshot: `data:image/jpeg;base64,${shot.toString('base64')}`, fired: chosen.fired, tag: name });
               drilled += 1;
               proofStats.detail += 1;
@@ -1305,16 +1316,19 @@ export async function runTaVerify(
         // restore clicks missed), shooting now would store THAT tag's detail as an event-level capture, and
         // the Tags-Fired fallback would then hand one tag's page to every other tag in the event - exactly
         // the "wrong tag's screenshot" the operator reported. No proof beats a misleading proof.
-        if (drilled === 0) {
+        if (drilled === 0 || needEventProof) {
+          await backToEvent(); // return to the event panel so the shared proof is the EVENT, not a leftover detail
           const view = await ta.evaluate<{ isDetail: boolean }>(readTaTagDetailState).catch(() => ({ isDetail: false }));
           if (view.isDetail) {
-            trace('END no tag detail captured, and a detail is still on screen - skipping the event-level proof rather than storing another tag\'s picture.');
+            trace('END could not return to the event panel for a shared proof - skipping rather than storing a wrong card.');
           } else {
             proofStats.eventOnly += 1;
             const buf = await snapPanel('event-panel');
-            if (!buf) { trace('END the event-panel screenshot failed - no proof stored.'); return; }
-            captures.push({ screenshot: `data:image/jpeg;base64,${buf.toString('base64')}`, fired: chosen.fired });
-            trace('END no tag detail captured - stored one event-panel proof for the tags this event fired.');
+            if (!buf) { trace('END the event-panel screenshot failed - no proof stored.'); }
+            else {
+              captures.push({ screenshot: `data:image/jpeg;base64,${buf.toString('base64')}`, fired: chosen.fired });
+              trace(`END stored one event-panel proof for the tags this event fired${needEventProof && drilled > 0 ? ' (the other tag has its own card; this covers the one whose panel did not switch)' : ''}.`);
+            }
           }
         } else {
           trace(`END captured ${drilled} tag detail proof(s) from this event.`);
