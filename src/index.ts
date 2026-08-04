@@ -26,6 +26,7 @@ import {
   GoogleScopeError,
 } from './auth/googleIdentityResolver.js';
 import { resolveHttpBinding, bindingBanner } from './utils/httpBinding.js';
+import { decidePostRoute, UNKNOWN_SESSION_MESSAGE } from './utils/mcpSession.js';
 import { createStytchTokenValidator } from './auth/stytchTokenValidator.js';
 import type { StytchClaims } from './auth/stytchTokenValidator.js';
 
@@ -35,13 +36,12 @@ async function main(): Promise<void> {
   // Build Google auth client
   const auth = await buildGoogleAuth();
 
-  // Create the MCP server with all tools registered
-  const server = createGtmMcpServer(auth);
-
   if (transport === 'http') {
-    await startHttpServer(server, auth);
+    // HTTP builds one MCP server PER SESSION (see startHttpServer): an McpServer can only ever be
+    // connected to a single transport, so a shared instance cannot serve two clients.
+    await startHttpServer(auth);
   } else {
-    await startStdioServer(server);
+    await startStdioServer(createGtmMcpServer(auth));
   }
 }
 
@@ -57,10 +57,7 @@ async function startStdioServer(server: Awaited<ReturnType<typeof createGtmMcpSe
     ' dryRun=' + (process.env.DRY_RUN ?? 'false'));
 }
 
-async function startHttpServer(
-  server: Awaited<ReturnType<typeof createGtmMcpServer>>,
-  auth: OAuth2Client
-): Promise<void> {
+async function startHttpServer(auth: OAuth2Client): Promise<void> {
   const { StreamableHTTPServerTransport } = await import(
     '@modelcontextprotocol/sdk/server/streamableHttp.js'
   );
@@ -239,71 +236,113 @@ async function startHttpServer(
     return auth;
   }
 
-  // Map of session ID → transport (for stateful sessions)
-  const transports = new Map<string, InstanceType<typeof StreamableHTTPServerTransport>>();
+  /** Live stateful sessions, keyed by mcp-session-id, each with its OWN MCP server.
+   *  An McpServer refuses a second `connect()` ("Already connected to a transport"), so sharing one
+   *  instance meant the SECOND client to arrive threw inside an async handler, and with no rejection
+   *  net that killed the process and took the first client's session with it. Keeping the server
+   *  beside its transport also lets us close it when the session ends. */
+  const sessions = new Map<
+    string,
+    {
+      transport: InstanceType<typeof StreamableHTTPServerTransport>;
+      server: ReturnType<typeof createGtmMcpServer>;
+    }
+  >();
+
+  /** JSON-RPC error body for a handler that threw, so a failure is a protocol error the client can read
+   *  rather than a dead socket (or a dead process). Guarded on headersSent because the transport may
+   *  already have started streaming a response by the time it throws. */
+  const rpcError = (res: import('express').Response, message: string): void => {
+    if (res.headersSent) return;
+    res.status(500).json({ jsonrpc: '2.0', error: { code: -32603, message }, id: null });
+  };
 
   app.post('/mcp', async (req, res) => {
-    const reqAuth = await resolveAuthForRequest(req, res);
-    if (!reqAuth) return; // 401 already sent
+    try {
+      const reqAuth = await resolveAuthForRequest(req, res);
+      if (!reqAuth) return; // 401 already sent
 
-    const sessionId = req.headers['mcp-session-id'] as string | undefined;
+      const sessionId = req.headers['mcp-session-id'] as string | undefined;
+      const route = decidePostRoute(sessionId, !!sessionId && sessions.has(sessionId), req.body);
 
-    let transport: InstanceType<typeof StreamableHTTPServerTransport>;
+      let transport: InstanceType<typeof StreamableHTTPServerTransport>;
 
-    if (sessionId && transports.has(sessionId)) {
-      // Resume existing session
-      transport = transports.get(sessionId)!;
-    } else {
-      // New session
-      const newSessionId = randomUUID();
-      transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => newSessionId,
-        onsessioninitialized: (sid) => {
-          transports.set(sid, transport);
-          console.error(`[samarth-gtm-mcp] New HTTP session: ${sid}`);
-        },
-      });
+      if (route.kind === 'resume') {
+        transport = sessions.get(route.sessionId)!.transport;
+      } else if (route.kind === 'unknown-session') {
+        res.status(404).json({
+          jsonrpc: '2.0',
+          error: { code: -32001, message: UNKNOWN_SESSION_MESSAGE },
+          id: null,
+        });
+        return;
+      } else {
+        // New session: its own server instance, connected to its own transport.
+        const newSessionId = randomUUID();
+        const sessionServer = createGtmMcpServer(auth);
+        transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: () => newSessionId,
+          onsessioninitialized: (sid) => {
+            sessions.set(sid, { transport, server: sessionServer });
+            console.error(`[samarth-gtm-mcp] New HTTP session: ${sid} (active: ${sessions.size})`);
+          },
+        });
 
-      transport.onclose = () => {
-        const sid = transport.sessionId;
-        if (sid) {
-          transports.delete(sid);
-          console.error(`[samarth-gtm-mcp] HTTP session closed: ${sid}`);
-        }
-      };
+        transport.onclose = () => {
+          const sid = transport.sessionId;
+          if (sid) {
+            sessions.delete(sid);
+            console.error(`[samarth-gtm-mcp] HTTP session closed: ${sid} (active: ${sessions.size})`);
+          }
+          void sessionServer.close().catch(() => undefined); // release this session's server
+        };
 
-      await server.connect(transport);
+        await sessionServer.connect(transport);
+      }
+
+      // Run tool dispatch inside the resolved identity context: the per-user
+      // Google client in multi-user mode, or the default identity otherwise.
+      await runWithAuth(reqAuth, () => transport.handleRequest(req, res, req.body));
+    } catch (err) {
+      console.error('[samarth-gtm-mcp] POST /mcp failed:', err instanceof Error ? err.message : String(err));
+      rpcError(res, 'Internal server error handling this request.');
     }
-
-    // Run tool dispatch inside the resolved identity context: the per-user
-    // Google client in multi-user mode, or the default identity otherwise.
-    await runWithAuth(reqAuth, () => transport.handleRequest(req, res, req.body));
   });
 
   // SSE stream endpoint (GET /mcp) — for clients that support SSE-style streaming
   app.get('/mcp', async (req, res) => {
-    const reqAuth = await resolveAuthForRequest(req, res);
-    if (!reqAuth) return;
-    const sessionId = req.headers['mcp-session-id'] as string | undefined;
-    if (!sessionId || !transports.has(sessionId)) {
-      res.status(400).json({ error: 'Missing or invalid mcp-session-id header.' });
-      return;
+    try {
+      const reqAuth = await resolveAuthForRequest(req, res);
+      if (!reqAuth) return;
+      const sessionId = req.headers['mcp-session-id'] as string | undefined;
+      if (!sessionId || !sessions.has(sessionId)) {
+        res.status(400).json({ error: 'Missing or invalid mcp-session-id header.' });
+        return;
+      }
+      const { transport } = sessions.get(sessionId)!;
+      await runWithAuth(reqAuth, () => transport.handleRequest(req, res));
+    } catch (err) {
+      console.error('[samarth-gtm-mcp] GET /mcp failed:', err instanceof Error ? err.message : String(err));
+      rpcError(res, 'Internal server error opening the event stream.');
     }
-    const transport = transports.get(sessionId)!;
-    await runWithAuth(reqAuth, () => transport.handleRequest(req, res));
   });
 
   // DELETE /mcp — client-initiated session termination
   app.delete('/mcp', async (req, res) => {
-    const reqAuth = await resolveAuthForRequest(req, res);
-    if (!reqAuth) return;
-    const sessionId = req.headers['mcp-session-id'] as string | undefined;
-    if (sessionId && transports.has(sessionId)) {
-      const transport = transports.get(sessionId)!;
-      await runWithAuth(reqAuth, () => transport.handleRequest(req, res));
-      transports.delete(sessionId);
-    } else {
-      res.status(404).json({ error: 'Session not found.' });
+    try {
+      const reqAuth = await resolveAuthForRequest(req, res);
+      if (!reqAuth) return;
+      const sessionId = req.headers['mcp-session-id'] as string | undefined;
+      if (sessionId && sessions.has(sessionId)) {
+        const { transport } = sessions.get(sessionId)!;
+        await runWithAuth(reqAuth, () => transport.handleRequest(req, res));
+        sessions.delete(sessionId); // transport.onclose also fires and closes that session's server
+      } else {
+        res.status(404).json({ error: 'Session not found.' });
+      }
+    } catch (err) {
+      console.error('[samarth-gtm-mcp] DELETE /mcp failed:', err instanceof Error ? err.message : String(err));
+      rpcError(res, 'Internal server error closing the session.');
     }
   });
 
@@ -369,25 +408,12 @@ async function startHttpServer(
     );
   }
 
-  // OAuth callback endpoint (used when redirect URI is this server)
-  app.get('/oauth/callback', async (req, res) => {
-    const code = req.query['code'] as string | undefined;
-    if (!code) {
-      res.status(400).send('Missing authorization code.');
-      return;
-    }
-    try {
-      const { exchangeCodeForTokens } = await import('./auth/googleAuth.js');
-      await exchangeCodeForTokens(code);
-      res.send(
-        '<html><body><h1>Authorization successful!</h1>' +
-          '<p>Copy the tokens from the server console and add them to your .env file.</p>' +
-          '<p>You can close this tab.</p></body></html>'
-      );
-    } catch (err) {
-      res.status(500).send('Token exchange failed: ' + String(err));
-    }
-  });
+  // NOTE: there is deliberately NO /oauth/callback route here. It used to accept an authorization code
+  // with no auth gate and call exchangeCodeForTokens(code), whose `persist` defaults to true - so an
+  // unauthenticated request could overwrite this server's stored Google credentials, on exactly the
+  // hosted deployments where /mcp is token-gated and the listener binds all interfaces. It was also
+  // unnecessary: `npm run auth:google` runs its own loopback listener on 127.0.0.1
+  // (src/scripts/auth-google.ts), which is how onboarding actually completes the flow.
 
   // Health check
   app.get('/health', (_req, res) => {
@@ -395,7 +421,7 @@ async function startHttpServer(
       status: 'ok',
       server: 'samarth-gtm-mcp',
       transport: 'http',
-      activeSessions: transports.size,
+      activeSessions: sessions.size,
       guardrails: {
         writesEnabled: process.env.GTM_MCP_ENABLE_WRITES === 'true',
         publishEnabled: process.env.GTM_MCP_ENABLE_PUBLISH === 'true',
@@ -414,6 +440,26 @@ async function startHttpServer(
     console.error('[samarth-gtm-mcp] Health: GET /health');
   });
 }
+
+// Process-level safety nets. Registered before main() runs so startup failures are covered too.
+// Everything goes to stderr: on the stdio transport stdout IS the JSON-RPC channel, and a stray
+// log line there corrupts the stream for the client.
+//
+// The two are deliberately asymmetric:
+//   - unhandledRejection: log and keep serving. Node's default is to terminate the process, so a
+//     single orphaned promise (a closed HTTP session's in-flight Google call, say) would take down
+//     every other session with it. The loud stderr line is what makes it debuggable instead of
+//     invisible.
+//   - uncaughtException: log and exit non-zero. Process state after one is undefined, so continuing
+//     is worse than restarting; the point of the handler is the diagnostic, not the recovery.
+process.on('unhandledRejection', (reason) => {
+  console.error('[samarth-gtm-mcp] Unhandled promise rejection:', reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('[samarth-gtm-mcp] Uncaught exception:', err);
+  process.exit(1);
+});
 
 main().catch((err) => {
   console.error('[samarth-gtm-mcp] Fatal error:', err);
