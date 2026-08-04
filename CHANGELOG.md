@@ -1,3 +1,9 @@
+## [1.448.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.448.2...v1.448.3) (2026-08-04)
+
+### Bug Fixes
+
+* **desktop:** diagnose the stuck TA panel + try Escape/breadcrumb close ([#803](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/803)) ([a7693d3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a7693d3fc39beb435d2a4e8888cb25ac3b0eac32))
+
 ## [1.448.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.448.1...v1.448.2) (2026-08-04)
 
 ### Bug Fixes
