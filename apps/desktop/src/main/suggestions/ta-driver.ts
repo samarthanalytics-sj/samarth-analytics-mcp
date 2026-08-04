@@ -77,7 +77,7 @@ interface PwPage {
   waitForLoadState(state?: string, opts?: Record<string, unknown>): Promise<void>;
   click(sel: string, opts?: Record<string, unknown>): Promise<void>;
   locator(sel: string): { first(): { count(): Promise<number>; click(o?: Record<string, unknown>): Promise<void>; fill(v: string, o?: Record<string, unknown>): Promise<void>; isVisible(): Promise<boolean>; press(key: string, o?: Record<string, unknown>): Promise<void> } };
-  screenshot(opts?: { type?: 'jpeg' | 'png'; quality?: number; fullPage?: boolean; timeout?: number }): Promise<Buffer>;
+  screenshot(opts?: { type?: 'jpeg' | 'png'; quality?: number; fullPage?: boolean; timeout?: number; clip?: { x: number; y: number; width: number; height: number } }): Promise<Buffer>;
   isClosed(): boolean;
   url(): string;
 }
@@ -316,6 +316,38 @@ function readTaPanel(): { event: string; fired: string } {
     const fired = fi >= 0 ? all.slice(fi, nfi > fi ? nfi : fi + 1500) : '';
     return { event: m ? m[1] : '', fired };
   } catch { return { event: '', fired: '' }; }
+}
+
+/** In the TA page: the bounding rect of the CONTENT column (the panel that renders "API Call" / "Tags
+ *  Fired" / a tag's detail), to the RIGHT of the event rail. Clipping a proof screenshot to this rect keeps
+ *  the left rail (where "Summary" lives) OUT of the frame, so a per-event/per-tag proof can never look like
+ *  the Summary. Heuristic + DOM-shape guarded: anchor on a content-only heading, climb to the widest
+ *  sensible ancestor that is NOT the full viewport width (that would re-include the rail). null when it
+ *  can't find a plausible panel, so the caller falls back to a full-page shot. */
+function taContentRect(): { x: number; y: number; width: number; height: number } | null {
+  try {
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const anchors = ['api call', 'tags fired', 'output of', 'container loaded', 'data layer'];
+    const els = Array.prototype.slice.call(document.querySelectorAll('h1,h2,h3,h4,h5,div,span,p')) as HTMLElement[];
+    let head: HTMLElement | null = null;
+    for (const el of els) {
+      if (el.getClientRects && el.getClientRects().length === 0) continue; // on-screen only
+      const t = (el.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      if (t.length < 40 && anchors.some((a) => t.startsWith(a))) { head = el; break; }
+    }
+    if (!head) return null;
+    let node: HTMLElement | null = head;
+    let best: DOMRect | null = null;
+    while (node && node !== document.body) {
+      const r = node.getBoundingClientRect();
+      // The content column: wide but not the whole window, tall, and starting right of the rail.
+      if (r.width >= vw * 0.4 && r.width <= vw * 0.85 && r.height >= vh * 0.3 && r.left >= vw * 0.1) best = r;
+      node = node.parentElement;
+    }
+    if (!best) return null;
+    const x = Math.max(0, best.left), y = Math.max(0, best.top);
+    return { x, y, width: Math.min(best.width, vw - x), height: Math.min(best.height, vh - y) };
+  } catch { return null; }
 }
 
 /** In the TA page: open the FIRED TAG named `name` from the current event's "Tags Fired" list, so a
@@ -984,6 +1016,19 @@ export async function runTaVerify(
       const trace = (msg: string): void => console.log(`[ta-proof] #${step} ${msg}`);
       const want = (target.names ?? []).filter(Boolean);
       trace(`START target=${want.length ? `tag "${want[0]}"` : target.event ? `event /${target.event}/` : '(newest fired)'}`);
+      // Clip the proof to the CONTENT column so the left rail (with "Summary") is never in the frame - this is
+      // why full-page shots read like the Summary even when we are on the right event. Falls back to a
+      // full-page shot when the panel rect can't be found, and logs which path it took.
+      const snapPanel = async (): Promise<Buffer | null> => {
+        const rect = await ta.evaluate<{ x: number; y: number; width: number; height: number } | null>(taContentRect).catch(() => null);
+        if (rect && rect.width > 200 && rect.height > 150) {
+          trace(`    clip proof to content panel ${Math.round(rect.width)}x${Math.round(rect.height)} @ ${Math.round(rect.x)},${Math.round(rect.y)}`);
+          const clipped = await ta.screenshot({ type: 'jpeg', quality: 60, clip: rect, timeout: 5000 }).catch(() => null);
+          if (clipped) return clipped;
+        }
+        trace('    content-panel rect not found - full-page proof (left rail may be in frame)');
+        return ta.screenshot({ type: 'jpeg', quality: 55, timeout: 5000 }).catch(() => null);
+      };
       try {
         await ta.evaluate(dismissTaOverlays).catch(() => undefined);
         // Start from a NON-detail view. A tag detail left up by the previous capture hides the real rail
@@ -1122,7 +1167,7 @@ export async function runTaVerify(
               st = await ta.evaluate<typeof blank>(readTaTagDetailState, name).catch(() => st);
               trace(`    clicked Values (try ${attempt + 1}): values=${st.valuesActive ? 'ON' : 'still off'}`);
             }
-            const shot = await ta.screenshot({ type: 'jpeg', quality: 55, timeout: 5000 }).catch(() => null);
+            const shot = await snapPanel();
             if (!shot) {
               trace('    x the screenshot failed - no proof stored for this tag');
             } else {
@@ -1163,7 +1208,8 @@ export async function runTaVerify(
             trace('END no tag detail captured, and a detail is still on screen - skipping the event-level proof rather than storing another tag\'s picture.');
           } else {
             proofStats.eventOnly += 1;
-            const buf = await ta.screenshot({ type: 'jpeg', quality: 55, timeout: 5000 });
+            const buf = await snapPanel();
+            if (!buf) { trace('END the event-panel screenshot failed - no proof stored.'); return; }
             captures.push({ screenshot: `data:image/jpeg;base64,${buf.toString('base64')}`, fired: chosen.fired });
             trace('END no tag detail captured - stored one event-panel proof for the tags this event fired.');
           }
