@@ -922,6 +922,12 @@ export interface VerifyProgressView {
 
 /** Options for verifying tag firing. */
 export interface VerifyTagsOptions {
+  /** What this run should exercise:
+   *   - 'both'   (default) drive every tag trigger AND submit the reviewed forms.
+   *   - 'clicks' drive tag triggers only; no form is submitted, so no real lead is created.
+   *   - 'forms'  submit the reviewed forms only; tag triggers are not driven, so the run visits just the
+   *              form pages. Tags that were never exercised stay "untested here", never "not firing". */
+  verifyScope?: 'both' | 'clicks' | 'forms';
   /** The GTM Preview snippet / URL / GTM-XXXX id the user pasted, so DRAFT tags load. */
   containerSnippet?: string;
   settleMs?: number;

@@ -421,9 +421,13 @@ export function registerSuggestionsIpc(data: GoogleDataService, memory?: MemoryS
         // The renderer runs a scan → gate → fill wizard FIRST (find forms-with-tags, ask skip/proceed, edit
         // the shared data), so this single run drives the click tags AND submits exactly what was reviewed.
         // Empty when the user skipped forms or the site had none → click-tag verification only.
-        const taForms: TaFormSubmit[] = (Array.isArray(o.reviewedForms) ? o.reviewedForms : [])
+        // SCOPE: 'clicks' drops the form submits entirely (so the run creates no real lead), 'forms' keeps
+        // them but tells the driver not to drive tag triggers, 'both' is the default behaviour.
+        const scope = o.verifyScope === 'clicks' || o.verifyScope === 'forms' ? o.verifyScope : 'both';
+        const taForms: TaFormSubmit[] = (scope === 'clicks' ? [] : (Array.isArray(o.reviewedForms) ? o.reviewedForms : []))
           .map((f) => ({ page: String(f.page ?? ''), formId: String(f.formId ?? ''), formClasses: String(f.formClasses ?? ''), method: String(f.method ?? ''), fields: (f.fields ?? []).map((x) => ({ selector: String(x.selector ?? ''), type: String(x.type ?? ''), value: String(x.value ?? '') })) }))
           .filter((f) => f.page && f.fields.length);
+        console.log(`[verify] scope=${scope}: ${scope === 'forms' ? 'submitting forms only, tag triggers are not driven' : scope === 'clicks' ? 'driving tag triggers only, no form is submitted' : 'driving tag triggers and submitting forms'}`);
         // Stop pressed during the crawl → don't even open Tag Assistant; return what we have.
         if (shouldStopVerify()) return { url: target, injected: false, previewAuth: false, pagesOk: false, verdicts: [] };
         emit({ phase: 'monitor', message: 'Opening Tag Assistant (your Chrome can stay open)...' });
@@ -440,6 +444,7 @@ export function registerSuggestionsIpc(data: GoogleDataService, memory?: MemoryS
           // snippet is present (that path already targets the container).
           ...(o.injectContainerId ? { injectContainerId: o.injectContainerId } : {}),
           ...(taForms.length ? { forms: taForms } : {}),
+          ...(scope === 'forms' ? { driveTriggers: false } : {}),
           onSignInPrompt: () => emit({ phase: 'monitor', message: 'ONE-TIME Tag Assistant sign-in: complete it in the window that just opened (your email is pre-filled). It is saved after this, so verify never asks again.' }),
           onPageProgress: (page, done, total) => emit({ phase: 'drive', message: 'Driving tags in the Tag Assistant window', page, done, total }),
           onFormProgress: (page, done, total) => emit({ phase: 'drive', message: 'Submitting a form for real in Tag Assistant', page, done, total }),
