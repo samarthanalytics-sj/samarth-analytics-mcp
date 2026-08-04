@@ -1,3 +1,9 @@
+## [1.450.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.449.2...v1.450.0) (2026-08-04)
+
+### Features
+
+* **desktop:** choose what to verify (clicks / forms / both) and show the page list ([#808](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/808)) ([4048b4a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/4048b4ac1b0df6ae4fdc3ebef1caef643908acb7))
+
 ## [1.449.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.449.1...v1.449.2) (2026-08-04)
 
 ### Performance Improvements
