@@ -1313,6 +1313,28 @@ export async function runTaVerify(
         }
       } catch (e) {
         trace(`END aborted by an error: ${(e instanceof Error ? e.message : String(e)).slice(0, 120)}`);
+      } finally {
+        // PROACTIVE cleanup for FORM captures (the pages-2/3 stuck fix): the NEXT page's real submit navigates
+        // the popup, and after that the TA panel won't switch off a leftover detail (rail clicks land on the
+        // overlay). While THIS page is still responsive - the breadcrumb works here, as page 1's between-tag
+        // navigation proves - walk the detail's breadcrumb back to a clean Summary so the next page starts on
+        // a selectable rail. Only for form captures (once per page); click-tag captures stay within a page.
+        if (target.event) {
+          try {
+            for (let hop = 0; hop < 3; hop += 1) {
+              const crumbSel = await ta.evaluate<string>(tagTaCrumbLink).catch(() => '');
+              if (!crumbSel) break;
+              await ta.click(crumbSel, { timeout: 1200 }).catch(() => undefined);
+              await ta.waitForTimeout(200);
+            }
+            const sumSel = await ta.evaluate<string>(tagTaSummaryItem).catch(() => '');
+            if (sumSel) await ta.click(sumSel, { timeout: 1200 }).catch(() => undefined);
+            else await ta.evaluate(clickTaSummary).catch(() => undefined);
+            await ta.waitForTimeout(200);
+            const sel = await ta.evaluate<number>(readTaSelectedRow).catch(() => -1);
+            trace(`cleaned up to a neutral rail for the next page (selectedRow=${sel})`);
+          } catch { /* cleanup is best-effort */ }
+        }
       }
     };
 
