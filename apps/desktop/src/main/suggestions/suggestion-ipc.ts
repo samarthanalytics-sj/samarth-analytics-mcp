@@ -11,6 +11,7 @@
 // confirm fn is supplied, and nothing is ever published.
 
 import { ipcMain, dialog, BrowserWindow, app, clipboard, nativeImage } from 'electron';
+import { log } from '../logger';
 import { writeFile } from 'node:fs/promises';
 import type { GoogleDataService } from '../google/data-service';
 import { findGa4BaseTag, plainDashes } from '../google/gtm-builders';
@@ -544,6 +545,31 @@ export function registerSuggestionsIpc(data: GoogleDataService, memory?: MemoryS
             return { tagName: v.tagName, ...(expectedEvent ? { expectedEvent } : {}), ...(page ? { page } : {}) };
           });
         const taSuggestions = buildTriggerSuggestions(unfired, allEventViews);
+        // Clean, human-readable verification RECORD (per fired tag + a final summary) - a report-style log
+        // distinct from the low-level [ta-proof] / [ta-attr] diagnostics above, for reading and reports.
+        {
+          const firedVerdicts = verdicts.filter((v) => v.fired);
+          let shots = 0;
+          log.section(`Tag Verification - ${target}`);
+          if (firedVerdicts.length === 0) log.info('No tags fired for this container on the verified page(s).');
+          firedVerdicts.forEach((v, i) => {
+            if (v.screenshot) shots += 1;
+            log.success(`Tag Fired (#${i + 1})`,
+              `Tag Name      : ${v.tagName}`,
+              `Page URL      : ${target}`,
+              `Event Name    : ${v.tagEventName ?? '(none)'}`,
+              `Event Value   : ${v.event ?? v.tagEventName ?? '(none)'}`,
+              `Trigger Name  : ${v.triggerName ?? '(none)'}`,
+              `Screenshot    : ${v.screenshot ? 'captured' : 'not captured'}`,
+              `Record        : saved`,
+            );
+          });
+          log.success('Verification complete',
+            `Total Tags Fired    : ${firedVerdicts.length}`,
+            `Total Records Saved : ${firedVerdicts.length}`,
+            `Total Screenshots   : ${shots}`,
+          );
+        }
         return { ...base, verdicts, ...(taEventViews.length ? { taEvents: taEventViews } : {}), ...(taSuggestions.length ? { taSuggestions } : {}) };
       }
 
