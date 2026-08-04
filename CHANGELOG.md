@@ -1,3 +1,9 @@
+## [1.450.6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.450.5...v1.450.6) (2026-08-04)
+
+### Bug Fixes
+
+* **mcp:** describe the real guardrail state instead of a stale read-only one ([#816](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/816)) ([034b746](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/034b746fe96f029539b6b557d00e216b23fbcf1b))
+
 ## [1.450.5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.450.4...v1.450.5) (2026-08-04)
 
 ### Bug Fixes
