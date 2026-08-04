@@ -7342,13 +7342,17 @@ function VerifyPanel({
     setVPreflightGate(decision);
   }
 
-  // Once STEP 1's scan finishes: forms found → open the skip/proceed gate; none → verify click tags only.
+  // Once STEP 1's scan finishes: forms found → go to the form-fill review using the top-selected scope; none → verify click tags only.
   useEffect(() => {
     if (vTaStage !== 'scanning' || vFormStatus.loading) return;
     // Stop pressed DURING the forms scan → don't advance into the gate / drive.
     if (vCancelRef.current) { setVTaStage('idle'); setVStopping(false); setVNote({ kind: 'info', text: 'Scan stopped.' }); return; }
-    if (vFormStatus.count && vFormStatus.count > 0) setVTaStage('gate');
-    else { setVTaStage('idle'); void runVerify(undefined, true, false); }
+    if (vFormStatus.count && vFormStatus.count > 0) {
+      // The scope was ALREADY chosen at the top ("What to verify"), so honour it instead of re-asking at a
+      // second gate. ('clicks' is handled before the scan in startTaFlow, so here it is only 'both' or 'forms'.)
+      vVerifyModeRef.current = vScope === 'forms' ? 'forms' : 'both';
+      setVTaStage('filling');
+    } else { setVTaStage('idle'); void runVerify(undefined, true, false); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vTaStage, vFormStatus]);
 
@@ -7796,20 +7800,9 @@ function VerifyPanel({
             </div>
           )}
           {/* STEP 2 - the skip/proceed gate, shown once the up-front form scan finds forms with tags. */}
-          {vTaStage === 'gate' && (
-            <div style={{ marginTop: 10, padding: '10px 12px', borderRadius: 8, border: '1px solid var(--c-blue)', background: 'rgba(70,130,240,0.06)' }}>
-              <div style={{ fontSize: 13, color: 'var(--text)', marginBottom: 8, lineHeight: 1.45 }}>
-                Found <b>{vFormStatus.count}</b> form(s) with a tracking tag. Verifying forms submits each one <b>for real</b> (a real lead per form). What do you want to verify?
-              </div>
-              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                <button style={styles.primaryBtn} onClick={() => { vVerifyModeRef.current = 'both'; setVTaStage('filling'); }} title="Submit the forms for real AND drive the click tags - full coverage.">Both (forms + clicks)</button>
-                <button style={styles.toggleOff} onClick={() => { vVerifyModeRef.current = 'forms'; setVTaStage('filling'); }} title="Submit the forms for real and verify ONLY the form tags - skips the click-tag driving, so it is much faster.">Forms only</button>
-                <button style={styles.toggleOff} onClick={() => { vVerifyModeRef.current = 'clicks'; setVTaStage('idle'); void runVerify(undefined, true, false); }} title="Drive the click tags only - no form is submitted (form tags stay untested).">Clicks only</button>
-              </div>
-            </div>
-          )}
-          {/* Sequential now: STEP 1 scans the site for forms, then (after the skip/proceed gate) the Tag
-              Assistant run verifies the click tags [+ submits the reviewed forms for real]. */}
+          {/* No second "what to verify" gate here: the scope chosen at the top ("What to verify") is applied
+              directly after the scan. STEP 1 scans the site for forms, then the Tag Assistant run verifies the
+              click tags [+ submits the reviewed forms for real, per the top selection]. */}
           {(vVerifying || vFormStatus.loading) ? (
             <div style={{ marginTop: 8 }}>
               <div style={{ fontSize: 12.5, color: 'var(--text-dim)', display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -7907,7 +7900,7 @@ function VerifyPanel({
             </div>
           ) : (vResult && !vResult.error && vTaStage === 'idle' && vFormStatus.count !== null && vFormStatus.count > 0) ? (
             <div style={{ marginTop: 8, fontSize: 12.5, color: 'var(--text-dim)' }}>
-              This site has <b>{vFormStatus.count}</b> form(s) with a tracking tag. To verify those by a real submit, run <b>Verify with Tag Assistant</b> again and choose <b>Proceed with form verification</b>.
+              This site has <b>{vFormStatus.count}</b> form(s) with a tracking tag. To verify those by a real submit, set <b>What to verify</b> to <b>Clicks + forms</b> (or <b>Forms only</b>) and run <b>Verify with Tag Assistant</b>.
             </div>
           ) : null}
           {vNote && (
