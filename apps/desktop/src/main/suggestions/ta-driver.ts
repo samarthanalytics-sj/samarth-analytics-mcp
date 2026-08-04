@@ -421,7 +421,23 @@ function openFiredTagInPage(name: string): string {
       if (t.length < bestLen) { bestLen = t.length; bestEl = el; }
     }
     if (!bestEl) return '';
-    bestEl.setAttribute('data-ta-tag', '1');
+    // Climb to the nearest CLICKABLE ancestor (the card's <a> / <button> / router link) so the click actually
+    // navigates TA to this tag's detail. Clicking the inner title span can be a no-op when the click handler
+    // lives on the card container - that is why the 2nd tag of a GA4+Meta pair kept re-showing the 1st tag's
+    // card. Stop before the wrapper grows to include the sibling card's text.
+    let clickEl: HTMLElement = bestEl;
+    let p: HTMLElement | null = bestEl;
+    for (let k = 0; k < 5 && p; k += 1, p = p.parentElement) {
+      const t2 = (p.textContent || '').replace(/\s+/g, ' ').trim();
+      if (t2.length > want.length + 80) break; // climbed too far - would capture the sibling card too
+      const tag = (p.tagName || '').toLowerCase();
+      const role = ((p.getAttribute && p.getAttribute('role')) || '').toLowerCase();
+      const clickable = tag === 'a' || tag === 'button' || role === 'button' || role === 'link'
+        || (p.hasAttribute && (p.hasAttribute('routerlink') || p.hasAttribute('ng-reflect-router-link') || p.hasAttribute('href')))
+        || !!(p as unknown as { onclick?: unknown }).onclick;
+      if (clickable) { clickEl = p; break; }
+    }
+    clickEl.setAttribute('data-ta-tag', '1');
     return '[data-ta-tag="1"]';
   } catch { return ''; }
 }
@@ -550,8 +566,8 @@ function tagTaMessageChip(): string {
  *     asked for. Without this a click that landed on the wrong card still gets stored under the requested
  *     tag's name, which is the "tag name and screenshot do not match" the operator saw. Pass the wanted
  *     name to check it; omit it (state-only probes) and nameOk is reported true. */
-function readTaTagDetailState(want?: string): { isDetail: boolean; eventContext: boolean; valuesActive: boolean; nameOk: boolean } {
-  const out = { isDetail: false, eventContext: false, valuesActive: false, nameOk: true };
+function readTaTagDetailState(want?: string): { isDetail: boolean; eventContext: boolean; valuesActive: boolean; nameOk: boolean; detailPlatform: string } {
+  const out = { isDetail: false, eventContext: false, valuesActive: false, nameOk: true, detailPlatform: '' as string };
   try {
     // Visible text only (see readTaPanel): a closed detail Angular left in the DOM used to make isDetail
     // report true on an event panel, which produced the false "could not get back" and "a detail is still
@@ -567,14 +583,27 @@ function readTaTagDetailState(want?: string): { isDetail: boolean; eventContext:
     out.eventContext = /Display Variables as/i.test(t) || /Firing Status/i.test(t);
     const norm = (s: string | null | undefined): string => (s || '').replace(/\s+/g, ' ').trim();
     if (want) {
-      // Identity by the HEADER region: everything before the "Tag Details" heading is the breadcrumb plus
-      // the tag title, so the requested name must appear there. Matching the region (not an element whose
-      // text is exactly the name) survives a title rendered with a "Fired" badge or split across nodes,
-      // while still excluding the same name lower down in a Tags-Fired list.
+      // Identity by PLATFORM, read from the Tag Details SECTION only (everything AFTER the "Tag Details"
+      // heading - the Properties "Type" row lives there). The old check scanned the region BEFORE that
+      // heading, but a fired-tag pair renders its Tags-Fired list there naming BOTH the GA4 and the Meta
+      // sibling, so it passed for whichever tag we asked - the exact reason a GA4 record could carry the Meta
+      // card. Inside the detail section only ONE tag's Type shows: a GA4 tag says "Google Analytics: GA4
+      // Event", a Meta tag says "Meta Pixel". Requiring exactly one platform there also rejects a panel that
+      // has not switched yet (still showing the sibling), so the caller can re-click and only capture the
+      // right card.
       const wantN = norm(want).toLowerCase();
       const flatLc = t.toLowerCase();
       const cut = flatLc.indexOf('tag details');
-      out.nameOk = (cut > 0 ? flatLc.slice(0, cut) : flatLc).indexOf(wantN) >= 0;
+      const detailLc = cut >= 0 ? flatLc.slice(cut) : flatLc;
+      const hasGa4 = /google analytics/.test(detailLc);
+      const hasMeta = /meta pixel/.test(detailLc);
+      out.detailPlatform = hasGa4 && !hasMeta ? 'ga4' : hasMeta && !hasGa4 ? 'meta' : hasGa4 && hasMeta ? 'both' : '';
+      const wantGa4 = /^ga4\b/.test(wantN) || /google analytics/.test(wantN);
+      const wantMeta = /^meta\b/.test(wantN);
+      if (wantGa4) out.nameOk = out.detailPlatform === 'ga4';
+      else if (wantMeta) out.nameOk = out.detailPlatform === 'meta';
+      // A tag with no platform keyword in its name (rare): fall back to the header-title check.
+      else out.nameOk = (cut > 0 ? flatLc.slice(0, cut) : flatLc).indexOf(wantN) >= 0;
     }
     // The tight label of a radio: its wrapping <label>, its label[for=id], else its next sibling. Kept tight
     // (exactly "Values") so the Names radio - whose PARENT text is "Names Values" - can never match.
@@ -1258,9 +1287,9 @@ export async function runTaVerify(
           if (!tagSel) { trace('    x its card was not found in this event\'s Tags-Fired list - no detail proof.'); continue; }
           await ta.click(tagSel, { timeout: 1200 }).catch(() => undefined); // REAL click → Angular opens Tag Details
           await ta.waitForTimeout(400); // let the Tag Details view render
-          const blank = { isDetail: false, eventContext: false, valuesActive: false, nameOk: false };
+          const blank = { isDetail: false, eventContext: false, valuesActive: false, nameOk: false, detailPlatform: '' };
           let st = await ta.evaluate<typeof blank>(readTaTagDetailState, name).catch(() => blank);
-          const show = (s: typeof blank): string => `detail=${s.isDetail ? 'y' : 'n'} eventContext=${s.eventContext ? 'y' : 'n'} nameMatches=${s.nameOk ? 'y' : 'n'} values=${s.valuesActive ? 'ON' : 'off'}`;
+          const show = (s: typeof blank): string => `detail=${s.isDetail ? 'y' : 'n'} eventContext=${s.eventContext ? 'y' : 'n'} nameMatches=${s.nameOk ? 'y' : 'n'} shows=${s.detailPlatform || '?'} values=${s.valuesActive ? 'ON' : 'off'}`;
           trace(`    opened: ${show(st)}`);
           // RECOVER a Summary-context detail: clicking a tag card often lands on the tag's GLOBAL page
           // (breadcrumb "Summary >", names only, no toggle). Its "Messages Where This Tag Fired" chip jumps
@@ -1277,9 +1306,21 @@ export async function runTaVerify(
               trace(`    recovered via the message chip: ${show(st)}`);
             }
           }
+          // SWITCH the panel to THIS tag. The 2nd tag of a GA4+Meta pair often keeps the 1st tag's Tag Details
+          // rendered on the first click, so the detail's platform still reads as the sibling's. Re-click the
+          // card (now the navigable container, not the inner span) and poll the detail platform until it is
+          // the one we asked for. Bounded; on timeout the tag falls through to the honest event-panel proof.
+          for (let poll = 0; poll < 2 && st.isDetail && st.eventContext && !st.nameOk; poll += 1) {
+            trace(`    detail shows ${st.detailPlatform || '?'} but asked for "${name}" - re-clicking to switch (try ${poll + 1})`);
+            const reSel = await ta.evaluate<string>(openFiredTagInPage, name).catch(() => '');
+            await ta.click(reSel || tagSel, { timeout: 1200 }).catch(() => undefined);
+            await ta.waitForTimeout(450);
+            st = await ta.evaluate<typeof blank>(readTaTagDetailState, name).catch(() => st);
+            trace(`    after re-click: ${show(st)}`);
+          }
           // Accept ONLY an event-context detail FOR THE TAG WE ASKED FOR: one opened from the SUMMARY has no
           // "Display Variables as" toggle so it can only ever show {{variable}} names, and a detail whose own
-          // title is a different tag must never be stored under this name.
+          // Type is a different platform than this tag must never be stored under this name.
           if (st.isDetail && st.eventContext && st.nameOk) {
             // Flip the toggle to VALUES so the proof shows the RESOLVED values (click_url, page_url, ...).
             // Verify it actually took (a click can miss / land before the panel settles) and retry once.
@@ -1312,6 +1353,10 @@ export async function runTaVerify(
             }
           } else {
             proofStats.rejected += 1;
+            // The panel would not switch to this tag (its detail still shows the sibling's platform). Mark it
+            // stuck so a later event does not waste time re-drilling it, and flag that this event needs its
+            // shared event-panel proof to cover this tag.
+            if (st.isDetail && st.eventContext && !st.nameOk) { stuckTags.add(name); needEventProof = true; }
             // One structural readout per run, so a persistent failure reports Tag Assistant's real DOM
             // instead of needing another round of guessing.
             if (!diagLogged) {
@@ -1321,7 +1366,7 @@ export async function runTaVerify(
             }
             const why = !st.isDetail ? 'the detail view did not open'
               : !st.eventContext ? 'it opened from the Summary (no Values toggle, names only)'
-              : 'the detail shown was a DIFFERENT tag';
+              : `the detail kept showing the sibling's platform (${st.detailPlatform || '?'}), not this tag`;
             trace(`    x REJECTED - ${why}. No image is stored for this tag rather than a wrong one.`);
           }
           // Back to the event view: the next tag's card is only findable there, and leaving a detail up
@@ -1335,7 +1380,7 @@ export async function runTaVerify(
         // restore clicks missed), shooting now would store THAT tag's detail as an event-level capture, and
         // the Tags-Fired fallback would then hand one tag's page to every other tag in the event - exactly
         // the "wrong tag's screenshot" the operator reported. No proof beats a misleading proof.
-        if (drilled === 0 || needEventProof) {
+        if (drilled < toDrill.length) {
           await backToEvent(); // return to the event panel so the shared proof is the EVENT, not a leftover detail
           const view = await ta.evaluate<{ isDetail: boolean }>(readTaTagDetailState).catch(() => ({ isDetail: false }));
           let buf: Buffer | null = null;
