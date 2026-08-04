@@ -1,3 +1,10 @@
+## [1.450.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.450.2...v1.450.3) (2026-08-04)
+
+### Bug Fixes
+
+* **desktop:** pick verify scope once at the top, drop the redundant second gate ([#812](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/812)) ([49dfcc1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/49dfcc1cb257a016767e438587f2eef215c63dbb))
+* **mcp:** stop audit_container reporting GTM built-in triggers as broken references ([#813](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/813)) ([d3de8a2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d3de8a2cd342e31fb54090572ac59fb232a6eef8))
+
 ## [1.450.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.450.1...v1.450.2) (2026-08-04)
 
 ### Bug Fixes
