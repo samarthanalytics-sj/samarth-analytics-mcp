@@ -1,3 +1,9 @@
+## [1.449.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.449.0...v1.449.1) (2026-08-04)
+
+### Bug Fixes
+
+* **desktop:** proactively return TA to Summary after each form capture ([#806](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/806)) ([4e341ad](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/4e341adad830bca307fe3490aab2597b158a7f1e))
+
 ## [1.449.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.448.4...v1.449.0) (2026-08-04)
 
 ### Features
