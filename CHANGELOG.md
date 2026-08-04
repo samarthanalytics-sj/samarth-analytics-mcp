@@ -1,3 +1,9 @@
+## [1.449.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.448.4...v1.449.0) (2026-08-04)
+
+### Features
+
+* **desktop:** post-drive processing logs + STOP diagnostics + close fallback ([#805](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/805)) ([62b92d5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/62b92d5ac6506428bd2388d02718e5ea345e9059))
+
 ## [1.448.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.448.3...v1.448.4) (2026-08-04)
 
 ### Bug Fixes
