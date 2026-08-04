@@ -1146,6 +1146,7 @@ export async function runTaVerify(
             rows = await ta.evaluate<Array<{ sel: string; num: number }>>(tagNewestTaRows, 6).catch(() => rows);
           }
           let stuck = false;
+          let stuckStreak = 0; // consecutive rows whose click didn't switch the panel - a frozen rail; bail early
           for (const row of rows) {
             // Click, then CONFIRM the selection actually moved to this row. Two pages both produce a
             // "form_submission" event, so a click that failed to switch leaves a panel that still matches by
@@ -1159,10 +1160,17 @@ export async function runTaVerify(
               await ta.waitForTimeout(300); // let Angular render the switched-to panel (API Call + Tags Fired)
               panel = await ta.evaluate<{ event: string; fired: string }>(readTaPanel).catch(() => ({ event: '', fired: '' }));
               sel = await ta.evaluate<number>(readTaSelectedRow).catch(() => 0);
-              if (!sel || sel === row.num) break;
+              if (sel) break; // any DEFINITE selection (a match OR a stuck wrong row) - only a null read (0) is worth a retry; retrying a stuck read just burns 300ms
             }
             trace(`  row #${row.num} -> event="${panel.event || '(none: panel did not switch)'}" firedTags=${hasFired(panel.fired) ? 'yes' : 'no'} selectedRow=${sel || 'unknown'}`);
-            if (sel && sel !== row.num) { trace(`  row #${row.num}: the panel is still showing row #${sel} - not trusting this read`); stuck = true; continue; }
+            if (sel && sel !== row.num) {
+              stuck = true; stuckStreak += 1;
+              // A frozen rail stays frozen for every row, so don't grind all 6 - two stuck rows is proof enough.
+              if (stuckStreak >= 2) { trace(`  row #${row.num}: still showing #${sel} - panel is frozen, ending this scan early`); break; }
+              trace(`  row #${row.num}: the panel is still showing row #${sel} - not trusting this read`);
+              continue;
+            }
+            stuckStreak = 0;
             // REQUIRE a real EVENT view: the Summary panel also has a "Tags Fired" list (every fired tag) but NO
             // API-Call event, so panel.event is empty there. Without this check a click that failed to switch the
             // panel left us on the Summary, whose all-tags list matched EVERY target → every proof was the Summary.
