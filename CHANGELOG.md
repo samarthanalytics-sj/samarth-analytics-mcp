@@ -1,3 +1,9 @@
+## [1.450.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.450.1...v1.450.2) (2026-08-04)
+
+### Bug Fixes
+
+* **mcp:** give each HTTP session its own MCP server and drop the open /oauth/callback ([#811](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/811)) ([73eef72](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/73eef72d37757142e383048f0b4918f40e37b0cc))
+
 ## [1.450.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.450.0...v1.450.1) (2026-08-04)
 
 ### Bug Fixes
