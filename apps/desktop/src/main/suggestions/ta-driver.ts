@@ -1034,6 +1034,17 @@ export async function runTaVerify(
     // how many of those show resolved VALUES, how many detail views we rejected (summary-context / stale),
     // and how many tags fell back to an event-panel shot. Makes a silent regression here visible.
     const proofStats = { detail: 0, values: 0, rejected: 0, eventOnly: 0 };
+    // Byte-hashes of every per-tag detail proof stored this run. Two DIFFERENT tags can only ever produce the
+    // SAME image when Tag Assistant refused to switch its panel (the GA4 + Meta pair case: the 2nd drill
+    // re-shot the 1st tag's card). A RUN-LEVEL set - not per-event - also catches the cross-event re-drill,
+    // where a later event's fallback re-opens the same stuck card and would otherwise store it under a second
+    // tag's name: the exact "tag name and screenshot mismatch" the operator reported.
+    const shotHashes = new Set<string>();
+    // Tags found to be "stuck" (a pair sibling whose panel never switched, so its drill only re-shot the
+    // other tag's card). Once stuck they stay stuck (they always fire alongside the same sibling), so we stop
+    // re-drilling them in later events - their pair event's reserve proof already covers them, and re-drilling
+    // just wastes time re-capturing a wrong card the dedup would reject anyway.
+    const stuckTags = new Set<string>();
     let diagLogged = false; // structural readout is logged once per run, on the first rejected drill-down
     // Every tag name in this run. An event's Tags-Fired text is matched against these to learn WHICH tags
     // it fired, so each of them can be opened for its own detail proof - including on a real form submit,
@@ -1204,9 +1215,10 @@ export async function runTaVerify(
         const wanted = best ? (target.names ?? []).filter(Boolean) : [];
         const derived = knownTagNames.filter((n) => chosen.fired.includes(n));
         const already = new Set(captures.map((c) => c.tag).filter(Boolean) as string[]);
-        // Cap per event so a busy event cannot stretch the run; the rest keep the event-panel proof.
-        const toDrill = [...new Set([...wanted, ...derived])].filter((n) => !already.has(n)).slice(0, 8);
-        const skipped = [...new Set([...wanted, ...derived])].filter((n) => already.has(n));
+        // Cap per event so a busy event cannot stretch the run; the rest keep the event-panel proof. Also skip
+        // tags already found to be stuck: re-drilling them just re-captures the wrong card and wastes time.
+        const toDrill = [...new Set([...wanted, ...derived])].filter((n) => !already.has(n) && !stuckTags.has(n)).slice(0, 8);
+        const skipped = [...new Set([...wanted, ...derived])].filter((n) => already.has(n) || stuckTags.has(n));
         trace(`this event fired ${derived.length} known tag(s); to drill now: ${toDrill.length ? toDrill.map((n) => `"${n}"`).join(', ') : '(none)'}${skipped.length ? ` | already proven earlier: ${skipped.length}` : ''}`);
         // Start from the EVENT panel: a detail view left up by the previous capture hides this event's
         // Tags-Fired list, so the first card lookup would search the wrong page (and a detail opened from
@@ -1233,7 +1245,13 @@ export async function runTaVerify(
         };
         let drilled = 0;
         let needEventProof = false; // a paired tag whose panel didn't switch (duplicate image) - give it the event proof
-        const eventShotHashes = new Set<string>(); // per-tag images already stored for THIS event, to catch duplicates
+        // RESERVE one event-panel proof NOW, while we are still guaranteed on this event's panel (the back
+        // loop above just ensured it and no detail has been opened yet). Multi-tag events (GA4 + Meta) often
+        // refuse to switch the panel to the 2nd tag, and the post-drill return can stick on a leftover detail
+        // - without this reserve the missed tag would fall back to the run's Summary image (a different tag's
+        // card). Only for multi-tag events; a lone tag reliably gets its own card and needs no reserve.
+        let eventPanelBuf: Buffer | null = null;
+        if (derived.length >= 2) eventPanelBuf = await snapPanel('event-reserve').catch(() => null);
         for (const name of toDrill) {
           trace(`  DRILL "${name}"`);
           const tagSel = await ta.evaluate<string>(openFiredTagInPage, name).catch(() => '');
@@ -1277,14 +1295,15 @@ export async function runTaVerify(
             const shotHash = shot ? createHash('md5').update(shot).digest('hex') : '';
             if (!shot) {
               trace('    x the screenshot failed - no proof stored for this tag');
-            } else if (eventShotHashes.has(shotHash)) {
-              // Byte-identical to a sibling tag already captured in THIS event = the panel never switched to
-              // this tag (the paired GA4+Meta case: the 2nd drill re-shot the 1st tag's card). Storing it would
-              // put the WRONG platform's card under this tag. Skip it; this tag gets the event-panel proof.
+            } else if (shotHashes.has(shotHash)) {
+              // Byte-identical to a tag already captured THIS RUN = the panel never switched to this tag (the
+              // paired GA4+Meta case: this drill re-shot the other tag's card). Storing it would put the WRONG
+              // platform's card under this tag. Skip it and mark it stuck; this tag gets the event-panel proof.
               needEventProof = true;
-              trace('    x image is identical to a sibling tag just captured (panel did not switch) - using the event-panel proof for this tag, not a wrong card.');
+              stuckTags.add(name);
+              trace('    x image is identical to a tag already captured (panel did not switch) - using the event-panel proof for this tag, not a wrong card.');
             } else {
-              eventShotHashes.add(shotHash);
+              shotHashes.add(shotHash);
               captures.push({ screenshot: `data:image/jpeg;base64,${shot.toString('base64')}`, fired: chosen.fired, tag: name });
               drilled += 1;
               proofStats.detail += 1;
@@ -1319,16 +1338,20 @@ export async function runTaVerify(
         if (drilled === 0 || needEventProof) {
           await backToEvent(); // return to the event panel so the shared proof is the EVENT, not a leftover detail
           const view = await ta.evaluate<{ isDetail: boolean }>(readTaTagDetailState).catch(() => ({ isDetail: false }));
-          if (view.isDetail) {
-            trace('END could not return to the event panel for a shared proof - skipping rather than storing a wrong card.');
+          let buf: Buffer | null = null;
+          if (!view.isDetail) buf = await snapPanel('event-panel');
+          // If the live return stuck on a leftover detail (or the shot failed), fall back to the reserve
+          // captured up front. It is THIS event's own panel, so it proves the tags this event fired without
+          // any risk of storing a different tag's detail card - and it means the missed tag never falls
+          // through to the run's Summary image.
+          const usedReserve = !buf && !!eventPanelBuf;
+          if (!buf) buf = eventPanelBuf;
+          if (!buf) {
+            trace('END could not obtain an event-panel proof (no live panel, no reserve) - skipping rather than storing a wrong card.');
           } else {
             proofStats.eventOnly += 1;
-            const buf = await snapPanel('event-panel');
-            if (!buf) { trace('END the event-panel screenshot failed - no proof stored.'); }
-            else {
-              captures.push({ screenshot: `data:image/jpeg;base64,${buf.toString('base64')}`, fired: chosen.fired });
-              trace(`END stored one event-panel proof for the tags this event fired${needEventProof && drilled > 0 ? ' (the other tag has its own card; this covers the one whose panel did not switch)' : ''}.`);
-            }
+            captures.push({ screenshot: `data:image/jpeg;base64,${buf.toString('base64')}`, fired: chosen.fired });
+            trace(`END stored one event-panel proof for the tags this event fired${needEventProof && drilled > 0 ? ' (the other tag has its own card; this covers the one whose panel did not switch)' : ''}${usedReserve ? ' (from the up-front reserve; the live return was stuck)' : ''}.`);
           }
         } else {
           trace(`END captured ${drilled} tag detail proof(s) from this event.`);
@@ -1594,10 +1617,33 @@ export async function runTaVerify(
     let summaryShot: string | undefined;
     try {
       await ta.evaluate(dismissTaOverlays).catch(() => undefined);
-      await ta.evaluate(clickTaSummary).catch(() => undefined);
+      // REAL reset to the Summary. An in-page synthetic click (clickTaSummary) does NOT switch TA's Angular
+      // view, so the old fallback screenshotted whatever detail card was last open - a DIFFERENT tag's card,
+      // then handed to every tag that fell back here (the config tags and any missed form tag). Walk the
+      // breadcrumb out of the leftover detail, then REAL-click the rail's "Summary" item.
+      for (let hop = 0; hop < 4; hop += 1) {
+        const crumbSel = await ta.evaluate<string>(tagTaCrumbLink).catch(() => '');
+        if (!crumbSel) break;
+        await ta.click(crumbSel, { timeout: 1200 }).catch(() => undefined);
+        await ta.waitForTimeout(180);
+      }
+      const sumSel = await ta.evaluate<string>(tagTaSummaryItem).catch(() => '');
+      if (sumSel) await ta.click(sumSel, { timeout: 1200 }).catch(() => undefined);
+      else await ta.evaluate(clickTaSummary).catch(() => undefined);
       await ta.waitForTimeout(400);
-      const buf = await ta.screenshot({ type: 'jpeg', quality: 55, timeout: 5000 });
-      summaryShot = `data:image/jpeg;base64,${buf.toString('base64')}`;
+      // If a tag detail is STILL showing after the reset, store NO summary rather than a wrong tag's card.
+      const stillDetail = (await ta.evaluate<{ isDetail: boolean }>(readTaTagDetailState).catch(() => ({ isDetail: true }))).isDetail;
+      if (stillDetail) {
+        console.log('[tag-assistant] Summary fallback skipped - a tag detail was still on screen after the reset (would be a wrong card).');
+      } else {
+        // Clip to the content column so the fallback is the aggregate Tags-Fired list, not the whole window
+        // with the left rail (the same reason the per-event proofs are clipped).
+        const { rect } = await ta.evaluate<{ rect: { x: number; y: number; width: number; height: number } | null; debug: string }>(taContentRect).catch(() => ({ rect: null as { x: number; y: number; width: number; height: number } | null, debug: '' }));
+        const buf = rect
+          ? await ta.screenshot({ type: 'jpeg', quality: 55, timeout: 5000, clip: rect })
+          : await ta.screenshot({ type: 'jpeg', quality: 55, timeout: 5000 });
+        summaryShot = `data:image/jpeg;base64,${buf.toString('base64')}`;
+      }
     } catch { /* best-effort */ }
     console.log(`[tag-assistant] captured ${captures.length}/${snapTried} in-drive per-event proof screenshot(s)${summaryShot ? ' + a Summary fallback' : ''}${snapTried > 0 && captures.length < snapTried / 2 ? ' -- LOW switch ratio: the rail clicks are not switching TA to the per-event panel, so those tags fall back to the Summary. If this persists, the TA rail-row selector needs revisiting.' : ''}`);
 
