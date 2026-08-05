@@ -425,7 +425,7 @@ GTM_MCP_ENABLE_DELETES=true
 |---|---|
 | `folders_list` | List all folders |
 | `folders_get` | Get a specific folder |
-| `folders_entities` | List entities in a folder |
+| `folders_entities` | List entities in a folder (auto-paginated) |
 | `folders_create` | ✏️ Create a folder |
 | `folders_update` | ✏️ Update a folder |
 | `folders_delete` | 🗑️ Delete a folder |
@@ -547,15 +547,25 @@ cohorts, and funnels.
 ### Pagination
 
 All list tools backed by paginated GTM endpoints (`accounts_*`-scoped containers,
-workspaces, tags, triggers, variables, folders, environments, user permissions,
-clients, transformations, zones, templates, gtag configs) **auto-follow pagination
-and return all results by default**. Optional arguments:
+workspaces, tags, triggers, variables, folders, folder entities, environments,
+user permissions, clients, transformations, zones, templates, gtag configs)
+**auto-follow pagination and return all results by default**. Optional arguments:
 
 - `maxPages` — cap the number of API pages fetched (default 50). If more pages remain,
   the response includes `"truncated": true` and a `nextPageToken`.
 - `pageToken` — resume from a previous truncated result.
 
 Non-truncated responses keep the original `{ <key>: [...], count }` shape unchanged.
+
+Two tools differ, because one list key does not describe what they return:
+
+- `folders_entities` returns three parallel collections (`tag`, `trigger`, `variable`, always
+  present, empty when the folder has none) plus a `counts` object, and adds `truncated` /
+  `nextPageToken` only when the page ceiling was hit.
+- `export_container` pages five collections independently, so it takes `maxPages` (applied per
+  collection) but no `pageToken`. A short export is marked `incomplete: true` with
+  `truncatedCollections`, per-collection `nextPageTokens` and a `warning` — in every format,
+  including the default `summary`.
 
 Legend: ✏️ requires `GTM_MCP_ENABLE_WRITES=true` | 🗑️ requires `GTM_MCP_ENABLE_DELETES=true` | 🚀 requires `GTM_MCP_ENABLE_PUBLISH=true`
 

@@ -6,7 +6,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { GtmClient } from '../utils/gtmClient.js';
 import { checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
-import { paginate, paginationFields, buildListResult } from '../utils/pagination.js';
+import { paginate, paginationFields, buildListResult, DEFAULT_MAX_PAGES } from '../utils/pagination.js';
 import { jsonResult, textResult, errorResult } from '../utils/toolResponse.js';
 import { workspaceScope as wsBase } from '../utils/schemas.js';
 
@@ -55,16 +55,53 @@ export function registerFolderTools(server: McpServer, getClient: () => GtmClien
   server.registerTool(
     'folders_entities',
     {
-      description: 'List all entities (tags, triggers, variables) within a specific GTM folder.',
-      inputSchema: wsBase.extend({ folderId: z.string() }),
+      description:
+        'List all entities (tags, triggers, variables) within a specific GTM folder. ' +
+        'Automatically follows pagination to return all entities.',
+      inputSchema: wsBase.extend({
+        folderId: z.string(),
+        pageToken: paginationFields.pageToken,
+        maxPages: paginationFields.maxPages.describe(
+          `Maximum number of API pages to fetch (default ${DEFAULT_MAX_PAGES}). GTM returns one ` +
+            'nextPageToken for tags, triggers and variables together, so this bounds the whole walk ' +
+            'rather than each collection.'
+        ),
+      }),
     },
-    async ({ accountId, containerId, workspaceId, folderId }) => {
+    async ({ accountId, containerId, workspaceId, folderId, pageToken, maxPages }) => {
       try {
         const client = getClient();
-        const res = await client.accounts.containers.workspaces.folders.entities({
-          path: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/folders/${folderId}`,
+        const path = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/folders/${folderId}`;
+        // One un-tokened call was the whole implementation and res.data went out raw, so page 2 was
+        // unreachable: the schema exposed no pageToken to feed the returned token back with. The
+        // failure was silent and confidently wrong - a folder whose triggers all landed on page 2
+        // came back with no `trigger` key at all, which reads as "this folder has no triggers"
+        // rather than as a short answer.
+        //
+        // paginate() accumulates ONE list and this response carries three, so accumulate the page
+        // BODIES and fan them out below. Walking the token stream three times would triple the API
+        // calls for identical data.
+        const pages = await paginate(
+          (token) =>
+            client.accounts.containers.workspaces.folders
+              .entities({ path, pageToken: token })
+              .then((r) => r.data),
+          (data) => [data],
+          { pageToken, maxPages }
+        );
+        // Always-present arrays: absent-versus-empty was the confusion the defect produced, so an
+        // empty folder now says so instead of returning {}. No summed `count` - one total across
+        // three collections, sitting next to a 3-element `tag` array, is a live misread.
+        const tag = pages.items.flatMap((p) => p.tag ?? []);
+        const trigger = pages.items.flatMap((p) => p.trigger ?? []);
+        const variable = pages.items.flatMap((p) => p.variable ?? []);
+        return jsonResult({
+          tag,
+          trigger,
+          variable,
+          counts: { tag: tag.length, trigger: trigger.length, variable: variable.length },
+          ...(pages.truncated ? { truncated: true, nextPageToken: pages.nextPageToken } : {}),
         });
-        return jsonResult(res.data);
       } catch (err) {
         return errorResult('folders_entities', err);
       }
