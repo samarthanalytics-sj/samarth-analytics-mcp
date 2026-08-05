@@ -837,33 +837,36 @@ async function captureShot(page: PwPage, state: { n: number }, opts: { boxToRing
   if (state.n >= MAX_SCREENSHOTS) return undefined;
   state.n += 1;
   try {
-    // boxToRing → CLIP to a tight box around the ringed element (+ a form's title) instead of the whole
-    // viewport, so the thumbnail reads as "this control / this form". Null clip (no ring, e.g. a page-view
-    // tag, or a degenerate box) falls through to the full-viewport shot.
-    let clip: { x: number; y: number; width: number; height: number } | null =
-      opts.boxToRing ? await page.evaluate<{ x: number; y: number; width: number; height: number } | null>(ringedClipInPage).catch(() => null) : null;
-    if (clip) {
-      // CLAMP to the real device viewport (not the page's innerWidth, which can exceed it on a wide/
-      // horizontally-overflowing layout): a clip that pokes past the viewport makes page.screenshot throw,
-      // which is why boxing dropped the shot count. Anything degenerate after clamping → no clip.
-      const vp = page.viewportSize?.() ?? { width: 1366, height: 900 };
-      const x = Math.max(0, Math.min(Math.round(clip.x), vp.width - 1));
-      const y = Math.max(0, Math.min(Math.round(clip.y), vp.height - 1));
-      const width = Math.max(1, Math.min(Math.round(clip.width), vp.width - x));
-      const height = Math.max(1, Math.min(Math.round(clip.height), vp.height - y));
-      clip = width >= 40 && height >= 24 ? { x, y, width, height } : null;
-    }
-    if (clip) {
-      try {
-        const buf = await page.screenshot({ type: 'jpeg', quality: 68, timeout: 4000, clip });
-        return `data:image/jpeg;base64,${buf.toString('base64')}`;
-      } catch {
-        /* the clip was still rejected (a race resized the page) — fall back to a full-viewport shot below,
-           so boxing NEVER costs us the screenshot entirely. */
+    // ALWAYS take the full-viewport shot first, so coverage NEVER depends on a screenshot clip being
+    // accepted — an oversized clip used to make page.screenshot throw and the tag lost its shot entirely
+    // (the 26 -> 2 drop). For a boxed request we then CROP that JPEG to the ringed element IN-PROCESS
+    // (nativeImage.crop), which can't be rejected the way a screenshot clip can. No ring / no crop tool →
+    // the full shot stands.
+    const full = await page.screenshot({ type: 'jpeg', quality: 60, timeout: 4000 });
+    const fullUri = `data:image/jpeg;base64,${full.toString('base64')}`;
+    if (!opts.boxToRing) return fullUri;
+    const box = await page.evaluate<{ x: number; y: number; width: number; height: number } | null>(ringedClipInPage).catch(() => null);
+    if (!box) return fullUri;
+    try {
+      const { nativeImage } = await import('electron');
+      const img = nativeImage.createFromBuffer(full);
+      const size = img.getSize();
+      // ringedClipInPage measures in CSS px; scale to the JPEG's pixel size in case of a devicePixelRatio.
+      const vp = page.viewportSize?.() ?? { width: size.width, height: size.height };
+      const sx = size.width / Math.max(1, vp.width);
+      const sy = size.height / Math.max(1, vp.height);
+      const x = Math.max(0, Math.min(Math.round(box.x * sx), size.width - 1));
+      const y = Math.max(0, Math.min(Math.round(box.y * sy), size.height - 1));
+      const width = Math.max(1, Math.min(Math.round(box.width * sx), size.width - x));
+      const height = Math.max(1, Math.min(Math.round(box.height * sy), size.height - y));
+      if (width >= 40 && height >= 24) {
+        const cropped = img.crop({ x, y, width, height });
+        if (!cropped.isEmpty()) return `data:image/jpeg;base64,${cropped.toJPEG(74).toString('base64')}`;
       }
+    } catch {
+      /* nativeImage unavailable / crop failed — the full shot below is a fine fallback */
     }
-    const buf = await page.screenshot({ type: 'jpeg', quality: 55, timeout: 4000 });
-    return `data:image/jpeg;base64,${buf.toString('base64')}`;
+    return fullUri;
   } catch {
     state.n -= 1;
     return undefined; // never fail verification over a screenshot
