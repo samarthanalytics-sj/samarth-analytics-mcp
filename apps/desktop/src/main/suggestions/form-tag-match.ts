@@ -119,6 +119,34 @@ function shared(a: Set<string>, b: Set<string>): number {
   return n;
 }
 
+/** Does this form tag express a CONTACT / MESSAGE intent? ("Send Us A Message", "Get In Touch", "Contact
+ *  Us", "Enquiry Form".) Such tags routinely carry no dataLayer form_name and no page-path trigger scope,
+ *  and the site's contact form's title is often just "Contact" (no token overlap with "Send Us A Message"),
+ *  so the title/token/scope paths all miss — the intent fallback below rescues them. PURE. */
+export function isContactIntentTag(tag: FormTagIdentity): boolean {
+  const hay = `${coreName(tag.tagName)} ${tag.formName ?? ''} ${tag.eventName ?? ''}`.toLowerCase();
+  return /\bcontact\b|\bmessage\b|enquir|inquir|get in touch|reach us|write to us/.test(hay);
+}
+
+/** The index of the site's CONTACT form, or -1. A form on a /contact-ish path wins; else one whose
+ *  id/classes/title say contact; else a form carrying a message textarea (the shape of a contact form),
+ *  preferring one that also has an email field. Never matches a search / newsletter form (no textarea,
+ *  not on a contact path, id isn't contact), so the intent fallback can't submit the wrong form. PURE. */
+export function contactShapedFormIdx(forms: PagedForm[], formPath: string[]): number {
+  const hasMessage = (f: PagedForm): boolean => f.fields.some((x) => x.type === 'textarea' || x.role === 'message');
+  const idSaysContact = (f: PagedForm): boolean => /contact|message|enquir|inquir/i.test(`${f.formId} ${f.formClasses} ${f.title}`);
+  let idx = forms.findIndex((_f, i) => /contact/i.test(formPath[i] || ''));
+  if (idx >= 0) return idx;
+  idx = forms.findIndex((f) => idSaysContact(f));
+  if (idx >= 0) return idx;
+  const withMsg = forms.map((f, i) => ({ f, i })).filter(({ f }) => hasMessage(f));
+  if (withMsg.length) {
+    const withEmail = withMsg.find(({ f }) => f.fields.some((x) => x.role === 'email' || /email/i.test(x.label || '')));
+    return (withEmail ?? withMsg[0]).i;
+  }
+  return -1;
+}
+
 /** Match the container's form tags to the site's forms (by identity token overlap). Returns the UNIQUE
  *  forms that matched >=1 tag (each carrying the tag names expected to fire on it) + the tags that
  *  matched no form (a coverage gap). A tag matches its best form when they share >=1 distinctive token. */
@@ -200,6 +228,14 @@ export function matchFormsToTags(
         const r = scoreIdentity(tt);
         if (r.idx >= 0 && r.score > bestScore) { bestIdx = r.idx; bestScore = r.score; }
       }
+    }
+    // 2b. CONTACT / MESSAGE intent fallback. A contact-intent tag ("Send Us A Message", "Get In Touch",
+    //     "Contact Us") that no title/token/page-scope matched pairs with the site's contact form. Only runs
+    //     when nothing else did AND only for a contact-intent tag, so it can never steal a form from a more
+    //     specific pairing; contactShapedFormIdx returns -1 for search / newsletter forms, so it can't
+    //     submit the wrong form. This is what rescues Shopify contact tags (no form_name, no page scope).
+    if (bestIdx < 0 && isContactIntentTag(tag)) {
+      bestIdx = contactShapedFormIdx(forms, formPath);
     }
     if (bestIdx >= 0) {
       const f = forms[bestIdx];

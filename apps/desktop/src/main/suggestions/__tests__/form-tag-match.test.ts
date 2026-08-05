@@ -239,6 +239,35 @@ check('tagPageSeedUrls: origin-resolved, deduped, non-path scopes dropped',
 check('tagPageSeedUrls: the homepage tag equals the target and is dropped', tagPageSeedUrls([{ page: '/' }], 'https://site.com/').length === 0);
 check('tagPageSeedUrls: a non-URL target yields no seeds (never a crash)', tagPageSeedUrls([{ page: '/x' }], 'not a url').length === 0);
 
+// ── CONTACT / MESSAGE intent fallback (Shopify-style: no form_name, no page scope, generic title) ────
+{
+  // The contact form's title is generic ("Contact") and the tag is "Send Us A Message" — no token/title
+  // overlap — but the form sits on a /pages/contact path AND has a message textarea. It should still pair.
+  const forms = [
+    form({ page: 'https://shop.com/', title: 'Newsletter', formId: 'newsletter', fields: [fld({ name: 'email', type: 'email', role: 'email', selector: '[name="email"]' })] }),
+    form({ page: 'https://shop.com/pages/contact', title: 'Contact', formId: '', fields: [
+      fld({ name: 'email', type: 'email', role: 'email', selector: '[name="email"]' }),
+      fld({ name: 'body', type: 'textarea', role: 'message', selector: '[name="body"]' }),
+    ] }),
+  ];
+  const { matched, unmatchedTags } = matchFormsToTags(forms, [tag('GA4 - Event - Send Us A Message Form Tag', 'send_us_a_message_form')]);
+  check('contact intent: pairs "Send Us A Message" tag to the /contact form', matched.some((m) => m.page.endsWith('/pages/contact') && m.expectedTags.some((t) => /Send Us A Message/.test(t.tagName))));
+  check('contact intent: does NOT pair to the newsletter form', !matched.some((m) => m.formId === 'newsletter'));
+  check('contact intent: no false unmatched', !unmatchedTags.includes('GA4 - Event - Send Us A Message Form Tag'));
+}
+{
+  // A NON-contact tag with no match must stay unmatched even when a contact form exists (fallback is gated).
+  const forms = [form({ page: 'https://shop.com/pages/contact', title: 'Contact', fields: [fld({ name: 'body', type: 'textarea', role: 'message', selector: '[name="body"]' })] })];
+  const { unmatchedTags } = matchFormsToTags(forms, [tag('GA4 - Event - Newsletter Signup Form Tag', 'newsletter_form')]);
+  check('contact intent: a non-contact tag does NOT grab the contact form', unmatchedTags.includes('GA4 - Event - Newsletter Signup Form Tag'));
+}
+{
+  // A contact-intent tag with NO contact-shaped form on the site stays honestly unmatched (no wrong submit).
+  const forms = [form({ page: 'https://shop.com/', title: 'Newsletter', formId: 'news', fields: [fld({ name: 'email', type: 'email', role: 'email', selector: '[name="email"]' })] })];
+  const { matched, unmatchedTags } = matchFormsToTags(forms, [tag('GA4 - Event - Contact Us Form Tag', 'contact_us_form')]);
+  check('contact intent: no contact-shaped form → stays unmatched (never the newsletter)', matched.length === 0 && unmatchedTags.includes('GA4 - Event - Contact Us Form Tag'));
+}
+
 console.log(`\nform-tag-match: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }
 if (passed < 12) { console.error(`expected >= 12 checks, got ${passed}`); process.exit(1); }
