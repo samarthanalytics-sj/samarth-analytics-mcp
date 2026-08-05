@@ -6335,6 +6335,7 @@ function verdictHowToFix(v: VerifyTagsResult['verdicts'][number]): string {
 
 // ── Tag-verification results: scorecard + one results table (replaces the old wall-of-text lists) ──
 type VVerdict = VerifyTagsResult['verdicts'][number];
+type VSuggestion = NonNullable<VerifyTagsResult['taSuggestions']>[number];
 type VStatus = 'fired' | 'config' | 'server' | 'untested' | 'issue';
 /** Bucket a verdict into a single status the scorecard + table share. */
 function verdictStatus(v: VVerdict): VStatus {
@@ -6632,6 +6633,107 @@ function VerifyResultsTable({ rows, onProof }: { rows: VVerdict[]; onProof: (v: 
                 <td style={{ ...vStyles.td, whiteSpace: 'nowrap' }}><span title={via.label} aria-hidden>{via.icon}</span> {via.label}</td>
                 <td style={{ ...vStyles.td, color: 'var(--text-muted)', fontSize: 12 }}>{signal}</td>
                 {anyProof ? <td style={vStyles.td}><ProofThumb screenshot={v.screenshot} name={v.tagName} onOpen={() => onProof(v)} /></td> : null}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/** The Untested-here and Not-firing rows, in the SAME table shape as Tags Fired.
+ *
+ *  These two sections used to render as stacked prose blocks (a bold line, then "Why:", then
+ *  "How to test:" / "Fix:"). With 6 not-firing tags that is a wall of repeated sentences where the
+ *  only varying words - the tag name and the page path - are buried mid-paragraph, and it does not
+ *  line up with the Fired table directly above it. Same columns, same status pill, so the whole
+ *  result reads as one report.
+ *
+ *  Nothing is dropped: every line the prose layout showed has a column here. `mode` only swaps the
+ *  action column (how to TEST something we never exercised vs how to FIX something that did not
+ *  fire) and what the guidance is derived from. */
+function VerifyDiagnosticTable({
+  rows, mode, onProof, suggByTag, aligned, aligning, onAlign,
+}: {
+  rows: VVerdict[];
+  mode: 'untested' | 'notfired';
+  onProof: (v: VVerdict) => void;
+  suggByTag?: Map<string, VSuggestion>;
+  aligned?: Record<string, string>;
+  aligning?: string | null;
+  onAlign?: (v: VVerdict, ev: string) => void;
+}): JSX.Element {
+  const anyProof = rows.some((v) => v.screenshot);
+  const actionHead = mode === 'untested' ? 'How to test' : 'Fix';
+  // Top-aligned: Why and the action column wrap to several lines, and a middle-aligned status pill
+  // floating beside a 3-line paragraph is what made the old layout hard to scan.
+  const td: React.CSSProperties = { ...vStyles.td, verticalAlign: 'top' };
+  return (
+    <div style={{ overflowX: 'auto', borderRadius: 10, border: '1px solid var(--border)' }}>
+      <table style={vStyles.table}>
+        <thead>
+          <tr>
+            {['Status', 'Tag', 'Event', 'Trigger', 'Why', actionHead, ...(anyProof ? ['Proof'] : [])].map((h) => (
+              <th key={h} style={vStyles.th}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((v) => {
+            const m = V_STATUS[verdictStatus(v)];
+            const via = verdictKindLabel(v);
+            const sug = mode === 'notfired' ? suggByTag?.get(v.tagName) : undefined;
+            return (
+              <tr key={v.tagId}>
+                <td style={td}><span style={{ ...vStyles.statusPill, color: m.color, background: m.bg, borderColor: m.border }}>{m.icon} {m.short}</span></td>
+                <td style={{ ...td, color: 'var(--text)', fontWeight: 500, minWidth: 190 }}>{v.tagName}</td>
+                <td style={td}>{v.event ? <code style={mdStyles.code}>{v.event}</code> : <span style={styles.muted}>-</span>}</td>
+                <td style={{ ...td, whiteSpace: 'nowrap' }}><span title={via.label} aria-hidden>{via.icon}</span> {via.label}</td>
+                <td style={{ ...td, minWidth: 260, maxWidth: 420, lineHeight: 1.5 }}>
+                  {v.reason ?? <span style={styles.muted}>-</span>}
+                  {v.observedBeacons && v.observedBeacons.length > 0 && (
+                    <div style={{ ...styles.muted, fontSize: 12, marginTop: 4 }}>Beacons seen: {v.observedBeacons.join(', ')}</div>
+                  )}
+                </td>
+                <td style={{ ...td, minWidth: 260, maxWidth: 460, lineHeight: 1.5, color: 'var(--c-blue)' }}>
+                  {mode === 'untested' ? (
+                    verdictHowToTest(v)
+                  ) : (
+                    <>
+                      {/* The CONCRETE per-tag suggestion (built from the real push, scoped to this tag's own
+                          form page) beats the generic fix text whenever we have one. */}
+                      <div>{sug ? sug.how : verdictHowToFix(v)}</div>
+                      {sug && sug.conditions.length > 0 && (
+                        <div style={{ fontFamily: 'monospace', fontSize: 11, marginTop: 5, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                          {sug.conditions.map((c) => (
+                            <span key={c.key} style={{ background: 'var(--surface-3)', borderRadius: 5, padding: '2px 6px', color: 'var(--text-dim)' }}>{`{{${c.key}}}`} = “{c.value}”</span>
+                          ))}
+                        </div>
+                      )}
+                      {v.observedEvents && v.observedEvents.length > 0 && (
+                        <div style={{ marginTop: 6, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                          {aligned?.[v.tagId] ? (
+                            <span style={{ color: 'var(--c-green)', fontSize: 12.5 }}>✓ Event Name set to {aligned[v.tagId]} - re-verify to confirm.</span>
+                          ) : (
+                            v.observedEvents.map((ev) => (
+                              <button
+                                key={ev}
+                                style={{ ...styles.toggleOff, fontSize: 12.5, padding: '3px 8px' }}
+                                disabled={aligning === v.tagId}
+                                onClick={() => onAlign?.(v, ev)}
+                                title={`Set this GA4 tag's Event Name to "${ev}" (draft-only; never publishes)`}
+                              >
+                                {aligning === v.tagId ? 'Aligning…' : `Align Event Name → ${ev}`}
+                              </button>
+                            ))
+                          )}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </td>
+                {anyProof ? <td style={td}><ProofThumb screenshot={v.screenshot} name={v.tagName} onOpen={() => onProof(v)} /></td> : null}
               </tr>
             );
           })}
@@ -8145,18 +8247,7 @@ function VerifyPanel({
                 <div style={{ ...styles.muted, fontSize: 12, marginBottom: 6, lineHeight: 1.5 }}>
                   We didn’t exercise these tags’ triggers in this run - this is <b>not</b> “not firing”. Either the CTA/link they listen to wasn’t on a page we drove, or (for a form tag) its form wasn’t among the ones submitted. Below is why each one, and how to actually test it.
                 </div>
-                <ul style={styles.resultList}>
-                  {fInconclusive.map((v) => {
-                    const k = verdictKindLabel(v);
-                    return (
-                      <li key={v.tagId} style={{ ...styles.resultRow, display: 'flex', flexDirection: 'column', gap: 2, alignItems: 'stretch' }}>
-                        <div><span style={{ fontWeight: 600, color: 'var(--text-dim)' }}>UNTESTED</span> <span title={k.label} aria-hidden>{k.icon}</span> {v.tagName}</div>
-                        {v.reason ? <div style={{ ...styles.muted, marginLeft: 8, marginTop: 2 }}>Why: {v.reason}</div> : null}
-                        <div style={{ marginLeft: 8, marginTop: 2, color: 'var(--c-blue)', fontSize: 12.5 }}>How to test: {verdictHowToTest(v)}</div>
-                      </li>
-                    );
-                  })}
-                </ul>
+                <VerifyDiagnosticTable rows={fInconclusive} mode="untested" onProof={showProof} />
               </div>
             )}
 
@@ -8166,64 +8257,15 @@ function VerifyPanel({
                 <div style={{ ...styles.muted, fontSize: 12, marginBottom: 6, lineHeight: 1.5 }}>
                   We <b>did</b> exercise these - drove the click / submitted the form - but GTM did not fire the tag. That means a <b>trigger condition doesn’t match</b> what the page sent. Compare each condition (event name, form name / id, page path) against the dataLayer below.
                 </div>
-                <ul style={styles.resultList}>
-                  {fNotFired.map((v) => {
-                    const k = verdictKindLabel(v);
-                    return (
-                      <li key={v.tagId} style={{ ...styles.resultRow, display: 'flex', gap: 10, alignItems: 'flex-start' }}>
-                        {v.screenshot ? <div style={{ flexShrink: 0, marginTop: 2 }}><ProofThumb screenshot={v.screenshot} name={v.tagName} onOpen={() => showProof(v)} /></div> : null}
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                        <div>
-                          <span style={{ fontWeight: 600, color: 'var(--c-red)' }}>NOT FIRED</span>{' '}
-                          <span title={k.label}>{k.icon}</span> {v.tagName}
-                        </div>
-                        {v.reason ? <div style={{ ...styles.muted, marginLeft: 8, marginTop: 2 }}>Why: {v.reason}</div> : null}
-                        {v.observedBeacons && v.observedBeacons.length > 0 && (
-                          <div style={{ ...styles.muted, marginLeft: 8, marginTop: 2, fontSize: 12 }}>Beacons seen: {v.observedBeacons.join(', ')}</div>
-                        )}
-                        {(() => {
-                          // Prefer the CONCRETE, per-tag trigger suggestion (built from the real push, scoped to
-                          // this tag's own form page) over the generic fix text - this is what replaces the old
-                          // separate, repetitive "DLV suggestions" section.
-                          const sug = suggByTag.get(v.tagName);
-                          if (sug && sug.conditions.length > 0) {
-                            return (
-                              <div style={{ marginLeft: 8, marginTop: 3 }}>
-                                <div style={{ color: 'var(--c-blue)', fontSize: 12.5 }}>Fix: {sug.how}</div>
-                                <div style={{ fontFamily: 'monospace', fontSize: 11, marginTop: 4, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                                  {sug.conditions.map((c) => (
-                                    <span key={c.key} style={{ background: 'var(--surface-3)', borderRadius: 5, padding: '2px 6px' }}>{`{{${c.key}}}`} = “{c.value}”</span>
-                                  ))}
-                                </div>
-                              </div>
-                            );
-                          }
-                          return <div style={{ marginLeft: 8, marginTop: 2, color: 'var(--c-blue)', fontSize: 12.5 }}>Fix: {sug ? sug.how : verdictHowToFix(v)}</div>;
-                        })()}
-                        {v.observedEvents && v.observedEvents.length > 0 && (
-                          <div style={{ marginLeft: 8, marginTop: 4, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-                            {aligned[v.tagId] ? (
-                              <span style={{ color: 'var(--c-green)', fontSize: 12.5 }}>✓ Event Name set to {aligned[v.tagId]} - re-verify to confirm.</span>
-                            ) : (
-                              v.observedEvents.map((ev) => (
-                                <button
-                                  key={ev}
-                                  style={{ ...styles.toggleOff, fontSize: 12.5, padding: '3px 8px' }}
-                                  disabled={aligning === v.tagId}
-                                  onClick={() => void alignEventName(v, ev)}
-                                  title={`Set this GA4 tag's Event Name to "${ev}" (draft-only; never publishes)`}
-                                >
-                                  {aligning === v.tagId ? 'Aligning…' : `Align Event Name → ${ev}`}
-                                </button>
-                              ))
-                            )}
-                          </div>
-                        )}
-                        </div>
-                      </li>
-                    );
-                  })}
-                </ul>
+                <VerifyDiagnosticTable
+                  rows={fNotFired}
+                  mode="notfired"
+                  onProof={showProof}
+                  suggByTag={suggByTag}
+                  aligned={aligned}
+                  aligning={aligning}
+                  onAlign={(v, ev) => void alignEventName(v, ev)}
+                />
               </div>
             )}
 
