@@ -1,3 +1,9 @@
+## [1.455.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.454.1...v1.455.0) (2026-08-05)
+
+### Features
+
+* **desktop:** DOCX export for verification results (images survive Google Docs upload) ([#835](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/835)) ([29fff64](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/29fff648b692da8ad70c911437e3fb09f949d3ea))
+
 ## [1.454.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.454.0...v1.454.1) (2026-08-05)
 
 ### Bug Fixes
