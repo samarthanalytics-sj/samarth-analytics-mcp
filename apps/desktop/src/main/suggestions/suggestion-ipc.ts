@@ -703,6 +703,10 @@ export function registerSuggestionsIpc(data: GoogleDataService, memory?: MemoryS
     if (tags.length === 0) {
       return empty(o.accountId ? 'This container has no form (custom-event) tags to verify. Create form-tracking tags first.' : 'Pick a GTM account, container and workspace (the GTM bar) so we know which form tags to verify.');
     }
+    // DIAGNOSTIC: the form tags that entered matching, with their identity signals (form-name condition +
+    // page-path scope). When 0 forms end up submitted, this is the first half of "why" — a tag with neither
+    // a form_name nor a page scope can only match by NAME↔title token overlap.
+    console.log(`[form-plan] ${tags.length} form tag(s) to match: ${tags.map((t) => `"${t.tagName}"${t.formName ? ` form_name=${t.formName}` : ''}${t.page ? ` page=${t.page}` : ''}`).join(' | ')}`);
 
     // 2. Crawl the site ONCE. This single pass BOTH collects the forms (per page, via the onPageForms
     //    callback) AND inventories the click CTAs — which we cache so the Tag Assistant / verify run that
@@ -755,6 +759,10 @@ export function registerSuggestionsIpc(data: GoogleDataService, memory?: MemoryS
         (page, raw) => { for (const v of toFormFillViews(raw, page, locale.id, emailTag)) pagedForms.push({ ...v, page }); },
       );
       pagesCrawled = scan.summary.pagesScanned;
+      // DIAGNOSTIC: the forms the crawl actually collected, with the title + id used for matching. The
+      // second half of "why 0 forms": if the contact form is here but its title/id share no token with the
+      // tag name (and the tag has no page scope), the match legitimately can't be made.
+      console.log(`[form-plan] crawled ${pagesCrawled} page(s), collected ${pagedForms.length} form(s): ${pagedForms.slice(0, 25).map((f) => `${(f.page || '').replace(/^https?:\/\/[^/]+/, '') || '/'}#${f.formId || '(no-id)'} "${(f.title || '').slice(0, 40)}"`).join(' | ')}${pagedForms.length > 25 ? ' …' : ''}`);
       // Cache the click-CTA inventory (+ coverage counts) for the verify run that follows the gate.
       cacheVerifyEls(target, scan.inventory.elements as DetectedElementView[], pagesCrawled, pagesTotal || pagesCrawled);
     } catch (e) {
@@ -763,6 +771,12 @@ export function registerSuggestionsIpc(data: GoogleDataService, memory?: MemoryS
 
     // 3. Match forms ↔ tags, then collapse the matched forms' fields into ONE data-entry set.
     const { matched, unmatchedTags } = matchFormsToTags(pagedForms, tags);
+    // DIAGNOSTIC: the verdict. `matched` forms are what the verify run submits for real; `unmatchedTags`
+    // are form tags with no site form to submit, so they stay honestly "Untested". Zero matched here is
+    // exactly the "0 form(s)" the operator saw — the two lines above show whether it's a missing form, a
+    // title/token mismatch, or a tag with no usable identity.
+    console.log(`[form-plan] matched ${matched.length} form(s); ${unmatchedTags.length} tag(s) unmatched${unmatchedTags.length ? ': ' + unmatchedTags.map((n) => `"${n}"`).join(', ') : ''}`);
+    for (const m of matched) console.log(`[form-plan]   "${(m.formTitle || '').slice(0, 40)}" (${(m.page || '').replace(/^https?:\/\/[^/]+/, '') || '/'}) -> ${(m.expectedTags ?? []).map((t) => t.tagName).join(', ')}`);
     const sharedFields = dedupeSharedFields(matched);
     // Coverage transparency: how many form tags entered this flow, and how many carry a page scope we
     // could seed - so the UI can say "12 of 65 tags fire on form submits" instead of looking broken.
