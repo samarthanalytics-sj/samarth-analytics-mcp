@@ -1,3 +1,9 @@
+## [1.454.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.453.1...v1.454.0) (2026-08-05)
+
+### Features
+
+* **desktop:** show Untested here and Not firing as tables, like Tags Fired ([#831](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/831)) ([27e5508](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/27e550820fc7e419d20c96d78674cd5e9e04f722))
+
 ## [1.453.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.453.0...v1.453.1) (2026-08-05)
 
 ### Bug Fixes
