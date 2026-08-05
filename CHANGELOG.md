@@ -1,3 +1,9 @@
+## [1.451.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.451.1...v1.451.2) (2026-08-05)
+
+### Bug Fixes
+
+* **desktop:** clamp boxed-shot clip to the viewport + always fall back to a full shot ([#823](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/823)) ([5c43c6d](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/5c43c6d6a1c70c9357bcbeebd6bcb2e5bdd8254f))
+
 ## [1.451.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.451.0...v1.451.1) (2026-08-05)
 
 ### Bug Fixes
