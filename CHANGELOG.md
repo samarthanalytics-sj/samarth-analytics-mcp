@@ -1,3 +1,9 @@
+## [1.451.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.450.9...v1.451.0) (2026-08-05)
+
+### Features
+
+* **desktop:** Excel export + boxed location screenshots in Tag Suggestions ([#822](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/822)) ([0b885ff](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/0b885ff6531ef34e9731593e0f6e8df54778278f))
+
 ## [1.450.9](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.450.8...v1.450.9) (2026-08-05)
 
 ### Bug Fixes
