@@ -1,3 +1,9 @@
+## [1.454.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.454.0...v1.454.1) (2026-08-05)
+
+### Bug Fixes
+
+* **desktop:** retry + log page loads so post-form-submit pages aren't silently skipped ([#832](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/832)) ([2c8d735](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/2c8d7352461be4ace6543f563dfe9512b23a0900))
+
 ## [1.454.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.453.1...v1.454.0) (2026-08-05)
 
 ### Features
