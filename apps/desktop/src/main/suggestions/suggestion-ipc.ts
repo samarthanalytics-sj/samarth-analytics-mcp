@@ -136,6 +136,25 @@ export function registerSuggestionsIpc(data: GoogleDataService, memory?: MemoryS
     return filePath;
   });
 
+  // Native Excel (.xlsx) export of the tag-suggestion structure. The renderer builds the rows from the
+  // SAME shared template logic the CSV uses (suggestionsToTemplateRows) and passes header + rows here, so
+  // the two exports never drift. The heavy exceljs builder is imported lazily, after the save dialog.
+  ipcMain.handle('suggestions:exportXlsx', async (e, defaultName: unknown, headers: unknown, rows: unknown) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const name = String(defaultName ?? 'GTM Structure - GA4 Events.xlsx').replace(/[\\/:*?"<>|]/g, '_');
+    const opts = { title: 'Export tag structure (Excel)', defaultPath: name, filters: [{ name: 'Excel', extensions: ['xlsx'] }] };
+    const { canceled, filePath } = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
+    if (canceled || !filePath) return null;
+    const safeHeaders = Array.isArray(headers) ? headers.map((h) => String(h ?? '')) : [];
+    const safeRows = Array.isArray(rows)
+      ? rows.map((r) => (Array.isArray(r) ? r.map((c) => String(c ?? '')) : []))
+      : [];
+    const { buildSuggestionsXlsx } = await import('./suggestions-xlsx');
+    const buf = await buildSuggestionsXlsx(safeHeaders, safeRows);
+    await writeFile(filePath, buf);
+    return filePath;
+  });
+
   // Save ONE verification proof screenshot (a JPEG/PNG data-URI captured during the run) to a file the
   // user picks. Read-only export - decodes the base64 data-URI and writes the bytes. Returns the saved
   // path, or null if the user cancelled or the value isn't a usable image data-URI.

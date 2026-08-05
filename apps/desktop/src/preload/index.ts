@@ -352,6 +352,9 @@ const api = {
     // Save the (renderer-built) template CSV to a user-chosen file → saved path or null.
     exportCsv: (defaultName: string, csv: string): Promise<string | null> =>
       ipcRenderer.invoke('suggestions:exportCsv', defaultName, csv),
+    // Save the (renderer-built) template rows as a native Excel .xlsx → saved path or null.
+    exportXlsx: (defaultName: string, headers: string[], rows: string[][]): Promise<string | null> =>
+      ipcRenderer.invoke('suggestions:exportXlsx', defaultName, headers, rows),
     // Save ONE verification proof screenshot (a JPEG/PNG data-URI) to a user-chosen file → saved path or null.
     exportProofImage: (defaultName: string, dataUrl: string): Promise<string | null> =>
       ipcRenderer.invoke('suggestions:exportProofImage', defaultName, dataUrl),

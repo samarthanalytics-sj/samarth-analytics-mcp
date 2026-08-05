@@ -370,6 +370,39 @@ const escapeCsv = (v: string): string => (/[",\r\n]/.test(v) ? `"${v.replace(/"/
 
 /** The suggestions as a CSV string in the template's exact column + block layout
  *  (CRLF line endings + RFC-4180 quoting, so Excel/Sheets open it cleanly). */
+/** Headers for the Excel export: the CSV's template columns with a leading "Page" so each tag's
+ *  source page is visible in the sheet (the CSV omits it to stay a clean GTM-import template). */
+export const TEMPLATE_HEADERS_XLSX = ['Page', ...TEMPLATE_HEADERS] as const;
+
+/** The SAME rows the CSV builds (one tag → several rows for its params/whens), as a 2D string array
+ *  with a leading Page cell on each tag's first row. Pure; used by the native .xlsx export so Excel and
+ *  CSV never drift. */
+export function suggestionsToTemplateRows(suggestions: SuggestedTagView[]): string[][] {
+  const rows: string[][] = [];
+  for (const s of suggestions) {
+    const g = suggestionToGroup(s);
+    for (let i = 0; i < g.rowCount; i++) {
+      const p = g.params[i];
+      const w = g.whens[i];
+      const first = i === 0;
+      rows.push([
+        first ? (s.page ?? '') : '',
+        first ? g.tagType : '',
+        first ? g.tagName : '',
+        first ? g.eventName : '',
+        p?.name ?? '',
+        p?.variable ?? '',
+        first ? g.triggerName : '',
+        first ? g.triggerType : '',
+        w?.variable ?? '',
+        w?.condition ?? '',
+        w?.value ?? '',
+      ]);
+    }
+  }
+  return rows;
+}
+
 export function suggestionsToTemplateCsv(suggestions: SuggestedTagView[]): string {
   const lines: string[] = [TEMPLATE_HEADERS.join(',')];
   for (const s of suggestions) {
