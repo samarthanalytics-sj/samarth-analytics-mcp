@@ -1146,8 +1146,8 @@ export async function runTaVerify(
         trace(`rail rows (newest first): [${rows.map((r) => r.num).join(', ')}]`);
         const names = (target.names ?? []).filter(Boolean).map((n) => n.toLowerCase());
         const evRe = target.event ? new RegExp(target.event, 'i') : null;
-        let best: { sel: string; fired: string } | null = null;
-        let firstFired: { sel: string; fired: string } | null = null;
+        let best: { sel: string; fired: string; num: number } | null = null;
+        let firstFired: { sel: string; fired: string; num: number } | null = null;
         // Up to two passes. If the whole rail scan came back STUCK (every click left the panel on a stale
         // earlier row - the pages-2/3 "still showing row #N" case, where a tag detail from the previous page
         // is up and rail clicks don't switch), a REAL Summary click clears it; then re-tag the rail and rescan.
@@ -1216,11 +1216,11 @@ export async function runTaVerify(
             // API-Call event, so panel.event is empty there. Without this check a click that failed to switch the
             // panel left us on the Summary, whose all-tags list matched EVERY target → every proof was the Summary.
             if (!panel.event || !hasFired(panel.fired)) continue;
-            if (!firstFired) firstFired = { sel: row.sel, fired: panel.fired };
+            if (!firstFired) firstFired = { sel: row.sel, fired: panel.fired, num: row.num };
             const firedLc = panel.fired.toLowerCase();
             const nameHit = names.length > 0 && names.some((n) => firedLc.includes(n));
             const evHit = !!evRe && evRe.test(panel.event);
-            if (nameHit || evHit) { best = { sel: row.sel, fired: panel.fired }; break; } // this event proves the target
+            if (nameHit || evHit) { best = { sel: row.sel, fired: panel.fired, num: row.num }; break; } // this event proves the target
           }
           if (best || firstFired || !stuck) break; // got a proof, or the failure wasn't a stuck panel (a reset won't help)
         }
@@ -1257,15 +1257,39 @@ export async function runTaVerify(
           const s = await ta.evaluate<{ isDetail: boolean }>(readTaTagDetailState).catch(() => ({ isDetail: true }));
           return !s.isDetail && (await onEventPanel());
         };
-        // Return to THIS event with the detail CLOSED. The breadcrumb ("22 form_submission >") collapses the
-        // open detail back to the event's Tags-Fired list; the rail row is the fallback. Verify the detail is
-        // actually gone, else the next tag's click lands on the still-open sibling and does nothing.
-        const backToEvent = async (): Promise<boolean> => {
-          for (let attempt = 0; attempt < 4; attempt += 1) {
-            if (await onCleanEvent()) return true;
+        // CLOSE an open tag detail. The live logs proved the breadcrumb alone does NOT collapse it - only the
+        // detail's close/✕ control (plus Escape) clears it (the same combo the stuck-reset uses to reach
+        // tagDetails=no). Without this the detail stays open and the next tag's click lands on it and is
+        // ignored, so the 2nd tag of a pair re-reads the 1st tag's platform. Bounded.
+        const closeAnyDetail = async (): Promise<void> => {
+          for (let i = 0; i < 4; i += 1) {
+            if (!(await ta.evaluate<{ isDetail: boolean }>(readTaTagDetailState).catch(() => ({ isDetail: false }))).isDetail) return;
             const crumbSel = await ta.evaluate<string>(tagTaCrumbLink).catch(() => '');
-            await ta.click(crumbSel || chosen.sel, { timeout: 1200 }).catch(() => undefined);
-            await ta.waitForTimeout(220);
+            if (crumbSel) { await ta.click(crumbSel, { timeout: 1000 }).catch(() => undefined); await ta.waitForTimeout(160); }
+            if (!(await ta.evaluate<{ isDetail: boolean }>(readTaTagDetailState).catch(() => ({ isDetail: false }))).isDetail) return;
+            const closeSel = await ta.evaluate<string>(tagTaCloseButton).catch(() => '');
+            if (closeSel) { await ta.click(closeSel, { timeout: 1000 }).catch(() => undefined); await ta.waitForTimeout(160); }
+            await ta.locator('body').first().press('Escape').catch(() => undefined);
+            await ta.waitForTimeout(160);
+          }
+        };
+        // Re-open THIS event's Tags-Fired list by its rail NUMBER: after a close we may land on the Summary, and
+        // the event row's data-ta-snap can be dropped on re-render, so re-mark the rail and click the right row.
+        const reselectEvent = async (): Promise<void> => {
+          const marked = await ta.evaluate<Array<{ sel: string; num: number }>>(tagNewestTaRows, 8).catch(() => [] as Array<{ sel: string; num: number }>);
+          const rowSel = marked.find((r) => r.num === chosen.num)?.sel ?? chosen.sel;
+          await ta.click(rowSel, { timeout: 1200 }).catch(() => undefined);
+          await ta.waitForTimeout(240);
+        };
+        // Return to THIS event with the detail CLOSED and the Tags-Fired list showing, so the next tag opens a
+        // FRESH detail for the right tag. Close first (a rail click is ignored while a detail overlays it), then
+        // re-anchor to this event if the close dropped us onto the Summary.
+        const backToEvent = async (): Promise<boolean> => {
+          for (let attempt = 0; attempt < 3; attempt += 1) {
+            if (await onCleanEvent()) return true;
+            await closeAnyDetail();
+            if (await onCleanEvent()) return true; // close landed back on this event's list
+            await reselectEvent();                 // close went to Summary - reopen this event by number
           }
           return onCleanEvent();
         };
