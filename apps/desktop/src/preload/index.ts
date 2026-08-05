@@ -416,7 +416,7 @@ const api = {
     cancelScan: (): Promise<void> => ipcRenderer.invoke('suggestions:cancelScan'),
     // Save the tag-verification RESULTS table to a user-chosen file — 'xlsx' (spreadsheet with embedded
     // proof images), 'pdf' or 'doc' (a styled report with each tag's proof screenshot). Returns path or null.
-    exportVerifyResults: (format: 'xlsx' | 'pdf' | 'doc', defaultName: string, payload: VerifyExportPayload): Promise<string | null> =>
+    exportVerifyResults: (format: 'xlsx' | 'pdf' | 'doc' | 'docx', defaultName: string, payload: VerifyExportPayload): Promise<string | null> =>
       ipcRenderer.invoke('verify:exportResults', format, defaultName, payload),
     // Real-submit form review: read a page's forms + their OWN fields, return a locale fill plan the
     // operator edits before Phase 2 submits. Read-only (fills/submits nothing).
