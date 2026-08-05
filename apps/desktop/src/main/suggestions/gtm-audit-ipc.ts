@@ -463,16 +463,15 @@ export function registerGtmAuditIpc(data: GoogleDataService, memory?: MemoryStor
   ipcMain.handle('verify:exportResults', async (e, format: unknown, defaultName: unknown, payload: unknown) => {
     const win = BrowserWindow.fromWebContents(e.sender);
     const fmt = String(format ?? '').toLowerCase();
-    if (fmt !== 'pdf' && fmt !== 'doc' && fmt !== 'docx' && fmt !== 'xlsx') throw new Error('Unsupported export format.');
+    if (fmt !== 'pdf' && fmt !== 'docx' && fmt !== 'xlsx') throw new Error('Unsupported export format.');
     const p = payload as VerifyExportPayload;
     if (!p || !Array.isArray(p.rows) || !p.counts) throw new Error('Invalid verification results.');
     const base = String(defaultName ?? 'Tag verification')
       .replace(/[\\/:*?"<>|]/g, '_')
-      .replace(/\.(pdf|docx|doc|xlsx)$/i, '')
+      .replace(/\.(pdf|docx|xlsx)$/i, '')
       .trim() || 'Tag verification';
     const filter =
       fmt === 'docx' ? { name: 'Word', extensions: ['docx'] }
-      : fmt === 'doc' ? { name: 'Word', extensions: ['doc'] }
       : fmt === 'xlsx' ? { name: 'Excel', extensions: ['xlsx'] }
       : { name: 'PDF', extensions: ['pdf'] };
     const opts = { title: 'Export tag verification', defaultPath: `${base}.${fmt}`, filters: [filter] };
@@ -495,12 +494,10 @@ export function registerGtmAuditIpc(data: GoogleDataService, memory?: MemoryStor
 
     const { verifyResultsHtml } = await import('../../shared/verify-results-html');
 
-    // PDF + DOC share the same styled HTML; DOC adds the MS-Office namespaces (word:true). The proof
-    // screenshots are inline data-URIs, so the document is self-contained.
-    const html = reportHtmlDocument(base, '', { word: fmt === 'doc', execHtml: verifyResultsHtml(p) });
-    if (fmt === 'doc') return await writeReportFile(filePath, html);
+    // PDF: the same styled HTML the report uses, with the proof screenshots inline (self-contained).
+    const html = reportHtmlDocument(base, '', { word: false, execHtml: verifyResultsHtml(p) });
 
-    // PDF: render the HTML in a hidden, script-disabled window and print it. The document can be several
+    // Render the HTML in a hidden, script-disabled window and print it. The document can be several
     // MB once the JPEG proofs are embedded, which can exceed the data:-URL navigation limit — so write it
     // to a temp file and loadFile() it (robust for any size) instead of a data: URL.
     const tmpHtml = join(tmpdir(), `samarth-verify-${process.pid}-${Date.now()}.html`);
