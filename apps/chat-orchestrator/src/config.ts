@@ -76,6 +76,9 @@ export interface OrchestratorConfig {
     jwksUrl?: string;
     issuer?: string;
     audience?: string;
+    /** Supabase auth base. Used to verify tokens when the project publishes no public keys. */
+    authUrl?: string;
+    anonKey?: string;
   };
   googleIdentity: {
     /**
@@ -259,6 +262,11 @@ export function loadConfig(): OrchestratorConfig {
       jwksUrl,
       issuer: process.env.SUPABASE_JWT_ISSUER?.trim(),
       audience: process.env.SUPABASE_JWT_AUDIENCE?.trim() || 'authenticated',
+      // Derived from the JWKS URL when not given, since both live under the same auth base.
+      authUrl:
+        process.env.SUPABASE_AUTH_URL?.trim() ||
+        jwksUrl?.replace(/\/\.well-known\/jwks\.json$/, ''),
+      anonKey,
     },
     googleIdentity: {
       mode: identityMode,

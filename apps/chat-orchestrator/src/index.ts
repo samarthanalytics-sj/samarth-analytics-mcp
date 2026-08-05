@@ -76,6 +76,8 @@ async function main(): Promise<void> {
     ? new SupabaseTokenVerifier(cfg.supabase.jwksUrl, {
         issuer: cfg.supabase.issuer,
         audience: cfg.supabase.audience,
+        authUrl: cfg.supabase.authUrl,
+        anonKey: cfg.supabase.anonKey,
       })
     : null;
 
