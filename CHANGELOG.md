@@ -1,3 +1,9 @@
+## [1.451.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.451.0...v1.451.1) (2026-08-05)
+
+### Bug Fixes
+
+* **mcp:** every truncated read says so, and can be resumed ([#817](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/817)) ([f5aa381](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/f5aa3817c7f09e398de87072890cb175fbd10e24))
+
 ## [1.451.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.450.9...v1.451.0) (2026-08-05)
 
 ### Features
