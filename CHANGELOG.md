@@ -1,3 +1,9 @@
+## [1.452.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.451.3...v1.452.0) (2026-08-05)
+
+### Features
+
+* **chat:** chat orchestrator, the GTM/GA4 AI chat backend for the website ([#825](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/825)) ([acc66b3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/acc66b3bc2ad3531f54150df60b8f2a804b5d138))
+
 ## [1.451.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.451.2...v1.451.3) (2026-08-05)
 
 ### Bug Fixes
