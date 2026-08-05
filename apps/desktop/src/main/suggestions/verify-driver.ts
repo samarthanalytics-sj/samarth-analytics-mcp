@@ -31,7 +31,8 @@ interface PwPage {
   goto(url: string, opts?: Record<string, unknown>): Promise<PwResponse | null>;
   evaluate<T = unknown>(fn: unknown, arg?: unknown): Promise<T>;
   waitForTimeout(ms: number): Promise<void>;
-  screenshot(opts?: { type?: 'jpeg' | 'png'; quality?: number; fullPage?: boolean; timeout?: number }): Promise<Buffer>;
+  screenshot(opts?: { type?: 'jpeg' | 'png'; quality?: number; fullPage?: boolean; timeout?: number; clip?: { x: number; y: number; width: number; height: number } }): Promise<Buffer>;
+  viewportSize?(): { width: number; height: number } | null;
   close(): Promise<void>;
 }
 interface PwContext {
@@ -839,8 +840,29 @@ async function captureShot(page: PwPage, state: { n: number }, opts: { boxToRing
     // boxToRing → CLIP to a tight box around the ringed element (+ a form's title) instead of the whole
     // viewport, so the thumbnail reads as "this control / this form". Null clip (no ring, e.g. a page-view
     // tag, or a degenerate box) falls through to the full-viewport shot.
-    const clip = opts.boxToRing ? await page.evaluate(ringedClipInPage).catch(() => null) : null;
-    const buf = await page.screenshot({ type: 'jpeg', quality: clip ? 68 : 55, timeout: 4000, ...(clip ? { clip } : {}) });
+    let clip: { x: number; y: number; width: number; height: number } | null =
+      opts.boxToRing ? await page.evaluate<{ x: number; y: number; width: number; height: number } | null>(ringedClipInPage).catch(() => null) : null;
+    if (clip) {
+      // CLAMP to the real device viewport (not the page's innerWidth, which can exceed it on a wide/
+      // horizontally-overflowing layout): a clip that pokes past the viewport makes page.screenshot throw,
+      // which is why boxing dropped the shot count. Anything degenerate after clamping → no clip.
+      const vp = page.viewportSize?.() ?? { width: 1366, height: 900 };
+      const x = Math.max(0, Math.min(Math.round(clip.x), vp.width - 1));
+      const y = Math.max(0, Math.min(Math.round(clip.y), vp.height - 1));
+      const width = Math.max(1, Math.min(Math.round(clip.width), vp.width - x));
+      const height = Math.max(1, Math.min(Math.round(clip.height), vp.height - y));
+      clip = width >= 40 && height >= 24 ? { x, y, width, height } : null;
+    }
+    if (clip) {
+      try {
+        const buf = await page.screenshot({ type: 'jpeg', quality: 68, timeout: 4000, clip });
+        return `data:image/jpeg;base64,${buf.toString('base64')}`;
+      } catch {
+        /* the clip was still rejected (a race resized the page) — fall back to a full-viewport shot below,
+           so boxing NEVER costs us the screenshot entirely. */
+      }
+    }
+    const buf = await page.screenshot({ type: 'jpeg', quality: 55, timeout: 4000 });
     return `data:image/jpeg;base64,${buf.toString('base64')}`;
   } catch {
     state.n -= 1;
