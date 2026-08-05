@@ -1,3 +1,9 @@
+## [1.450.8](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.450.7...v1.450.8) (2026-08-05)
+
+### Bug Fixes
+
+* **desktop:** close the open tag detail before switching to the paired tag ([#820](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/820)) ([3867c8d](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/3867c8d7fd20d69e7a04d8da43cf7db3102d0d84))
+
 ## [1.450.7](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.450.6...v1.450.7) (2026-08-04)
 
 ### Bug Fixes
