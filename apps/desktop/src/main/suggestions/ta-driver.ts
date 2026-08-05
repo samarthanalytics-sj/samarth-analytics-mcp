@@ -24,7 +24,8 @@ import { PlaywrightUnavailableError } from './playwright-driver';
 import {
   installGuardsInPage, allowFormSubmitInPage, grantConsentInPage, hideCookieOverlaysInPage, pushDataLayerInPage,
   driveInPage, specFor, buildCustomEventPayload, withPreviewParams,
-  type VerifyDriverTag, type DriveOutcome,
+  driveShopifySearchInPage, driveShopifyFilterInPage, isShopifySearchTag, isShopifyFilterTag,
+  type VerifyDriverTag, type DriveOutcome, type ShopifyDriveResult,
 } from './verify-driver';
 import { fillAndSubmitInPage, type FormSubmitFieldInput } from './form-submit-driver';
 import { isFormEventName } from './form-tag-match';
@@ -1530,6 +1531,27 @@ export async function runTaVerify(
         if (kind === 'pageview') {
           perTag.push({ tagId: tag.id, kind: 'navigate', targetFound: true, performed: true, hits: [] });
           continue;
+        }
+        // SHOPIFY search / facet-filter tags fire on interactions the generic click-drive can't reach
+        // (opening the search overlay + submitting; toggling a collection facet). Route them to the
+        // dedicated in-page drivers FIRST; if the control isn't on this page (found:false) we fall through
+        // to the normal drive below, so a plainly-named "search"/"filter" click is never made worse.
+        if (isShopifySearchTag(tag.name, tag.trigger) || isShopifyFilterTag(tag.name, tag.trigger)) {
+          const useSearch = isShopifySearchTag(tag.name, tag.trigger);
+          let r: ShopifyDriveResult;
+          try {
+            r = await popup.evaluate<ShopifyDriveResult>(useSearch ? driveShopifySearchInPage : driveShopifyFilterInPage);
+          } catch (e) {
+            r = { found: false, performed: false, what: useSearch ? 'search' : 'filter', note: (e instanceof Error ? e.message : String(e)).slice(0, 120) };
+          }
+          if (r.found && r.performed) {
+            console.log(`[tag-assistant]     drove Shopify ${r.what} interaction for "${tag.name ?? tag.id}"`);
+            await popup.waitForTimeout(Math.max(settleMs, 800));
+            await snapNewestTa({ names: tag.name ? [tag.name] : [] });
+            perTag.push({ tagId: tag.id, kind: kind === 'form_submit' ? 'submit' : 'click', targetFound: true, performed: true, hits: [] });
+            continue;
+          }
+          // control not on this page → fall through to the normal drive (it may be an ordinary click/form)
         }
         if (kind === 'custom_event') {
           const evName = tag.trigger.eventName ?? '';

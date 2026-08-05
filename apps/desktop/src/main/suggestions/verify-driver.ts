@@ -444,6 +444,99 @@ export function allowFormSubmitInPage(): void {
   (window as unknown as { __vf_allow_submit?: boolean }).__vf_allow_submit = true;
 }
 
+/** Result of a Shopify interaction drive (search / facet filter). `found` = the control was on the page;
+ *  `performed` = we exercised it. The tag's real firing is still credited from the debug stream. */
+export interface ShopifyDriveResult { found: boolean; performed: boolean; what: string; note: string }
+
+/** In the page: exercise the site SEARCH the way a shopper would, so a "Search" tag (a click on the search
+ *  control, or the search form's submit) fires. Reveals a search UI hidden behind a toggle, types a query,
+ *  then submits — installGuardsInPage blocks the real navigation while GTM's own listener still fires.
+ *  Returns found:false when there is no search on this page (caller falls back to the normal drive). */
+export function driveShopifySearchInPage(query?: string): ShopifyDriveResult {
+  try {
+    const q = (query && String(query)) || 'ghee';
+    const visible = (el: Element | null): boolean => !!el && !!(el as HTMLElement).getClientRects && (el as HTMLElement).getClientRects().length > 0;
+    const findInput = (): HTMLInputElement | null =>
+      document.querySelector('input[type="search"], input[name="q" i], input[name="search" i], [role="searchbox"]') as HTMLInputElement | null;
+    let input = findInput();
+    // Search often lives behind a header icon/toggle — click it to reveal the input, then re-query.
+    if (!visible(input)) {
+      const toggle = document.querySelector(
+        'a[href*="/search" i], button[aria-label*="search" i], [role="button"][aria-label*="search" i], [class*="search" i][class*="toggle" i], [data-search-toggle], summary[aria-label*="search" i]',
+      ) as HTMLElement | null;
+      if (toggle) { try { toggle.click(); } catch { /* best-effort */ } }
+      input = findInput();
+    }
+    if (!input) return { found: false, performed: false, what: 'search', note: 'no search input on this page' };
+    try { input.focus(); } catch { /* ignore */ }
+    input.value = q;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    const form = input.closest('form');
+    if (form) {
+      const btn = form.querySelector('button[type="submit"], input[type="submit"], button:not([type])') as HTMLElement | null;
+      if (btn) btn.click();
+      else form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    } else {
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }));
+      input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', bubbles: true }));
+    }
+    return { found: true, performed: true, what: 'search', note: '' };
+  } catch (e) {
+    return { found: false, performed: false, what: 'search', note: String(e).slice(0, 120) };
+  }
+}
+
+/** In the page: toggle a Shopify collection FACET so a "Filter" tag (the facet form's change/submit, or the
+ *  theme's filter dataLayer push) fires. Prefers a real Shopify filter input (name `filter.*`), else a
+ *  checkbox/radio inside a form that posts to a collection. Guards block a full-page submit; theme JS that
+ *  filters via fetch/history still runs. found:false when no facet is here (caller falls back). */
+export function driveShopifyFilterInPage(): ShopifyDriveResult {
+  try {
+    let facet = document.querySelector(
+      'input[name^="filter." i], input[name*="filter" i][type="checkbox"], input[name*="filter" i][type="radio"]',
+    ) as HTMLInputElement | null;
+    if (!facet) {
+      const forms = Array.prototype.slice.call(document.querySelectorAll('form')) as HTMLFormElement[];
+      for (const f of forms) {
+        const act = (f.getAttribute('action') || '').toLowerCase();
+        const id = (f.id || '').toLowerCase();
+        if (act.indexOf('/collections') >= 0 || id.indexOf('facet') >= 0 || id.indexOf('filter') >= 0) {
+          const cb = f.querySelector('input[type="checkbox"], input[type="radio"]') as HTMLInputElement | null;
+          if (cb) { facet = cb; break; }
+        }
+      }
+    }
+    if (!facet) return { found: false, performed: false, what: 'filter', note: 'no collection facet on this page' };
+    try { facet.scrollIntoView({ block: 'center' }); } catch { /* ignore */ }
+    if (facet.type === 'checkbox' || facet.type === 'radio') facet.checked = !facet.checked;
+    facet.dispatchEvent(new Event('input', { bubbles: true }));
+    facet.dispatchEvent(new Event('change', { bubbles: true }));
+    try { facet.click(); } catch { /* some themes bind click; ignore if it re-toggles */ }
+    return { found: true, performed: true, what: 'filter', note: '' };
+  } catch (e) {
+    return { found: false, performed: false, what: 'filter', note: String(e).slice(0, 120) };
+  }
+}
+
+/** Pure: does this tag listen to a SEARCH interaction? Matches the tag/trigger wording (name, event, click
+ *  text, the {{Click Element}} selector). Used to route it to driveShopifySearchInPage before the generic
+ *  click-drive, which can't open a search overlay. */
+export function isShopifySearchTag(name: string | undefined, t: { name?: string; eventName?: string; clickTextValue?: string; clickElementValue?: string }): boolean {
+  const hay = `${name ?? ''} ${t.name ?? ''} ${t.eventName ?? ''} ${t.clickTextValue ?? ''} ${t.clickElementValue ?? ''}`.toLowerCase();
+  // "search" not preceded by a LETTER — so "research" never matches, while "search-toggle" / "searchbox" /
+  // "header__search" (after _, -, ., space, or start) all do.
+  return /(?<![a-z])search/.test(hay);
+}
+
+/** Pure: does this tag listen to a collection FILTER / facet interaction? */
+export function isShopifyFilterTag(name: string | undefined, t: { name?: string; eventName?: string; clickTextValue?: string; clickElementValue?: string; formIdValue?: string; formClassesValue?: string }): boolean {
+  const hay = `${name ?? ''} ${t.name ?? ''} ${t.eventName ?? ''} ${t.clickTextValue ?? ''} ${t.clickElementValue ?? ''} ${t.formIdValue ?? ''} ${t.formClassesValue ?? ''}`.toLowerCase();
+  // "filter"/"facet" not preceded by a LETTER, so "filters"/"filter_applied"/"FacetFiltersForm"/".facet-…"
+  // match while "unfiltered" does not.
+  return /(?<![a-z])(filter|facet)/.test(hay);
+}
+
 /**
  * Grant Consent Mode v2 in-page so consent-gated tags (GA4/Ads/Meta) actually fire during
  * verification. Synthetic override — the question we answer is "does the tag fire when consent is
