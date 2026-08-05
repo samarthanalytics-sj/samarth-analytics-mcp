@@ -1,3 +1,9 @@
+## [1.453.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.453.0...v1.453.1) (2026-08-05)
+
+### Bug Fixes
+
+* **desktop:** match form tags that use GTM's built-in Form Submission trigger + deep-log the plan ([#829](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/829)) ([2943c7f](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/2943c7f2908dde1aef762cfd888b15fda018d363))
+
 ## [1.453.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.452.0...v1.453.0) (2026-08-05)
 
 ### Features
