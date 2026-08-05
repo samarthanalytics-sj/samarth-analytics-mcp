@@ -1505,12 +1505,25 @@ export async function runTaVerify(
       // build under the debug session. So: skip only when NOT in preview mode and it's already the page.
       const alreadyOnPage = done === 1 && popup.url().split('?')[0].replace(/\/$/, '') === pageUrl.split('?')[0].replace(/\/$/, '');
       if (previewParams || !alreadyOnPage) {
-        try { await popup.goto(withPreview(pageUrl), { waitUntil: 'networkidle', timeout: navTimeoutMs }); } catch {
-          for (const t of groupTags) perTag.push({ tagId: t.id, kind: 'navigate', targetFound: false, performed: false, note: `could not load ${pageUrl}`, hits: [] });
-          continue;
+        // A real form submit on the PREVIOUS page navigates the popup; on a heavy Shopify page the next
+        // load can then miss `networkidle` (persistent beacons/sockets) and TIME OUT - which used to be
+        // swallowed silently, skipping this page's form(s) with no trace (the contact + product forms that
+        // never submitted). Retry once with a looser `domcontentloaded` wait, and if it still fails, LOG it.
+        let loaded = false;
+        for (let attempt = 0; attempt < 2 && !loaded; attempt += 1) {
+          try {
+            await popup.goto(withPreview(pageUrl), { waitUntil: attempt === 0 ? 'networkidle' : 'domcontentloaded', timeout: navTimeoutMs });
+            loaded = true;
+          } catch (e) {
+            if (attempt === 0) { await popup.waitForTimeout(1000); continue; } // one retry with a looser wait
+            console.log(`[tag-assistant]   could not load ${pageUrl}: ${(e instanceof Error ? e.message : String(e)).slice(0, 140)} — skipping this page's ${groupTags.length} trigger(s) + ${pageForms.length} form(s). popup now at ${popup.url().slice(0, 120)}`);
+            for (const t of groupTags) perTag.push({ tagId: t.id, kind: 'navigate', targetFound: false, performed: false, note: `could not load ${pageUrl}`, hits: [] });
+          }
         }
+        if (!loaded) continue;
         await popup.waitForTimeout(Math.max(settleMs, 2000)); // container + debug re-attach on the new page
       }
+      console.log(`[tag-assistant]     on ${popup.url().slice(0, 120)} — driving ${groupTags.length} trigger(s), ${pageForms.length} form(s)`);
       // Re-establish the injected container on this page before driving its triggers (see above).
       await ensureInjectedBooted(pageUrl);
       pagesDriven.push(pageUrl);
@@ -1606,7 +1619,8 @@ export async function runTaVerify(
         try { opts.onFormProgress?.(pageUrl, formDone, allForms.length); } catch { /* progress is a nicety */ }
         if (fi > 0) {
           // A later form on the SAME page needs a fresh load (the prior submit navigated the page away).
-          try { await popup.goto(withPreview(pageUrl), { waitUntil: 'networkidle', timeout: navTimeoutMs }); } catch { continue; }
+          try { await popup.goto(withPreview(pageUrl), { waitUntil: 'networkidle', timeout: navTimeoutMs }); }
+          catch (e) { console.log(`[tag-assistant]   could not reload ${pageUrl} for form ${formDone}/${allForms.length}: ${(e instanceof Error ? e.message : String(e)).slice(0, 120)} — skipping it`); continue; }
           await popup.waitForTimeout(Math.max(settleMs, 1500));
           await ensureInjectedBooted(pageUrl);
           await popup.evaluate(grantConsentInPage).catch(() => undefined);
