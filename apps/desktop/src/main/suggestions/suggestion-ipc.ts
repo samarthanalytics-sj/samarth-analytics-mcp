@@ -673,23 +673,34 @@ export function registerSuggestionsIpc(data: GoogleDataService, memory?: MemoryS
     let error: string | undefined;
     const empty = (err: string): FormTagVerifyPlanResult => ({ url: target, localeId: locale.id, locales: localeOptions(), matched: [], sharedFields: [], unmatchedTags: [], pagesCrawled: 0, formTagCount: 0, pageScopedSeeds: 0, error: err });
 
-    // 1. The container's FORM (custom-event) tags → identities.
+    // 1. The container's FORM tags → identities. A form tag is one that fires on a form submission:
+    //    - a custom_event whose event name is a form event (dataLayer form_submission push), OR
+    //    - GTM's BUILT-IN Form Submission trigger (kind 'form_submit', event gtm.formSubmit). This second
+    //      case was excluded before, so a container whose form tags use the NATIVE Form Submission trigger
+    //      (very common on Shopify) yielded ZERO matchable tags → 0 forms verified, every form tag "Untested".
     let tags: FormTagIdentity[] = [];
     try {
       if (o.accountId && o.containerId && o.workspaceId) {
         const snap = await data.getGtmContainerSnapshot(o.accountId, o.containerId, o.workspaceId);
-        tags = snapshotToVerifyInputs(snap).tags
-          // FORM tags only: a custom-event tag whose trigger event denotes a form submit. Excludes
-          // scroll-depth / CTA-click custom-event tags, which otherwise get matched to a form and
-          // wrongly reported as failing to fire on submit.
-          .filter((t) => t.trigger.kind === 'custom_event' && isFormEventName(t.trigger.eventName ?? ''))
+        const allTags = snapshotToVerifyInputs(snap).tags;
+        const isFormTag = (t: { trigger: { kind: string; eventName?: string } }): boolean =>
+          (t.trigger.kind === 'custom_event' && isFormEventName(t.trigger.eventName ?? '')) || t.trigger.kind === 'form_submit';
+        // DEEP DIAGNOSTIC: every container tag, its trigger kind + event, page scope, and whether it counts
+        // as a form-matchable tag. This is the FIRST thing to read when 0 forms verify — it shows at a glance
+        // whether the form tags were recognised (e.g. a Form Submission trigger vs a custom_event push).
+        for (const t of allTags) {
+          console.log(`[form-plan] tag "${t.tagName}" kind=${t.trigger.kind} event="${t.trigger.eventName ?? ''}"${t.page ? ` page=${t.page}` : ''} -> ${isFormTag(t) ? 'FORM (matchable)' : 'skip'}`);
+        }
+        tags = allTags
+          .filter(isFormTag)
           .map((t) => {
             const cd = t.trigger.customEventData ?? {};
             // Use the tag's actual form-name / form-id CONDITION as its identity — NOT an arbitrary first
             // customEventData value. A pixel tag can carry non-form fields (value / currency / content_name)
             // or none; Object.values(cd)[0] would then hand every such tag the SAME junk token and pile them
             // all onto one form. With no form-name condition we omit it, so matching falls to the tag name
-            // (whose service token pairs with the form's page path).
+            // (whose service token pairs with the form's page path). A built-in Form Submission trigger has
+            // no customEventData, so form_submit tags match by name / page scope / contact-intent.
             const formName = cd.form_name ?? cd.formName ?? cd.form_id ?? cd.formId;
             // t.page is the tag's resolved Page-Path / URL trigger scope (snapshotToVerifyInputs computes
             // it). Feed it to matching so a page-scoped form tag pairs deterministically with that page's
@@ -701,11 +712,11 @@ export function registerSuggestionsIpc(data: GoogleDataService, memory?: MemoryS
       return empty(`Could not read the container: ${(e instanceof Error ? e.message : String(e)).slice(0, 150)}`);
     }
     if (tags.length === 0) {
-      return empty(o.accountId ? 'This container has no form (custom-event) tags to verify. Create form-tracking tags first.' : 'Pick a GTM account, container and workspace (the GTM bar) so we know which form tags to verify.');
+      return empty(o.accountId ? 'This container has no form-submission tags to verify. Create form-tracking tags first.' : 'Pick a GTM account, container and workspace (the GTM bar) so we know which form tags to verify.');
     }
     // DIAGNOSTIC: the form tags that entered matching, with their identity signals (form-name condition +
     // page-path scope). When 0 forms end up submitted, this is the first half of "why" — a tag with neither
-    // a form_name nor a page scope can only match by NAME↔title token overlap.
+    // a form_name nor a page scope can only match by NAME↔title token overlap or the contact-intent fallback.
     console.log(`[form-plan] ${tags.length} form tag(s) to match: ${tags.map((t) => `"${t.tagName}"${t.formName ? ` form_name=${t.formName}` : ''}${t.page ? ` page=${t.page}` : ''}`).join(' | ')}`);
 
     // 2. Crawl the site ONCE. This single pass BOTH collects the forms (per page, via the onPageForms
