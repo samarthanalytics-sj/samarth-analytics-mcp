@@ -830,13 +830,17 @@ function locateFormInPage(loc: { formId?: string; tokens?: string[] }): { found:
 const MAX_SCREENSHOTS = 80;
 /** A compact JPEG screenshot of the current page as a data URI — visual proof of the interaction the
  *  driver just performed (for click/form tags the driven element is ringed). Best-effort + bounded. */
-async function captureShot(page: PwPage, state: { n: number }): Promise<string | undefined> {
+async function captureShot(page: PwPage, state: { n: number }, opts: { boxToRing?: boolean } = {}): Promise<string | undefined> {
   // Reserve the slot SYNCHRONOUSLY (before the awaited screenshot) so concurrent page workers sharing
   // this counter can't both pass the cap and overshoot MAX_SCREENSHOTS; release it back on failure.
   if (state.n >= MAX_SCREENSHOTS) return undefined;
   state.n += 1;
   try {
-    const buf = await page.screenshot({ type: 'jpeg', quality: 55, timeout: 4000 });
+    // boxToRing → CLIP to a tight box around the ringed element (+ a form's title) instead of the whole
+    // viewport, so the thumbnail reads as "this control / this form". Null clip (no ring, e.g. a page-view
+    // tag, or a degenerate box) falls through to the full-viewport shot.
+    const clip = opts.boxToRing ? await page.evaluate(ringedClipInPage).catch(() => null) : null;
+    const buf = await page.screenshot({ type: 'jpeg', quality: clip ? 68 : 55, timeout: 4000, ...(clip ? { clip } : {}) });
     return `data:image/jpeg;base64,${buf.toString('base64')}`;
   } catch {
     state.n -= 1;
@@ -1307,6 +1311,53 @@ function rescrollRingedInPage(): void {
   }
 }
 
+/** In the page: the viewport-space rectangle to CLIP the proof screenshot to, so the shot is a tight box
+ *  around the ringed element instead of the whole page (the "not a proper box" the operator saw). Adds
+ *  padding, and for a form pulls in its TITLE (a heading inside the form or directly above it) so the box
+ *  reads as "this form". Returns null when there's no ring or the box would be degenerate → caller falls
+ *  back to the full viewport (correct for a page-view tag, whose "location" is the whole page). */
+function ringedClipInPage(): { x: number; y: number; width: number; height: number } | null {
+  try {
+    const el = document.querySelector('[data-sx-hl]') as HTMLElement | null;
+    if (!el) return null;
+    const vw = Math.max(1, Math.min(window.innerWidth || 0, document.documentElement.clientWidth || 0) || window.innerWidth);
+    const vh = Math.max(1, Math.min(window.innerHeight || 0, document.documentElement.clientHeight || 0) || window.innerHeight);
+    const r = el.getBoundingClientRect();
+    let top = r.top, left = r.left, right = r.right, bottom = r.bottom;
+    // A form (or a wrapper that holds form controls) → include its title heading so the box is self-
+    // explanatory. Take a heading INSIDE the form's top, else one DIRECTLY ABOVE it (horizontally
+    // overlapping, within ~140px) — the usual "Contact Us" / "Get Your Free…" heading over a form.
+    const isFormish = el.tagName === 'FORM' || !!el.querySelector('form, input, textarea, select');
+    if (isFormish) {
+      const heads = Array.prototype.slice.call(document.querySelectorAll('h1,h2,h3,h4,[role="heading"]')) as HTMLElement[];
+      let best: DOMRect | null = null;
+      let bestGap = Infinity;
+      for (const hh of heads) {
+        const hr = hh.getBoundingClientRect();
+        if (hr.width < 40 || hr.height < 8) continue; // skip empty/icon headings
+        const horizontallyOverlaps = hr.left < right && hr.right > left;
+        const insideTop = hr.top >= r.top - 4 && hr.top <= r.top + Math.min(r.height * 0.5, 160);
+        const justAbove = hr.bottom <= r.top + 4 && (r.top - hr.bottom) < 140;
+        if (horizontallyOverlaps && (insideTop || justAbove)) {
+          const gap = Math.abs(r.top - hr.top);
+          if (gap < bestGap) { bestGap = gap; best = hr; }
+        }
+      }
+      if (best) { top = Math.min(top, best.top); left = Math.min(left, best.left); right = Math.max(right, best.right); }
+    }
+    const pad = 20;
+    const x = Math.max(0, Math.floor(left - pad));
+    const y = Math.max(0, Math.floor(top - pad));
+    const width = Math.min(vw, Math.ceil(right + pad)) - x;
+    const height = Math.min(vh, Math.ceil(bottom + pad)) - y;
+    // Degenerate / off-screen → let the caller take a full-viewport shot instead of a sliver.
+    if (width < 48 || height < 32) return null;
+    return { x, y, width: Math.min(width, vw - x), height: Math.min(height, vh - y) };
+  } catch {
+    return null;
+  }
+}
+
 /** Hide fixed/sticky cookie-consent + similar overlays so a ringed FOOTER element (email/phone/footer
  *  CTA — the usual site-wide mailto) isn't obscured behind the banner in the proof screenshot. Only
  *  hides fixed/sticky consent-style containers; best-effort and read-only-ish (a discarded page). */
@@ -1446,7 +1497,10 @@ export async function runSuggestionScreenshots(
             await page.waitForTimeout(120);
           } catch { /* best-effort */ }
         }
-        const screenshot = found ? await captureShot(page, shotState) : undefined;
+        // Box the shot to the ringed control/form for click & form tags; a page-view tag's "location" is
+        // the whole page, so keep its shot full-viewport (no ring to box).
+        const boxToRing = t.trigger.kind !== 'pageview';
+        const screenshot = found ? await captureShot(page, shotState, { boxToRing }) : undefined;
         shots.push({ tagId: t.id, page: pageUrl, ...(screenshot ? { screenshot } : {}) });
       }
     };

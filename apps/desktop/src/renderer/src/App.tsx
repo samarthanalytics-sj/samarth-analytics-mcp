@@ -60,7 +60,7 @@ import type {
   FormTagVerifyPlanResult,
   SubmitFormVerifyResult,
 } from '../../shared/ipc';
-import { suggestionToGroup, suggestionsToTemplateCsv, suggestionsToInstallRunbookMarkdown, installPlanNeedsAction, installPlanProgress, dedupeViewsByGtmName, conversionActionNameFromTag, TEMPLATE_HEADERS, applyTagEdit, adsIdentityIssue, TAG_TYPE_OPTIONS, STANDARD_TRIGGER_VARIABLES, CONDITION_LABELS, type TagEdit, type TemplateGroup, type TriggerWhen, type InstallProgress } from '../../shared/tag-template';
+import { suggestionToGroup, suggestionsToTemplateCsv, suggestionsToTemplateRows, TEMPLATE_HEADERS_XLSX, suggestionsToInstallRunbookMarkdown, installPlanNeedsAction, installPlanProgress, dedupeViewsByGtmName, conversionActionNameFromTag, TEMPLATE_HEADERS, applyTagEdit, adsIdentityIssue, TAG_TYPE_OPTIONS, STANDARD_TRIGGER_VARIABLES, CONDITION_LABELS, type TagEdit, type TemplateGroup, type TriggerWhen, type InstallProgress } from '../../shared/tag-template';
 import { findMergeGroups, mergeGroup, mergeLabel, type MergeGroup } from '../../shared/tag-merge';
 import { splittableFormPages, splitFormByPage } from '../../shared/tag-split';
 import { parseCsvUrls, parseCsvUrlStats, CSV_URL_CAP } from '../../shared/csv-urls';
@@ -4905,6 +4905,22 @@ function TagReviewPanel({
     }
   }
 
+  // Native Excel (.xlsx) of the same tag structure the CSV exports — same rows (built by the shared
+  // suggestionsToTemplateRows so they never drift), a leading Page column, bold frozen header + autofilter.
+  async function downloadStructureXlsx(): Promise<void> {
+    const picked = suggestions.filter((s) => selected[s.id]);
+    const list = (picked.length ? picked : suggestions).map(effective);
+    if (!list.length) return;
+    setExportNote('');
+    try {
+      const rows = suggestionsToTemplateRows(list);
+      const saved = await window.desktop.tags.exportXlsx('GTM Structure - GA4 Events.xlsx', [...TEMPLATE_HEADERS_XLSX], rows);
+      setExportNote(saved ? `✓ Saved ${list.length} tag(s) to ${saved}` : 'Export cancelled');
+    } catch (e) {
+      onError(String(e));
+    }
+  }
+
   // Download the whole scan's measurement plan as a client-ready "install runbook"
   // Markdown: per-tag GTM structure + site-side install steps + a consolidated
   // "what your developer must do" section. Uses the SAME deduped, edit-applied list
@@ -5805,6 +5821,9 @@ function TagReviewPanel({
                 </button>
                 <button style={styles.linkBtn} onClick={() => void downloadStructureCsv()}>
                   ⬇ Download CSV
+                </button>
+                <button style={styles.linkBtn} onClick={() => void downloadStructureXlsx()}>
+                  ⬇ Excel
                 </button>
                 <button style={styles.linkBtn} onClick={() => void downloadRunbook('md')}>
                   ⬇ Install runbook
