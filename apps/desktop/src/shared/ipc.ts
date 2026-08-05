@@ -909,9 +909,12 @@ export interface TaTriggerSuggestion {
  *  - crawl   : scanning site pages to locate each tag's trigger (the long phase)
  *  - drive   : navigating each page and exercising its tags */
 export interface VerifyProgressView {
-  phase: 'prepare' | 'monitor' | 'crawl' | 'drive';
+  phase: 'prepare' | 'monitor' | 'crawl' | 'drive' | 'awaitHuman';
   /** A short human label for the phase (e.g. "Scanning site pages to locate each tag"). */
   message: string;
+  /** For phase 'awaitHuman': what the operator must complete in the visible window before the run resumes
+   *  (an OTP entry, a CAPTCHA, or a generic verification step). The renderer shows a Continue button. */
+  humanKind?: 'otp' | 'captcha' | 'verification';
   /** The page being scanned / driven right now, when applicable. */
   page?: string;
   /** Completed count so far in this phase (1-based), when known. */
