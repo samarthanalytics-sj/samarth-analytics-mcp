@@ -1,3 +1,9 @@
+## [1.453.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.452.0...v1.453.0) (2026-08-05)
+
+### Features
+
+* **desktop:** drive Shopify search + collection filters in tag verification ([#826](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/826)) ([3dd0c12](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/3dd0c12c8bf115f08db8899e571d810f9d21f6f2))
+
 ## [1.452.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.451.3...v1.452.0) (2026-08-05)
 
 ### Features
