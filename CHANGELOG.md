@@ -1,3 +1,9 @@
+## [1.451.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.451.2...v1.451.3) (2026-08-05)
+
+### Bug Fixes
+
+* **desktop:** box location shots by cropping the full screenshot, never a screenshot clip ([#824](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/824)) ([d3736e0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d3736e0179765037749ea653864733188649284d))
+
 ## [1.451.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.451.1...v1.451.2) (2026-08-05)
 
 ### Bug Fixes
