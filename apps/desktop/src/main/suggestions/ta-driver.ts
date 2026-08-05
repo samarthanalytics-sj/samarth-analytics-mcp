@@ -23,7 +23,7 @@ import { classifyCollector } from '../../shared/runtime-capture';
 import { PlaywrightUnavailableError } from './playwright-driver';
 import {
   installGuardsInPage, allowFormSubmitInPage, grantConsentInPage, hideCookieOverlaysInPage, pushDataLayerInPage,
-  driveInPage, specFor, buildCustomEventPayload, withPreviewParams,
+  driveInPage, specFor, buildCustomEventPayload, withPreviewParams, detectHumanStepInPage,
   driveShopifySearchInPage, driveShopifyFilterInPage, isShopifySearchTag, isShopifyFilterTag,
   type VerifyDriverTag, type DriveOutcome, type ShopifyDriveResult,
 } from './verify-driver';
@@ -727,7 +727,7 @@ export async function runTaVerify(
   url: string,
   tags: VerifyDriverTag[],
   containerPublicId: string,
-  opts: { settleMs?: number; navTimeoutMs?: number; loginHint?: string; signInTimeoutMs?: number; previewSnippet?: string; injectContainerId?: string; forms?: TaFormSubmit[]; driveTriggers?: boolean; onSignInPrompt?: () => void; onPageProgress?: (page: string, done: number, total: number) => void; onFormProgress?: (page: string, done: number, total: number) => void; shouldStop?: () => boolean } = {},
+  opts: { settleMs?: number; navTimeoutMs?: number; loginHint?: string; signInTimeoutMs?: number; previewSnippet?: string; injectContainerId?: string; forms?: TaFormSubmit[]; driveTriggers?: boolean; onSignInPrompt?: () => void; onPageProgress?: (page: string, done: number, total: number) => void; onFormProgress?: (page: string, done: number, total: number) => void; onAwaitHuman?: (info: { kind: 'otp' | 'captcha' | 'verification'; page: string }) => Promise<void>; shouldStop?: () => boolean } = {},
 ): Promise<TaVerifyResult> {
   const settleMs = opts.settleMs ?? 900;
   const navTimeoutMs = opts.navTimeoutMs ?? 25_000;
@@ -1638,6 +1638,21 @@ export async function runTaVerify(
         }
         // Let the (often AJAX) submit resolve + the success-state form_submission push + the tag fire.
         await popup.waitForTimeout(Math.max(settleMs, 3000));
+        // OPERATOR-ASSISTED STEP: if the form is now gated behind an OTP entry or a CAPTCHA, the success /
+        // conversion tag only fires once a HUMAN completes it. Pause here and let the operator finish it in
+        // the visible window, then resume and capture whatever fired. We never solve or bypass the challenge.
+        if (opts.onAwaitHuman) {
+          try {
+            const human = await popup.evaluate<{ kind: '' | 'otp' | 'captcha' | 'verification' }>(detectHumanStepInPage).catch(() => ({ kind: '' as const }));
+            if (human.kind) {
+              console.log(`[tag-assistant]   ${human.kind.toUpperCase()} step detected after this submit — pausing for the operator to complete it in the window...`);
+              await opts.onAwaitHuman({ kind: human.kind, page: pageUrl });
+              console.log('[tag-assistant]   resumed — capturing what fired after the human step.');
+              // Give the post-verification success push + tag fire time to stream in.
+              await popup.waitForTimeout(Math.max(settleMs, 2500));
+            }
+          } catch { /* the pause is best-effort — never let it break the run */ }
+        }
         // Poll briefly for the newest rail event to become form_submission (frames arrive async after the
         // reload), then snapshot that event's Tags-Fired panel (proof for THIS form's tags).
         for (let poll = 0; poll < 6; poll += 1) {

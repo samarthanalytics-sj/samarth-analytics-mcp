@@ -444,6 +444,35 @@ export function allowFormSubmitInPage(): void {
   (window as unknown as { __vf_allow_submit?: boolean }).__vf_allow_submit = true;
 }
 
+/** In the page (AFTER a real form submit): is the form now gated behind a human step — a CAPTCHA, or an
+ *  OTP / verification-code entry — that must be completed before the success/conversion tag fires? Returns
+ *  the kind (or '') so the driver can PAUSE and let the operator finish it by hand in the visible window.
+ *  Detection only — never solves or bypasses anything. */
+export function detectHumanStepInPage(): { kind: '' | 'otp' | 'captcha' | 'verification' } {
+  try {
+    const visible = (el: Element | null): boolean => !!el && !!(el as HTMLElement).getClientRects && (el as HTMLElement).getClientRects().length > 0;
+    // CAPTCHA widgets: reCAPTCHA / hCaptcha / Cloudflare Turnstile (iframe or the mount div with a sitekey).
+    const captcha = document.querySelector(
+      'iframe[src*="recaptcha" i], iframe[src*="hcaptcha" i], iframe[src*="turnstile" i], iframe[title*="captcha" i], .g-recaptcha, .h-captcha, .cf-turnstile, [data-sitekey]',
+    );
+    if (visible(captcha)) return { kind: 'captcha' };
+    // OTP / verification-code entry: an input whose name/id/placeholder/autocomplete says otp / code /
+    // one-time / verification, OR visible on-page copy asking for a code sent to a phone/email.
+    const otpInput = Array.prototype.slice.call(document.querySelectorAll('input')).find((el) => {
+      const i = el as HTMLInputElement;
+      if (!visible(i) || i.type === 'hidden') return false;
+      const hay = `${i.name} ${i.id} ${i.placeholder} ${i.getAttribute('autocomplete') || ''} ${i.getAttribute('aria-label') || ''}`.toLowerCase();
+      return /\botp\b|one[-\s]?time|verification\s*code|\bverify\b.*code|\bpin\b|sms\s*code|\bcode\b/.test(hay) && i.maxLength <= 8;
+    });
+    if (otpInput) return { kind: 'otp' };
+    const bodyText = (document.body.innerText || '').toLowerCase();
+    if (/(enter|verify).{0,30}(otp|one[-\s]?time|code|pin)\b/.test(bodyText) && /sent (to|you|your)/.test(bodyText)) return { kind: 'otp' };
+    return { kind: '' };
+  } catch {
+    return { kind: '' };
+  }
+}
+
 /** Result of a Shopify interaction drive (search / facet filter). `found` = the control was on the page;
  *  `performed` = we exercised it. The tag's real firing is still credited from the debug stream. */
 export interface ShopifyDriveResult { found: boolean; performed: boolean; what: string; note: string }

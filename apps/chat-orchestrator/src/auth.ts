@@ -6,7 +6,7 @@
  * orchestrator trusts nothing else: user and org identity always come from verified claims, never
  * from the request body.
  */
-import { createPublicKey, createVerify, timingSafeEqual } from 'node:crypto';
+import { createHash, createPublicKey, createVerify, timingSafeEqual } from 'node:crypto';
 import type { AuthedUser } from './types.js';
 
 interface Jwk {
@@ -22,6 +22,7 @@ interface Jwk {
 }
 
 const JWKS_TTL_MS = 60 * 60 * 1000;
+const REMOTE_CACHE_TTL_MS = 60 * 1000;
 const CLOCK_SKEW_SEC = 30;
 const SUPPORTED_ALGS = new Set(['RS256', 'RS384', 'RS512', 'ES256']);
 
@@ -42,15 +43,100 @@ function b64uToJson<T>(input: string): T {
   return JSON.parse(b64uToBuf(input).toString('utf8')) as T;
 }
 
+/** Reads `exp` without verifying. Only used to shorten a cache TTL, never to grant access. */
+function readExpiry(token: string): number | null {
+  try {
+    const { exp } = b64uToJson<{ exp?: number }>(token.split('.')[1]);
+    return typeof exp === 'number' ? exp * 1000 : null;
+  } catch {
+    return null;
+  }
+}
+
 export class SupabaseTokenVerifier {
   private keys: Jwk[] = [];
   private fetchedAt = 0;
 
+  /** Remote-verification results, keyed by a digest of the token. Never holds the token itself. */
+  private readonly remoteCache = new Map<string, { user: AuthedUser; expiresAt: number }>();
+
   constructor(
     private readonly jwksUrl: string,
-    private readonly opts: { issuer?: string; audience?: string } = {},
+    private readonly opts: {
+      issuer?: string;
+      audience?: string;
+      /**
+       * Supabase auth base, e.g. https://<ref>.supabase.co/auth/v1. Enables the fallback used when
+       * the project still signs with a shared secret and publishes no public keys.
+       */
+      authUrl?: string;
+      anonKey?: string;
+    } = {},
     private readonly fetchImpl: typeof fetch = fetch,
   ) {}
+
+  /**
+   * Verifies a token against Supabase itself.
+   *
+   * Needed because a Supabase project on the legacy signing scheme uses HS256 with the project's
+   * JWT secret and serves an EMPTY JWKS. Local verification is impossible without holding that
+   * secret, and a secret that can verify tokens can also mint them, which is not a credential this
+   * service should carry. Asking Supabase is authoritative, needs only the public anon key, and is
+   * what the platform's own Edge Functions already do.
+   *
+   * Costs one request per turn, so results are cached briefly. The cache key is a digest, so a
+   * memory dump does not yield usable tokens.
+   */
+  private async verifyRemotely(token: string): Promise<AuthedUser> {
+    const { authUrl, anonKey } = this.opts;
+    if (!authUrl || !anonKey) {
+      throw new AuthError(
+        'This Supabase project publishes no public keys, so tokens must be verified against the ' +
+          'Supabase API. Set SUPABASE_AUTH_URL and SUPABASE_ANON_KEY.',
+        'misconfigured',
+      );
+    }
+
+    const key = createHash('sha256').update(token).digest('hex');
+    const hit = this.remoteCache.get(key);
+    if (hit && hit.expiresAt > Date.now()) return hit.user;
+
+    let res: Response;
+    try {
+      res = await this.fetchImpl(`${authUrl.replace(/\/$/, '')}/user`, {
+        headers: { Authorization: `Bearer ${token}`, apikey: anonKey },
+      });
+    } catch (err) {
+      throw new AuthError(
+        `Could not reach Supabase to verify the session: ${err instanceof Error ? err.message : String(err)}`,
+        'verifier_unavailable',
+      );
+    }
+
+    if (res.status === 401 || res.status === 403) {
+      throw new AuthError('Your session is no longer valid. Please sign in again.', 'auth_expired');
+    }
+    if (!res.ok) {
+      throw new AuthError(
+        `Supabase returned ${res.status} verifying the session`,
+        'verifier_unavailable',
+      );
+    }
+
+    const body = (await res.json().catch(() => ({}))) as { id?: string; email?: string };
+    if (!body.id) throw new AuthError('Supabase returned no user for this token', 'no_subject');
+
+    const user: AuthedUser = { id: body.id, email: body.email };
+    // Bounded by the token's own expiry so a revoked-then-reissued session cannot ride a stale hit.
+    const exp = readExpiry(token);
+    const ttl = Math.min(
+      REMOTE_CACHE_TTL_MS,
+      exp ? Math.max(exp - Date.now(), 0) : REMOTE_CACHE_TTL_MS,
+    );
+    this.remoteCache.set(key, { user, expiresAt: Date.now() + ttl });
+    if (this.remoteCache.size > 5000) this.remoteCache.clear();
+    return user;
+  }
 
   private async loadKeys(force = false): Promise<Jwk[]> {
     const fresh = Date.now() - this.fetchedAt < JWKS_TTL_MS;
@@ -88,11 +174,17 @@ export class SupabaseTokenVerifier {
     const [rawHeader, rawPayload, rawSignature] = parts;
     const header = b64uToJson<{ alg?: string; kid?: string }>(rawHeader);
 
-    // Pin the algorithm family: accepting "none" or an HMAC alg here would let a caller sign
-    // their own token with the public key.
+    // A project on the legacy signing scheme uses HS256 and publishes no keys. Verifying that
+    // locally would mean holding the project's JWT secret, which can mint tokens as well as check
+    // them, so ask Supabase instead. Deliberately keyed on the algorithm rather than on an empty
+    // JWKS, so a symmetric token can never be accepted through the local path.
     if (!header.alg || !SUPPORTED_ALGS.has(header.alg)) {
+      if (header.alg?.startsWith('HS')) return this.verifyRemotely(token);
       throw new AuthError(`Unsupported token algorithm ${header.alg ?? 'none'}`, 'bad_algorithm');
     }
+
+    // Asymmetric token, but the project has published no keys to check it against.
+    if ((await this.loadKeys().catch(() => [])).length === 0) return this.verifyRemotely(token);
 
     const jwk = await this.keyFor(header.kid);
     const keyObject = createPublicKey({ key: jwk as never, format: 'jwk' });

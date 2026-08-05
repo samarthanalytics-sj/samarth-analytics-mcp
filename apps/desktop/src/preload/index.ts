@@ -409,6 +409,8 @@ const api = {
     // Stop the in-flight verify scan/drive (the Stop button). The crawl + Tag-Assistant drive finish the
     // current page and resolve with a partial result; the renderer also stops the orchestration.
     cancelVerify: (): Promise<void> => ipcRenderer.invoke('suggestions:cancelVerify'),
+    // Resume a verify run paused on an OTP / CAPTCHA step (operator finished it in the window → Continue).
+    continueVerify: (): Promise<void> => ipcRenderer.invoke('suggestions:continueVerify'),
     /** Stop a running scan. The in-flight scanStream/scanUrlsStream promise still RESOLVES, with the
      *  pages read so far and a warning saying it was stopped. */
     cancelScan: (): Promise<void> => ipcRenderer.invoke('suggestions:cancelScan'),

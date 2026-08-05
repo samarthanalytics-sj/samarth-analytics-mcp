@@ -7203,6 +7203,9 @@ function VerifyPanel({
   // the next "Verify with Tag Assistant" run (Phase 2b). A ref so an edit doesn't re-render the buttons.
   const vReviewedFormsRef = useRef<NonNullable<VerifyTagsOptions['reviewedForms']>>([]);
   const [vProgress, setVProgress] = useState<VerifyProgressView | null>(null);
+  // Set while a verify run is PAUSED on an OTP / CAPTCHA step, waiting for the operator to finish it in the
+  // Tag Assistant window and click Continue. Cleared on the next non-pause progress event.
+  const [vAwaitHuman, setVAwaitHuman] = useState<VerifyProgressView | null>(null);
   // What this run exercises. 'clicks' skips the forms step entirely (no real lead is created); 'forms'
   // submits the reviewed forms without driving tag triggers; 'both' is the full run.
   const [vScope, setVScope] = useState<'both' | 'clicks' | 'forms'>('both');
@@ -7213,13 +7216,16 @@ function VerifyPanel({
   // One entry point for progress: keep the live line AND roll the previous page into the done list.
   const onVerifyProgress = (p: VerifyProgressView): void => {
     setVProgress(p);
+    // Operator-assisted pause: show/clear the "Complete OTP/CAPTCHA, then Continue" banner.
+    if (p.phase === 'awaitHuman') setVAwaitHuman(p);
+    else setVAwaitHuman(null);
     const page = (p.page ?? '').trim();
     if (!page || page === vPageRef.current) return;
     const prev = vPageRef.current;
     vPageRef.current = page;
     if (prev) setVPagesDone((list) => (list.includes(prev) ? list : [...list, prev]));
   };
-  const resetVerifyProgress = (): void => { vPageRef.current = ''; setVPagesDone([]); };
+  const resetVerifyProgress = (): void => { vPageRef.current = ''; setVPagesDone([]); setVAwaitHuman(null); };
   const [vResult, setVResult] = useState<VerifyTagsResult | null>(null);
   const [vSkipped, setVSkipped] = useState<Array<{ tagId: string; name: string; reason: string }>>([]);
   const [vShowSkipped, setVShowSkipped] = useState(false);
@@ -7940,6 +7946,24 @@ function VerifyPanel({
               {/* Indeterminate bar - no % is known (the driver loads + drives every page), so an animated
                   sliver signals "working" without a false percentage. */}
               <div className="vf-progress" role="progressbar" aria-label="Verification in progress" aria-busy="true" style={{ marginTop: 8 }} />
+              {/* OPERATOR-ASSISTED PAUSE: the run hit an OTP / CAPTCHA it can't (and won't) solve. The
+                  operator finishes it by hand in the visible Tag Assistant window, then clicks Continue. */}
+              {vAwaitHuman && (
+                <div role="alert" style={{ marginTop: 10, padding: '12px 14px', borderRadius: 'var(--radius)', background: 'var(--c-amber-bg)', border: '1px solid var(--c-amber)', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 18 }} aria-hidden>⏸️</span>
+                  <div style={{ flex: 1, minWidth: 200 }}>
+                    <div style={{ fontWeight: 700, color: 'var(--c-amber)' }}>
+                      Paused — {vAwaitHuman.humanKind === 'captcha' ? 'CAPTCHA' : vAwaitHuman.humanKind === 'otp' ? 'OTP / verification code' : 'a verification step'} needs you
+                    </div>
+                    <div style={{ ...styles.muted, fontSize: 12.5, marginTop: 2 }}>
+                      Complete it in the Tag Assistant window that’s open, then click Continue so we can capture the tag(s) that fire. Nothing is bypassed — you finish the step.
+                    </div>
+                  </div>
+                  <button style={styles.primaryBtn} onClick={() => { setVAwaitHuman(null); void window.desktop.tags.continueVerify(); }}>
+                    Continue ▶
+                  </button>
+                </div>
+              )}
               {/* Live feed: the page being scanned/driven right now - low-opacity + fading so it reads as
                   "work in flight", with a phase label and (for the crawl/drive) an honest done/total. */}
               {vProgress && (
@@ -7949,6 +7973,7 @@ function VerifyPanel({
                     {vProgress.phase === 'crawl' ? 'Scanning pages'
                       : vProgress.phase === 'drive' ? 'Verifying tags'
                       : vProgress.phase === 'monitor' ? 'Minting monitor preview'
+                      : vProgress.phase === 'awaitHuman' ? 'Paused for you'
                       : 'Preparing'}
                   </span>
                   {vProgress.page && (

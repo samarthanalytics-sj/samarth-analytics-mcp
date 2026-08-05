@@ -69,6 +69,12 @@ function takeVerifyEls(url: string): { els: DetectedElementView[]; pagesCrawled:
 let verifyCancelled = false;
 const shouldStopVerify = (): boolean => verifyCancelled;
 
+// Operator-assisted pause: when a form submit lands on an OTP / CAPTCHA step, the drive awaits this resolver
+// and the renderer's "Continue" button (suggestions:continueVerify) resolves it. One at a time (one verify
+// run at a time), so a single module-level resolver is enough; a Stop also releases it.
+let verifyContinueResolver: (() => void) | null = null;
+const releaseVerifyContinue = (): void => { const r = verifyContinueResolver; verifyContinueResolver = null; r?.(); };
+
 // The same cooperative cancel for a tag-suggestion SCAN (its own Stop button). Kept separate from the
 // verify flag on purpose: the two run from different tabs, and stopping one must never halt the other.
 let scanCancelled = false;
@@ -107,7 +113,10 @@ export function registerSuggestionsIpc(data: GoogleDataService, memory?: MemoryS
 
   // Stop the in-flight verify scan/drive. Sets the flag the crawl + Tag-Assistant drive loops poll; they
   // finish the current page and resolve with a partial result. The renderer also stops the orchestration.
-  ipcMain.handle('suggestions:cancelVerify', () => { verifyCancelled = true; });
+  ipcMain.handle('suggestions:cancelVerify', () => { verifyCancelled = true; releaseVerifyContinue(); });
+
+  // Operator clicked "Continue" on the OTP / CAPTCHA pause — resume the paused form-submit drive.
+  ipcMain.handle('suggestions:continueVerify', () => { releaseVerifyContinue(); });
   // Stop a running scan. The crawl workers poll shouldStopScan() at their loop boundary and resolve
   // with the pages already read, so the user keeps the partial result instead of losing the run.
   ipcMain.handle('suggestions:cancelScan', () => { scanCancelled = true; });
@@ -479,6 +488,15 @@ export function registerSuggestionsIpc(data: GoogleDataService, memory?: MemoryS
           onSignInPrompt: () => emit({ phase: 'monitor', message: 'ONE-TIME Tag Assistant sign-in: complete it in the window that just opened (your email is pre-filled). It is saved after this, so verify never asks again.' }),
           onPageProgress: (page, done, total) => emit({ phase: 'drive', message: 'Driving tags in the Tag Assistant window', page, done, total }),
           onFormProgress: (page, done, total) => emit({ phase: 'drive', message: 'Submitting a form for real in Tag Assistant', page, done, total }),
+          // OPERATOR-ASSISTED PAUSE: the form landed on an OTP / CAPTCHA step. Tell the renderer to show a
+          // "Complete it in the window, then Continue" banner, and wait for the operator's Continue (or a Stop,
+          // or a 5-minute safety timeout) before resuming. We never solve the challenge — a human does.
+          onAwaitHuman: (info) => new Promise<void>((resolve) => {
+            const label = info.kind === 'captcha' ? 'a CAPTCHA' : info.kind === 'otp' ? 'an OTP / verification code' : 'a verification step';
+            emit({ phase: 'awaitHuman', humanKind: info.kind, message: `Complete ${label} in the Tag Assistant window, then click Continue`, page: info.page });
+            verifyContinueResolver = resolve;
+            setTimeout(() => { if (verifyContinueResolver === resolve) { verifyContinueResolver = null; resolve(); } }, 300_000);
+          }),
           shouldStop: shouldStopVerify,
         });
         const base = { url: target, injected: false, previewAuth: false, pagesOk: ta.pagesOk, verifiedByMonitor: true as const, ...(ta.pagesDriven.length ? { pagesDriven: ta.pagesDriven } : {}), ...(pagesCrawled ? { pagesCrawled } : {}), ...(pagesTotal ? { pagesTotal } : {}), ...(ta.containersSeen?.length ? { containersSeen: ta.containersSeen } : {}), ...(ta.injectedContainer ? { injectedContainer: true } : {}) };
