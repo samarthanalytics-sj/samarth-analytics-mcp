@@ -463,15 +463,16 @@ export function registerGtmAuditIpc(data: GoogleDataService, memory?: MemoryStor
   ipcMain.handle('verify:exportResults', async (e, format: unknown, defaultName: unknown, payload: unknown) => {
     const win = BrowserWindow.fromWebContents(e.sender);
     const fmt = String(format ?? '').toLowerCase();
-    if (fmt !== 'pdf' && fmt !== 'doc' && fmt !== 'xlsx') throw new Error('Unsupported export format.');
+    if (fmt !== 'pdf' && fmt !== 'doc' && fmt !== 'docx' && fmt !== 'xlsx') throw new Error('Unsupported export format.');
     const p = payload as VerifyExportPayload;
     if (!p || !Array.isArray(p.rows) || !p.counts) throw new Error('Invalid verification results.');
     const base = String(defaultName ?? 'Tag verification')
       .replace(/[\\/:*?"<>|]/g, '_')
-      .replace(/\.(pdf|doc|xlsx)$/i, '')
+      .replace(/\.(pdf|docx|doc|xlsx)$/i, '')
       .trim() || 'Tag verification';
     const filter =
-      fmt === 'doc' ? { name: 'Word', extensions: ['doc'] }
+      fmt === 'docx' ? { name: 'Word', extensions: ['docx'] }
+      : fmt === 'doc' ? { name: 'Word', extensions: ['doc'] }
       : fmt === 'xlsx' ? { name: 'Excel', extensions: ['xlsx'] }
       : { name: 'PDF', extensions: ['pdf'] };
     const opts = { title: 'Export tag verification', defaultPath: `${base}.${fmt}`, filters: [filter] };
@@ -483,6 +484,13 @@ export function registerGtmAuditIpc(data: GoogleDataService, memory?: MemoryStor
     if (fmt === 'xlsx') {
       const { buildVerifyResultsXlsx } = await import('./verify-results-xlsx');
       return await writeReportFile(filePath, await buildVerifyResultsXlsx(p));
+    }
+
+    // DOCX: a REAL Word document with each proof embedded as a binary media part. Unlike the HTML-based .doc
+    // (data: URI images, which Google Docs strips on import), this uploads to Google Docs WITH its images.
+    if (fmt === 'docx') {
+      const { buildVerifyResultsDocx } = await import('./verify-results-docx');
+      return await writeReportFile(filePath, buildVerifyResultsDocx(p));
     }
 
     const { verifyResultsHtml } = await import('../../shared/verify-results-html');
