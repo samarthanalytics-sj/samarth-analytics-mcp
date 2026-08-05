@@ -1,0 +1,210 @@
+/**
+ * The agentic turn: model call, tool calls, model call, until the model answers.
+ *
+ * Budgets are the safety and cost control. Without them a confused model can loop on a failing tool
+ * until the request times out, and each iteration is a full-price completion.
+ */
+import type { OrchestratorConfig } from './config.js';
+import type { McpConnection } from './mcp-client.js';
+import type { OpenAiClient } from './openai.js';
+import { capToolResult, scopeTools, toOpenAiTools } from './tools.js';
+import { buildSituationalContext, buildStaticSystem } from './prompts.js';
+import { GoogleIdentityError, isGoogleAuthFailure } from './google-identity.js';
+import type { ChatContext, ChatMessage, StreamEvent } from './types.js';
+
+export interface RunTurnArgs {
+  cfg: OrchestratorConfig;
+  mcp: McpConnection;
+  llm: OpenAiClient;
+  history: { role: 'user' | 'assistant'; content: string }[];
+  context: ChatContext;
+  user: { id: string; email?: string };
+  emit(event: StreamEvent): void;
+  signal: AbortSignal;
+  /**
+   * Mints a new connection after Google rejects the current identity. Returning a fresh connection
+   * lets one expired access token cost a retry instead of the whole turn.
+   */
+  onAuthFailure?: () => Promise<McpConnection>;
+}
+
+export async function runTurn(args: RunTurnArgs): Promise<void> {
+  const { cfg, llm, context, user, emit, signal } = args;
+  const startedAt = Date.now();
+  let mcp = args.mcp;
+  // One refresh per turn. A second failure is a real authorization problem, not an expiry, and
+  // looping on it would just burn tokens.
+  let authRetryUsed = false;
+
+  const scoped = scopeTools(mcp.listTools(), {
+    product: context.product,
+    includeWrites: cfg.enableWriteTools,
+  });
+  const openAiTools = toOpenAiTools(scoped);
+
+  emit({
+    type: 'ready',
+    product: context.product,
+    model: cfg.openai.model,
+    toolCount: scoped.length,
+  });
+
+  const staticSystem = buildStaticSystem({
+    product: context.product,
+    canWrite: cfg.enableWriteTools,
+    mcpInstructions: mcp.getInstructions(),
+  });
+
+  const messages: ChatMessage[] = [
+    { role: 'system', content: staticSystem },
+    { role: 'system', content: buildSituationalContext(context, user) },
+    ...boundHistory(args.history, cfg.limits.maxHistoryMessages),
+  ];
+
+  let toolCallsUsed = 0;
+
+  for (;;) {
+    if (signal.aborted) {
+      emit({ type: 'done', reason: 'aborted' });
+      return;
+    }
+    if (Date.now() - startedAt > cfg.limits.maxTurnMs) {
+      emit({
+        type: 'token',
+        text: '\n\n[Stopped: this turn exceeded its time budget. Ask a narrower question, or ask me to continue.]',
+      });
+      emit({ type: 'done', reason: 'time_budget' });
+      return;
+    }
+
+    const result = await llm.streamChat(
+      messages,
+      openAiTools,
+      {
+        onDelta: (text) => emit({ type: 'token', text }),
+        onUsage: (u) =>
+          emit({
+            type: 'usage',
+            promptTokens: u.promptTokens,
+            completionTokens: u.completionTokens,
+            cachedTokens: u.cachedTokens,
+          }),
+      },
+      signal,
+    );
+
+    if (result.toolCalls.length === 0) {
+      emit({ type: 'done', reason: 'complete' });
+      return;
+    }
+
+    if (toolCallsUsed + result.toolCalls.length > cfg.limits.maxToolCallsPerTurn) {
+      emit({
+        type: 'token',
+        text:
+          '\n\n[Stopped: this turn hit its tool-call budget. Here is what I found so far. ' +
+          'Ask me to continue if you want me to keep digging.]',
+      });
+      emit({ type: 'done', reason: 'tool_budget' });
+      return;
+    }
+
+    // The assistant turn carrying the tool calls must be replayed verbatim, or the follow-up tool
+    // messages have nothing to attach to.
+    messages.push({
+      role: 'assistant',
+      content: result.content || null,
+      tool_calls: result.toolCalls,
+    });
+
+    for (const call of result.toolCalls) {
+      toolCallsUsed++;
+
+      let parsedArgs: Record<string, unknown> = {};
+      let parseError: string | null = null;
+      try {
+        parsedArgs = call.function.arguments ? JSON.parse(call.function.arguments) : {};
+      } catch (err) {
+        parseError = `Arguments were not valid JSON: ${err instanceof Error ? err.message : String(err)}`;
+      }
+
+      emit({ type: 'tool_call', id: call.id, name: call.function.name, args: parsedArgs });
+
+      if (parseError) {
+        messages.push({
+          role: 'tool',
+          tool_call_id: call.id,
+          name: call.function.name,
+          content: `${parseError}. Retry this call with valid JSON arguments.`,
+        });
+        emit({
+          type: 'tool_result',
+          id: call.id,
+          name: call.function.name,
+          ok: false,
+          summary: 'Invalid arguments',
+        });
+        continue;
+      }
+
+      let { ok, text } = await mcp.callTool(call.function.name, parsedArgs);
+
+      if (!ok && !authRetryUsed && args.onAuthFailure && isGoogleAuthFailure(text)) {
+        authRetryUsed = true;
+        try {
+          mcp = await args.onAuthFailure();
+          ({ ok, text } = await mcp.callTool(call.function.name, parsedArgs));
+        } catch (err) {
+          text =
+            err instanceof GoogleIdentityError
+              ? `Google authorization failed: ${err.message}`
+              : `Google authorization failed: ${err instanceof Error ? err.message : String(err)}`;
+          ok = false;
+        }
+      }
+
+      const capped = capToolResult(text, cfg.limits.maxToolResultChars);
+
+      messages.push({
+        role: 'tool',
+        tool_call_id: call.id,
+        name: call.function.name,
+        content: capped,
+      });
+      emit({
+        type: 'tool_result',
+        id: call.id,
+        name: call.function.name,
+        ok,
+        summary: summarize(capped),
+      });
+    }
+  }
+}
+
+/**
+ * Keeps the most recent turns and tells the model when older ones were dropped, so it never
+ * silently answers as if it can still see them.
+ */
+function boundHistory(
+  history: { role: 'user' | 'assistant'; content: string }[],
+  max: number,
+): ChatMessage[] {
+  if (history.length <= max) {
+    return history.map((m) => ({ role: m.role, content: m.content }));
+  }
+  const kept = history.slice(-max);
+  const dropped = history.length - kept.length;
+  return [
+    {
+      role: 'system',
+      content: `[${dropped} earlier message(s) in this conversation were dropped to fit the context window. If the user refers to something you cannot see, say so and ask them to restate it.]`,
+    },
+    ...kept.map((m) => ({ role: m.role, content: m.content })),
+  ];
+}
+
+function summarize(text: string): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  return flat.length > 160 ? `${flat.slice(0, 157)}...` : flat;
+}

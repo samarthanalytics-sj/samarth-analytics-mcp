@@ -1,0 +1,33 @@
+{
+  // Module settings are load-bearing, do not "simplify" them:
+  //
+  // The system prompt imports the shared GTM methodology from apps/desktop, and
+  // apps/desktop/package.json has no "type": "module". Under NodeNext, TypeScript picks the
+  // module format from the INPUT file's nearest package.json, so that one file emitted as
+  // CommonJS while everything around it emitted as ESM. The output then landed under this
+  // package (which IS "type": "module"), Node parsed the CJS file as ESM, and the process died
+  // at startup with "does not provide an export named GA4_EVENT_SELECTION". tsx hid this in dev
+  // because it transpiles per-file on the fly.
+  //
+  // "module": "ES2022" forces ESM for every file regardless of which app it came from.
+  // "moduleResolution": "Bundler" is the only resolution mode ES2022 accepts here, and its one
+  // downside is that it does NOT require .js extensions on relative imports, while Node at
+  // runtime does. src/__tests__/build.test.ts guards that gap.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022"],
+    "outDir": "./dist",
+    "rootDir": "..",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "declaration": false,
+    "sourceMap": true
+  },
+  "include": ["src/**/*.ts", "../desktop/src/shared/gtm-methodology.ts"],
+  "exclude": ["node_modules", "dist"]
+}

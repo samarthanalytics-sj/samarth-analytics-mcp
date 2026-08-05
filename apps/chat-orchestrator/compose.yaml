@@ -1,0 +1,88 @@
+# Chat orchestrator, self-hosted.
+#
+#   docker compose up -d --build
+#   docker compose logs -f orchestrator
+#
+# Run this from the REPO ROOT so the build context includes both the MCP server
+# and the orchestrator:
+#   docker compose -f apps/chat-orchestrator/compose.yaml up -d --build
+#
+# The orchestrator is deliberately NOT published to the host. nginx terminates
+# TLS and is the only thing that reaches it. Exposing 8787 directly would put an
+# unencrypted endpoint holding user Google tokens on the network.
+
+services:
+  orchestrator:
+    build:
+      context: ../..
+      dockerfile: apps/chat-orchestrator/Dockerfile
+    image: samarth-chat-orchestrator:latest
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      # Refuses to start unless per-user identity is configured (see config.ts).
+      GOOGLE_IDENTITY_MODE: supabase
+    expose:
+      - "8787"
+    networks:
+      - chat
+    # Each MCP child is 150-300 MB. This ceiling must agree with
+    # MCP_POOL_MAX_SESSIONS in .env, or the pool will happily spawn its way into
+    # the OOM killer.
+    mem_limit: 8g
+    cpus: 2.0
+    # Long tool loops mean a slow shutdown is normal; give in-flight turns time
+    # to finish before the process is killed.
+    stop_grace_period: 45s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:8787/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - certbot-webroot:/var/www/certbot:ro
+      - letsencrypt:/etc/letsencrypt:ro
+    networks:
+      - chat
+
+  # Renews the certificate and exits. Schedule from cron:
+  #   0 3 * * * docker compose -f .../compose.yaml run --rm certbot renew --quiet
+  certbot:
+    image: certbot/certbot:latest
+    profiles: ["certs"]
+    volumes:
+      - certbot-webroot:/var/www/certbot
+      - letsencrypt:/etc/letsencrypt
+    networks:
+      - chat
+
+networks:
+  chat:
+    driver: bridge
+
+volumes:
+  certbot-webroot:
+  letsencrypt:
