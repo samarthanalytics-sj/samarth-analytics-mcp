@@ -1,3 +1,9 @@
+## [1.450.9](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.450.8...v1.450.9) (2026-08-05)
+
+### Bug Fixes
+
+* **desktop:** actually close the tag detail (close control + Escape) between paired tags ([#821](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/821)) ([17ec1e8](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/17ec1e809039fb88f6849e0b3f4a31cc2777478c))
+
 ## [1.450.8](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.450.7...v1.450.8) (2026-08-05)
 
 ### Bug Fixes
