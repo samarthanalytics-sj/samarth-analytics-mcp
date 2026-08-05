@@ -356,6 +356,18 @@ export function registerSuggestionsIpc(data: GoogleDataService, memory?: MemoryS
       // URLs (off-site / unparseable dropped). When present, we skip the auto-crawl entirely and drive
       // every tag on each of these pages (below) — direct control over coverage for missed forms.
       const explicitPages = normalizeVerifyPages(o.verifyPages, target);
+      // DEEP DIAGNOSTIC: echo exactly what this verification run was asked to do, so the log reads like the
+      // form the operator filled in (URL, the What-to-verify choice, the page scope, how many tags, which
+      // container, and which engine). First thing to read when a run does something unexpected.
+      const scopeLabel = o.verifyScope === 'clicks' ? 'clicks only' : o.verifyScope === 'forms' ? 'forms only' : 'clicks + forms (both)';
+      console.log('[verify] ─────────── new verification run ───────────');
+      console.log(`[verify] enter url        : ${target}`);
+      console.log(`[verify] selected option  : ${scopeLabel}`);
+      console.log(`[verify] pages to verify  : ${explicitPages.length ? explicitPages.join(', ') : '(none entered → auto-crawl the whole site)'}`);
+      console.log(`[verify] tags to verify   : ${tagList.length}`);
+      console.log(`[verify] container        : ${o.monitor ? `${o.monitor.accountId} / ${o.monitor.containerId}` : '(not provided)'}`);
+      console.log(`[verify] engine           : ${o.monitor ? 'Tag Assistant (authoritative debug stream)' : 'injected driver'}`);
+      console.log(`[verify] reviewed forms   : ${Array.isArray(o.reviewedForms) ? o.reviewedForms.length : 0} passed from the form review${o.verifyScope === 'clicks' ? ' (ignored — clicks-only)' : ''}`);
       const hasClickTags = tagList.some((t) => t.trigger.kind === 'link_click' || t.trigger.kind === 'all_clicks');
       // REUSE the scan step's crawl: the Forms scan (formTagVerifyPlan) that runs BEFORE the gate already
       // crawled this URL and cached its click-CTA inventory, so pull that here and skip a SECOND full crawl.
