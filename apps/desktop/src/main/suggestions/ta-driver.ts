@@ -1249,29 +1249,29 @@ export async function runTaVerify(
         const toDrill = [...new Set([...wanted, ...derived])].filter((n) => !already.has(n) && !stuckTags.has(n)).slice(0, 8);
         const skipped = [...new Set([...wanted, ...derived])].filter((n) => already.has(n) || stuckTags.has(n));
         trace(`this event fired ${derived.length} known tag(s); to drill now: ${toDrill.length ? toDrill.map((n) => `"${n}"`).join(', ') : '(none)'}${skipped.length ? ` | already proven earlier: ${skipped.length}` : ''}`);
-        // Start from the EVENT panel: a detail view left up by the previous capture hides this event's
-        // Tags-Fired list, so the first card lookup would search the wrong page (and a detail opened from
-        // there carries no Values toggle). Bounded, and harmless when we are already on the event.
-        for (let back = 0; back < 2; back += 1) {
-          if (await onEventPanel()) break; // positive check, same reason as backToEvent
-          await ta.click(chosen.sel, { timeout: 1200 }).catch(() => undefined);
-          await ta.waitForTimeout(180);
-        }
-        // Return to THIS event's panel between tags. The breadcrumb ("22 form_submission >") is rendered by
-        // the detail we are on and always points at the right event; the rail row's data-ta-snap attribute
-        // can be dropped when Angular renders the detail, and that stale selector is why only the FIRST tag
-        // of each event used to get a proof. Crumb first, rail row as the fallback, then verify.
-        const backToEvent = async (): Promise<boolean> => {
-          for (let attempt = 0; attempt < 2; attempt += 1) {
-            const crumbSel = attempt === 0 ? await ta.evaluate<string>(tagTaCrumbLink).catch(() => '') : '';
-            await ta.click(crumbSel || chosen.sel, { timeout: 1200 }).catch(() => undefined);
-            await ta.waitForTimeout(200);
-            // Confirm by the API-Call block, not by the absence of a detail: the old check reported a
-            // failure on page 1 even though the return had worked and the next tag drilled fine.
-            if (await onEventPanel()) return true;
-          }
-          return false;
+        // "On the event, detail CLOSED." TA keeps the event header, API Call and Tags-Fired list on screen
+        // even while a tag's detail is open below, so onEventPanel() alone is true WITH a detail up - and
+        // clicking the next tag on top of an open detail is ignored (the panel never switches, the root cause
+        // of the 2nd-tag mismatch). This also requires no Tag Details to be showing.
+        const onCleanEvent = async (): Promise<boolean> => {
+          const s = await ta.evaluate<{ isDetail: boolean }>(readTaTagDetailState).catch(() => ({ isDetail: true }));
+          return !s.isDetail && (await onEventPanel());
         };
+        // Return to THIS event with the detail CLOSED. The breadcrumb ("22 form_submission >") collapses the
+        // open detail back to the event's Tags-Fired list; the rail row is the fallback. Verify the detail is
+        // actually gone, else the next tag's click lands on the still-open sibling and does nothing.
+        const backToEvent = async (): Promise<boolean> => {
+          for (let attempt = 0; attempt < 4; attempt += 1) {
+            if (await onCleanEvent()) return true;
+            const crumbSel = await ta.evaluate<string>(tagTaCrumbLink).catch(() => '');
+            await ta.click(crumbSel || chosen.sel, { timeout: 1200 }).catch(() => undefined);
+            await ta.waitForTimeout(220);
+          }
+          return onCleanEvent();
+        };
+        // Start from the event with any leftover detail CLOSED, so the first card lookup sees the Tags-Fired
+        // list and the first click opens a fresh detail.
+        await backToEvent();
         let drilled = 0;
         let needEventProof = false; // a paired tag whose panel didn't switch (duplicate image) - give it the event proof
         // RESERVE one event-panel proof NOW, while we are still guaranteed on this event's panel (the back
@@ -1306,12 +1306,13 @@ export async function runTaVerify(
               trace(`    recovered via the message chip: ${show(st)}`);
             }
           }
-          // SWITCH the panel to THIS tag. The 2nd tag of a GA4+Meta pair often keeps the 1st tag's Tag Details
-          // rendered on the first click, so the detail's platform still reads as the sibling's. Re-click the
-          // card (now the navigable container, not the inner span) and poll the detail platform until it is
-          // the one we asked for. Bounded; on timeout the tag falls through to the honest event-panel proof.
+          // SWITCH the panel to THIS tag. If the detail still shows the sibling's platform, CLOSE it first
+          // (clicking a second tag on top of an open detail is ignored - the root cause of the mismatch),
+          // then re-open THIS tag's card and re-check its platform. Bounded; on timeout the tag falls through
+          // to the honest event-panel proof.
           for (let poll = 0; poll < 2 && st.isDetail && st.eventContext && !st.nameOk; poll += 1) {
-            trace(`    detail shows ${st.detailPlatform || '?'} but asked for "${name}" - re-clicking to switch (try ${poll + 1})`);
+            trace(`    detail shows ${st.detailPlatform || '?'} but asked for "${name}" - closing it and re-opening (try ${poll + 1})`);
+            await backToEvent(); // collapse the sibling's detail so the next click actually opens this tag
             const reSel = await ta.evaluate<string>(openFiredTagInPage, name).catch(() => '');
             await ta.click(reSel || tagSel, { timeout: 1200 }).catch(() => undefined);
             await ta.waitForTimeout(450);
