@@ -158,6 +158,84 @@ export async function listGtmWorkspaces(
   };
 }
 
+export type ContainerLookup =
+  | { found: true; container: GtmContainer; accountsSearched: number }
+  /**
+   * `exhaustive` is the honest half. A search that gave up early and one that genuinely covered
+   * everything both end with no match, and only one of them means the container does not exist.
+   */
+  | { found: false; accountsSearched: number; exhaustive: boolean };
+
+/** Past this, the round trips cost more than the user saves over picking from the dropdowns. */
+const MAX_ACCOUNTS_SCANNED = 30;
+
+/**
+ * Turns whatever the user pasted into something matchable.
+ *
+ * The GTM interface puts the numeric container id in its own URL, and that URL is what people
+ * actually have on the clipboard when they are looking at a container, so it is worth reading.
+ */
+export function normalizeContainerQuery(
+  raw: string,
+): { kind: 'publicId' | 'containerId'; value: string } | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  const fromUrl = /\/containers\/(\d+)/.exec(trimmed);
+  if (fromUrl) return { kind: 'containerId', value: fromUrl[1] };
+
+  if (/^GTM-[A-Z0-9]{4,12}$/i.test(trimmed)) {
+    return { kind: 'publicId', value: trimmed.toUpperCase() };
+  }
+  if (/^\d{1,20}$/.test(trimmed)) return { kind: 'containerId', value: trimmed };
+
+  return null;
+}
+
+/**
+ * Finds a container by its public GTM-XXXXXXX or numeric id, across every account the user can see.
+ *
+ * The API's own lookup takes a linked destination id (a GA4 measurement id, an Ads conversion id),
+ * not a container id, so it cannot answer this. Scanning is the only route, and it is worth the
+ * round trips: someone who already knows the container id should not have to find which of their
+ * accounts it lives under first.
+ */
+export async function findGtmContainer(
+  mcp: McpConnection,
+  query: { kind: 'publicId' | 'containerId'; value: string },
+): Promise<ContainerLookup> {
+  const accounts = await listGtmAccounts(mcp);
+  const scanning = accounts.items.slice(0, MAX_ACCOUNTS_SCANNED);
+
+  // Anything that stopped a list short means a miss cannot be reported as "does not exist".
+  let complete = !accounts.truncated && scanning.length === accounts.items.length;
+  let searched = 0;
+
+  for (const account of scanning) {
+    let containers;
+    try {
+      containers = await listGtmContainers(mcp, account.accountId);
+    } catch {
+      // One account the user cannot read must not fail the whole search, but it does mean the
+      // remaining ground was not fully covered.
+      complete = false;
+      searched++;
+      continue;
+    }
+    searched++;
+    if (containers.truncated) complete = false;
+
+    const match = containers.items.find((c) =>
+      query.kind === 'publicId'
+        ? c.publicId?.toUpperCase() === query.value
+        : c.containerId === query.value,
+    );
+    if (match) return { found: true, container: match, accountsSearched: searched };
+  }
+
+  return { found: false, accountsSearched: searched, exhaustive: complete };
+}
+
 /**
  * GA4 properties, flattened out of the account summaries.
  *

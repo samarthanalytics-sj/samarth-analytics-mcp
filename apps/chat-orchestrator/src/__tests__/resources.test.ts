@@ -12,6 +12,8 @@ import {
   listGtmAccounts,
   listGtmContainers,
   listGtmWorkspaces,
+  findGtmContainer,
+  normalizeContainerQuery,
   ResourceError,
 } from '../resources.js';
 import type { McpConnection } from '../mcp-client.js';
@@ -138,6 +140,144 @@ await test('passes both ids', async () => {
   const result = await listGtmWorkspaces(mcp, '6000', '111');
   assert.deepEqual(calls[0].args, { accountId: '6000', containerId: '111' });
   assert.equal(result.items[0].name, 'Default Workspace');
+});
+
+console.log('pasted container id, normalisation');
+
+for (const [input, expected] of [
+  ['GTM-ABC1234', { kind: 'publicId', value: 'GTM-ABC1234' }],
+  ['  gtm-abc1234  ', { kind: 'publicId', value: 'GTM-ABC1234' }],
+  ['111222', { kind: 'containerId', value: '111222' }],
+  [
+    'https://tagmanager.google.com/#/container/accounts/6000/containers/111/workspaces/3',
+    { kind: 'containerId', value: '111' },
+  ],
+] as const) {
+  await test(`accepts ${JSON.stringify(input)}`, async () => {
+    assert.deepEqual(normalizeContainerQuery(input), expected);
+  });
+}
+
+for (const bad of ['', '   ', 'G-ABC123', 'not an id', 'GTM-', '<script>']) {
+  await test(`rejects ${JSON.stringify(bad)}`, async () => {
+    assert.equal(normalizeContainerQuery(bad), null);
+  });
+}
+
+console.log('pasted container id, resolution');
+
+/** An MCP whose reply depends on which tool was asked, so a scan can be simulated. */
+function scriptedMcp(handlers: Record<string, (args: Record<string, unknown>) => unknown>) {
+  return {
+    async callTool(name: string, args: Record<string, unknown>) {
+      const handler = handlers[name];
+      if (!handler) return { ok: false, text: `${name} not scripted` };
+      return { ok: true, text: JSON.stringify(handler(args)) };
+    },
+  } as unknown as McpConnection;
+}
+
+await test('finds a container in the second account and stops there', async () => {
+  let containerCalls = 0;
+  const mcp = scriptedMcp({
+    accounts_list: () => ({
+      accounts: [
+        { accountId: '1', name: 'First' },
+        { accountId: '2', name: 'Second' },
+        { accountId: '3', name: 'Third' },
+      ],
+    }),
+    containers_list: (args) => {
+      containerCalls++;
+      return args.accountId === '2'
+        ? { containers: [{ accountId: '2', containerId: '99', name: 'Found', publicId: 'GTM-ABC1234' }] }
+        : { containers: [] };
+    },
+  });
+
+  const result = await findGtmContainer(mcp, { kind: 'publicId', value: 'GTM-ABC1234' });
+  assert.equal(result.found, true);
+  assert.equal(result.found && result.container.accountId, '2');
+  // The third account is never touched: the scan is the expensive part, so it must short-circuit.
+  assert.equal(containerCalls, 2);
+});
+
+await test('matches a public id case-insensitively', async () => {
+  const mcp = scriptedMcp({
+    accounts_list: () => ({ accounts: [{ accountId: '1', name: 'A' }] }),
+    containers_list: () => ({
+      containers: [{ containerId: '5', name: 'X', publicId: 'gtm-lower99' }],
+    }),
+  });
+  assert.equal((await findGtmContainer(mcp, { kind: 'publicId', value: 'GTM-LOWER99' })).found, true);
+});
+
+await test('matches a numeric container id', async () => {
+  const mcp = scriptedMcp({
+    accounts_list: () => ({ accounts: [{ accountId: '1', name: 'A' }] }),
+    containers_list: () => ({ containers: [{ containerId: '777', name: 'By number' }] }),
+  });
+  const result = await findGtmContainer(mcp, { kind: 'containerId', value: '777' });
+  assert.equal(result.found && result.container.name, 'By number');
+});
+
+await test('a complete search that finds nothing reports itself as exhaustive', async () => {
+  const mcp = scriptedMcp({
+    accounts_list: () => ({ accounts: [{ accountId: '1', name: 'A' }] }),
+    containers_list: () => ({ containers: [{ containerId: '5', publicId: 'GTM-OTHER11', name: 'X' }] }),
+  });
+  const result = await findGtmContainer(mcp, { kind: 'publicId', value: 'GTM-MISSING1' });
+  assert.deepEqual(result, { found: false, accountsSearched: 1, exhaustive: true });
+});
+
+await test('a truncated account list makes a miss non-exhaustive', async () => {
+  const mcp = scriptedMcp({
+    accounts_list: () => ({ accounts: [{ accountId: '1', name: 'A' }], truncated: true }),
+    containers_list: () => ({ containers: [] }),
+  });
+  // "Not found" here must not be reported to the user as "does not exist".
+  assert.equal((await findGtmContainer(mcp, { kind: 'publicId', value: 'GTM-ABC1234' })).found, false);
+  assert.equal(
+    (await findGtmContainer(mcp, { kind: 'publicId', value: 'GTM-ABC1234' }) as { exhaustive: boolean })
+      .exhaustive,
+    false,
+  );
+});
+
+await test('a truncated container list makes a miss non-exhaustive', async () => {
+  const mcp = scriptedMcp({
+    accounts_list: () => ({ accounts: [{ accountId: '1', name: 'A' }] }),
+    containers_list: () => ({ containers: [{ containerId: '5', name: 'X' }], truncated: true }),
+  });
+  const result = await findGtmContainer(mcp, { kind: 'publicId', value: 'GTM-ABC1234' });
+  assert.equal(result.found === false && result.exhaustive, false);
+});
+
+await test('an unreadable account is skipped, and the search stops claiming completeness', async () => {
+  const mcp = {
+    async callTool(name: string, args: Record<string, unknown>) {
+      if (name === 'accounts_list') {
+        return {
+          ok: true,
+          text: JSON.stringify({
+            accounts: [
+              { accountId: '1', name: 'Denied' },
+              { accountId: '2', name: 'Fine' },
+            ],
+          }),
+        };
+      }
+      if (args.accountId === '1') return { ok: false, text: 'containers_list failed: forbidden' };
+      return { ok: true, text: JSON.stringify({ containers: [{ containerId: '8', name: 'Y' }] }) };
+    },
+  } as unknown as McpConnection;
+
+  // The readable account is still searched, so one bad grant does not break the feature.
+  const hit = await findGtmContainer(mcp, { kind: 'containerId', value: '8' });
+  assert.equal(hit.found, true);
+
+  const miss = await findGtmContainer(mcp, { kind: 'containerId', value: '404' });
+  assert.equal(miss.found === false && miss.exhaustive, false);
 });
 
 console.log('GA4 properties');
