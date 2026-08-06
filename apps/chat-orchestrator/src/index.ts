@@ -19,6 +19,13 @@ import { OpenAiClient, OpenAiError } from './openai.js';
 import { runTurn } from './loop.js';
 import { SseStream } from './sse.js';
 import { scopeTools } from './tools.js';
+import {
+  listGa4Properties,
+  listGtmAccounts,
+  listGtmContainers,
+  listGtmWorkspaces,
+  ResourceError,
+} from './resources.js';
 import type { AuthedUser, ChatRequestBody } from './types.js';
 
 const cfg: OrchestratorConfig = loadConfig();
@@ -225,6 +232,107 @@ async function main(): Promise<void> {
     }
   });
 
+  /**
+   * Runs a read against this user's own MCP session and returns JSON.
+   *
+   * Shares the chat path's identity handling on purpose: a picker that could list containers the
+   * chat cannot then read would be worse than no picker, and 428 (Google account not connected) has
+   * to mean the same thing on both surfaces.
+   */
+  async function withUserMcp(
+    req: express.Request,
+    res: express.Response,
+    fn: (mcp: McpConnection) => Promise<unknown>,
+    validate?: () => string | null,
+  ): Promise<void> {
+    let user: AuthedUser;
+    try {
+      user = await authenticate(req.headers.authorization);
+    } catch (err) {
+      return sendAuthError(res, err);
+    }
+
+    // Pickers refresh far more often than turns are sent, so they get their own, looser budget.
+    if (!limiter.allow(`resources:${user.id}`, cfg.limits.turnsPerMinutePerUser * 4)) {
+      res.setHeader('Retry-After', '60');
+      res.status(429).json({ code: 'rate_limited', message: 'Too many lookups. Try again shortly.' });
+      return;
+    }
+
+    // Checked after authentication, so an anonymous caller cannot tell a malformed request from a
+    // well-formed one, and before a child is spawned, so a bad id costs nothing.
+    const invalid = validate?.();
+    if (invalid) {
+      res.status(400).json({ code: 'bad_request', message: invalid });
+      return;
+    }
+
+    const userJwt = extractBearer(req.headers.authorization);
+
+    let mcp: McpConnection;
+    try {
+      mcp = await pool.acquire(user.id, userJwt);
+    } catch (err) {
+      if (err instanceof GoogleIdentityError) {
+        console.error(`[identity] ${err.code} for user ${userRef(user.id)}: ${forLog(err.message)}`);
+        res.status(err.code === 'not_connected' ? 428 : 502).json({
+          code: err.code,
+          message: err.message,
+        });
+        return;
+      }
+      res.status(503).json({
+        code: 'mcp_unavailable',
+        message: err instanceof Error ? err.message : 'Could not start a tool session.',
+      });
+      return;
+    }
+
+    try {
+      res.json(await fn(mcp));
+    } catch (err) {
+      const code = err instanceof ResourceError ? err.code : 'resource_failed';
+      console.error(`[resources] ${req.path} failed for user ${userRef(user.id)}: ${forLog(String(err))}`);
+      res.status(502).json({
+        code,
+        message: err instanceof Error ? err.message : 'Could not load that list.',
+      });
+    } finally {
+      pool.release(user.id);
+    }
+  }
+
+  /** GTM accounts this user can reach. First step of the container picker. */
+  app.get('/v1/resources/gtm/accounts', (req, res) => {
+    void withUserMcp(req, res, (mcp) => listGtmAccounts(mcp));
+  });
+
+  app.get('/v1/resources/gtm/containers', (req, res) => {
+    void withUserMcp(
+      req,
+      res,
+      (mcp) => listGtmContainers(mcp, idParam(req.query.accountId)!),
+      () => (idParam(req.query.accountId) ? null : 'A valid accountId is required.'),
+    );
+  });
+
+  app.get('/v1/resources/gtm/workspaces', (req, res) => {
+    void withUserMcp(
+      req,
+      res,
+      (mcp) => listGtmWorkspaces(mcp, idParam(req.query.accountId)!, idParam(req.query.containerId)!),
+      () =>
+        idParam(req.query.accountId) && idParam(req.query.containerId)
+          ? null
+          : 'A valid accountId and containerId are required.',
+    );
+  });
+
+  /** Every GA4 property across every account, in one call. */
+  app.get('/v1/resources/ga4/properties', (req, res) => {
+    void withUserMcp(req, res, (mcp) => listGa4Properties(mcp));
+  });
+
   app.post('/v1/chat', async (req, res) => {
     let user: AuthedUser;
     try {
@@ -329,6 +437,19 @@ async function main(): Promise<void> {
 
 function extractBearer(header: string | undefined): string {
   return header?.startsWith('Bearer ') ? header.slice(7).trim() : '';
+}
+
+/**
+ * Accepts a resource id from the query string, or nothing.
+ *
+ * GTM ids are numeric today, but the check stays deliberately permissive about character set and
+ * strict about shape: the goal is to reject a value that is obviously not an id before it reaches
+ * the Google API, not to encode an assumption about their format that a future id could break.
+ */
+function idParam(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return /^[A-Za-z0-9_-]{1,64}$/.test(trimmed) ? trimmed : null;
 }
 
 function sendAuthError(res: express.Response, err: unknown): void {
