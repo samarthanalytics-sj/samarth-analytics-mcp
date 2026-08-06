@@ -75,9 +75,18 @@ async function main(): Promise<void> {
     `[orchestrator] MCP connected: ${all.length} tools (${reads} read, ${all.length - reads} write-gated), ` +
       `${probe.listPrompts().length} prompts`,
   );
+  // Scoped with the SAME options the turn loop uses. Omitting includeDeletes here printed 82 GTM
+  // tools on a server that hands the model 94, under a banner that said "deletes ENABLED": the
+  // operator surface and the real one disagreeing about what a write-enabled server can reach.
+  const bannerScope = (product: Product): number =>
+    scopeTools(all, {
+      product,
+      includeWrites: cfg.enableWriteTools,
+      includeDeletes: cfg.enableDeleteTools,
+    }).length;
   console.log(
-    `[orchestrator] visible to model: GTM ${scopeTools(all, { product: 'gtm', includeWrites: cfg.enableWriteTools }).length}, ` +
-      `GA4 ${scopeTools(all, { product: 'ga4', includeWrites: cfg.enableWriteTools }).length}` +
+    `[orchestrator] visible to model: GTM ${bannerScope('gtm')}, ` +
+      `GA4 ${bannerScope('ga4')}` +
       (cfg.enableWriteTools
         ? cfg.enableDeleteTools
           ? ' (writes ENABLED, deletes ENABLED)'
