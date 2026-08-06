@@ -1,3 +1,9 @@
+## [1.460.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.460.1...v1.460.2) (2026-08-06)
+
+### Bug Fixes
+
+* **chat:** boot banner under-reported the tools handed to the model ([#843](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/843)) ([e9379dd](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/e9379dd1db9e9ed68d4d89ef008ab30ef2f0ea83))
+
 ## [1.460.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.460.0...v1.460.1) (2026-08-06)
 
 ### Bug Fixes
