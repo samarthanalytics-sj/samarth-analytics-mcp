@@ -1,3 +1,9 @@
+## [1.460.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.459.0...v1.460.0) (2026-08-06)
+
+### Features
+
+* **chat:** resolve a pasted container id to the account that holds it ([#841](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/841)) ([bf709b4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/bf709b40dd20d468985b9a62d0562174bad8eae7))
+
 ## [1.459.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.458.0...v1.459.0) (2026-08-06)
 
 ### Features
