@@ -20,10 +20,12 @@ import { runTurn } from './loop.js';
 import { SseStream } from './sse.js';
 import { scopeTools } from './tools.js';
 import {
+  findGtmContainer,
   listGa4Properties,
   listGtmAccounts,
   listGtmContainers,
   listGtmWorkspaces,
+  normalizeContainerQuery,
   ResourceError,
 } from './resources.js';
 import type { AuthedUser, ChatRequestBody } from './types.js';
@@ -325,6 +327,25 @@ async function main(): Promise<void> {
         idParam(req.query.accountId) && idParam(req.query.containerId)
           ? null
           : 'A valid accountId and containerId are required.',
+    );
+  });
+
+  /**
+   * Resolves a pasted container id to the account that holds it.
+   *
+   * Someone who already knows their GTM-XXXXXXX should not have to work out which account it is
+   * under before they can ask a question about it.
+   */
+  app.get('/v1/resources/gtm/container-lookup', (req, res) => {
+    const raw = typeof req.query.q === 'string' ? req.query.q.slice(0, 300) : '';
+    void withUserMcp(
+      req,
+      res,
+      (mcp) => findGtmContainer(mcp, normalizeContainerQuery(raw)!),
+      () =>
+        normalizeContainerQuery(raw)
+          ? null
+          : 'Enter a container id like GTM-ABC1234, its numeric id, or a Tag Manager URL.',
     );
   });
 
