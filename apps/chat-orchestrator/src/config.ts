@@ -118,15 +118,15 @@ export interface OrchestratorConfig {
    */
   enableDeleteTools: boolean;
   /**
-   * Whether a write that is immediately live still stops for a plain approval card.
+   * Whether a create or update that is immediately live still stops for a plain approval card.
    *
-   * Changes inside a GTM workspace never stop: they are drafts, the live configuration is untouched,
-   * and prompting on each one only teaches people to click through. But GA4 Admin has no draft, and
-   * container, version, environment, and permission changes skip the workspace entirely, so those
-   * take effect the moment they succeed with nothing to discard.
+   * OFF by default, which is the uniform CRUD model: create, read and update apply directly on both
+   * products, and only a removal stops. Set ORCHESTRATOR_APPROVE_LIVE_WRITES=true to restore the
+   * middle tier, where anything with no draft behind it (all GA4 Admin config, and GTM container,
+   * version, environment and permission changes) shows an approval card first.
    *
-   * Defaults to true. Set ORCHESTRATOR_APPROVE_LIVE_WRITES=false to let those apply directly too,
-   * which leaves a typed confirmation on deletes as the only gate in the system.
+   * On is the stricter setting. Deletes and archives are gated regardless and this flag cannot
+   * reach them.
    */
   approveLiveWrites: boolean;
 }
@@ -308,7 +308,7 @@ export function loadConfig(): OrchestratorConfig {
     enableWriteTools: bool('ORCHESTRATOR_ENABLE_WRITE_TOOLS'),
     // Deletes require writes. Enabling deletes alone would be incoherent.
     enableDeleteTools: bool('ORCHESTRATOR_ENABLE_WRITE_TOOLS') && bool('ORCHESTRATOR_ENABLE_DELETE_TOOLS'),
-    // Opt OUT, not in: the unset case has to be the one that asks before changing something live.
-    approveLiveWrites: process.env.ORCHESTRATOR_APPROVE_LIVE_WRITES?.trim() !== 'false',
+    // Opt IN. The uniform CRUD model is the requested default; this flag re-adds the stricter tier.
+    approveLiveWrites: process.env.ORCHESTRATOR_APPROVE_LIVE_WRITES?.trim() === 'true',
   };
 }

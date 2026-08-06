@@ -23,23 +23,22 @@ export interface McpPrompt {
 /**
  * Operations that are never offered to the model, whatever the settings.
  *
- * Publishing makes a draft live, which is a category change rather than an edit. GA4 archives and
- * deletes have no draft concept, take effect immediately, and the MCP's own tool descriptions call
- * archiving "effectively permanent (no un-archive)". Neither belongs behind a card a user can click
- * through in two seconds.
+ * Neither is part of CRUD. Publishing makes a draft live, which is a category change rather than an
+ * edit and the single step that reaches the user's real site. Reauthorizing an environment rotates a
+ * credential. Everything else, including GA4 deletes and archives, is reachable behind the delete
+ * tier.
  */
-const NEVER_OFFERED = /publish|reauthorize|^ga4_.*(delete|archive)|^ga4_(delete|archive)/i;
+const NEVER_OFFERED = /publish|reauthorize/i;
 
 /**
- * Deletes of GTM entities. Allowed only when deletes are explicitly enabled, and then only behind a
- * typed confirmation.
+ * Removals, across both products. Offered only when deletes are enabled, and always behind a typed
+ * confirmation.
  *
- * The blast radius is bounded but real. The delete lands in a DRAFT workspace, so live tagging is
- * untouched and the entity still exists in the last published version. But this MCP exposes no
- * revert for tags, triggers, or variables and no workspace revert, so recovery means discarding the
- * workspace or recreating the entity by hand. Undo is a manual operation, not a button.
+ * `archive` counts. GA4 archiving is not a soft state this toolset can undo: the MCP's own
+ * description calls it "effectively permanent (no un-archive)". Treating it as an ordinary update
+ * because the word "delete" is absent would be reading the name instead of the consequence.
  */
-const GTM_DELETE = /(^|_)(delete|remove)(_|$)/i;
+const DESTRUCTIVE = /(^|_)(delete|remove|archive)(_|$)/i;
 
 export class McpConnection {
   private client: Client | null = null;
@@ -149,7 +148,7 @@ export class McpConnection {
           inputSchema: schema,
           isWrite,
           isDestructive: NEVER_OFFERED.test(t.name),
-          isDelete: !NEVER_OFFERED.test(t.name) && GTM_DELETE.test(t.name),
+          isDelete: !NEVER_OFFERED.test(t.name) && DESTRUCTIVE.test(t.name),
           surface: isWrite ? classifyWriteSurface(t.name, properties) : undefined,
         });
       }

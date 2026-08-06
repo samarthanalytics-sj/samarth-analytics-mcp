@@ -33,42 +33,67 @@ export function classifyWriteSurface(
 }
 
 /**
+ * The word a removal makes the user type.
+ *
+ * An archive is not a delete and should not be confirmed as one. GA4 archiving has no undo anywhere
+ * in this toolset, while a GA4 property delete goes to a trash it can be recovered from, so the two
+ * are not interchangeable and the prompt should not pretend they are. Typing the word that matches
+ * the operation is also what stops the confirmation becoming muscle memory.
+ */
+export function confirmWordFor(toolName: string): string {
+  return /(^|_)archive(_|$)/i.test(toolName) ? 'ARCHIVE' : 'DELETE';
+}
+
+/**
  * Decides whether a write stops for the user, and how hard.
  *
- * Three tiers, matching the desktop assistant so both surfaces behave the same way:
+ * Ordinary CRUD across both products applies directly: create, read and update run when the model
+ * calls them. Removal is the exception, and it stops for a typed confirmation.
  *
- * 1. A change inside a GTM workspace APPLIES DIRECTLY. It is a draft, the live configuration is
- *    still the previous one, nothing here publishes, and discarding the workspace throws it away.
- *    Prompting on each one trains people to click Approve without reading, which costs more safety
- *    than it buys.
- * 2. A DELETE stops for a typed confirmation. Nothing in this toolset reverts one, so undo means
- *    rebuilding by hand. This tier is never relaxed by configuration.
- * 3. A write that is immediately live with no draft behind it stops for a plain approval. GA4 Admin
- *    has no draft concept, and container, version, environment, and permission changes skip the
- *    workspace entirely. Additive but live still deserves an explicit yes.
+ * The reasoning is that a confirmation is only worth asking for when it is not routine. Prompting on
+ * every create teaches people to click Approve without reading, which spends the attention that the
+ * one irreversible prompt needs. Removals are where the asymmetry is real: nothing in this toolset
+ * reverts one, so undo means rebuilding by hand or, for a GA4 archive, not at all.
+ *
+ * `approveLiveWrites` restores the middle tier, where a create or update with no draft behind it
+ * (all GA4 Admin config, and GTM container, version, environment and permission changes) shows a
+ * plain approval card. It is off by default because the uniform CRUD model was asked for
+ * deliberately, and on it is the stricter setting, never the looser one.
  *
  * Returns null when the write should simply run.
  */
 export function approvalGate(
-  tool: { isDelete: boolean; surface?: string },
+  tool: { isDelete: boolean; surface?: string; name?: string },
   approveLiveWrites: boolean,
 ): { confirmWord?: string } | null {
-  if (tool.isDelete) return { confirmWord: 'DELETE' };
-  // An unclassified write is treated as live. The opposite default would describe something
-  // irreversible to the user as a discardable draft.
+  // Checked first and never relaxed by configuration: no flag can turn a removal into a silent one.
+  if (tool.isDelete) return { confirmWord: confirmWordFor(tool.name ?? '') };
   if (approveLiveWrites && tool.surface !== 'gtm_draft') return {};
   return null;
 }
 
-/** One line on what this change can and cannot be taken back, for the approval card. */
-export function describeReversibility(surface: WriteSurface, isDelete: boolean): string {
+/**
+ * One line on what this change can and cannot be taken back, for the approval card.
+ *
+ * `toolName` matters because an archive is the worst case on this list and reads like the mildest.
+ */
+export function describeReversibility(
+  surface: WriteSurface,
+  isDelete: boolean,
+  toolName = '',
+): string {
+  if (isDelete && /(^|_)archive(_|$)/i.test(toolName)) {
+    return 'Archiving is effectively permanent. There is no un-archive in the GA4 API, so this cannot be undone here or in the GA4 interface.';
+  }
   if (surface === 'gtm_draft') {
     return isDelete
       ? 'This happens in a draft workspace, so your live site is unaffected, but nothing here restores it: recovery means rebuilding it by hand or discarding the workspace.'
       : 'This lands in a draft workspace and is not published, so your live site is unaffected until someone publishes it.';
   }
   if (surface === 'ga4_live') {
-    return 'GA4 has no draft. This takes effect on the property as soon as it succeeds, and nothing here undoes it.';
+    return isDelete
+      ? 'GA4 has no draft. This removes the resource from the live property as soon as it succeeds. Some GA4 deletes go to a trash that can be restored for a limited time; nothing here restores them for you.'
+      : 'GA4 has no draft. This takes effect on the property as soon as it succeeds, and nothing here undoes it.';
   }
   return isDelete
     ? 'This is not workspace-scoped, so there is no draft to discard. It takes effect immediately and nothing here undoes it.'
