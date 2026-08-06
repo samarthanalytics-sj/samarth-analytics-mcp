@@ -1,3 +1,9 @@
+## [1.461.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.460.2...v1.461.0) (2026-08-06)
+
+### Features
+
+* **chat:** uniform CRUD on GTM and GA4, with removals behind a typed word ([#844](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/844)) ([54ab082](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/54ab082ba91658d0400078485a763d3302a96d04))
+
 ## [1.460.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.460.1...v1.460.2) (2026-08-06)
 
 ### Bug Fixes
