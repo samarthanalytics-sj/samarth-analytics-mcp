@@ -1,3 +1,9 @@
+## [1.457.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.456.0...v1.457.0) (2026-08-06)
+
+### Features
+
+* **chat:** write access behind human approval ([#838](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/838)) ([274b726](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/274b726c290a6c1f9d9f7419c0f48325e0c9ac70))
+
 ## [1.456.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.455.1...v1.456.0) (2026-08-06)
 
 ### Features
