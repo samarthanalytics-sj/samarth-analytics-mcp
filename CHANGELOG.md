@@ -1,3 +1,9 @@
+## [1.460.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.460.0...v1.460.1) (2026-08-06)
+
+### Bug Fixes
+
+* **chat:** tier writes by where they land, and stop gating draft edits ([#842](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/842)) ([0a29983](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/0a29983615d1b8983dc87e02245d1089c2e65518))
+
 ## [1.460.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.459.0...v1.460.0) (2026-08-06)
 
 ### Features
