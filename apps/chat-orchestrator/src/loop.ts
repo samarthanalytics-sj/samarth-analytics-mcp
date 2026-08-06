@@ -11,6 +11,7 @@ import { capToolResult, scopeTools, toOpenAiTools } from './tools.js';
 import { buildSituationalContext, buildStaticSystem } from './prompts.js';
 import { GoogleIdentityError, isGoogleAuthFailure } from './google-identity.js';
 import { forLog, userRef } from './redact.js';
+import { summarizeWrite, type ApprovalBroker } from './approvals.js';
 import type { ChatContext, ChatMessage, StreamEvent } from './types.js';
 
 export interface RunTurnArgs {
@@ -27,6 +28,8 @@ export interface RunTurnArgs {
    * lets one expired access token cost a retry instead of the whole turn.
    */
   onAuthFailure?: () => Promise<McpConnection>;
+  /** Present only when write tools are enabled. Its absence makes a write impossible to execute. */
+  approvals?: ApprovalBroker;
 }
 
 export async function runTurn(args: RunTurnArgs): Promise<void> {
@@ -40,6 +43,10 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
   const scoped = scopeTools(mcp.listTools(), {
     product: context.product,
     includeWrites: cfg.enableWriteTools,
+    onTruncated: (dropped) =>
+      console.warn(
+        `[tools] ${dropped.length} tool(s) withheld by the per-request ceiling and invisible to the model: ${dropped.slice(0, 10).join(', ')}${dropped.length > 10 ? ', ...' : ''}`,
+      ),
   });
   const openAiTools = toOpenAiTools(scoped);
 
@@ -146,6 +153,60 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
           summary: 'Invalid arguments',
         });
         continue;
+      }
+
+      // Writes are proposed, never performed. The model cannot execute one; only the user can.
+      const tool = scoped.find((t) => t.name === call.function.name);
+      if (tool?.isWrite) {
+        if (!args.approvals) {
+          // Belt and braces: the tool should not have been visible without a broker.
+          messages.push({
+            role: 'tool',
+            tool_call_id: call.id,
+            name: call.function.name,
+            content: 'This conversation is read-only. Explain the change instead of making it.',
+          });
+          emit({ type: 'tool_result', id: call.id, name: call.function.name, ok: false, summary: 'Read-only' });
+          continue;
+        }
+
+        const outcome = await args.approvals.request(
+          user.id,
+          call.function.name,
+          parsedArgs,
+          (approvalId) =>
+            emit({
+              type: 'approval_required',
+              approvalId,
+              toolName: call.function.name,
+              summary: summarizeWrite(call.function.name, parsedArgs),
+              args: parsedArgs,
+            }),
+        );
+
+        if (!outcome.approved) {
+          const why =
+            outcome.reason === 'timeout'
+              ? 'The user did not respond in time, so nothing was changed.'
+              : outcome.reason === 'aborted'
+                ? 'The user stopped the request, so nothing was changed.'
+                : 'The user declined this change, so nothing was changed.';
+          console.log(
+            `[approval] ${call.function.name} ${outcome.reason} for user ${userRef(user.id)}`,
+          );
+          messages.push({ role: 'tool', tool_call_id: call.id, name: call.function.name, content: why });
+          emit({ type: 'tool_result', id: call.id, name: call.function.name, ok: false, summary: why });
+          continue;
+        }
+
+        // The user may have corrected what the model proposed; their version is what runs.
+        parsedArgs = outcome.args;
+        // Every guarded write in this MCP requires confirm=true. Setting it here, after a human
+        // decision, is the only place in this codebase that may set it.
+        parsedArgs.confirm = true;
+        console.log(
+          `[approval] ${call.function.name} APPROVED by user ${userRef(user.id)}: ${forLog(JSON.stringify(parsedArgs), 200)}`,
+        );
       }
 
       let { ok, text } = await mcp.callTool(call.function.name, parsedArgs);

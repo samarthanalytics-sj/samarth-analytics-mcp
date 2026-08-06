@@ -24,12 +24,20 @@ export interface ScopeOptions {
   includeWrites: boolean;
   /** Hard ceiling on how many tools are advertised in one request. */
   maxTools?: number;
+  /** Called when the ceiling actually dropped tools, so a silent cap cannot go unnoticed. */
+  onTruncated?(dropped: string[]): void;
 }
 
 export function scopeTools(all: ToolDef[], opts: ScopeOptions): ToolDef[] {
-  const { product, includeWrites, maxTools = 60 } = opts;
+  // Enabling writes roughly doubles the surface, so the ceiling has to move with it or the cap
+  // silently swallows the write tools the model was just given permission to use.
+  const { product, includeWrites, maxTools = includeWrites ? 120 : 60, onTruncated } = opts;
 
   const inScope = all.filter((t) => {
+    // Destructive tools are withheld unconditionally. An approval card is a reasonable gate for
+    // creating a tag and not for deleting one, and a GA4 archive is irreversible. These stay off at
+    // the MCP guardrail level too, so this is the second of two independent refusals.
+    if (t.isDestructive) return false;
     if (t.isWrite && !includeWrites) return false;
     if (ALWAYS_AVAILABLE.has(t.name)) return true;
     return productOf(t.name) === product;
@@ -42,6 +50,11 @@ export function scopeTools(all: ToolDef[], opts: ScopeOptions): ToolDef[] {
     return a.name.localeCompare(b.name);
   });
 
+  if (inScope.length > maxTools) {
+    // A capped tool list is indistinguishable from a short one from the model's side: it simply
+    // never sees the tool and reports it cannot do the thing. Say so in the log at least.
+    onTruncated?.(inScope.slice(maxTools).map((t) => t.name));
+  }
   return inScope.slice(0, maxTools);
 }
 
