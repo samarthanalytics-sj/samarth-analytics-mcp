@@ -69,7 +69,11 @@ async function main(): Promise<void> {
   console.log(
     `[orchestrator] visible to model: GTM ${scopeTools(all, { product: 'gtm', includeWrites: cfg.enableWriteTools }).length}, ` +
       `GA4 ${scopeTools(all, { product: 'ga4', includeWrites: cfg.enableWriteTools }).length}` +
-      (cfg.enableWriteTools ? ' (writes ENABLED)' : ' (read-only)'),
+      (cfg.enableWriteTools
+        ? cfg.enableDeleteTools
+          ? ' (writes ENABLED, deletes ENABLED)'
+          : ' (writes ENABLED)'
+        : ' (read-only)'),
   );
 
   const llm = new OpenAiClient(cfg);
@@ -134,6 +138,7 @@ async function main(): Promise<void> {
       model: cfg.openai.model,
       mcpTools: all.length,
       writeToolsVisible: cfg.enableWriteTools,
+      deleteToolsVisible: cfg.enableDeleteTools,
       authRequired: !cfg.devNoAuth,
       googleIdentityMode: cfg.googleIdentity.mode,
       mcpSessions: sessions,
@@ -203,13 +208,17 @@ async function main(): Promise<void> {
         ? (req.body.arguments as Record<string, unknown>)
         : undefined;
 
+    const typed = typeof req.body?.confirm === 'string' ? req.body.confirm : undefined;
+
     try {
-      approvals.resolve(req.params.id, user.id, decision, args);
+      approvals.resolve(req.params.id, user.id, decision, args, typed);
       res.json({ ok: true, decision });
     } catch (err) {
       const code = err instanceof ApprovalError ? err.code : 'unknown_approval';
-      // A mismatched owner is reported as not-found so an approval id cannot be probed for.
-      res.status(404).json({
+      // A missing typed confirmation is a 400 the user can correct; everything else is reported as
+      // not-found so an approval id cannot be probed for.
+      const status = code === 'confirmation_required' ? 400 : 404;
+      res.status(status).json({
         code: code === 'not_yours' ? 'unknown_approval' : code,
         message: err instanceof Error ? err.message : 'Unknown approval',
       });

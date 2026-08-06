@@ -112,6 +112,11 @@ export interface OrchestratorConfig {
    * guardrail flags, which stay authoritative: this only controls what the model can see.
    */
   enableWriteTools: boolean;
+  /**
+   * Offers GTM deletes, behind a typed confirmation. Separate from writes on purpose: creating a tag
+   * and removing one are different decisions, and this toolset has no revert for the second.
+   */
+  enableDeleteTools: boolean;
 }
 
 function req(name: string): string {
@@ -289,5 +294,7 @@ export function loadConfig(): OrchestratorConfig {
       turnsPerMinutePerUser: num('TURNS_PER_MINUTE_PER_USER', 10),
     },
     enableWriteTools: bool('ORCHESTRATOR_ENABLE_WRITE_TOOLS'),
+    // Deletes require writes. Enabling deletes alone would be incoherent.
+    enableDeleteTools: bool('ORCHESTRATOR_ENABLE_WRITE_TOOLS') && bool('ORCHESTRATOR_ENABLE_DELETE_TOOLS'),
   };
 }

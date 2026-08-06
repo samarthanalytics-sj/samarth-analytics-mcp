@@ -28,6 +28,11 @@ export interface ToolDef {
    * removing one, and an archive of a GA4 custom dimension is irreversible.
    */
   isDestructive: boolean;
+  /**
+   * A GTM delete. Offered only when deletes are enabled, and then only behind a typed confirmation,
+   * because this toolset has no revert and undo is a manual operation.
+   */
+  isDelete: boolean;
 }
 
 export interface ChatContext {
@@ -56,6 +61,8 @@ export type StreamEvent =
       toolName: string;
       summary: string;
       args: Record<string, unknown>;
+      /** When set, the user must type this word before the change can be approved. */
+      confirmWord?: string;
     }
   | { type: 'approval_resolved'; approvalId: string; approved: boolean }
   | { type: 'usage'; promptTokens: number; completionTokens: number; cachedTokens: number }

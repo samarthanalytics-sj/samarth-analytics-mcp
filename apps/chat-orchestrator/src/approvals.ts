@@ -18,6 +18,8 @@ export interface PendingApproval {
   userId: string;
   toolName: string;
   args: Record<string, unknown>;
+  /** When set, the caller must echo this word for the approval to count. */
+  confirmWord?: string;
   createdAt: number;
   resolve(outcome: ApprovalOutcome): void;
   timer: NodeJS.Timeout;
@@ -30,7 +32,7 @@ export type ApprovalOutcome =
 export class ApprovalError extends Error {
   constructor(
     message: string,
-    readonly code: 'unknown_approval' | 'not_yours' | 'already_resolved',
+    readonly code: 'unknown_approval' | 'not_yours' | 'already_resolved' | 'confirmation_required',
   ) {
     super(message);
   }
@@ -52,6 +54,7 @@ export class ApprovalBroker {
     toolName: string,
     args: Record<string, unknown>,
     onCreated: (id: string) => void,
+    confirmWord?: string,
   ): Promise<ApprovalOutcome> {
     const id = randomUUID();
     return new Promise<ApprovalOutcome>((resolve) => {
@@ -62,7 +65,16 @@ export class ApprovalBroker {
       // Never hold the process open for an approval nobody is going to give.
       timer.unref?.();
 
-      this.pending.set(id, { id, userId, toolName, args, createdAt: Date.now(), resolve, timer });
+      this.pending.set(id, {
+        id,
+        userId,
+        toolName,
+        args,
+        confirmWord,
+        createdAt: Date.now(),
+        resolve,
+        timer,
+      });
       onCreated(id);
     });
   }
@@ -79,6 +91,7 @@ export class ApprovalBroker {
     userId: string,
     decision: 'approve' | 'decline',
     args?: Record<string, unknown>,
+    typed?: string,
   ): void {
     const entry = this.pending.get(id);
     if (!entry) {
@@ -88,6 +101,15 @@ export class ApprovalBroker {
     // observed one could authorize a write against someone else's container.
     if (entry.userId !== userId) {
       throw new ApprovalError('That approval belongs to a different session.', 'not_yours');
+    }
+
+    // A delete carries a word the user must retype. Checked here rather than in the UI, because a
+    // client-side gate is a suggestion and this one has to be a rule.
+    if (decision === 'approve' && entry.confirmWord && typed?.trim() !== entry.confirmWord) {
+      throw new ApprovalError(
+        `This change needs you to type ${entry.confirmWord} to confirm.`,
+        'confirmation_required',
+      );
     }
 
     this.pending.delete(id);
@@ -121,6 +143,17 @@ export class ApprovalBroker {
  * of per-tool phrasing that would drift as tools are added.
  */
 export function summarizeWrite(toolName: string, args: Record<string, unknown>): string {
+  if (/(^|_)(delete|remove)(_|$)/i.test(toolName)) {
+    const subject = toolName.replace(/_(delete|remove).*$/, '').replace(/_/g, ' ');
+    const id =
+      (typeof args.tagId === 'string' && args.tagId) ||
+      (typeof args.triggerId === 'string' && args.triggerId) ||
+      (typeof args.variableId === 'string' && args.variableId) ||
+      (typeof args.name === 'string' && args.name) ||
+      '';
+    return id ? `Delete from ${subject}: ${id}` : `Delete from ${subject}`;
+  }
+
   const verb = toolName.includes('_create')
     ? 'Create'
     : toolName.includes('_update')

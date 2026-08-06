@@ -155,6 +155,63 @@ await test('pending count reflects outstanding approvals', async () => {
   assert.equal(broker.stats().pending, 0);
 });
 
+console.log('typed confirmation for deletes');
+
+await test('a delete cannot be approved without typing the word', async () => {
+  // Enforced here, not in the UI. A client-side gate is a suggestion; this one has to be a rule.
+  const broker = new ApprovalBroker();
+  let id = '';
+  const pending = broker.request('user-1', 'tags_delete', ARGS, (i) => (id = i), 'DELETE');
+
+  assert.throws(
+    () => broker.resolve(id, 'user-1', 'approve'),
+    (e: unknown) => e instanceof ApprovalError && e.code === 'confirmation_required',
+  );
+  assert.throws(
+    () => broker.resolve(id, 'user-1', 'approve', undefined, 'delete'),
+    (e: unknown) => e instanceof ApprovalError && e.code === 'confirmation_required',
+    'the check must be exact, not case-insensitive',
+  );
+  assert.throws(
+    () => broker.resolve(id, 'user-1', 'approve', undefined, 'DELETE THIS'),
+    (e: unknown) => e instanceof ApprovalError && e.code === 'confirmation_required',
+  );
+
+  // Still parked after every rejected attempt.
+  let settled = false;
+  void pending.then(() => (settled = true));
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(settled, false);
+
+  broker.resolve(id, 'user-1', 'approve', undefined, 'DELETE');
+  assert.equal((await pending).approved, true);
+});
+
+await test('surrounding whitespace in the typed word is tolerated', async () => {
+  const broker = new ApprovalBroker();
+  let id = '';
+  const pending = broker.request('user-1', 'tags_delete', ARGS, (i) => (id = i), 'DELETE');
+  broker.resolve(id, 'user-1', 'approve', undefined, '  DELETE  ');
+  assert.equal((await pending).approved, true);
+});
+
+await test('declining a delete needs no typed word', async () => {
+  // Making it harder to say no than to say yes would be exactly backwards.
+  const broker = new ApprovalBroker();
+  let id = '';
+  const pending = broker.request('user-1', 'tags_delete', ARGS, (i) => (id = i), 'DELETE');
+  broker.resolve(id, 'user-1', 'decline');
+  assert.equal((await pending).approved, false);
+});
+
+await test('a non-delete write needs no typed word', async () => {
+  const broker = new ApprovalBroker();
+  let id = '';
+  const pending = broker.request('user-1', 'tags_create', ARGS, (i) => (id = i));
+  broker.resolve(id, 'user-1', 'approve');
+  assert.equal((await pending).approved, true);
+});
+
 console.log('card headline');
 
 await test('the summary names the action and the subject', () => {
@@ -164,6 +221,11 @@ await test('the summary names the action and the subject', () => {
   );
   assert.match(summarizeWrite('ga4_custom_dimension_create', { displayName: 'Plan' }), /^Create GA4/);
   assert.match(summarizeWrite('triggers_update', { triggerId: '77' }), /trigger 77/);
+});
+
+await test('a delete headline names what is being removed', () => {
+  assert.match(summarizeWrite('tags_delete', { tagId: '42' }), /^Delete from tags: 42$/);
+  assert.match(summarizeWrite('triggers_delete', {}), /^Delete from triggers$/);
 });
 
 await test('a nameless write still produces a readable headline', () => {

@@ -22,6 +22,8 @@ const ALWAYS_AVAILABLE = new Set(['accounts_list', 'containers_list', 'container
 export interface ScopeOptions {
   product: Product;
   includeWrites: boolean;
+  /** Offers GTM deletes. Requires includeWrites; ignored without it. */
+  includeDeletes?: boolean;
   /** Hard ceiling on how many tools are advertised in one request. */
   maxTools?: number;
   /** Called when the ceiling actually dropped tools, so a silent cap cannot go unnoticed. */
@@ -31,13 +33,21 @@ export interface ScopeOptions {
 export function scopeTools(all: ToolDef[], opts: ScopeOptions): ToolDef[] {
   // Enabling writes roughly doubles the surface, so the ceiling has to move with it or the cap
   // silently swallows the write tools the model was just given permission to use.
-  const { product, includeWrites, maxTools = includeWrites ? 120 : 60, onTruncated } = opts;
+  const {
+    product,
+    includeWrites,
+    includeDeletes = false,
+    maxTools = includeWrites ? 120 : 60,
+    onTruncated,
+  } = opts;
 
   const inScope = all.filter((t) => {
     // Destructive tools are withheld unconditionally. An approval card is a reasonable gate for
     // creating a tag and not for deleting one, and a GA4 archive is irreversible. These stay off at
     // the MCP guardrail level too, so this is the second of two independent refusals.
+    // Publishing and GA4 archives are never offered, whatever the settings.
     if (t.isDestructive) return false;
+    if (t.isDelete && !(includeWrites && includeDeletes)) return false;
     if (t.isWrite && !includeWrites) return false;
     if (ALWAYS_AVAILABLE.has(t.name)) return true;
     return productOf(t.name) === product;
@@ -45,10 +55,10 @@ export function scopeTools(all: ToolDef[], opts: ScopeOptions): ToolDef[] {
 
   // Reads first, so a truncation caused by maxTools never removes the ability to look something up
   // while leaving the ability to change it.
-  inScope.sort((a, b) => {
-    if (a.isWrite !== b.isWrite) return a.isWrite ? 1 : -1;
-    return a.name.localeCompare(b.name);
-  });
+  // Reads first, then writes, then deletes. If the ceiling truncates, it removes the most
+  // consequential tools before the least.
+  const rank = (t: ToolDef): number => (t.isDelete ? 2 : t.isWrite ? 1 : 0);
+  inScope.sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
 
   if (inScope.length > maxTools) {
     // A capped tool list is indistinguishable from a short one from the model's side: it simply

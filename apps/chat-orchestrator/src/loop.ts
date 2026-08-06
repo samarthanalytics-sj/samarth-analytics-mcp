@@ -43,6 +43,7 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
   const scoped = scopeTools(mcp.listTools(), {
     product: context.product,
     includeWrites: cfg.enableWriteTools,
+    includeDeletes: cfg.enableDeleteTools,
     onTruncated: (dropped) =>
       console.warn(
         `[tools] ${dropped.length} tool(s) withheld by the per-request ceiling and invisible to the model: ${dropped.slice(0, 10).join(', ')}${dropped.length > 10 ? ', ...' : ''}`,
@@ -170,6 +171,10 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
           continue;
         }
 
+        // A delete needs the word typed back. Creating a tag is reversible by deleting it; deleting
+        // one is not reversible through this toolset at all.
+        const confirmWord = tool.isDelete ? 'DELETE' : undefined;
+
         const outcome = await args.approvals.request(
           user.id,
           call.function.name,
@@ -181,7 +186,9 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
               toolName: call.function.name,
               summary: summarizeWrite(call.function.name, parsedArgs),
               args: parsedArgs,
+              confirmWord,
             }),
+          confirmWord,
         );
 
         if (!outcome.approved) {
