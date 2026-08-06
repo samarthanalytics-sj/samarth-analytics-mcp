@@ -1,3 +1,9 @@
+## [1.463.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.462.0...v1.463.0) (2026-08-06)
+
+### Features
+
+* **chat:** record what the assistant did, to whose container, and who approved it ([#846](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/846)) ([a863104](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a863104a7d219556469f965a1f35d8a4bc915faa))
+
 ## [1.462.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.461.0...v1.462.0) (2026-08-06)
 
 ### Features
