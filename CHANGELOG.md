@@ -1,3 +1,9 @@
+## [1.459.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.458.0...v1.459.0) (2026-08-06)
+
+### Features
+
+* **chat:** container and property pickers for the AI chat ([#840](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/840)) ([5a0eade](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/5a0eadeacfc1a0f16fb66fbe3f8f4616b51f6f5a))
+
 ## [1.458.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.457.0...v1.458.0) (2026-08-06)
 
 ### Features
