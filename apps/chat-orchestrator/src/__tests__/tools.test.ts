@@ -12,13 +12,14 @@ function test(name: string, fn: () => void): void {
   console.log(`  ok  ${name}`);
 }
 
-function tool(name: string, isWrite = false, isDestructive = false): ToolDef {
+function tool(name: string, isWrite = false, isDestructive = false, isDelete = false): ToolDef {
   return {
     name,
     description: `description for ${name}`,
     inputSchema: { type: 'object', properties: isWrite ? { confirm: { type: 'boolean' } } : {} },
     isWrite,
     isDestructive,
+    isDelete,
   };
 }
 
@@ -29,12 +30,13 @@ const CATALOG: ToolDef[] = [
   tool('tags_list'),
   tool('tags_get'),
   tool('tags_create', true),
-  tool('tags_delete', true, true),
+  tool('tags_delete', true, false, true),
   tool('audit_container'),
   tool('ga4_properties_list'),
   tool('ga4_run_report'),
   tool('ga4_create_property', true),
   tool('ga4_archive_audience', true, true),
+  tool('versions_publish', true, true),
 ];
 
 console.log('tool scoping');
@@ -83,15 +85,48 @@ test('maxTools truncation drops writes before reads', () => {
 
 console.log('destructive tools are never exposed');
 
-test('deletes and archives stay hidden even with writes enabled', () => {
+test('a GTM delete stays hidden unless deletes are separately enabled', () => {
+  // Writes and deletes are different decisions. Turning on the first must not turn on the second.
+  const writesOnly = scopeTools(CATALOG, { product: 'gtm', includeWrites: true }).map((t) => t.name);
+  assert.equal(writesOnly.includes('tags_delete'), false);
+
+  const withDeletes = scopeTools(CATALOG, {
+    product: 'gtm',
+    includeWrites: true,
+    includeDeletes: true,
+  }).map((t) => t.name);
+  assert.ok(withDeletes.includes('tags_delete'), 'deletes should appear once explicitly enabled');
+});
+
+test('enabling deletes without writes is incoherent and offers nothing', () => {
+  const scoped = scopeTools(CATALOG, {
+    product: 'gtm',
+    includeWrites: false,
+    includeDeletes: true,
+  });
+  assert.equal(scoped.some((t) => t.isWrite || t.isDelete), false);
+});
+
+test('GA4 archives stay hidden even with writes AND deletes enabled', () => {
+  // GA4 has no draft concept and the MCP calls archiving "effectively permanent (no un-archive)".
+  const ga4 = scopeTools(CATALOG, {
+    product: 'ga4',
+    includeWrites: true,
+    includeDeletes: true,
+  }).map((t) => t.name);
+  assert.equal(ga4.includes('ga4_archive_audience'), false, 'an irreversible GA4 archive was exposed');
+});
+
+test('publish is never offered, at any setting', () => {
   // The approval card is a reasonable gate for creating a tag and not for deleting one, and a GA4
   // archive is irreversible. This is the second of two independent refusals; the MCP guardrail
   // flags are the first.
-  const scoped = scopeTools(CATALOG, { product: 'gtm', includeWrites: true }).map((t) => t.name);
-  assert.equal(scoped.includes('tags_delete'), false, 'a delete tool was exposed to the model');
-
-  const ga4 = scopeTools(CATALOG, { product: 'ga4', includeWrites: true }).map((t) => t.name);
-  assert.equal(ga4.includes('ga4_archive_audience'), false, 'an archive tool was exposed');
+  const scoped = scopeTools(CATALOG, {
+    product: 'gtm',
+    includeWrites: true,
+    includeDeletes: true,
+  }).map((t) => t.name);
+  assert.equal(scoped.includes('versions_publish'), false, 'publish was exposed to the model');
 });
 
 test('non-destructive writes ARE exposed when writes are enabled', () => {
@@ -99,21 +134,29 @@ test('non-destructive writes ARE exposed when writes are enabled', () => {
   assert.ok(scoped.includes('tags_create'), 'creating a tag should be possible behind approval');
 });
 
-test('enabling writes never widens the read surface into deletes', () => {
+test('enabling writes never widens the surface into deletes or publish', () => {
   const readOnly = scopeTools(CATALOG, { product: 'gtm', includeWrites: false });
   const withWrites = scopeTools(CATALOG, { product: 'gtm', includeWrites: true });
-  assert.equal(
-    withWrites.some((t) => t.isDestructive),
-    false,
-  );
+  assert.equal(withWrites.some((t) => t.isDestructive || t.isDelete), false);
   assert.ok(withWrites.length > readOnly.length, 'writes should add tools');
+});
+
+test('truncation drops deletes first, then writes, then reads', () => {
+  const scoped = scopeTools(CATALOG, {
+    product: 'gtm',
+    includeWrites: true,
+    includeDeletes: true,
+    maxTools: 3,
+  });
+  assert.equal(scoped.length, 3);
+  assert.equal(scoped.some((t) => t.isDelete), false, 'a delete survived truncation ahead of a read');
 });
 
 console.log('openai mapping');
 
 test('schemas are normalized to a valid function-calling shape', () => {
   const mapped = toOpenAiTools([
-    { name: 'x', description: 'd', inputSchema: { $schema: 'http://json-schema.org/draft-07/schema#' }, isWrite: false, isDestructive: false },
+    { name: 'x', description: 'd', inputSchema: { $schema: 'http://json-schema.org/draft-07/schema#' }, isWrite: false, isDestructive: false, isDelete: false },
   ]);
   assert.equal(mapped[0].function.parameters.type, 'object');
   assert.deepEqual(mapped[0].function.parameters.properties, {});
@@ -122,7 +165,7 @@ test('schemas are normalized to a valid function-calling shape', () => {
 
 test('descriptions are bounded', () => {
   const mapped = toOpenAiTools([
-    { name: 'x', description: 'a'.repeat(5000), inputSchema: {}, isWrite: false, isDestructive: false },
+    { name: 'x', description: 'a'.repeat(5000), inputSchema: {}, isWrite: false, isDestructive: false, isDelete: false },
   ]);
   assert.ok(mapped[0].function.description.length <= 1024);
 });

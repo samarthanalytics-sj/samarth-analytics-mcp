@@ -20,11 +20,25 @@ export interface McpPrompt {
 }
 
 /**
- * Irreversible or publishing operations, matched on the MCP's own naming convention. Kept as one
- * pattern rather than a name list so a newly added delete tool is destructive by default instead of
- * silently becoming approvable.
+ * Operations that are never offered to the model, whatever the settings.
+ *
+ * Publishing makes a draft live, which is a category change rather than an edit. GA4 archives and
+ * deletes have no draft concept, take effect immediately, and the MCP's own tool descriptions call
+ * archiving "effectively permanent (no un-archive)". Neither belongs behind a card a user can click
+ * through in two seconds.
  */
-const DESTRUCTIVE = /(^|_)(delete|archive|remove)(_|$)|publish|reauthorize/i;
+const NEVER_OFFERED = /publish|reauthorize|^ga4_.*(delete|archive)|^ga4_(delete|archive)/i;
+
+/**
+ * Deletes of GTM entities. Allowed only when deletes are explicitly enabled, and then only behind a
+ * typed confirmation.
+ *
+ * The blast radius is bounded but real. The delete lands in a DRAFT workspace, so live tagging is
+ * untouched and the entity still exists in the last published version. But this MCP exposes no
+ * revert for tags, triggers, or variables and no workspace revert, so recovery means discarding the
+ * workspace or recreating the entity by hand. Undo is a manual operation, not a button.
+ */
+const GTM_DELETE = /(^|_)(delete|remove)(_|$)/i;
 
 export class McpConnection {
   private client: Client | null = null;
@@ -132,7 +146,8 @@ export class McpConnection {
           // Every guarded mutation in this MCP takes `confirm`; read tools never do. That makes the
           // schema itself the read/write discriminator, with no name list to keep in sync.
           isWrite: Object.prototype.hasOwnProperty.call(properties, 'confirm'),
-          isDestructive: DESTRUCTIVE.test(t.name),
+          isDestructive: NEVER_OFFERED.test(t.name),
+          isDelete: !NEVER_OFFERED.test(t.name) && GTM_DELETE.test(t.name),
         });
       }
       cursor = page.nextCursor;
