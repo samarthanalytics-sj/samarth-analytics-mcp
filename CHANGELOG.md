@@ -1,3 +1,9 @@
+## [1.462.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.461.0...v1.462.0) (2026-08-06)
+
+### Features
+
+* **chat:** supervise the orchestrator so a crash is not an outage ([#845](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/845)) ([c580a60](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c580a6080fd08d0fc932427f7802fa895dddf0ee))
+
 ## [1.461.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.460.2...v1.461.0) (2026-08-06)
 
 ### Features
