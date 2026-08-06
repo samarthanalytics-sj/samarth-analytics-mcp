@@ -1,3 +1,9 @@
+## [1.456.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.455.1...v1.456.0) (2026-08-06)
+
+### Features
+
+* **chat:** log requests and tool failures, with secrets redacted ([#837](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/837)) ([5043f03](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/5043f032f55155e9126e96c1b249879542af938a))
+
 ## [1.455.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.455.0...v1.455.1) (2026-08-06)
 
 ### Bug Fixes
