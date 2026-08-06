@@ -1,0 +1,270 @@
+/**
+ * Audit trail: what the assistant did, to whose container, and whether anyone approved it.
+ *
+ * The approval card used to be the record. It no longer is: a tag create, a GA4 property update and
+ * a permission grant all apply the moment the model calls the tool, and without this the only trace
+ * is a line in a log file on whichever host happened to be running. "Who changed this tag and when"
+ * has to have an answer that is not "let me check my laptop".
+ *
+ * Written against PostgREST with the service role key rather than through @supabase/supabase-js.
+ * This service has four dependencies and none of them are heavy; adding a client library to make
+ * three POSTs would be the largest thing in the tree.
+ *
+ * TWO RULES, and they pull in opposite directions:
+ *
+ * 1. A failure here must never break a user's turn. Losing an audit row is bad; failing a container
+ *    audit because a logging table was unreachable is worse, and would make the whole feature
+ *    something an operator switches off.
+ * 2. A failure here must never be silent. An audit trail that quietly stopped recording six weeks
+ *    ago is worse than none, because everyone believes it. So every failure logs, and the count is
+ *    on /health where a monitor can see it.
+ */
+import { forLog, redactSecrets, userRef } from './redact.js';
+import type { ChatContext } from './types.js';
+
+export interface AuditTarget {
+  accountId?: string;
+  containerId?: string;
+  workspaceId?: string;
+  propertyId?: string;
+}
+
+export interface ToolEventRecord extends AuditTarget {
+  toolName: string;
+  product: 'gtm' | 'ga4';
+  surface?: 'gtm_draft' | 'gtm_live' | 'ga4_live';
+  isWrite: boolean;
+  isDelete: boolean;
+  approval: 'not_required' | 'approved' | 'declined' | 'timeout' | 'aborted';
+  args: Record<string, unknown>;
+  ok: boolean;
+  resultSummary: string;
+  durationMs: number;
+}
+
+export interface AssistantTurnRecord {
+  content: string;
+  promptTokens: number;
+  completionTokens: number;
+  cachedTokens: number;
+  model: string;
+  stopReason: string;
+}
+
+/**
+ * Strips credentials from a value that is about to be stored.
+ *
+ * Round-tripping through JSON applies the same redaction to every nested string without walking the
+ * object by hand. The replacement labels are plain text with no quotes or backslashes, so the
+ * redacted document is still valid JSON; the catch is there because a value this important should
+ * degrade to something rather than throw.
+ */
+export function redactValue(value: unknown): unknown {
+  try {
+    return JSON.parse(redactSecrets(JSON.stringify(value ?? null)));
+  } catch {
+    return { unserializable: true };
+  }
+}
+
+/** Keeps a title short enough to list without being useless. */
+function titleFrom(text: string): string {
+  const flat = redactSecrets(text).replace(/\s+/g, ' ').trim();
+  return flat.length > 120 ? `${flat.slice(0, 117)}...` : flat;
+}
+
+export class AuditRecorder {
+  private failureCount = 0;
+  private readonly enabled: boolean;
+
+  constructor(
+    private readonly baseUrl: string,
+    private readonly serviceRoleKey: string,
+  ) {
+    this.enabled = Boolean(baseUrl && serviceRoleKey);
+  }
+
+  isEnabled(): boolean {
+    return this.enabled;
+  }
+
+  stats(): { enabled: boolean; failures: number } {
+    return { enabled: this.enabled, failures: this.failureCount };
+  }
+
+  private async request(
+    method: 'POST' | 'PATCH' | 'GET',
+    path: string,
+    body?: unknown,
+    prefer = 'return=minimal',
+  ): Promise<unknown[] | null> {
+    const res = await fetch(`${this.baseUrl}/rest/v1/${path}`, {
+      method,
+      headers: {
+        apikey: this.serviceRoleKey,
+        Authorization: `Bearer ${this.serviceRoleKey}`,
+        'Content-Type': 'application/json',
+        Prefer: prefer,
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      // A slow audit write must not hold a turn open. The row is lost; the turn is not.
+      signal: AbortSignal.timeout(8_000),
+    });
+
+    if (!res.ok) {
+      throw new Error(`${res.status} ${forLog(await res.text().catch(() => ''), 200)}`);
+    }
+    if (prefer.includes('return=representation')) {
+      return (await res.json().catch(() => [])) as unknown[];
+    }
+    return null;
+  }
+
+  private fail(what: string, err: unknown): void {
+    this.failureCount++;
+    console.error(
+      `[audit] ${what} failed (${this.failureCount} total): ${forLog(err instanceof Error ? err.message : String(err))}`,
+    );
+  }
+
+  /**
+   * Opens or resumes a conversation, returning the id everything else attaches to.
+   *
+   * A client-supplied id is checked against the caller before it is used. Without that check,
+   * passing somebody else's conversation id would append your messages to their history, and the
+   * service role key bypasses the RLS that would otherwise have stopped it. An id that is not
+   * theirs quietly starts a new conversation rather than failing the turn.
+   *
+   * Returns null when auditing is off or the write failed, and the caller then records nothing for
+   * this turn rather than treating it as fatal.
+   */
+  async beginConversation(
+    userId: string,
+    context: ChatContext,
+    firstUserMessage: string,
+    existingId?: string,
+  ): Promise<string | null> {
+    if (!this.enabled) return null;
+
+    const target: AuditTarget = {
+      accountId: context.accountId,
+      containerId: context.containerId,
+      workspaceId: context.workspaceId,
+      propertyId: context.propertyId,
+    };
+
+    try {
+      if (existingId) {
+        const rows = await this.request(
+          'PATCH',
+          `chat_conversations?id=eq.${encodeURIComponent(existingId)}&user_id=eq.${encodeURIComponent(userId)}`,
+          {
+            updated_at: new Date().toISOString(),
+            account_id: target.accountId ?? null,
+            container_id: target.containerId ?? null,
+            workspace_id: target.workspaceId ?? null,
+            property_id: target.propertyId ?? null,
+          },
+          'return=representation',
+        );
+        if (rows && rows.length > 0) return existingId;
+        console.warn(
+          `[audit] conversation ${existingId} is not owned by user ${userRef(userId)}; starting a new one`,
+        );
+      }
+
+      const created = await this.request(
+        'POST',
+        'chat_conversations',
+        {
+          user_id: userId,
+          product: context.product,
+          title: titleFrom(firstUserMessage),
+          account_id: target.accountId ?? null,
+          container_id: target.containerId ?? null,
+          workspace_id: target.workspaceId ?? null,
+          property_id: target.propertyId ?? null,
+        },
+        'return=representation',
+      );
+      const row = created?.[0] as { id?: string } | undefined;
+      return row?.id ?? null;
+    } catch (err) {
+      this.fail('beginConversation', err);
+      return null;
+    }
+  }
+
+  /** Records what the user said. Fire and forget. */
+  recordUserMessage(conversationId: string | null, userId: string, content: string): void {
+    if (!this.enabled || !conversationId) return;
+    void this.request('POST', 'chat_messages', {
+      conversation_id: conversationId,
+      user_id: userId,
+      role: 'user',
+      content: redactSecrets(content),
+    }).catch((err) => this.fail('recordUserMessage', err));
+  }
+
+  /**
+   * Records the assistant's reply and what the turn cost.
+   *
+   * The token counts live here rather than in their own table because metering and history want the
+   * same rows, and separating them would mean a join to answer "what did this user spend".
+   */
+  recordAssistantTurn(
+    conversationId: string | null,
+    userId: string,
+    turn: AssistantTurnRecord,
+  ): void {
+    if (!this.enabled || !conversationId) return;
+    void this.request('POST', 'chat_messages', {
+      conversation_id: conversationId,
+      user_id: userId,
+      role: 'assistant',
+      content: redactSecrets(turn.content),
+      prompt_tokens: turn.promptTokens,
+      completion_tokens: turn.completionTokens,
+      cached_tokens: turn.cachedTokens,
+      model: turn.model,
+      stop_reason: turn.stopReason,
+    })
+      .then(() => this.touch(conversationId))
+      .catch((err) => this.fail('recordAssistantTurn', err));
+  }
+
+  /** The row that answers "what changed in this container, and who did it". Fire and forget. */
+  recordToolEvent(
+    conversationId: string | null,
+    userId: string,
+    event: ToolEventRecord,
+  ): void {
+    if (!this.enabled || !conversationId) return;
+    void this.request('POST', 'chat_tool_events', {
+      conversation_id: conversationId,
+      user_id: userId,
+      tool_name: event.toolName,
+      product: event.product,
+      surface: event.surface ?? null,
+      is_write: event.isWrite,
+      is_delete: event.isDelete,
+      approval: event.approval,
+      // Arguments AS EXECUTED, so a correction made on the approval card is what gets stored.
+      args: redactValue(event.args),
+      account_id: event.accountId ?? null,
+      container_id: event.containerId ?? null,
+      workspace_id: event.workspaceId ?? null,
+      property_id: event.propertyId ?? null,
+      ok: event.ok,
+      result_summary: forLog(event.resultSummary, 500),
+      duration_ms: event.durationMs,
+    }).catch((err) => this.fail('recordToolEvent', err));
+  }
+
+  /** Keeps the conversation list ordered by real activity rather than by when it was opened. */
+  private touch(conversationId: string): void {
+    void this.request('PATCH', `chat_conversations?id=eq.${encodeURIComponent(conversationId)}`, {
+      updated_at: new Date().toISOString(),
+    }).catch((err) => this.fail('touch', err));
+  }
+}

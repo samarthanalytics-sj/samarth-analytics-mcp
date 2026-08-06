@@ -17,6 +17,7 @@ import { forLog, userRef } from './redact.js';
 import { ApprovalBroker, ApprovalError } from './approvals.js';
 import { OpenAiClient, OpenAiError } from './openai.js';
 import { runTurn } from './loop.js';
+import { AuditRecorder } from './audit.js';
 import { SseStream } from './sse.js';
 import { scopeTools } from './tools.js';
 import {
@@ -94,6 +95,18 @@ async function main(): Promise<void> {
         : ' (read-only)'),
   );
 
+  const audit = new AuditRecorder(cfg.supabase.url ?? '', cfg.supabase.serviceRoleKey ?? '');
+  if (audit.isEnabled()) {
+    console.log('[orchestrator] audit trail ON (chat_conversations, chat_messages, chat_tool_events)');
+  } else {
+    // Stated at boot rather than discovered later. A write surface with no record of what it did is
+    // a deliberate choice, and it should be a visible one.
+    console.warn(
+      '[orchestrator] WARNING: audit trail OFF. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to ' +
+        'record what the assistant changes. Writes will leave no durable trace.',
+    );
+  }
+
   const llm = new OpenAiClient(cfg);
   const limiter = new RateLimiter();
   // Only constructed when writes are enabled. Its absence is what makes a write impossible: the
@@ -169,6 +182,9 @@ async function main(): Promise<void> {
       googleIdentityMode: cfg.googleIdentity.mode,
       mcpSessions: sessions,
       mcpSessionsBusy: busy,
+      // Surfaced so a trail that stopped recording is visible to a monitor rather than discovered
+      // the day somebody needs it.
+      audit: audit.stats(),
       pendingApprovals: approvals?.stats().pending ?? 0,
     });
   });
@@ -414,6 +430,17 @@ async function main(): Promise<void> {
       });
     }
 
+    // Opened before the stream so a failure here is a plain log line rather than a mid-stream error.
+    // Returns null when auditing is off or unreachable, and the turn then records nothing.
+    const lastUserMessage = body.messages[body.messages.length - 1]?.content ?? '';
+    const conversationId = await audit.beginConversation(
+      user.id,
+      { ...body.context, product },
+      lastUserMessage,
+      typeof body.conversationId === 'string' ? body.conversationId : undefined,
+    );
+    audit.recordUserMessage(conversationId, user.id, lastUserMessage);
+
     const stream = new SseStream(res);
     const controller = new AbortController();
     req.on('close', () => {
@@ -423,6 +450,8 @@ async function main(): Promise<void> {
       approvals?.abortFor(user.id);
       stream.close();
     });
+
+    if (conversationId) stream.send({ type: 'conversation', conversationId });
 
     try {
       await runTurn({
@@ -441,6 +470,8 @@ async function main(): Promise<void> {
           ? () => pool.refreshIdentity(user.id, userJwt)
           : undefined,
         approvals: approvals ?? undefined,
+        audit,
+        conversationId,
       });
     } catch (err) {
       stream.send({

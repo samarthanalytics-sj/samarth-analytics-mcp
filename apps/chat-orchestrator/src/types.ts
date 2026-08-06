@@ -68,6 +68,8 @@ export interface ChatRequestBody {
 /** Events streamed to the browser over SSE. Mirrors the desktop app's chat event union. */
 export type StreamEvent =
   | { type: 'ready'; product: Product; model: string; toolCount: number }
+  /** The conversation this turn was recorded under, so the client can continue it next time. */
+  | { type: 'conversation'; conversationId: string }
   | { type: 'token'; text: string }
   | { type: 'tool_call'; id: string; name: string; args: unknown }
   | { type: 'tool_result'; id: string; name: string; ok: boolean; summary: string }
