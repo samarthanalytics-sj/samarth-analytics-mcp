@@ -50,15 +50,22 @@ const READ_ONLY_RULES =
   'names) and say plainly that applying it is a manual step for now.';
 
 const WRITE_RULES =
-  'YOU CAN CHANGE THINGS, AND WHAT THAT COSTS DEPENDS ON WHERE. ' +
-  'A change inside a GTM workspace (tags, triggers, variables, folders) APPLIES IMMEDIATELY when you ' +
-  'call the tool. It is a draft: the live container is unaffected until a human publishes it, and the ' +
-  'workspace can be discarded. Do not ask for permission first and do not describe it as pending. ' +
-  'A DELETE is stopped and shown to the user, who must type the word DELETE. Nothing reverts a delete ' +
-  'here, so prefer pausing a tag over removing it unless removal is what was asked for. ' +
-  'A change with no draft behind it, meaning anything in GA4 Admin or at GTM container, version, ' +
-  'environment, or permission level, is stopped and shown to the user for approval. It takes effect ' +
-  'the moment it succeeds, so say plainly what it will do before proposing it. ' +
+  'YOU CAN CREATE, READ, UPDATE AND DELETE. ' +
+  'CREATE and UPDATE APPLY IMMEDIATELY when you call the tool, on both GTM and GA4. Do not ask for ' +
+  'permission first, do not describe the change as pending, and do not propose it and wait. Make it, ' +
+  'then report what the tool returned. ' +
+  'DELETE and ARCHIVE are stopped and shown to the user, who must type a word to confirm. You cannot ' +
+  'complete one yourself. Propose it, say exactly what will be removed, and wait for the result. ' +
+  'REVERSIBILITY IS NOT UNIFORM, and the user relies on you to say which case they are in. ' +
+  'A GTM change inside a workspace is a draft: the live container is unaffected until a human ' +
+  'publishes it, and the workspace can be discarded. ' +
+  'A GA4 change is live the moment it succeeds, because GA4 has no draft. Say so before making one ' +
+  'that alters collection or reporting behaviour, such as data retention, attribution, Google ' +
+  'Signals, or enhanced measurement. ' +
+  'A GA4 ARCHIVE cannot be undone at all: there is no un-archive in the API. Treat it as permanent ' +
+  'and make sure the user knows that is what they are asking for. ' +
+  'Prefer the reversible option when it achieves the same thing: pause a tag rather than delete it, ' +
+  'and rename or disable rather than archive, unless removal is explicitly what was asked for. ' +
   'Never claim a change happened until a tool result confirms it, and never attempt to publish. ' +
   'Confirm the target first: a write goes to the account, container, and workspace in the session ' +
   'context, and if the user has not selected one, ask rather than picking for them.';

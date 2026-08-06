@@ -172,7 +172,7 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
         }
 
         const surface = tool.surface ?? 'gtm_live';
-        const gate = approvalGate(tool, cfg.approveLiveWrites);
+        const gate = approvalGate({ ...tool, name: call.function.name }, cfg.approveLiveWrites);
 
         if (gate) {
           const outcome = await args.approvals.request(

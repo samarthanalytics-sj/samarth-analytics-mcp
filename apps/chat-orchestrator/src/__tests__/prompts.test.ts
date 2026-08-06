@@ -22,25 +22,36 @@ test('gtm prompt carries the shared measurement methodology', () => {
 test('read-only mode says so and does not promise writes', () => {
   const sys = buildStaticSystem({ product: 'gtm', canWrite: false, mcpInstructions: '' });
   assert.match(sys, /READ-ONLY/);
-  assert.equal(/YOU CAN CHANGE THINGS/.test(sys), false);
+  assert.equal(/YOU CAN CREATE, READ, UPDATE AND DELETE/.test(sys), false);
 });
 
 /**
- * The model has to be told which tier a write falls into, because it changes what it should say
- * before calling. Told everything needs approval, it narrates a pending change that already
- * happened; told nothing does, it announces a live GA4 edit as though it were a draft.
+ * The model has to be told which tier a call falls into, because it changes what it should say
+ * before making it. Told a create needs approval, it narrates a pending change that already
+ * happened; told nothing is gated, it promises a delete it cannot complete on its own.
  */
-test('write mode states each tier and forbids publishing', () => {
+test('write mode states the CRUD model and forbids publishing', () => {
   const sys = buildStaticSystem({ product: 'gtm', canWrite: true, mcpInstructions: '' });
-  assert.match(sys, /YOU CAN CHANGE THINGS/);
-  // Draft writes apply directly, and the model must not pretend otherwise.
-  assert.match(sys, /APPLIES IMMEDIATELY/);
-  assert.match(sys, /draft/);
+  assert.match(sys, /YOU CAN CREATE, READ, UPDATE AND DELETE/);
+  // Creates and updates run, and the model must not pretend to be waiting on anyone.
+  assert.match(sys, /APPLY IMMEDIATELY/);
   assert.match(sys, /Do not ask for permission first/);
-  // Deletes and live writes stop.
-  assert.match(sys, /DELETE is stopped/);
-  assert.match(sys, /no draft behind it/);
+  // Removals stop, and the model cannot finish one itself.
+  assert.match(sys, /DELETE and ARCHIVE are stopped/);
+  assert.match(sys, /You cannot\s+complete one yourself|cannot complete one yourself/);
   assert.match(sys, /never attempt to publish/i);
+});
+
+/**
+ * The single most misleading thing the assistant could say is that a GA4 change is a draft. It is
+ * not, and an archive is worse than merely live.
+ */
+test('write mode distinguishes GTM drafts from live GA4 changes', () => {
+  const sys = buildStaticSystem({ product: 'ga4', canWrite: true, mcpInstructions: '' });
+  assert.match(sys, /REVERSIBILITY IS NOT UNIFORM/);
+  assert.match(sys, /GA4 has no draft/);
+  assert.match(sys, /ARCHIVE cannot be undone at all/);
+  assert.match(sys, /pause a tag rather than delete it/);
 });
 
 test('anti-fabrication rules are always present', () => {

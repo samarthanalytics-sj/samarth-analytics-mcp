@@ -12,7 +12,7 @@
  * permission grant, none of which have a draft to discard.
  */
 import assert from 'node:assert/strict';
-import { classifyWriteSurface, approvalGate } from '../writeTiers.js';
+import { classifyWriteSurface, approvalGate, confirmWordFor, describeReversibility } from '../writeTiers.js';
 
 let passed = 0;
 function test(name: string, fn: () => void): void {
@@ -59,37 +59,84 @@ test('a tool invented tomorrow is classified without being added to a list', () 
 
 console.log('who stops, and how hard');
 
-const gate = (t: { isDelete: boolean; surface?: string }, approveLive = true) =>
+const gate = (t: { isDelete: boolean; surface?: string; name?: string }, approveLive = false) =>
   approvalGate(t, approveLive);
 
-test('a tag create runs without asking', () => {
-  assert.equal(gate({ isDelete: false, surface: 'gtm_draft' }), null);
+/* Ordinary CRUD runs. A confirmation is only worth asking for when it is not routine, and
+   prompting on every create spends the attention the one irreversible prompt needs. */
+test('a create or update runs without asking, on either product', () => {
+  assert.equal(gate({ isDelete: false, surface: 'gtm_draft', name: 'tags_create' }), null);
+  assert.equal(gate({ isDelete: false, surface: 'ga4_live', name: 'ga4_create_custom_dimension' }), null);
+  assert.equal(gate({ isDelete: false, surface: 'ga4_live', name: 'ga4_update_data_retention' }), null);
+  assert.equal(gate({ isDelete: false, surface: 'gtm_live', name: 'containers_create' }), null);
 });
 
-test('a delete always demands the typed word', () => {
-  assert.deepEqual(gate({ isDelete: true, surface: 'gtm_draft' }), { confirmWord: 'DELETE' });
-  assert.deepEqual(gate({ isDelete: true, surface: 'gtm_live' }), { confirmWord: 'DELETE' });
+test('a delete always stops, whatever product or surface it is on', () => {
+  for (const t of [
+    { isDelete: true, surface: 'gtm_draft', name: 'tags_delete' },
+    { isDelete: true, surface: 'gtm_live', name: 'versions_delete' },
+    { isDelete: true, surface: 'ga4_live', name: 'ga4_delete_property' },
+  ]) {
+    assert.deepEqual(gate(t), { confirmWord: 'DELETE' }, t.name);
+  }
 });
 
-test('a delete is still gated when live approvals are switched off', () => {
-  // The opt-out relaxes live writes only. It must never reach deletes.
-  assert.deepEqual(gate({ isDelete: true, surface: 'gtm_draft' }, false), { confirmWord: 'DELETE' });
-  assert.deepEqual(gate({ isDelete: true, surface: 'ga4_live' }, false), { confirmWord: 'DELETE' });
+/* The word has to match the operation. An archive confirmed with the word DELETE both misstates
+   what happens and turns the prompt into muscle memory. */
+test('an archive asks for ARCHIVE, not DELETE', () => {
+  assert.deepEqual(gate({ isDelete: true, surface: 'ga4_live', name: 'ga4_archive_custom_dimension' }), {
+    confirmWord: 'ARCHIVE',
+  });
+  assert.equal(confirmWordFor('ga4_archive_audience'), 'ARCHIVE');
+  assert.equal(confirmWordFor('ga4_delete_key_event'), 'DELETE');
+  assert.equal(confirmWordFor('tags_delete'), 'DELETE');
+  // "archived" inside a longer word is not an archive operation.
+  assert.equal(confirmWordFor('list_archived_things'), 'DELETE');
 });
 
-test('a live write asks, without a typed word', () => {
-  assert.deepEqual(gate({ isDelete: false, surface: 'ga4_live' }), {});
-  assert.deepEqual(gate({ isDelete: false, surface: 'gtm_live' }), {});
+test('no configuration can let a removal through silently', () => {
+  for (const approveLive of [true, false]) {
+    assert.deepEqual(gate({ isDelete: true, surface: 'gtm_draft', name: 'tags_delete' }, approveLive), {
+      confirmWord: 'DELETE',
+    });
+    assert.deepEqual(
+      gate({ isDelete: true, surface: 'ga4_live', name: 'ga4_archive_audience' }, approveLive),
+      { confirmWord: 'ARCHIVE' },
+    );
+  }
 });
 
-test('the opt-out lets live writes through', () => {
-  assert.equal(gate({ isDelete: false, surface: 'ga4_live' }, false), null);
-  assert.equal(gate({ isDelete: false, surface: 'gtm_live' }, false), null);
+test('the opt-in flag re-adds a card for live creates and updates only', () => {
+  assert.deepEqual(gate({ isDelete: false, surface: 'ga4_live', name: 'ga4_create_property' }, true), {});
+  assert.deepEqual(gate({ isDelete: false, surface: 'gtm_live', name: 'containers_create' }, true), {});
+  // A draft write is unaffected by it.
+  assert.equal(gate({ isDelete: false, surface: 'gtm_draft', name: 'tags_create' }, true), null);
 });
 
-test('a write with no surface is treated as live, not as a draft', () => {
-  // Defaulting the unknown case to "draft" would describe it to the user as reversible.
-  assert.deepEqual(gate({ isDelete: false, surface: undefined }), {});
+test('a write with no surface is still treated as live under the strict flag', () => {
+  assert.deepEqual(gate({ isDelete: false, surface: undefined, name: 'mystery_create' }, true), {});
 });
 
-console.log(`\n${passed} write-tier test(s) passed`);
+console.log('the card tells the truth about undo');
+
+test('an archive is described as permanent, not as a draft or a trash', () => {
+  const text = describeReversibility('ga4_live', true, 'ga4_archive_custom_dimension');
+  assert.match(text, /permanent/i);
+  assert.match(text, /no un-archive/i);
+  assert.equal(/draft/i.test(text), false);
+});
+
+test('a GA4 delete is not described as landing in a draft workspace', () => {
+  const text = describeReversibility('ga4_live', true, 'ga4_delete_property');
+  assert.equal(/draft workspace/i.test(text), false);
+  assert.match(text, /GA4 has no draft/i);
+});
+
+test('a GTM draft write is still described as discardable', () => {
+  const text = describeReversibility('gtm_draft', false, 'tags_create');
+  assert.match(text, /draft workspace/i);
+  assert.match(text, /not published/i);
+});
+
+console.log(`
+${passed} write-tier test(s) passed`);
