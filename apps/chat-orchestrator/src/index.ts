@@ -13,6 +13,7 @@ import { AuthError, SupabaseTokenVerifier } from './auth.js';
 import { McpConnection } from './mcp-client.js';
 import { McpPool } from './mcp-pool.js';
 import { createTokenProvider, GoogleIdentityError } from './google-identity.js';
+import { forLog, userRef } from './redact.js';
 import { OpenAiClient, OpenAiError } from './openai.js';
 import { runTurn } from './loop.js';
 import { SseStream } from './sse.js';
@@ -83,6 +84,22 @@ async function main(): Promise<void> {
 
   const app = express();
   app.disable('x-powered-by');
+
+  // One line per request. Without it there is no way to tell a request that never arrived from one
+  // that arrived and was rejected before reaching a handler, which is the first question worth
+  // answering when a browser reports a bare network failure.
+  app.use((req, res, next) => {
+    const startedAt = Date.now();
+    res.on('finish', () => {
+      if (req.path === '/health') return;
+      const origin = req.headers.origin ?? '-';
+      console.log(
+        `[req] ${req.method} ${req.path} -> ${res.statusCode} ${Date.now() - startedAt}ms origin=${origin}`,
+      );
+    });
+    next();
+  });
+
   app.use(express.json({ limit: '256kb' }));
   app.use(
     cors({
@@ -189,6 +206,7 @@ async function main(): Promise<void> {
       userMcp = await pool.acquire(user.id, userJwt);
     } catch (err) {
       if (err instanceof GoogleIdentityError) {
+        console.error(`[identity] ${err.code} for user ${userRef(user.id)}: ${forLog(err.message)}`);
         return res.status(err.code === 'not_connected' ? 428 : 502).json({
           code: err.code,
           message: err.message,
