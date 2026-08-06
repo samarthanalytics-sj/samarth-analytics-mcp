@@ -1,3 +1,7 @@
 dist/
 node_modules/
 .env
+
+# Redirected server output. Secrets are redacted before they are logged, but a run log still
+# carries user ids, container ids, and approved write payloads, none of which belong in git.
+*.log
