@@ -1,3 +1,9 @@
+## [1.455.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.455.0...v1.455.1) (2026-08-06)
+
+### Bug Fixes
+
+* **chat:** verify sessions from Supabase projects that publish no public keys ([#833](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/833)) ([f91b348](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/f91b348883d19d423ad7218f47e749906dd5fda9))
+
 ## [1.455.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.454.1...v1.455.0) (2026-08-05)
 
 ### Features
