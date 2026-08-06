@@ -72,6 +72,17 @@ export interface OrchestratorConfig {
     env: Record<string, string>;
   };
   supabase: {
+    /**
+     * Project base URL, e.g. https://abc.supabase.co. Needed for the audit trail, which writes
+     * through PostgREST. Derived from the functions URL when not given explicitly.
+     */
+    url?: string;
+    /**
+     * Service role key. Bypasses RLS, so it lives only on this host and never reaches a browser.
+     * Without it the audit trail is off: the tables deny every client write by design, and the
+     * orchestrator is the only thing that may add a row.
+     */
+    serviceRoleKey?: string;
     /** JWKS endpoint used to verify user access tokens. Empty in dev-bypass mode. */
     jwksUrl?: string;
     issuer?: string;
@@ -203,6 +214,13 @@ export function loadConfig(): OrchestratorConfig {
   // The child is an MCP stdio server regardless of how this process is configured.
   mcpEnv.GTM_MCP_TRANSPORT = 'stdio';
 
+  // Explicit wins; otherwise fall back to the functions URL, which is the same origin with a
+  // /functions/v1 suffix. Deriving it saves configuring the same host twice and getting it wrong.
+  const supabaseUrl =
+    process.env.SUPABASE_URL?.trim() ||
+    process.env.SUPABASE_FUNCTIONS_URL?.trim().replace(/\/functions\/v1\/?$/, '') ||
+    '';
+
   const identityMode = (process.env.GOOGLE_IDENTITY_MODE?.trim() ?? 'inherit') as
     | 'supabase'
     | 'static'
@@ -277,6 +295,8 @@ export function loadConfig(): OrchestratorConfig {
     },
     supabase: {
       jwksUrl,
+      url: supabaseUrl,
+      serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY?.trim(),
       issuer: process.env.SUPABASE_JWT_ISSUER?.trim(),
       audience: process.env.SUPABASE_JWT_AUDIENCE?.trim() || 'authenticated',
       // Derived from the JWKS URL when not given, since both live under the same auth base.

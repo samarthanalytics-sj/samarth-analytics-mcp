@@ -13,6 +13,8 @@ import { GoogleIdentityError, isGoogleAuthFailure } from './google-identity.js';
 import { forLog, userRef } from './redact.js';
 import { summarizeWrite, type ApprovalBroker } from './approvals.js';
 import { approvalGate } from './writeTiers.js';
+import type { AuditRecorder } from './audit.js';
+import { productOf } from './tools.js';
 import type { ChatContext, ChatMessage, StreamEvent } from './types.js';
 
 export interface RunTurnArgs {
@@ -31,6 +33,10 @@ export interface RunTurnArgs {
   onAuthFailure?: () => Promise<McpConnection>;
   /** Present only when write tools are enabled. Its absence makes a write impossible to execute. */
   approvals?: ApprovalBroker;
+  /** Records what happened. Never allowed to fail a turn; see audit.ts. */
+  audit?: AuditRecorder;
+  /** Null when auditing is off or the conversation could not be opened; recording is then skipped. */
+  conversationId?: string | null;
 }
 
 export async function runTurn(args: RunTurnArgs): Promise<void> {
@@ -72,9 +78,33 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
   ];
 
   let toolCallsUsed = 0;
+  // Accumulated so the audit row reflects the whole turn rather than the last model call: a turn
+  // that used tools makes several completions, and billing wants their sum.
+  let assistantText = '';
+  const spend = { promptTokens: 0, completionTokens: 0, cachedTokens: 0 };
+
+  const target = {
+    accountId: context.accountId,
+    containerId: context.containerId,
+    workspaceId: context.workspaceId,
+    propertyId: context.propertyId,
+  };
+
+  /** Writes the closing record for this turn. Called on every exit path, including the budgets. */
+  const finish = (reason: string): void => {
+    args.audit?.recordAssistantTurn(args.conversationId ?? null, user.id, {
+      content: assistantText,
+      promptTokens: spend.promptTokens,
+      completionTokens: spend.completionTokens,
+      cachedTokens: spend.cachedTokens,
+      model: cfg.openai.model,
+      stopReason: reason,
+    });
+  };
 
   for (;;) {
     if (signal.aborted) {
+      finish('aborted');
       emit({ type: 'done', reason: 'aborted' });
       return;
     }
@@ -83,6 +113,7 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
         type: 'token',
         text: '\n\n[Stopped: this turn exceeded its time budget. Ask a narrower question, or ask me to continue.]',
       });
+      finish('time_budget');
       emit({ type: 'done', reason: 'time_budget' });
       return;
     }
@@ -92,18 +123,24 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
       openAiTools,
       {
         onDelta: (text) => emit({ type: 'token', text }),
-        onUsage: (u) =>
+        onUsage: (u) => {
+          spend.promptTokens += u.promptTokens;
+          spend.completionTokens += u.completionTokens;
+          spend.cachedTokens += u.cachedTokens;
           emit({
             type: 'usage',
             promptTokens: u.promptTokens,
             completionTokens: u.completionTokens,
             cachedTokens: u.cachedTokens,
-          }),
+          });
+        },
       },
       signal,
     );
 
     if (result.toolCalls.length === 0) {
+      assistantText += result.content ?? '';
+      finish('complete');
       emit({ type: 'done', reason: 'complete' });
       return;
     }
@@ -115,12 +152,14 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
           '\n\n[Stopped: this turn hit its tool-call budget. Here is what I found so far. ' +
           'Ask me to continue if you want me to keep digging.]',
       });
+      finish('tool_budget');
       emit({ type: 'done', reason: 'tool_budget' });
       return;
     }
 
     // The assistant turn carrying the tool calls must be replayed verbatim, or the follow-up tool
     // messages have nothing to attach to.
+    assistantText += result.content ?? '';
     messages.push({
       role: 'assistant',
       content: result.content || null,
@@ -158,6 +197,25 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
       }
 
       const tool = scoped.find((t) => t.name === call.function.name);
+      const callStartedAt = Date.now();
+      let approval: 'not_required' | 'approved' | 'declined' | 'timeout' | 'aborted' = 'not_required';
+
+      /** One audit row per tool call, whatever became of it. */
+      const record = (ok: boolean, summary: string): void =>
+        args.audit?.recordToolEvent(args.conversationId ?? null, user.id, {
+          ...target,
+          toolName: call.function.name,
+          product: productOf(call.function.name),
+          surface: tool?.surface,
+          isWrite: Boolean(tool?.isWrite),
+          isDelete: Boolean(tool?.isDelete),
+          approval,
+          args: parsedArgs,
+          ok,
+          resultSummary: summary,
+          durationMs: Date.now() - callStartedAt,
+        });
+
       if (tool?.isWrite) {
         if (!args.approvals) {
           // Belt and braces: no write tool should have been visible without a broker.
@@ -168,6 +226,7 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
             content: 'This conversation is read-only. Explain the change instead of making it.',
           });
           emit({ type: 'tool_result', id: call.id, name: call.function.name, ok: false, summary: 'Read-only' });
+          record(false, 'Refused: this deployment is read-only');
           continue;
         }
 
@@ -193,6 +252,7 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
           );
 
           if (!outcome.approved) {
+            approval = outcome.reason;
             const why =
               outcome.reason === 'timeout'
                 ? 'The user did not respond in time, so nothing was changed.'
@@ -204,9 +264,11 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
             );
             messages.push({ role: 'tool', tool_call_id: call.id, name: call.function.name, content: why });
             emit({ type: 'tool_result', id: call.id, name: call.function.name, ok: false, summary: why });
+            record(false, why);
             continue;
           }
 
+          approval = 'approved';
           // The user may have corrected what the model proposed; their version is what runs.
           parsedArgs = outcome.args;
           console.log(
@@ -264,13 +326,11 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
         name: call.function.name,
         content: capped,
       });
-      emit({
-        type: 'tool_result',
-        id: call.id,
-        name: call.function.name,
-        ok,
-        summary: summarize(capped),
-      });
+      const summary = summarize(capped);
+      emit({ type: 'tool_result', id: call.id, name: call.function.name, ok, summary });
+      // Written after the call so `parsedArgs` carries any correction made on the approval card:
+      // the row has to say what actually ran, not what the model first proposed.
+      record(ok, summary);
     }
   }
 }
