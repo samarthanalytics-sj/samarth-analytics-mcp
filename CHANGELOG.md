@@ -1,3 +1,9 @@
+## [1.458.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.457.0...v1.458.0) (2026-08-06)
+
+### Features
+
+* **chat:** offer GTM deletes behind a typed confirmation ([#839](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/839)) ([adb1e25](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/adb1e25cffa5260a6c851b58566f4e1310a2fb99))
+
 ## [1.457.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.456.0...v1.457.0) (2026-08-06)
 
 ### Features
