@@ -22,14 +22,25 @@ test('gtm prompt carries the shared measurement methodology', () => {
 test('read-only mode says so and does not promise writes', () => {
   const sys = buildStaticSystem({ product: 'gtm', canWrite: false, mcpInstructions: '' });
   assert.match(sys, /READ-ONLY/);
-  assert.equal(/WRITES REQUIRE APPROVAL/.test(sys), false);
+  assert.equal(/YOU CAN CHANGE THINGS/.test(sys), false);
 });
 
-test('write mode requires approval and forbids publishing', () => {
+/**
+ * The model has to be told which tier a write falls into, because it changes what it should say
+ * before calling. Told everything needs approval, it narrates a pending change that already
+ * happened; told nothing does, it announces a live GA4 edit as though it were a draft.
+ */
+test('write mode states each tier and forbids publishing', () => {
   const sys = buildStaticSystem({ product: 'gtm', canWrite: true, mcpInstructions: '' });
-  assert.match(sys, /WRITES REQUIRE APPROVAL/);
-  assert.match(sys, /draft workspace/);
-  assert.match(sys, /Never attempt to publish/);
+  assert.match(sys, /YOU CAN CHANGE THINGS/);
+  // Draft writes apply directly, and the model must not pretend otherwise.
+  assert.match(sys, /APPLIES IMMEDIATELY/);
+  assert.match(sys, /draft/);
+  assert.match(sys, /Do not ask for permission first/);
+  // Deletes and live writes stop.
+  assert.match(sys, /DELETE is stopped/);
+  assert.match(sys, /no draft behind it/);
+  assert.match(sys, /never attempt to publish/i);
 });
 
 test('anti-fabrication rules are always present', () => {

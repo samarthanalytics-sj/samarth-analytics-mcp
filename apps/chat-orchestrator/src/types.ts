@@ -15,6 +15,20 @@ export interface OpenAiToolCall {
   function: { name: string; arguments: string };
 }
 
+/**
+ * Where a write actually lands, which is the only thing that decides whether it can be undone.
+ *
+ * `gtm_draft` is workspace-scoped: tags, triggers, variables, folders. The change sits in a draft
+ * that is never published by this app, the previous state is still live, and discarding the
+ * workspace throws the change away. This is the tier that can safely apply without a prompt.
+ *
+ * `gtm_live` is container, account, version, environment, or permission scope. There is no draft
+ * step, so it takes effect the moment it succeeds.
+ *
+ * `ga4_live` is every GA4 Admin write. GA4 has no draft concept at all.
+ */
+export type WriteSurface = 'gtm_draft' | 'gtm_live' | 'ga4_live';
+
 /** Neutral tool definition, mapped from an MCP tool listing. */
 export interface ToolDef {
   name: string;
@@ -23,16 +37,18 @@ export interface ToolDef {
   /** True when the MCP schema declares a `confirm` argument, which marks every guarded write. */
   isWrite: boolean;
   /**
-   * True for deletes, archives, publishes and reauthorizations. These are never shown to the model,
-   * whatever the write setting: an approval card is a reasonable gate for creating a tag and not for
-   * removing one, and an archive of a GA4 custom dimension is irreversible.
+   * True for publishes, reauthorizations, and GA4 deletes and archives. These are never shown to the
+   * model, whatever the write setting: publishing makes a draft live, which is a category change
+   * rather than an edit, and a GA4 archive is described by the MCP itself as effectively permanent.
    */
   isDestructive: boolean;
   /**
-   * A GTM delete. Offered only when deletes are enabled, and then only behind a typed confirmation,
-   * because this toolset has no revert and undo is a manual operation.
+   * A delete. Always behind a typed confirmation, because nothing in this toolset reverts one and
+   * undo is a manual rebuild.
    */
   isDelete: boolean;
+  /** Undefined on reads. Set for every write, and drives what the user is told about reversibility. */
+  surface?: WriteSurface;
 }
 
 export interface ChatContext {
@@ -63,6 +79,8 @@ export type StreamEvent =
       args: Record<string, unknown>;
       /** When set, the user must type this word before the change can be approved. */
       confirmWord?: string;
+      /** Lets the card state what is actually at stake instead of assuming a draft workspace. */
+      surface: WriteSurface;
     }
   | { type: 'approval_resolved'; approvalId: string; approved: boolean }
   | { type: 'usage'; promptTokens: number; completionTokens: number; cachedTokens: number }

@@ -148,6 +148,14 @@ async function main(): Promise<void> {
       mcpTools: all.length,
       writeToolsVisible: cfg.enableWriteTools,
       deleteToolsVisible: cfg.enableDeleteTools,
+      // What actually stops for the user. The UI states a safety property, so it has to read this
+      // rather than assume: claiming every change is reviewed when most now apply directly would be
+      // worse than saying nothing.
+      approvals: {
+        draftWritesApplyDirectly: true,
+        liveWritesRequireApproval: cfg.approveLiveWrites,
+        deletesRequireTypedConfirmation: true,
+      },
       authRequired: !cfg.devNoAuth,
       googleIdentityMode: cfg.googleIdentity.mode,
       mcpSessions: sessions,

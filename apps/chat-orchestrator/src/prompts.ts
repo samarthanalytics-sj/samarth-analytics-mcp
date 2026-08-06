@@ -50,9 +50,18 @@ const READ_ONLY_RULES =
   'names) and say plainly that applying it is a manual step for now.';
 
 const WRITE_RULES =
-  'WRITES REQUIRE APPROVAL. Any change you propose is shown to the user for explicit confirmation ' +
-  'before it executes, and every change lands in a draft workspace that is never published. Never ' +
-  'claim something was created until a tool result confirms it. Never attempt to publish.';
+  'YOU CAN CHANGE THINGS, AND WHAT THAT COSTS DEPENDS ON WHERE. ' +
+  'A change inside a GTM workspace (tags, triggers, variables, folders) APPLIES IMMEDIATELY when you ' +
+  'call the tool. It is a draft: the live container is unaffected until a human publishes it, and the ' +
+  'workspace can be discarded. Do not ask for permission first and do not describe it as pending. ' +
+  'A DELETE is stopped and shown to the user, who must type the word DELETE. Nothing reverts a delete ' +
+  'here, so prefer pausing a tag over removing it unless removal is what was asked for. ' +
+  'A change with no draft behind it, meaning anything in GA4 Admin or at GTM container, version, ' +
+  'environment, or permission level, is stopped and shown to the user for approval. It takes effect ' +
+  'the moment it succeeds, so say plainly what it will do before proposing it. ' +
+  'Never claim a change happened until a tool result confirms it, and never attempt to publish. ' +
+  'Confirm the target first: a write goes to the account, container, and workspace in the session ' +
+  'context, and if the user has not selected one, ask rather than picking for them.';
 
 const STYLE_RULES =
   'STYLE. Answer the question that was actually asked, in plain prose with short paragraphs. Use a ' +
