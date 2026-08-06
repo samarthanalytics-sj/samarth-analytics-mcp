@@ -22,6 +22,12 @@ export interface ToolDef {
   inputSchema: Record<string, unknown>;
   /** True when the MCP schema declares a `confirm` argument, which marks every guarded write. */
   isWrite: boolean;
+  /**
+   * True for deletes, archives, publishes and reauthorizations. These are never shown to the model,
+   * whatever the write setting: an approval card is a reasonable gate for creating a tag and not for
+   * removing one, and an archive of a GA4 custom dimension is irreversible.
+   */
+  isDestructive: boolean;
 }
 
 export interface ChatContext {
@@ -44,6 +50,14 @@ export type StreamEvent =
   | { type: 'token'; text: string }
   | { type: 'tool_call'; id: string; name: string; args: unknown }
   | { type: 'tool_result'; id: string; name: string; ok: boolean; summary: string }
+  | {
+      type: 'approval_required';
+      approvalId: string;
+      toolName: string;
+      summary: string;
+      args: Record<string, unknown>;
+    }
+  | { type: 'approval_resolved'; approvalId: string; approved: boolean }
   | { type: 'usage'; promptTokens: number; completionTokens: number; cachedTokens: number }
   | { type: 'error'; code: string; message: string }
   | { type: 'done'; reason: 'complete' | 'tool_budget' | 'time_budget' | 'aborted' };

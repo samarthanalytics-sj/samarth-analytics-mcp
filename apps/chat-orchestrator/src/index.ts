@@ -14,6 +14,7 @@ import { McpConnection } from './mcp-client.js';
 import { McpPool } from './mcp-pool.js';
 import { createTokenProvider, GoogleIdentityError } from './google-identity.js';
 import { forLog, userRef } from './redact.js';
+import { ApprovalBroker, ApprovalError } from './approvals.js';
 import { OpenAiClient, OpenAiError } from './openai.js';
 import { runTurn } from './loop.js';
 import { SseStream } from './sse.js';
@@ -73,6 +74,9 @@ async function main(): Promise<void> {
 
   const llm = new OpenAiClient(cfg);
   const limiter = new RateLimiter();
+  // Only constructed when writes are enabled. Its absence is what makes a write impossible: the
+  // turn loop refuses any write tool it cannot route through a broker.
+  const approvals = cfg.enableWriteTools ? new ApprovalBroker() : null;
   const verifier = cfg.supabase.jwksUrl
     ? new SupabaseTokenVerifier(cfg.supabase.jwksUrl, {
         issuer: cfg.supabase.issuer,
@@ -134,6 +138,7 @@ async function main(): Promise<void> {
       googleIdentityMode: cfg.googleIdentity.mode,
       mcpSessions: sessions,
       mcpSessionsBusy: busy,
+      pendingApprovals: approvals?.stats().pending ?? 0,
     });
   });
 
@@ -171,6 +176,42 @@ async function main(): Promise<void> {
       res.status(400).json({
         code: 'unknown_command',
         message: err instanceof Error ? err.message : 'Unknown command',
+      });
+    }
+  });
+
+  /**
+   * Records a decision on a parked write. The turn is blocked on this call.
+   *
+   * The body may carry corrected arguments, because an approval card that cannot be edited is just
+   * a confirmation dialog, and people click through those.
+   */
+  app.post('/v1/approvals/:id', async (req, res) => {
+    let user: AuthedUser;
+    try {
+      user = await authenticate(req.headers.authorization);
+    } catch (err) {
+      return sendAuthError(res, err);
+    }
+    if (!approvals) {
+      return res.status(409).json({ code: 'read_only', message: 'This deployment is read-only.' });
+    }
+
+    const decision = req.body?.decision === 'approve' ? 'approve' : 'decline';
+    const args =
+      req.body?.arguments && typeof req.body.arguments === 'object'
+        ? (req.body.arguments as Record<string, unknown>)
+        : undefined;
+
+    try {
+      approvals.resolve(req.params.id, user.id, decision, args);
+      res.json({ ok: true, decision });
+    } catch (err) {
+      const code = err instanceof ApprovalError ? err.code : 'unknown_approval';
+      // A mismatched owner is reported as not-found so an approval id cannot be probed for.
+      res.status(404).json({
+        code: code === 'not_yours' ? 'unknown_approval' : code,
+        message: err instanceof Error ? err.message : 'Unknown approval',
       });
     }
   });
@@ -222,6 +263,9 @@ async function main(): Promise<void> {
     const controller = new AbortController();
     req.on('close', () => {
       controller.abort();
+      // A parked write whose user has navigated away must not sit waiting for a decision that can
+      // no longer arrive.
+      approvals?.abortFor(user.id);
       stream.close();
     });
 
@@ -241,6 +285,7 @@ async function main(): Promise<void> {
         onAuthFailure: tokenProvider
           ? () => pool.refreshIdentity(user.id, userJwt)
           : undefined,
+        approvals: approvals ?? undefined,
       });
     } catch (err) {
       stream.send({

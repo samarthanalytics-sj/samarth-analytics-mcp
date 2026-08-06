@@ -12,7 +12,7 @@
     "start": "node dist/chat-orchestrator/src/index.js",
     "models": "node scripts/check-model.mjs",
     "smoke": "node scripts/smoke.mjs",
-    "test": "tsx src/__tests__/tools.test.ts && tsx src/__tests__/prompts.test.ts && tsx src/__tests__/identity.test.ts && tsx src/__tests__/auth.test.ts && tsx src/__tests__/redact.test.ts",
+    "test": "tsx src/__tests__/tools.test.ts && tsx src/__tests__/prompts.test.ts && tsx src/__tests__/identity.test.ts && tsx src/__tests__/auth.test.ts && tsx src/__tests__/redact.test.ts && tsx src/__tests__/approvals.test.ts",
     "test:build": "npm run build && tsx src/__tests__/build.test.ts"
   },
   "dependencies": {

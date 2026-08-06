@@ -19,6 +19,13 @@ export interface McpPrompt {
   arguments?: { name: string; description?: string; required?: boolean }[];
 }
 
+/**
+ * Irreversible or publishing operations, matched on the MCP's own naming convention. Kept as one
+ * pattern rather than a name list so a newly added delete tool is destructive by default instead of
+ * silently becoming approvable.
+ */
+const DESTRUCTIVE = /(^|_)(delete|archive|remove)(_|$)|publish|reauthorize/i;
+
 export class McpConnection {
   private client: Client | null = null;
   private tools: ToolDef[] = [];
@@ -125,6 +132,7 @@ export class McpConnection {
           // Every guarded mutation in this MCP takes `confirm`; read tools never do. That makes the
           // schema itself the read/write discriminator, with no name list to keep in sync.
           isWrite: Object.prototype.hasOwnProperty.call(properties, 'confirm'),
+          isDestructive: DESTRUCTIVE.test(t.name),
         });
       }
       cursor = page.nextCursor;
