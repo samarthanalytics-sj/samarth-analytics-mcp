@@ -11,6 +11,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { OrchestratorConfig } from './config.js';
 import type { ToolDef } from './types.js';
+import { classifyWriteSurface } from './writeTiers.js';
 
 export interface McpPrompt {
   name: string;
@@ -139,15 +140,17 @@ export class McpConnection {
           unknown
         >;
         const properties = (schema.properties ?? {}) as Record<string, unknown>;
+        // Every guarded mutation in this MCP takes `confirm`; read tools never do. That makes the
+        // schema itself the read/write discriminator, with no name list to keep in sync.
+        const isWrite = Object.prototype.hasOwnProperty.call(properties, 'confirm');
         toolPages.push({
           name: t.name,
           description: t.description ?? '',
           inputSchema: schema,
-          // Every guarded mutation in this MCP takes `confirm`; read tools never do. That makes the
-          // schema itself the read/write discriminator, with no name list to keep in sync.
-          isWrite: Object.prototype.hasOwnProperty.call(properties, 'confirm'),
+          isWrite,
           isDestructive: NEVER_OFFERED.test(t.name),
           isDelete: !NEVER_OFFERED.test(t.name) && GTM_DELETE.test(t.name),
+          surface: isWrite ? classifyWriteSurface(t.name, properties) : undefined,
         });
       }
       cursor = page.nextCursor;

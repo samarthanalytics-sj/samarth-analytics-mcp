@@ -117,6 +117,18 @@ export interface OrchestratorConfig {
    * and removing one are different decisions, and this toolset has no revert for the second.
    */
   enableDeleteTools: boolean;
+  /**
+   * Whether a write that is immediately live still stops for a plain approval card.
+   *
+   * Changes inside a GTM workspace never stop: they are drafts, the live configuration is untouched,
+   * and prompting on each one only teaches people to click through. But GA4 Admin has no draft, and
+   * container, version, environment, and permission changes skip the workspace entirely, so those
+   * take effect the moment they succeed with nothing to discard.
+   *
+   * Defaults to true. Set ORCHESTRATOR_APPROVE_LIVE_WRITES=false to let those apply directly too,
+   * which leaves a typed confirmation on deletes as the only gate in the system.
+   */
+  approveLiveWrites: boolean;
 }
 
 function req(name: string): string {
@@ -296,5 +308,7 @@ export function loadConfig(): OrchestratorConfig {
     enableWriteTools: bool('ORCHESTRATOR_ENABLE_WRITE_TOOLS'),
     // Deletes require writes. Enabling deletes alone would be incoherent.
     enableDeleteTools: bool('ORCHESTRATOR_ENABLE_WRITE_TOOLS') && bool('ORCHESTRATOR_ENABLE_DELETE_TOOLS'),
+    // Opt OUT, not in: the unset case has to be the one that asks before changing something live.
+    approveLiveWrites: process.env.ORCHESTRATOR_APPROVE_LIVE_WRITES?.trim() !== 'false',
   };
 }
