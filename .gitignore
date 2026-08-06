@@ -22,3 +22,6 @@ oauth-client.json
 
 # local tooling (mcp-publisher binary)
 .tools/
+
+# Local tunnel binary (downloaded, not source)
+tools/cloudflared.exe

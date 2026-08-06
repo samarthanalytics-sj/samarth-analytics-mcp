@@ -10,6 +10,7 @@ import type { OpenAiClient } from './openai.js';
 import { capToolResult, scopeTools, toOpenAiTools } from './tools.js';
 import { buildSituationalContext, buildStaticSystem } from './prompts.js';
 import { GoogleIdentityError, isGoogleAuthFailure } from './google-identity.js';
+import { forLog, userRef } from './redact.js';
 import type { ChatContext, ChatMessage, StreamEvent } from './types.js';
 
 export interface RunTurnArgs {
@@ -151,6 +152,12 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
 
       if (!ok && !authRetryUsed && args.onAuthFailure && isGoogleAuthFailure(text)) {
         authRetryUsed = true;
+        // The retry overwrites `text`, so the failure that triggered it would otherwise be lost.
+        // It is the more diagnostic of the two: it says whether the token was expired or simply
+        // lacked the scope, which the refresh error cannot tell you.
+        console.error(
+          `[tool] ${call.function.name} first attempt failed (will refresh): ${forLog(text)}`,
+        );
         try {
           mcp = await args.onAuthFailure();
           ({ ok, text } = await mcp.callTool(call.function.name, parsedArgs));
@@ -161,6 +168,14 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
               : `Google authorization failed: ${err instanceof Error ? err.message : String(err)}`;
           ok = false;
         }
+      }
+
+      if (!ok) {
+        // The model relays tool failures to the user in its own words, which is useless for
+        // diagnosis. Without this line a production failure leaves no trace at all.
+        console.error(
+          `[tool] ${call.function.name} failed for user ${userRef(user.id)}: ${forLog(text)}`,
+        );
       }
 
       const capped = capToolResult(text, cfg.limits.maxToolResultChars);
