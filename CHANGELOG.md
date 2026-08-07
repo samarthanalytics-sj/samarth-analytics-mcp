@@ -1,3 +1,9 @@
+## [1.464.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.463.0...v1.464.0) (2026-08-07)
+
+### Features
+
+* **chat:** meter chat usage against the user's plan ([#847](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/847)) ([18a2bbd](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/18a2bbd1ecfff8046a032ac72514fefd985f3eaa))
+
 ## [1.463.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.462.0...v1.463.0) (2026-08-06)
 
 ### Features
