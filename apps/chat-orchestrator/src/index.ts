@@ -19,6 +19,7 @@ import { OpenAiClient, OpenAiError } from './openai.js';
 import { runTurn } from './loop.js';
 import { AuditRecorder } from './audit.js';
 import { UsageMeter, quotaMessage } from './usage.js';
+import { planFix, FIXABLE_CATEGORIES, type AuditFinding } from './audit-fix.js';
 import { SseStream } from './sse.js';
 import { scopeTools } from './tools.js';
 import {
@@ -33,6 +34,19 @@ import {
 import type { AuthedUser, ChatRequestBody } from './types.js';
 
 const cfg: OrchestratorConfig = loadConfig();
+
+/**
+ * Failures that describe the REQUEST rather than an upstream fault, so they answer 400.
+ *
+ * The distinction matters to a client: a 502 invites a retry, and retrying a fix that was refused
+ * because it needs a typed confirmation will fail identically every time.
+ */
+const REQUEST_FAULT_CODES = new Set([
+  'not_fixable',
+  'confirmation_required',
+  'deletes_disabled',
+  'bad_result',
+]);
 
 /** Fixed-window per-user turn limiter. Replace with Redis when this runs on more than one node. */
 class RateLimiter {
@@ -286,7 +300,7 @@ async function main(): Promise<void> {
   async function withUserMcp(
     req: express.Request,
     res: express.Response,
-    fn: (mcp: McpConnection) => Promise<unknown>,
+    fn: (mcp: McpConnection, user: AuthedUser) => Promise<unknown>,
     validate?: () => string | null,
   ): Promise<void> {
     let user: AuthedUser;
@@ -333,13 +347,17 @@ async function main(): Promise<void> {
     }
 
     try {
-      res.json(await fn(mcp));
+      res.json(await fn(mcp, user));
     } catch (err) {
       const code = err instanceof ResourceError ? err.code : 'resource_failed';
       console.error(`[resources] ${req.path} failed for user ${userRef(user.id)}: ${forLog(String(err))}`);
-      res.status(502).json({
+      // Not everything reaching here is an upstream fault. A refused fix and a missing typed
+      // confirmation are answers about the request, and returning 502 for them would tell the
+      // client to retry something that will never succeed until they change it.
+      const status = REQUEST_FAULT_CODES.has(code) ? 400 : code === 'read_only' ? 409 : 502;
+      res.status(status).json({
         code,
-        message: err instanceof Error ? err.message : 'Could not load that list.',
+        message: err instanceof Error ? err.message : 'Could not complete that request.',
       });
     } finally {
       pool.release(user.id);
@@ -388,6 +406,123 @@ async function main(): Promise<void> {
         normalizeContainerQuery(raw)
           ? null
           : 'Enter a container id like GTM-ABC1234, its numeric id, or a Tag Manager URL.',
+    );
+  });
+
+  /**
+   * Runs the container audit and returns its findings verbatim.
+   *
+   * Read-only: audit_container never modifies anything, so this needs no write flag and no gate.
+   */
+  app.post('/v1/audit/gtm', (req, res) => {
+    const ws = {
+      accountId: idParam(req.body?.accountId),
+      containerId: idParam(req.body?.containerId),
+      workspaceId: idParam(req.body?.workspaceId),
+    };
+    void withUserMcp(
+      req,
+      res,
+      async (mcp) => {
+        const { ok, text } = await mcp.callTool('audit_container', {
+          accountId: ws.accountId,
+          containerId: ws.containerId,
+          workspaceId: ws.workspaceId,
+          includeInfo: req.body?.includeInfo === true,
+        });
+        if (!ok) throw new ResourceError(text, 'tool_failed');
+        let body: Record<string, unknown>;
+        try {
+          body = JSON.parse(text) as Record<string, unknown>;
+        } catch {
+          throw new ResourceError('The audit returned a result that was not JSON.', 'bad_result');
+        }
+        // Which findings have an automatic fix is decided here, not in the browser, so the button
+        // the user sees and the action the server will accept can never disagree.
+        return { ...body, fixableCategories: FIXABLE_CATEGORIES };
+      },
+      () =>
+        ws.accountId && ws.containerId && ws.workspaceId
+          ? null
+          : 'A valid accountId, containerId and workspaceId are required.',
+    );
+  });
+
+  /**
+   * Applies the fix for one finding.
+   *
+   * The plan is recomputed here from the finding rather than trusting a tool name and arguments
+   * sent by the browser. Accepting those would turn this into an open write endpoint: anyone could
+   * post any tool with any arguments and have it executed under their Google identity.
+   */
+  app.post('/v1/audit/fix', (req, res) => {
+    const ws = {
+      accountId: idParam(req.body?.accountId) ?? '',
+      containerId: idParam(req.body?.containerId) ?? '',
+      workspaceId: idParam(req.body?.workspaceId) ?? '',
+    };
+    const finding = req.body?.finding as AuditFinding | undefined;
+
+    void withUserMcp(
+      req,
+      res,
+      async (mcp, user) => {
+        if (!cfg.enableWriteTools) {
+          throw new ResourceError('This deployment is read-only.', 'read_only');
+        }
+        const plan = planFix(finding!, ws);
+        if (!plan.fixable) throw new ResourceError(plan.reason, 'not_fixable');
+
+        if (plan.destructive) {
+          if (!cfg.enableDeleteTools) {
+            throw new ResourceError('Deletes are not enabled on this deployment.', 'deletes_disabled');
+          }
+          // Same gate as the chat: a removal takes the typed word, checked on the server because a
+          // client-side check is a suggestion.
+          if (String(req.body?.confirm ?? '').trim() !== plan.confirmWord) {
+            throw new ResourceError(
+              `This fix removes something. Send confirm: "${plan.confirmWord}" to proceed.`,
+              'confirmation_required',
+            );
+          }
+        }
+
+        const startedAt = Date.now();
+        const { ok, text } = await mcp.callTool(plan.tool, { ...plan.args, confirm: true });
+
+        // A fix changes somebody's container exactly as a chat write does, so it leaves the same
+        // record. Without this, the one write path that bypasses the chat would also bypass the
+        // audit trail, and "who changed this tag" would have a blind spot shaped like this button.
+        const conversationId = await audit.beginConversation(
+          user.id,
+          { product: 'gtm', ...ws },
+          `Container audit fix: ${plan.label}`,
+        );
+        audit.recordToolEvent(conversationId, user.id, {
+          ...ws,
+          toolName: plan.tool,
+          product: 'gtm',
+          surface: 'gtm_draft',
+          isWrite: true,
+          isDelete: plan.destructive,
+          // The click IS the approval, and a destructive one also required the typed word above.
+          approval: 'approved',
+          args: plan.args,
+          ok,
+          resultSummary: text,
+          durationMs: Date.now() - startedAt,
+        });
+
+        if (!ok) throw new ResourceError(text, 'fix_failed');
+        return { applied: true, tool: plan.tool, label: plan.label, result: forLog(text, 400) };
+      },
+      () => {
+        if (!ws.accountId || !ws.containerId || !ws.workspaceId) {
+          return 'A valid accountId, containerId and workspaceId are required.';
+        }
+        if (!finding || typeof finding.category !== 'string') return 'A finding is required.';
+        return null;
+      },
     );
   });
 
