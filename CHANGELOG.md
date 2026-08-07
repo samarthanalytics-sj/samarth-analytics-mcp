@@ -1,3 +1,9 @@
+## [1.465.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.464.0...v1.465.0) (2026-08-07)
+
+### Features
+
+* **audit:** run the container audit from the web, and fix what is safely fixable ([#848](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/848)) ([5835b5a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/5835b5a0a7b8a8b6cd6604afc7ddc5a86881d6e0))
+
 ## [1.464.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.463.0...v1.464.0) (2026-08-07)
 
 ### Features
