@@ -14,6 +14,7 @@ import { forLog, userRef } from './redact.js';
 import { summarizeWrite, type ApprovalBroker } from './approvals.js';
 import { approvalGate } from './writeTiers.js';
 import type { AuditRecorder } from './audit.js';
+import type { UsageMeter } from './usage.js';
 import { productOf } from './tools.js';
 import type { ChatContext, ChatMessage, StreamEvent } from './types.js';
 
@@ -37,6 +38,8 @@ export interface RunTurnArgs {
   audit?: AuditRecorder;
   /** Null when auditing is off or the conversation could not be opened; recording is then skipped. */
   conversationId?: string | null;
+  /** Counts this turn against the user's plan. Never allowed to fail a turn; see usage.ts. */
+  usage?: UsageMeter;
 }
 
 export async function runTurn(args: RunTurnArgs): Promise<void> {
@@ -92,6 +95,10 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
 
   /** Writes the closing record for this turn. Called on every exit path, including the budgets. */
   const finish = (reason: string): void => {
+    // Billed on every exit path, including the budget stops. A turn that was cut short still cost
+    // whatever it spent before stopping, and not charging for it would let a caller get unlimited
+    // work by always hitting the ceiling.
+    args.usage?.record(user.id, spend.promptTokens + spend.completionTokens);
     args.audit?.recordAssistantTurn(args.conversationId ?? null, user.id, {
       content: assistantText,
       promptTokens: spend.promptTokens,

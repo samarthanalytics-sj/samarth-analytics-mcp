@@ -18,6 +18,7 @@ import { ApprovalBroker, ApprovalError } from './approvals.js';
 import { OpenAiClient, OpenAiError } from './openai.js';
 import { runTurn } from './loop.js';
 import { AuditRecorder } from './audit.js';
+import { UsageMeter, quotaMessage } from './usage.js';
 import { SseStream } from './sse.js';
 import { scopeTools } from './tools.js';
 import {
@@ -107,6 +108,13 @@ async function main(): Promise<void> {
     );
   }
 
+  const usage = new UsageMeter(cfg.supabase.url ?? '', cfg.supabase.serviceRoleKey ?? '');
+  console.log(
+    usage.isEnabled()
+      ? '[orchestrator] usage metering ON (user_plans.current_usage_chat / current_usage_tokens)'
+      : '[orchestrator] usage metering OFF: turns are not counted against any plan.',
+  );
+
   const llm = new OpenAiClient(cfg);
   const limiter = new RateLimiter();
   // Only constructed when writes are enabled. Its absence is what makes a write impossible: the
@@ -185,6 +193,7 @@ async function main(): Promise<void> {
       // Surfaced so a trail that stopped recording is visible to a monitor rather than discovered
       // the day somebody needs it.
       audit: audit.stats(),
+      usage: usage.stats(),
       pendingApprovals: approvals?.stats().pending ?? 0,
     });
   });
@@ -403,6 +412,25 @@ async function main(): Promise<void> {
       });
     }
 
+    // Checked before the MCP child is spawned and before a token is spent. A quota enforced after
+    // the work is done is not a quota.
+    const quota = await usage.check(user.id);
+    if (quota && !quota.allowed) {
+      console.log(`[usage] ${userRef(user.id)} is over their ${quota.reason} limit; turn refused`);
+      return res.status(429).json({
+        code: 'quota_exceeded',
+        message: quotaMessage(quota),
+        quota: {
+          reason: quota.reason,
+          usedChat: quota.usedChat,
+          limitChat: quota.limitChat,
+          usedTokens: quota.usedTokens,
+          limitTokens: quota.limitTokens,
+          planType: quota.planType,
+        },
+      });
+    }
+
     const body = req.body as ChatRequestBody;
     if (!Array.isArray(body?.messages) || body.messages.length === 0) {
       return res.status(400).json({ code: 'bad_request', message: 'messages array is required' });
@@ -472,6 +500,7 @@ async function main(): Promise<void> {
         approvals: approvals ?? undefined,
         audit,
         conversationId,
+        usage,
       });
     } catch (err) {
       stream.send({
