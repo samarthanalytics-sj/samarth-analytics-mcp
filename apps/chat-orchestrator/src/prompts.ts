@@ -86,12 +86,18 @@ export function buildStaticSystem(opts: {
   mcpInstructions: string;
   /** Products the user connected to this chat. Already sanitized. */
   integrations?: readonly Product[];
+  /** Tells the model its tool list is a subset and how to reveal the rest. Empty when nothing is hidden. */
+  toolGroupNotice?: string;
 }): string {
   const parts: string[] = [];
   parts.push(opts.product === 'ga4' ? ROLE_GA4 : ROLE_GTM);
   parts.push(HONESTY_RULES);
   parts.push(TOOL_RULES);
   parts.push(opts.canWrite ? WRITE_RULES : READ_ONLY_RULES);
+
+  // High, and immediately after TOOL_RULES' "only call tools that appear in your tool list": that
+  // instruction read alone is what makes a model announce a capability is missing.
+  if (opts.toolGroupNotice) parts.push(opts.toolGroupNotice);
 
   // Placed straight after the write rules, so the relaxation of the single-product rule is read in
   // the same breath as the rule it relaxes. Empty when no chip is on, leaving the single-product

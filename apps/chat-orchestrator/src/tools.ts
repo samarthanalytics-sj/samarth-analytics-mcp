@@ -47,12 +47,20 @@ export function scopeTools(all: ToolDef[], opts: ScopeOptions): ToolDef[] {
     onTruncated,
   } = opts;
 
-  // A connected product brings its own reads, so the ceiling has to grow with it for the same
-  // reason it grows for writes: otherwise turning on a chip silently evicts the tools the chip was
-  // turned on to provide.
   const connected = new Set(integrations.filter((p) => p !== product));
-  const baseMax = includeWrites ? 120 : 60;
-  const maxTools = opts.maxTools ?? baseMax + connected.size * 40;
+
+  /**
+   * NO CEILING BY DEFAULT.
+   *
+   * There used to be one (120 with writes, 60 without) because the whole permitted set was sent to
+   * the model on every step. Progressive disclosure now decides what is SENT, so this function's
+   * job is only to decide what is PERMITTED, and truncating that is actively harmful: a tool cut
+   * here is gone from the permitted set entirely, so enable_tool_group cannot reveal it either and
+   * the capability is unreachable rather than merely hidden.
+   *
+   * Callers may still pass an explicit ceiling; onTruncated still fires when it bites.
+   */
+  const maxTools = opts.maxTools ?? Number.POSITIVE_INFINITY;
 
   const inScope = all.filter((t) => {
     // Destructive tools are withheld unconditionally. An approval card is a reasonable gate for
