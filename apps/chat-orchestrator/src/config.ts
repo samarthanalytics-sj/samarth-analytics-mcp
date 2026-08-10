@@ -321,8 +321,26 @@ export function loadConfig(): OrchestratorConfig {
     limits: {
       maxToolCallsPerTurn: num('MAX_TOOL_CALLS_PER_TURN', 12),
       maxTurnMs: num('MAX_TURN_MS', 120_000),
-      maxHistoryMessages: num('MAX_HISTORY_MESSAGES', 20),
-      maxToolResultChars: num('MAX_TOOL_RESULT_CHARS', 24_000),
+      /*
+       * Both lowered from 20 / 24,000 while looking at real usage: 71% of input tokens were cache
+       * hits, so the cacheable prefix was already efficient and the remaining cost was the
+       * UNCACHEABLE tail - conversation history and tool results, re-sent on every tool round.
+       *
+       * 10 messages is roughly five exchanges. Dropping older ones is announced to the model (see
+       * boundHistory), so the failure mode is "I cannot see that, please restate it" rather than a
+       * confident answer about a message it no longer has.
+       *
+       * 16,000 characters is about 4,000 tokens: comfortably above a normal list, low enough to
+       * clip a runaway one. capToolResult marks the cut explicitly and tells the model to say the
+       * list is incomplete, so a truncated result can never be presented as the whole set.
+       *
+       * PROVISIONAL. These were set from reasoning about where the tokens were, not from a
+       * measured before/after: at the time of the change there was no post-change traffic to
+       * compare. If the assistant starts losing the thread of multi-step work, raise
+       * MAX_HISTORY_MESSAGES back toward 20 - that is the one with a real usability cost.
+       */
+      maxHistoryMessages: num('MAX_HISTORY_MESSAGES', 10),
+      maxToolResultChars: num('MAX_TOOL_RESULT_CHARS', 16_000),
       turnsPerMinutePerUser: num('TURNS_PER_MINUTE_PER_USER', 10),
     },
     enableWriteTools: bool('ORCHESTRATOR_ENABLE_WRITE_TOOLS'),
