@@ -328,7 +328,9 @@ function registerGalleryImport(server: McpServer, getClient: () => GtmClient): v
         'Requires GTM_MCP_ENABLE_WRITES=true and confirm=true. ' +
         'The GTM API DOES support this (templates.import_from_gallery); never tell the user it is UI-only. ' +
         'Idempotent: importing one already present returns it unchanged rather than creating a duplicate. ' +
-        'Returns the template and its tag TYPE code (cvt_...), which you then pass as `type` to tags_create ' +
+        'Returns the installed template. To build a tag on it you need its tag TYPE (a cvt_... string): READ ' +
+        'that from the container rather than constructing it from the templateId, because the format is not ' +
+        'what it appears to be. Pass the exact string as `type` to tags_create ' +
         'along with that template\'s own field keys (template-specific, e.g. Meta Pixel uses pixelId). ' +
         `Common pairs: ${GALLERY_EXAMPLES}.`,
       inputSchema: wsBase.extend({
@@ -370,7 +372,7 @@ function registerGalleryImport(server: McpServer, getClient: () => GtmClient): v
             imported: false,
             reason: 'This gallery template is already installed in the workspace; returning the existing one.',
             template: existing,
-            tagType: galleryTagType(existing, containerId),
+            tagTypeNote: TAG_TYPE_GUIDANCE,
           });
         }
 
@@ -379,7 +381,7 @@ function registerGalleryImport(server: McpServer, getClient: () => GtmClient): v
         return jsonResult({
           imported: true,
           template: imported,
-          tagType: galleryTagType(imported, containerId),
+          tagTypeNote: TAG_TYPE_GUIDANCE,
         });
       } catch (err) {
         return errorResult('templates_import_from_gallery', err);
@@ -448,15 +450,22 @@ async function importFromGallery(
 }
 
 /**
- * The tag `type` code a custom template is used under.
+ * Where the tag `type` for an installed template comes from.
  *
- * GTM addresses an installed template as `cvt_<containerId>_<templateId>`. Returning it here saves
- * the caller a second lookup, and getting it wrong is the difference between a tag that builds and
- * an "invalid tag type" error, so it is derived rather than guessed.
+ * Deliberately NOT computed here. This used to return `cvt_<containerId>_<templateId>`, which is
+ * not the format GTM actually uses: a real import produced `cvt_TB7ZX` against container
+ * 223151851, so the constructed string was wrong and would have been passed straight into
+ * tags_create as an invalid type.
+ *
+ * It happened to cause no harm only because the caller ignored it. That is luck, not design: a
+ * convenience field that is confidently wrong is worse than an absent one, because the next caller
+ * trusts it. The same fabrication the model is forbidden from doing should not be done by the tool
+ * that instructs it.
+ *
+ * The type is a real property of the container's tag-type list, so it is read rather than derived:
+ * the tool's response tells the caller where to get it.
  */
-function galleryTagType(template: Record<string, unknown>, containerId: string): string | null {
-  const templateId = typeof template.templateId === 'string' ? template.templateId : null;
-  if (!templateId) return null;
-  const onContainer = typeof template.containerId === 'string' ? template.containerId : containerId;
-  return `cvt_${onContainer}_${templateId}`;
-}
+const TAG_TYPE_GUIDANCE =
+  'Do not construct the tag type from the templateId; the format is not what it looks like. Read it ' +
+  'from the container: the installed template appears in the tag-type list (and in an existing ' +
+  'tag built on it) as cvt_..., and that exact string is what tags_create needs.';
