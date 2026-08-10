@@ -1,3 +1,9 @@
+## [1.467.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.466.0...v1.467.0) (2026-08-10)
+
+### Features
+
+* **chat:** GTM<->GA4 cross-platform integration chips ([#850](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/850)) ([d6a9de6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d6a9de676be776b7ccdb0c5e438dcca899190c0d))
+
 ## [1.466.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.465.0...v1.466.0) (2026-08-10)
 
 ### Features
