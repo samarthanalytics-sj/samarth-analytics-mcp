@@ -18,6 +18,18 @@ import type { UsageMeter } from './usage.js';
 import { productOf } from './tools.js';
 import { attachmentPrompt, type ExtractedAttachment } from './attachments.js';
 import { sanitizeIntegrations } from './integrations.js';
+import {
+  ENABLE_TOOL_GROUP,
+  availableGroups,
+  buildToolGroupPrompt,
+  describeRevealedGroup,
+  enableToolGroupDef,
+  filterToolsByGroup,
+  groupCounts,
+  selectToolGroups,
+  type ToolGroup,
+} from './tool-groups.js';
+import type { ToolDef } from './types.js';
 import type { ChatContext, ChatMessage, StreamEvent } from './types.js';
 
 export interface RunTurnArgs {
@@ -63,12 +75,36 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
     includeWrites: cfg.enableWriteTools,
     includeDeletes: cfg.enableDeleteTools,
     integrations,
-    onTruncated: (dropped) =>
-      console.warn(
-        `[tools] ${dropped.length} tool(s) withheld by the per-request ceiling and invisible to the model: ${dropped.slice(0, 10).join(', ')}${dropped.length > 10 ? ', ...' : ''}`,
-      ),
+    // No ceiling passed on purpose: this is the PERMITTED set, and progressive disclosure below
+    // decides what is actually sent. A tool cut here would be unreachable even via the gate.
   });
-  const openAiTools = toOpenAiTools(scoped);
+  /**
+   * Progressive disclosure. `scoped` stays the full permitted set (what this user MAY call); what
+   * the model SEES is a subset of it, recomputed whenever a group is revealed.
+   *
+   * Keeping the two separate matters: permission checks below still run against `scoped`, so
+   * hiding a tool from the prompt never becomes a security decision by accident.
+   */
+  const enabledGroups = new Set<ToolGroup>();
+  const gateGroups = availableGroups(scoped);
+  const gateCounts = groupCounts(scoped);
+  const gate = gateGroups.length > 0 ? enableToolGroupDef(gateGroups, gateCounts) : null;
+
+  const visibleTools = (): ToolDef[] => {
+    const selected = selectToolGroups({
+      messages: args.history.map((m) => m.content),
+      enabled: enabledGroups,
+      integrations,
+    });
+    const shown = filterToolsByGroup(scoped, selected);
+    return gate ? [...shown, gate] : shown;
+  };
+
+  let openAiTools = toOpenAiTools(visibleTools());
+  console.log(
+    `[tools] ${visibleTools().length - (gate ? 1 : 0)} of ${scoped.length} tools visible this turn` +
+      (gate ? `, ${gateGroups.length} group(s) available on request` : ''),
+  );
 
   emit({
     type: 'ready',
@@ -82,6 +118,9 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
     canWrite: cfg.enableWriteTools,
     mcpInstructions: mcp.getInstructions(),
     integrations,
+    // Without this the model treats its partial list as the whole surface and tells the user a
+    // capability does not exist, which is exactly the failure the old silent cap produced.
+    toolGroupNotice: buildToolGroupPrompt(gateGroups),
   });
 
   const messages: ChatMessage[] = [
@@ -213,6 +252,37 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
           ok: false,
           summary: 'Invalid arguments',
         });
+        continue;
+      }
+
+      // The gate is handled here rather than sent to the MCP: it is the orchestrator's own tool,
+      // and its whole effect is on what the NEXT model call can see.
+      if (gate && call.function.name === ENABLE_TOOL_GROUP) {
+        const requested = String(parsedArgs.group ?? '') as ToolGroup;
+        const known = gateGroups.includes(requested as Exclude<ToolGroup, 'core'>);
+        if (!known) {
+          const summary = `"${requested}" is not a group in this conversation. Available: ${gateGroups.join(', ')}.`;
+          messages.push({ role: 'tool', tool_call_id: call.id, name: call.function.name, content: summary });
+          emit({ type: 'tool_result', id: call.id, name: call.function.name, ok: false, summary });
+          continue;
+        }
+
+        const before = new Set(visibleTools().map((t) => t.name));
+        enabledGroups.add(requested);
+        const revealed = visibleTools().filter((t) => !before.has(t.name));
+        // Recomputed now, so the tools are on the very next model call rather than the one after.
+        openAiTools = toOpenAiTools(visibleTools());
+
+        const summary = describeRevealedGroup(requested, revealed);
+        messages.push({ role: 'tool', tool_call_id: call.id, name: call.function.name, content: summary });
+        emit({
+          type: 'tool_result',
+          id: call.id,
+          name: call.function.name,
+          ok: true,
+          summary: `Revealed ${revealed.length} tool(s) in "${requested}"`,
+        });
+        console.log(`[tools] revealed group "${requested}": ${revealed.length} tool(s) now visible`);
         continue;
       }
 
