@@ -1,3 +1,9 @@
+## [1.471.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.470.0...v1.471.0) (2026-08-10)
+
+### Features
+
+* **gtm:** install gallery templates, so the pixel advice has something behind it ([#857](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/857)) ([fb366e3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/fb366e39750e0c69963b82893f41f621c7475fa9))
+
 ## [1.470.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.469.1...v1.470.0) (2026-08-10)
 
 ### Features
