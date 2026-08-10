@@ -1,3 +1,9 @@
+## [1.468.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.467.1...v1.468.0) (2026-08-10)
+
+### Features
+
+* **chat:** read endpoints for conversation history and resume ([#852](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/852)) ([5f0f3e1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/5f0f3e1a43076ef70651b99fe6779fc68a36380b))
+
 ## [1.467.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.467.0...v1.467.1) (2026-08-10)
 
 ### Performance Improvements
