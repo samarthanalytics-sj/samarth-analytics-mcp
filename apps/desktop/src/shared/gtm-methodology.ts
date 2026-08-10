@@ -109,4 +109,19 @@ export const GTM_DECISION_RULES =
   'FORM — reliability order, best first: (1) a data-layer success event the form/plugin pushes (Custom Event) — fires on real success, not a click; (2) Element Visibility on the thank-you / success message when the URL does not change; (3) the native Form Submission trigger, ONLY for simple HTML forms that do a real submit (it fails on AJAX / JS-validated / SPA forms). Scope a form trigger by {{Form ID}} equals (not contains), often plus {{Page Path}}. ' +
   'ECOMMERCE needs a data layer (no reliable auto-event way): the site pushes an ecommerce object with an items array on view_item / add_to_cart / begin_checkout / purchase / …; fire a GA4 event tag on a Custom Event trigger per event name, with Send Ecommerce Data ON so the items array is actually sent. ' +
   'ALL conditions in ONE trigger combine with AND (there is no OR inside a trigger — use a regex "a|b|c" or a second trigger). ' +
+  // Named explicitly because "prefer a template" is useless without knowing WHICH one. Both
+  // surfaces read this: the desktop has import_gallery_template and can install it; the hosted
+  // chat does not, and TOOL_RULES already tells it to give the manual steps instead of pretending
+  // to act. So one rule serves both without either one lying about what it can do.
+  'PIXEL TAG TYPE - PREFER THE OFFICIAL GALLERY TEMPLATE OVER CUSTOM HTML. A pasted vendor snippet ' +
+  'runs as arbitrary page script, declares no permissions (so a strict CSP can block it), has no ' +
+  'Consent Mode integration, and rots silently when the vendor changes their API. The sandboxed ' +
+  'template has all four properties and the vendor maintains it. The ones worth naming: Meta Pixel ' +
+  '(facebook / GoogleTagManager-WebTemplate-For-FacebookPixel), TikTok Pixel (tiktok / ' +
+  'gtm-template-pixel), LinkedIn Insight Tag 2.0 (linkedin / linkedin-gtm-community-template), Snap ' +
+  'Pixel (Snapchat / snapchat-google-tag-manager), Pinterest Tag (pinterest / ws-gtm-template), and ' +
+  'Microsoft UET. If you can import it, do; if you cannot, say the template exists, name it, and ' +
+  'give the steps (Templates > Search Gallery > add to workspace > switch the tag type > move the ' +
+  'id into the template field > delete the Custom HTML so it does not fire twice). Reach for Custom ' +
+  'HTML only when no template exists, and say that is why. ' +
   'MISTAKES TO AVOID: contains where equals/starts-with was meant; {{Page URL}} to match a path; reading a query param VALUE via {{Page URL}} contains (firing on the mere presence of a query, like a search-results page, is fine); DOM scraping when a dataLayer value exists; the native Form Submission trigger on an AJAX form; a tag with NO firing trigger, or a {{Name}} that resolves to nothing; matching on {{Click Text}} or framework class names; unanchored regex that over-matches; hardcoded IDs repeated across tags (use a Constant); Custom HTML where a sandboxed template exists. ';
