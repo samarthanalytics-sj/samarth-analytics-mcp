@@ -22,6 +22,7 @@ import { UsageMeter, quotaMessage } from './usage.js';
 import { planFix, FIXABLE_CATEGORIES, type AuditFinding } from './audit-fix.js';
 import { SseStream } from './sse.js';
 import { scopeTools } from './tools.js';
+import { extractAll, type ExtractedAttachment } from './attachments.js';
 import {
   findGtmContainer,
   listGa4Properties,
@@ -161,7 +162,10 @@ async function main(): Promise<void> {
     next();
   });
 
-  app.use(express.json({ limit: '256kb' }));
+  // 28mb, not 256kb: attachments arrive base64 in the body, and base64 inflates by a third. The
+  // real ceilings are enforced in attachments.ts (15 MB per file, 20 MB per message, 5 files) so
+  // this only has to be comfortably above them rather than be the limit itself.
+  app.use(express.json({ limit: '28mb' }));
   app.use(
     cors({
       origin(origin, cb) {
@@ -595,6 +599,26 @@ async function main(): Promise<void> {
 
     // Opened before the stream so a failure here is a plain log line rather than a mid-stream error.
     // Returns null when auditing is off or unreachable, and the turn then records nothing.
+    // Extracted before the stream opens, so a refusal ("that .doc is the old format") is a clean
+    // 400 the composer can show against the file, rather than a message mid-answer.
+    let extracted: ExtractedAttachment[] = [];
+    if (Array.isArray(body.attachments) && body.attachments.length > 0) {
+      const { ok, rejected } = await extractAll(body.attachments);
+      extracted = ok;
+      if (ok.length === 0 && rejected.length > 0) {
+        return res.status(400).json({
+          error: 'attachments_unreadable',
+          message: rejected.map((r) => r.reason).join(' '),
+          rejected,
+        });
+      }
+      // Some read, some did not: the turn proceeds, and the user is told which were left out
+      // rather than being left to wonder why the model ignored one.
+      if (rejected.length > 0) {
+        console.warn(`[chat] ${rejected.length} attachment(s) rejected:`, rejected.map((r) => r.name).join(', '));
+      }
+    }
+
     const lastUserMessage = body.messages[body.messages.length - 1]?.content ?? '';
     const conversationId = await audit.beginConversation(
       user.id,
@@ -624,6 +648,7 @@ async function main(): Promise<void> {
         history: body.messages,
         context: { ...body.context, product },
         user,
+        attachments: extracted,
         emit: (event) => stream.send(event),
         signal: controller.signal,
         // Only offer a refresh when there is an identity provider that could actually mint a new
