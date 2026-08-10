@@ -124,6 +124,12 @@ export function groupOf(name: string): ToolGroup | undefined {
   if (CORE_TOOLS.has(name)) return 'core';
   if (name === 'audit_container' || name === 'export_container') return 'audit';
 
+  // Named before the prefix rules, because the prefix lies about this one. It starts with
+  // "templates_" so it would fall into server-side, but installing a gallery template is how you
+  // build a Meta or LinkedIn PIXEL TAG - an everyday web-container job. Left in server-side it was
+  // invisible to "add the meta pixel", which is the only request that ever needs it.
+  if (name === 'templates_import_from_gallery') return 'gtm-write';
+
   if (name.startsWith('ga4_')) return GA4_WRITE.test(name) ? 'ga4-write' : 'ga4-read';
   if (SERVER_SIDE.test(name)) return 'server-side';
   if (GTM_ENTITY.test(name)) return 'gtm-write';
@@ -138,8 +144,11 @@ export function groupOf(name: string): ToolGroup | undefined {
  * enable_tool_group, not a refusal. So the patterns are deliberately broad rather than clever.
  */
 const GROUP_KEYWORDS: Record<Exclude<ToolGroup, 'core'>, RegExp> = {
+  // Vendor names included because "add the LinkedIn Insight Tag" is a tag-building request that
+  // happens to name no verb from the list above, and it is exactly the case the gallery-import
+  // tool exists for.
   'gtm-write':
-    /\b(creat|add|build|make|set up|setup|edit|updat|chang|modif|renam|remov|delet|paus|unpaus|enabl|disabl|fix|implement|configur|track)\w*\b/i,
+    /\b(creat|add|build|make|set up|setup|edit|updat|chang|modif|renam|remov|delet|paus|unpaus|enabl|disabl|fix|implement|configur|track|pixel|meta|facebook|linkedin|tiktok|snap|pinterest|reddit|hotjar|clarity|uet|gallery|template)\w*\b/i,
   'gtm-admin':
     /\b(workspace|version|publish|environment|permission|user access|share|new container|combine|merge)\w*\b/i,
   'server-side': /\b(server[- ]?side|sgtm|server container|client|transformation|zone|template|gtag|first[- ]?party)\w*\b/i,
