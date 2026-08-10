@@ -1,3 +1,9 @@
+## [1.467.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.467.0...v1.467.1) (2026-08-10)
+
+### Performance Improvements
+
+* **chat:** progressive tool disclosure instead of a silent tool cap ([#851](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/851)) ([75064e3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/75064e39bac68c62f56e5ec4db7e531a6bb225cc))
+
 ## [1.467.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.466.0...v1.467.0) (2026-08-10)
 
 ### Features
