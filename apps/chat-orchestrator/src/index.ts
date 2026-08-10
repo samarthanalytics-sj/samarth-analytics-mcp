@@ -244,6 +244,61 @@ async function main(): Promise<void> {
     });
   });
 
+  /**
+   * The caller's recent conversations.
+   *
+   * Everything needed to resume is here: the product and the container/property the conversation
+   * was held about. Resuming into a different container than the one the answers describe would
+   * make the transcript quietly wrong, so the client restores the selection too.
+   */
+  app.get('/v1/conversations', async (req, res) => {
+    let user: AuthedUser;
+    try {
+      user = await authenticate(req.headers.authorization);
+    } catch (err) {
+      return sendAuthError(res, err);
+    }
+    if (!audit.isEnabled()) {
+      // Distinguished from "you have none": the feature is off, and saying so stops a user
+      // concluding their history was lost.
+      return res.status(503).json({
+        error: 'history_unavailable',
+        message: 'Conversation history is not configured on this deployment.',
+      });
+    }
+    try {
+      res.json({ conversations: await audit.listConversations(user.id) });
+    } catch (err) {
+      console.error('[conversations] list failed:', forLog(err instanceof Error ? err.message : String(err)));
+      res.status(502).json({ error: 'history_failed', message: 'Could not load your conversations.' });
+    }
+  });
+
+  /** One conversation, for replay into the transcript. */
+  app.get('/v1/conversations/:id', async (req, res) => {
+    let user: AuthedUser;
+    try {
+      user = await authenticate(req.headers.authorization);
+    } catch (err) {
+      return sendAuthError(res, err);
+    }
+    if (!audit.isEnabled()) {
+      return res.status(503).json({
+        error: 'history_unavailable',
+        message: 'Conversation history is not configured on this deployment.',
+      });
+    }
+    try {
+      const conversation = await audit.getConversation(user.id, req.params.id);
+      // Missing and not-yours answer identically; see getConversation.
+      if (!conversation) return res.status(404).json({ error: 'not_found', message: 'Conversation not found.' });
+      res.json({ conversation });
+    } catch (err) {
+      console.error('[conversations] get failed:', forLog(err instanceof Error ? err.message : String(err)));
+      res.status(502).json({ error: 'history_failed', message: 'Could not load that conversation.' });
+    }
+  });
+
   /** Expands a registered MCP prompt into the user-message text that starts a turn. */
   app.post('/v1/commands/:name', async (req, res) => {
     try {
