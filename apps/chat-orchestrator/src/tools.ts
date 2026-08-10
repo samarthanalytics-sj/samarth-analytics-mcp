@@ -6,6 +6,7 @@
  * by product and by read/write before it ever reaches OpenAI.
  */
 import type { Product } from './config.js';
+import { connectedWriteAllowed } from './integrations.js';
 import type { ToolDef } from './types.js';
 
 /** GA4 tools are the ga4_-prefixed ones; everything else in this server is GTM. */
@@ -24,6 +25,11 @@ export interface ScopeOptions {
   includeWrites: boolean;
   /** Offers GTM deletes. Requires includeWrites; ignored without it. */
   includeDeletes?: boolean;
+  /**
+   * Other products the user has CONNECTED to this chat. Already sanitized. Each contributes its
+   * reads plus only its allowlisted writes; see integrations.ts for why.
+   */
+  integrations?: readonly Product[];
   /** Hard ceiling on how many tools are advertised in one request. */
   maxTools?: number;
   /** Called when the ceiling actually dropped tools, so a silent cap cannot go unnoticed. */
@@ -37,9 +43,16 @@ export function scopeTools(all: ToolDef[], opts: ScopeOptions): ToolDef[] {
     product,
     includeWrites,
     includeDeletes = false,
-    maxTools = includeWrites ? 120 : 60,
+    integrations = [],
     onTruncated,
   } = opts;
+
+  // A connected product brings its own reads, so the ceiling has to grow with it for the same
+  // reason it grows for writes: otherwise turning on a chip silently evicts the tools the chip was
+  // turned on to provide.
+  const connected = new Set(integrations.filter((p) => p !== product));
+  const baseMax = includeWrites ? 120 : 60;
+  const maxTools = opts.maxTools ?? baseMax + connected.size * 40;
 
   const inScope = all.filter((t) => {
     // Destructive tools are withheld unconditionally. An approval card is a reasonable gate for
@@ -50,7 +63,17 @@ export function scopeTools(all: ToolDef[], opts: ScopeOptions): ToolDef[] {
     if (t.isDelete && !(includeWrites && includeDeletes)) return false;
     if (t.isWrite && !includeWrites) return false;
     if (ALWAYS_AVAILABLE.has(t.name)) return true;
-    return productOf(t.name) === product;
+
+    const owner = productOf(t.name);
+    if (owner === product) return true;
+
+    // A CONNECTED product contributes all of its reads, but only the writes its workflow needs.
+    // Its deletes never arrive here at all: they were already refused above, and they are absent
+    // from the allowlist as well, so this is two independent refusals rather than one.
+    if (connected.has(owner)) {
+      return t.isWrite ? connectedWriteAllowed(owner, t.name) : true;
+    }
+    return false;
   });
 
   // Reads first, so a truncation caused by maxTools never removes the ability to look something up
