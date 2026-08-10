@@ -1,3 +1,9 @@
+## [1.466.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.465.0...v1.466.0) (2026-08-10)
+
+### Features
+
+* **chat:** file attachments in the hosted chat ([#849](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/849)) ([de3c40c](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/de3c40c36dcccc65343b44ac96b0f3c704213f07))
+
 ## [1.465.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.464.0...v1.465.0) (2026-08-07)
 
 ### Features
