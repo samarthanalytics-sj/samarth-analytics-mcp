@@ -1,3 +1,9 @@
+## [1.471.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.471.0...v1.471.1) (2026-08-10)
+
+### Bug Fixes
+
+* **gtm:** the gallery import called an SDK method that does not exist ([#858](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/858)) ([5cf152c](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/5cf152cd62d061f3478b393871a29f83dff79d51))
+
 ## [1.471.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.470.0...v1.471.0) (2026-08-10)
 
 ### Features
