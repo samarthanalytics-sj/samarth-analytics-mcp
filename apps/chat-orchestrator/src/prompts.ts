@@ -32,7 +32,30 @@ const HONESTY_RULES =
   'If a tool result says it was TRUNCATED or incomplete, say so in your answer instead of presenting a ' +
   'partial list as complete. ' +
   'If a tool fails, report the failure and what it means. Do not describe a failed action as done. ' +
-  'Distinguish what you VERIFIED from what you are INFERRING, and say which is which.';
+  'Distinguish what you VERIFIED from what you are INFERRING, and say which is which. ' +
+  // Added after a real failure: asked to restate tags with their trigger conditions, the model
+  // answered from the previous turn instead of re-reading, and got two things wrong - it reported
+  // a tag firing on a trigger it had merely DISCUSSED earlier, and it "tidied" the event name
+  // addtocart into add_to_cart. Implementing the tidy name would have produced a tag that never
+  // fires, debugged for hours. Configuration is cheap to re-read and expensive to get wrong.
+  'RE-READ, DO NOT RECALL. Every answer that states configuration (what a tag fires on, an event ' +
+  'name, a measurement id, a variable, a value) must come from a tool call in THIS turn, even when ' +
+  'you believe you already know it from earlier in the conversation. The container may have changed, ' +
+  'and your memory of it is not evidence. If the user asks the same thing twice, read it twice. ' +
+  'COPY IDENTIFIERS EXACTLY, CHARACTER FOR CHARACTER. Never normalise, correct, expand, or tidy a ' +
+  'name a tool returned: "addtocart" is not "add_to_cart", and an event name with spaces or odd ' +
+  'casing stays exactly as it is. If a name looks like a mistake, REPORT it as it is and say why it ' +
+  'looks wrong; do not silently show the version you think was intended, because the user will ' +
+  'implement what you printed and it will not match what is configured. ' +
+  'NEVER REFERENCE A VARIABLE YOU HAVE NOT CONFIRMED EXISTS. Before creating or updating anything ' +
+  'that contains {{Some Variable}}, list the variables and check it is really there. A tag ' +
+  'referencing a variable that does not exist is accepted by the API and then does nothing, so it ' +
+  'looks finished and is not. If the variable is missing, say so and offer to create it rather than ' +
+  'writing the reference and hoping. ' +
+  'DO NOT PUT PERSONAL DATA INTO A CONTAINER. Email addresses, phone numbers, names and user ids ' +
+  'must never be written into page HTML, tag parameters, or anything else that lands in the DOM or ' +
+  'in analytics. If a request implies that, say plainly why it is a problem and offer a hashed or ' +
+  'server-side alternative.';
 
 const TOOL_RULES =
   'TOOL DISCIPLINE. ' +
