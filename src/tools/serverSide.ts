@@ -291,4 +291,124 @@ export function registerServerSideTools(server: McpServer, getClient: () => GtmC
   ];
 
   for (const spec of specs) registerResource(server, getClient, spec);
+
+  registerGalleryImport(server, getClient);
+}
+
+/** Common gallery templates, so the model does not have to guess an owner/repository pair. */
+const GALLERY_EXAMPLES =
+  'facebook/GoogleTagManager-WebTemplate-For-FacebookPixel (Meta Pixel), ' +
+  'tiktok/gtm-template-pixel (TikTok), ' +
+  'linkedin/linkedin-gtm-community-template (LinkedIn Insight Tag 2.0), ' +
+  'Snapchat/snapchat-google-tag-manager (Snap Pixel), ' +
+  'pinterest/ws-gtm-template (Pinterest, web) or pinterest/ss-gtm-template (Pinterest, server), ' +
+  'stape-io/facebook-tag and stape-io/tiktok-tag (Stape server-side)';
+
+/**
+ * Installing a Community Template Gallery template into a workspace.
+ *
+ * This exists because the alternative is Custom HTML, and Custom HTML is a worse tag in four
+ * specific ways: it runs as arbitrary page script rather than in GTM's sandbox, it declares no
+ * permissions so a strict CSP can block it, it has no Consent Mode integration, and it rots
+ * silently when the vendor changes their API. The methodology already tells the model to prefer a
+ * gallery template; without this tool that advice had nothing behind it on this server and the
+ * chat could only describe the manual steps.
+ *
+ * IDEMPOTENT BY DESIGN. Importing the same owner/repository twice would leave two copies of the
+ * template in the workspace and make "which type do I use?" ambiguous, so an existing install is
+ * detected first and returned unchanged. Callers can therefore run this without checking.
+ */
+function registerGalleryImport(server: McpServer, getClient: () => GtmClient): void {
+  server.registerTool(
+    'templates_import_from_gallery',
+    {
+      description:
+        '[WRITE] Install a Community Template Gallery template into a workspace by GitHub owner and repository, ' +
+        'so a pixel can use its official sandboxed template instead of Custom HTML. ' +
+        'Requires GTM_MCP_ENABLE_WRITES=true and confirm=true. ' +
+        'The GTM API DOES support this (templates.import_from_gallery); never tell the user it is UI-only. ' +
+        'Idempotent: importing one already present returns it unchanged rather than creating a duplicate. ' +
+        'Returns the template and its tag TYPE code (cvt_...), which you then pass as `type` to tags_create ' +
+        'along with that template\'s own field keys (template-specific, e.g. Meta Pixel uses pixelId). ' +
+        `Common pairs: ${GALLERY_EXAMPLES}.`,
+      inputSchema: wsBase.extend({
+        owner: z.string().describe('GitHub owner of the gallery template, e.g. "linkedin".'),
+        repository: z.string().describe('GitHub repository, e.g. "linkedin-gtm-community-template".'),
+        sha: z.string().optional().describe('Optional gallery version SHA. Defaults to the latest published version.'),
+        confirm: z.boolean().describe('Must be true to confirm this write operation.'),
+      }),
+    },
+    async ({ accountId, containerId, workspaceId, owner, repository, sha, confirm }) => {
+      try {
+        const config = getGuardrailConfig();
+        const { dryRun } = checkGuardrails('write', confirm, config);
+        if (dryRun) {
+          return textResult(
+            `[DRY RUN] Would import gallery template ${owner}/${repository} into workspace ${workspaceId}`,
+          );
+        }
+
+        const api = getClient().accounts.containers.workspaces.templates as unknown as WorkspaceResourceApi & {
+          import_from_gallery(params: Record<string, unknown>): Promise<{ data: Record<string, unknown> }>;
+        };
+        const parent = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`;
+
+        // Already installed? Compared case-insensitively, because the gallery is not consistent
+        // about capitalisation (Snapchat/snapchat-google-tag-manager) and a case mismatch would
+        // import a second copy of a template that is already there.
+        const wantOwner = owner.trim().toLowerCase();
+        const wantRepo = repository.trim().toLowerCase();
+        const existingPages = await paginate(
+          (pageToken) => api.list({ parent, pageToken }),
+          (data) => (data as { data?: { template?: Record<string, unknown>[] } }).data?.template,
+        );
+        const existing = existingPages.items.find((t) => {
+          const ref = t.galleryReference as { owner?: string; repository?: string } | undefined;
+          return ref?.owner?.toLowerCase() === wantOwner && ref?.repository?.toLowerCase() === wantRepo;
+        });
+        if (existing) {
+          return jsonResult({
+            imported: false,
+            reason: 'This gallery template is already installed in the workspace; returning the existing one.',
+            template: existing,
+            tagType: galleryTagType(existing, containerId),
+          });
+        }
+
+        const res = await api.import_from_gallery({
+          parent,
+          galleryOwner: owner,
+          galleryRepository: repository,
+          ...(sha ? { gallerySha: sha } : {}),
+          // Gallery templates declare the permissions they need (network access, cookie reads).
+          // The API refuses the import without this acknowledgement. Set here rather than exposed
+          // as an argument: a caller answering "no" gets a failed import and nothing else, so the
+          // choice is not a real one. The permissions are visible on the template afterwards.
+          acknowledgePermissions: true,
+        });
+
+        return jsonResult({
+          imported: true,
+          template: res.data,
+          tagType: galleryTagType(res.data, containerId),
+        });
+      } catch (err) {
+        return errorResult('templates_import_from_gallery', err);
+      }
+    }
+  );
+}
+
+/**
+ * The tag `type` code a custom template is used under.
+ *
+ * GTM addresses an installed template as `cvt_<containerId>_<templateId>`. Returning it here saves
+ * the caller a second lookup, and getting it wrong is the difference between a tag that builds and
+ * an "invalid tag type" error, so it is derived rather than guessed.
+ */
+function galleryTagType(template: Record<string, unknown>, containerId: string): string | null {
+  const templateId = typeof template.templateId === 'string' ? template.templateId : null;
+  if (!templateId) return null;
+  const onContainer = typeof template.containerId === 'string' ? template.containerId : containerId;
+  return `cvt_${onContainer}_${templateId}`;
 }
