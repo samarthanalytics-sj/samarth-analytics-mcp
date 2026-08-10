@@ -267,4 +267,117 @@ export class AuditRecorder {
       updated_at: new Date().toISOString(),
     }).catch((err) => this.fail('touch', err));
   }
+
+  // ── Reading it back ────────────────────────────────────────────────────────
+  //
+  // EVERY query below filters on user_id explicitly. The service role key bypasses RLS, so the
+  // database will happily return somebody else's conversation if asked; the ownership check is
+  // this code, and nothing else. Same reasoning as beginConversation's id check.
+  //
+  // These throw rather than swallowing, unlike the write path. A write that fails costs a history
+  // row nobody is waiting for; a read that fails is a user staring at an empty list, and silently
+  // returning [] would tell them their conversations are gone.
+
+  /** The caller's recent conversations, newest activity first. */
+  async listConversations(userId: string, limit = 30): Promise<ConversationSummary[]> {
+    const rows = (await this.request(
+      'GET',
+      `chat_conversations?user_id=eq.${encodeURIComponent(userId)}` +
+        `&select=id,title,product,account_id,container_id,workspace_id,property_id,created_at,updated_at` +
+        `&order=updated_at.desc.nullslast,created_at.desc&limit=${Math.min(Math.max(limit, 1), 100)}`,
+      undefined,
+      'return=representation',
+    )) as ConversationRow[] | null;
+
+    return (rows ?? []).map((r) => ({
+      id: r.id,
+      title: r.title ?? 'Untitled conversation',
+      product: r.product === 'ga4' ? 'ga4' : 'gtm',
+      accountId: r.account_id ?? undefined,
+      containerId: r.container_id ?? undefined,
+      workspaceId: r.workspace_id ?? undefined,
+      propertyId: r.property_id ?? undefined,
+      updatedAt: r.updated_at ?? r.created_at,
+    }));
+  }
+
+  /**
+   * One conversation's messages, oldest first, for replay into the transcript.
+   *
+   * Tool events are deliberately NOT joined in. Replaying which tools ran would suggest they could
+   * be inspected or re-approved, and neither is true after the turn ended: the results are gone and
+   * an approval cannot be revisited. The transcript shows what was said; the audit trail, which is
+   * a separate surface with its own reader, shows what was done.
+   */
+  async getConversation(userId: string, conversationId: string): Promise<ConversationDetail | null> {
+    const convs = (await this.request(
+      'GET',
+      `chat_conversations?id=eq.${encodeURIComponent(conversationId)}` +
+        `&user_id=eq.${encodeURIComponent(userId)}` +
+        `&select=id,title,product,account_id,container_id,workspace_id,property_id,created_at,updated_at&limit=1`,
+      undefined,
+      'return=representation',
+    )) as ConversationRow[] | null;
+
+    const conv = convs?.[0];
+    // Not theirs, or does not exist. The two are answered identically on purpose: distinguishing
+    // them would confirm the existence of another user's conversation to anyone guessing ids.
+    if (!conv) return null;
+
+    const rows = (await this.request(
+      'GET',
+      `chat_messages?conversation_id=eq.${encodeURIComponent(conversationId)}` +
+        `&user_id=eq.${encodeURIComponent(userId)}` +
+        `&select=role,content,created_at&order=created_at.asc&limit=200`,
+      undefined,
+      'return=representation',
+    )) as MessageRow[] | null;
+
+    return {
+      id: conv.id,
+      title: conv.title ?? 'Untitled conversation',
+      product: conv.product === 'ga4' ? 'ga4' : 'gtm',
+      accountId: conv.account_id ?? undefined,
+      containerId: conv.container_id ?? undefined,
+      workspaceId: conv.workspace_id ?? undefined,
+      propertyId: conv.property_id ?? undefined,
+      updatedAt: conv.updated_at ?? conv.created_at,
+      messages: (rows ?? [])
+        .filter((m) => m.role === 'user' || m.role === 'assistant')
+        .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content ?? '' })),
+    };
+  }
+}
+
+interface ConversationRow {
+  id: string;
+  title: string | null;
+  product: string | null;
+  account_id: string | null;
+  container_id: string | null;
+  workspace_id: string | null;
+  property_id: string | null;
+  created_at: string;
+  updated_at: string | null;
+}
+
+interface MessageRow {
+  role: string;
+  content: string | null;
+  created_at: string;
+}
+
+export interface ConversationSummary {
+  id: string;
+  title: string;
+  product: 'gtm' | 'ga4';
+  accountId?: string;
+  containerId?: string;
+  workspaceId?: string;
+  propertyId?: string;
+  updatedAt: string;
+}
+
+export interface ConversationDetail extends ConversationSummary {
+  messages: { role: 'user' | 'assistant'; content: string }[];
 }
