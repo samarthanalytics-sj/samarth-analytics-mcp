@@ -1,3 +1,9 @@
+## [1.471.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.471.1...v1.471.2) (2026-08-10)
+
+### Bug Fixes
+
+* **gtm:** stop constructing the custom-template tag type ([#859](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/859)) ([1a3f9b2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/1a3f9b2127c656e1c0c4f44d34c251e3651067f9))
+
 ## [1.471.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.471.0...v1.471.1) (2026-08-10)
 
 ### Bug Fixes
