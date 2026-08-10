@@ -10,6 +10,7 @@
  */
 import { GA4_EVENT_SELECTION, GTM_DECISION_RULES } from '../../desktop/src/shared/gtm-methodology.js';
 import type { Product } from './config.js';
+import { buildIntegrationPrompt, INTEGRATION_LABEL, sanitizeIntegrations } from './integrations.js';
 import type { ChatContext } from './types.js';
 
 const ROLE_GTM =
@@ -83,12 +84,20 @@ export function buildStaticSystem(opts: {
   product: Product;
   canWrite: boolean;
   mcpInstructions: string;
+  /** Products the user connected to this chat. Already sanitized. */
+  integrations?: readonly Product[];
 }): string {
   const parts: string[] = [];
   parts.push(opts.product === 'ga4' ? ROLE_GA4 : ROLE_GTM);
   parts.push(HONESTY_RULES);
   parts.push(TOOL_RULES);
   parts.push(opts.canWrite ? WRITE_RULES : READ_ONLY_RULES);
+
+  // Placed straight after the write rules, so the relaxation of the single-product rule is read in
+  // the same breath as the rule it relaxes. Empty when no chip is on, leaving the single-product
+  // prompt byte-identical to what it has always been.
+  const integrationBlock = buildIntegrationPrompt(opts.product, opts.integrations ?? [], opts.canWrite);
+  if (integrationBlock) parts.push(integrationBlock);
 
   if (opts.product === 'gtm') {
     // Tool-agnostic domain expertise: which GA4 event an intent maps to, and how an expert picks
@@ -136,6 +145,27 @@ export function buildSituationalContext(ctx: ChatContext, user: { email?: string
       'The user has NOT selected a container or property yet. If a question needs one, list what ' +
         'they have access to and ask them to pick, rather than guessing.',
     );
+  }
+
+  // A connected product is useless without its selection: the GA4 workflow resolves a Measurement
+  // ID from the SELECTED property, so if none is picked the model has to ask rather than reach for
+  // whatever id is already in the container.
+  const on = sanitizeIntegrations(ctx.product, ctx.integrations);
+  if (on.length) {
+    lines.push(`Connected platforms in this chat: ${on.map((p) => INTEGRATION_LABEL[p]).join(', ')}.`);
+    if (on.includes('ga4') && !ctx.propertyId) {
+      lines.push(
+        'GA4 is connected but NO GA4 property is selected. Ask the user to pick one before ' +
+          'resolving a Measurement ID; never reuse an id already present in the container as if it ' +
+          'belonged to their property.',
+      );
+    }
+    if (on.includes('gtm') && !ctx.containerId) {
+      lines.push(
+        'GTM is connected but NO container is selected. Ask the user which container to build in ' +
+          'before creating anything.',
+      );
+    }
   }
   return lines.join('\n');
 }

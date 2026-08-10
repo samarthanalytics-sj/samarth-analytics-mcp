@@ -65,6 +65,12 @@ export interface ChatContext {
   containerId?: string;
   workspaceId?: string;
   propertyId?: string;
+  /**
+   * Other products the user connected to this chat. Opt-in per request, sanitized at the boundary
+   * against what this product may actually connect, and used to widen BOTH the tool set and the
+   * prompt. See integrations.ts.
+   */
+  integrations?: Product[];
 }
 
 export interface ChatRequestBody {

@@ -22,6 +22,7 @@ import { UsageMeter, quotaMessage } from './usage.js';
 import { planFix, FIXABLE_CATEGORIES, type AuditFinding } from './audit-fix.js';
 import { SseStream } from './sse.js';
 import { scopeTools } from './tools.js';
+import { checkAllowlistAgainstServer } from './integrations.js';
 import { extractAll, type ExtractedAttachment } from './attachments.js';
 import {
   findGtmContainer,
@@ -110,6 +111,16 @@ async function main(): Promise<void> {
           : ' (writes ENABLED)'
         : ' (read-only)'),
   );
+
+  // A cross-platform allowlist entry that matches no registered tool withholds that write silently
+  // while the prompt still describes the workflow. Surfaced at boot, where it is cheap to notice.
+  const missingAllowlisted = checkAllowlistAgainstServer(all.map((t) => t.name));
+  if (missingAllowlisted.length > 0) {
+    console.warn(
+      `[orchestrator] WARNING: ${missingAllowlisted.length} cross-platform allowlist entr(ies) match no registered tool ` +
+        `and will never be offered: ${missingAllowlisted.join(', ')}. Check integrations.ts against the server's tool names.`,
+    );
+  }
 
   const audit = new AuditRecorder(cfg.supabase.url ?? '', cfg.supabase.serviceRoleKey ?? '');
   if (audit.isEnabled()) {

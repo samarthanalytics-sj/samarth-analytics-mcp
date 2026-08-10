@@ -17,6 +17,7 @@ import type { AuditRecorder } from './audit.js';
 import type { UsageMeter } from './usage.js';
 import { productOf } from './tools.js';
 import { attachmentPrompt, type ExtractedAttachment } from './attachments.js';
+import { sanitizeIntegrations } from './integrations.js';
 import type { ChatContext, ChatMessage, StreamEvent } from './types.js';
 
 export interface RunTurnArgs {
@@ -53,10 +54,15 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
   // looping on it would just burn tokens.
   let authRetryUsed = false;
 
+  // Sanitized here rather than trusted from the body: this list widens the tool surface, so junk
+  // or a self-reference must be dropped before it can pick tools.
+  const integrations = sanitizeIntegrations(context.product, context.integrations);
+
   const scoped = scopeTools(mcp.listTools(), {
     product: context.product,
     includeWrites: cfg.enableWriteTools,
     includeDeletes: cfg.enableDeleteTools,
+    integrations,
     onTruncated: (dropped) =>
       console.warn(
         `[tools] ${dropped.length} tool(s) withheld by the per-request ceiling and invisible to the model: ${dropped.slice(0, 10).join(', ')}${dropped.length > 10 ? ', ...' : ''}`,
@@ -75,6 +81,7 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
     product: context.product,
     canWrite: cfg.enableWriteTools,
     mcpInstructions: mcp.getInstructions(),
+    integrations,
   });
 
   const messages: ChatMessage[] = [
