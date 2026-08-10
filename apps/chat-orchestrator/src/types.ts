@@ -1,9 +1,17 @@
 import type { Product } from './config.js';
 
+/**
+ * A multi-part user message. Only used when an image is attached: OpenAI takes images as content
+ * parts, and a plain string cannot carry one.
+ */
+export type ChatContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } };
+
 /** Chat message as exchanged with the browser and with OpenAI. */
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string | null;
+  content: string | ChatContentPart[] | null;
   tool_calls?: OpenAiToolCall[];
   tool_call_id?: string;
   name?: string;
@@ -63,6 +71,8 @@ export interface ChatRequestBody {
   messages: { role: 'user' | 'assistant'; content: string }[];
   context?: ChatContext;
   conversationId?: string;
+  /** Files attached to the LAST user message. Base64, extracted server-side; see attachments.ts. */
+  attachments?: { name: string; dataBase64: string }[];
 }
 
 /** Events streamed to the browser over SSE. Mirrors the desktop app's chat event union. */

@@ -16,6 +16,7 @@ import { approvalGate } from './writeTiers.js';
 import type { AuditRecorder } from './audit.js';
 import type { UsageMeter } from './usage.js';
 import { productOf } from './tools.js';
+import { attachmentPrompt, type ExtractedAttachment } from './attachments.js';
 import type { ChatContext, ChatMessage, StreamEvent } from './types.js';
 
 export interface RunTurnArgs {
@@ -25,6 +26,8 @@ export interface RunTurnArgs {
   history: { role: 'user' | 'assistant'; content: string }[];
   context: ChatContext;
   user: { id: string; email?: string };
+  /** Files the user attached to the last message, already extracted. See attachments.ts. */
+  attachments?: ExtractedAttachment[];
   emit(event: StreamEvent): void;
   signal: AbortSignal;
   /**
@@ -77,7 +80,10 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
   const messages: ChatMessage[] = [
     { role: 'system', content: staticSystem },
     { role: 'system', content: buildSituationalContext(context, user) },
-    ...boundHistory(args.history, cfg.limits.maxHistoryMessages),
+    ...withAttachments(
+      boundHistory(args.history, cfg.limits.maxHistoryMessages),
+      args.attachments ?? [],
+    ),
   ];
 
   let toolCallsUsed = 0;
@@ -340,6 +346,50 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
       record(ok, summary);
     }
   }
+}
+
+/**
+ * Folds this turn's attachments into the LAST user message.
+ *
+ * Attached to that message rather than sent as a separate system block, because the files belong
+ * to what the user just asked - a system message would read as standing context and keep applying
+ * to later turns, when in fact the browser only sends the bytes once.
+ *
+ * Documents become text; images become vision parts, which is why the content can stop being a
+ * plain string here. If there is no user message to attach to (a malformed request), the
+ * attachments are dropped rather than invented into one.
+ */
+function withAttachments(messages: ChatMessage[], attachments: ExtractedAttachment[]): ChatMessage[] {
+  if (attachments.length === 0) return messages;
+
+  let lastUser = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === 'user') {
+      lastUser = i;
+      break;
+    }
+  }
+  if (lastUser === -1) return messages;
+
+  const original = typeof messages[lastUser].content === 'string' ? (messages[lastUser].content as string) : '';
+  const text = `${original}${attachmentPrompt(attachments)}`;
+  const images = attachments.filter((a) => a.media);
+
+  const replaced: ChatMessage =
+    images.length === 0
+      ? { ...messages[lastUser], content: text }
+      : {
+          ...messages[lastUser],
+          content: [
+            { type: 'text', text },
+            ...images.map((a) => ({
+              type: 'image_url' as const,
+              image_url: { url: `data:${a.media!.mime};base64,${a.media!.dataBase64}` },
+            })),
+          ],
+        };
+
+  return [...messages.slice(0, lastUser), replaced, ...messages.slice(lastUser + 1)];
 }
 
 /**

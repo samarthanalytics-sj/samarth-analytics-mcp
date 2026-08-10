@@ -12,7 +12,7 @@
     "start": "node dist/chat-orchestrator/src/index.js",
     "models": "node scripts/check-model.mjs",
     "smoke": "node scripts/smoke.mjs",
-    "test": "tsx src/__tests__/tools.test.ts && tsx src/__tests__/prompts.test.ts && tsx src/__tests__/identity.test.ts && tsx src/__tests__/auth.test.ts && tsx src/__tests__/redact.test.ts && tsx src/__tests__/approvals.test.ts && tsx src/__tests__/resources.test.ts && tsx src/__tests__/writeTiers.test.ts && tsx src/__tests__/audit.test.ts && tsx src/__tests__/usage.test.ts && tsx src/__tests__/auditFix.test.ts",
+    "test": "tsx src/__tests__/tools.test.ts && tsx src/__tests__/prompts.test.ts && tsx src/__tests__/identity.test.ts && tsx src/__tests__/auth.test.ts && tsx src/__tests__/redact.test.ts && tsx src/__tests__/approvals.test.ts && tsx src/__tests__/resources.test.ts && tsx src/__tests__/writeTiers.test.ts && tsx src/__tests__/audit.test.ts && tsx src/__tests__/usage.test.ts && tsx src/__tests__/auditFix.test.ts && tsx --test src/__tests__/attachments.test.ts",
     "test:build": "npm run build && tsx src/__tests__/build.test.ts",
     "supervise": "node scripts/supervise.mjs"
   },
@@ -20,7 +20,10 @@
     "@modelcontextprotocol/sdk": "^1.17.4",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
-    "express": "^4.18.2"
+    "exceljs": "^4.4.0",
+    "express": "^4.18.2",
+    "mammoth": "^1.12.1",
+    "pdf-parse": "^2.4.5"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
