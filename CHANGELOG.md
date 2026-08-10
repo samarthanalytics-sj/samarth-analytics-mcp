@@ -1,3 +1,9 @@
+## [1.469.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.468.0...v1.469.0) (2026-08-10)
+
+### Features
+
+* **chat:** durable memory - preferences that survive into future conversations ([#853](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/853)) ([6b62ccc](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/6b62ccc2bfcd7f22a48cd7911b87a1ab1731e195))
+
 ## [1.468.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.467.1...v1.468.0) (2026-08-10)
 
 ### Features
