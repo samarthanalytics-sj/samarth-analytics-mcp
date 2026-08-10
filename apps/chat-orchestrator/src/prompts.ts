@@ -11,6 +11,7 @@
 import { GA4_EVENT_SELECTION, GTM_DECISION_RULES } from '../../desktop/src/shared/gtm-methodology.js';
 import type { Product } from './config.js';
 import { buildIntegrationPrompt, INTEGRATION_LABEL, sanitizeIntegrations } from './integrations.js';
+import { MEMORY_TOOL_RULES } from './memory.js';
 import type { ChatContext } from './types.js';
 
 const ROLE_GTM =
@@ -88,6 +89,10 @@ export function buildStaticSystem(opts: {
   integrations?: readonly Product[];
   /** Tells the model its tool list is a subset and how to reveal the rest. Empty when nothing is hidden. */
   toolGroupNotice?: string;
+  /** What the user told us in earlier conversations. Empty when nothing applies here. */
+  memoryNotice?: string;
+  /** Whether the remember/forget tools are actually offered this turn. */
+  canRemember?: boolean;
 }): string {
   const parts: string[] = [];
   parts.push(opts.product === 'ga4' ? ROLE_GA4 : ROLE_GTM);
@@ -98,6 +103,12 @@ export function buildStaticSystem(opts: {
   // High, and immediately after TOOL_RULES' "only call tools that appear in your tool list": that
   // instruction read alone is what makes a model announce a capability is missing.
   if (opts.toolGroupNotice) parts.push(opts.toolGroupNotice);
+
+  // Memory last of the behavioural rules, so the standing preferences are read AFTER the honesty
+  // and tool rules that constrain how they may be applied. A remembered preference must never
+  // outrank what a tool actually returns.
+  if (opts.canRemember) parts.push(MEMORY_TOOL_RULES);
+  if (opts.memoryNotice) parts.push(opts.memoryNotice);
 
   // Placed straight after the write rules, so the relaxation of the single-product rule is read in
   // the same breath as the rule it relaxes. Empty when no chip is on, leaving the single-product

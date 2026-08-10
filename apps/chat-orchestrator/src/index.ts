@@ -24,6 +24,7 @@ import { SseStream } from './sse.js';
 import { scopeTools } from './tools.js';
 import { checkAllowlistAgainstServer } from './integrations.js';
 import { extractAll, type ExtractedAttachment } from './attachments.js';
+import { MemoryStore } from './memory.js';
 import {
   findGtmContainer,
   listGa4Properties,
@@ -133,6 +134,13 @@ async function main(): Promise<void> {
         'record what the assistant changes. Writes will leave no durable trace.',
     );
   }
+
+  const memory = new MemoryStore(cfg.supabase.url ?? '', cfg.supabase.serviceRoleKey ?? '');
+  console.log(
+    memory.isEnabled()
+      ? '[orchestrator] chat memory ON (chat_memories: durable preferences applied to future turns)'
+      : '[orchestrator] chat memory OFF: preferences will not survive a conversation.',
+  );
 
   const usage = new UsageMeter(cfg.supabase.url ?? '', cfg.supabase.serviceRoleKey ?? '');
   console.log(
@@ -297,6 +305,40 @@ async function main(): Promise<void> {
       console.error('[conversations] get failed:', forLog(err instanceof Error ? err.message : String(err)));
       res.status(502).json({ error: 'history_failed', message: 'Could not load that conversation.' });
     }
+  });
+
+  /**
+   * What the assistant remembers about this user.
+   *
+   * Exposed so it is inspectable and removable. A system that stores standing instructions about
+   * someone, and shapes its behaviour by them, must let that person see and correct the list.
+   */
+  app.get('/v1/memories', async (req, res) => {
+    let user: AuthedUser;
+    try {
+      user = await authenticate(req.headers.authorization);
+    } catch (err) {
+      return sendAuthError(res, err);
+    }
+    if (!memory.isEnabled()) return res.json({ memories: [], enabled: false });
+    try {
+      res.json({ memories: await memory.list(user.id), enabled: true });
+    } catch (err) {
+      console.error('[memories] list failed:', forLog(err instanceof Error ? err.message : String(err)));
+      res.status(502).json({ error: 'memory_failed', message: 'Could not load what is remembered.' });
+    }
+  });
+
+  app.delete('/v1/memories/:id', async (req, res) => {
+    let user: AuthedUser;
+    try {
+      user = await authenticate(req.headers.authorization);
+    } catch (err) {
+      return sendAuthError(res, err);
+    }
+    const removed = await memory.forget(user.id, req.params.id);
+    if (!removed) return res.status(404).json({ error: 'not_found', message: 'No such memory.' });
+    res.json({ ok: true });
   });
 
   /** Expands a registered MCP prompt into the user-message text that starts a turn. */
@@ -724,6 +766,7 @@ async function main(): Promise<void> {
           ? () => pool.refreshIdentity(user.id, userJwt)
           : undefined,
         approvals: approvals ?? undefined,
+        memory,
         audit,
         conversationId,
         usage,
