@@ -1,3 +1,9 @@
+## [1.469.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.469.0...v1.469.1) (2026-08-10)
+
+### Bug Fixes
+
+* **chat:** re-read configuration, never restate it from memory ([#854](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/854)) ([6c3241c](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/6c3241c67c31c4e4ea35054ae696a3f41cda1397))
+
 ## [1.469.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.468.0...v1.469.0) (2026-08-10)
 
 ### Features
