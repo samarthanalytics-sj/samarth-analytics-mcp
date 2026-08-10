@@ -18,6 +18,7 @@ import type { UsageMeter } from './usage.js';
 import { productOf } from './tools.js';
 import { attachmentPrompt, type ExtractedAttachment } from './attachments.js';
 import { sanitizeIntegrations } from './integrations.js';
+import { FORGET_MEMORY, REMEMBER_MEMORY, buildMemoryPrompt, type MemoryRecord, type MemoryScope, type MemoryStore } from './memory.js';
 import {
   ENABLE_TOOL_GROUP,
   availableGroups,
@@ -52,6 +53,8 @@ export interface RunTurnArgs {
   approvals?: ApprovalBroker;
   /** Records what happened. Never allowed to fail a turn; see audit.ts. */
   audit?: AuditRecorder;
+  /** Durable preferences from earlier conversations. Absent means memory is off. */
+  memory?: MemoryStore;
   /** Null when auditing is off or the conversation could not be opened; recording is then skipped. */
   conversationId?: string | null;
   /** Counts this turn against the user's plan. Never allowed to fail a turn; see usage.ts. */
@@ -100,7 +103,56 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
     return gate ? [...shown, gate] : shown;
   };
 
-  let openAiTools = toOpenAiTools(visibleTools());
+  /**
+   * Memory tools are the orchestrator's own, like the group gate: the MCP server has no memory
+   * surface, and putting them here means they work without touching that server at all.
+   */
+  const memoryTools: ToolDef[] = args.memory?.isEnabled()
+    ? [
+        {
+          name: REMEMBER_MEMORY,
+          description:
+            'Remember a durable preference or house rule so it applies in FUTURE conversations, not just this one. ' +
+            'Use it when the user states how they want things done (a tag naming convention, a format they always want, ' +
+            'a policy for this container). Scope it to the container or property when it belongs to that one. Do NOT use ' +
+            'it for facts you can look up again, which go stale, or for one-off instructions.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              content: { type: 'string', description: 'The rule, in one sentence, in the user\'s own terms.' },
+              scope: {
+                type: 'string',
+                enum: ['user', 'container', 'property'],
+                description:
+                  '"container" or "property" when the rule belongs to the selected one; "user" only when it is genuinely account-wide.',
+              },
+            },
+            required: ['content', 'scope'],
+            additionalProperties: false,
+          },
+          isWrite: false,
+          isDelete: false,
+          isDestructive: false,
+        } as ToolDef,
+        {
+          name: FORGET_MEMORY,
+          description:
+            'Forget a remembered preference, by the id shown in the REMEMBERED PREFERENCES list. Use when the user ' +
+            'asks you to stop applying something.',
+          inputSchema: {
+            type: 'object',
+            properties: { id: { type: 'string', description: 'The memory id.' } },
+            required: ['id'],
+            additionalProperties: false,
+          },
+          isWrite: false,
+          isDelete: false,
+          isDestructive: false,
+        } as ToolDef,
+      ]
+    : [];
+
+  let openAiTools = toOpenAiTools([...visibleTools(), ...memoryTools]);
   console.log(
     `[tools] ${visibleTools().length - (gate ? 1 : 0)} of ${scoped.length} tools visible this turn` +
       (gate ? `, ${gateGroups.length} group(s) available on request` : ''),
@@ -113,6 +165,16 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
     toolCount: scoped.length,
   });
 
+  // Fetched before the prompt: what the user told us in earlier conversations, scoped to where
+  // this session actually is. Failure returns [] inside the store, so a turn never dies for it.
+  const memories: MemoryRecord[] = args.memory
+    ? await args.memory.forSession(user.id, { containerId: context.containerId, propertyId: context.propertyId })
+    : [];
+  if (memories.length > 0) {
+    args.memory?.markUsed(memories.map((m) => m.id));
+    console.log(`[memory] ${memories.length} memor(ies) applied this turn`);
+  }
+
   const staticSystem = buildStaticSystem({
     product: context.product,
     canWrite: cfg.enableWriteTools,
@@ -121,6 +183,10 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
     // Without this the model treats its partial list as the whole surface and tells the user a
     // capability does not exist, which is exactly the failure the old silent cap produced.
     toolGroupNotice: buildToolGroupPrompt(gateGroups),
+    // What the user has told us before. Empty when nothing applies here, so a session with no
+    // memories keeps the byte-identical cacheable prefix it always had.
+    memoryNotice: buildMemoryPrompt(memories),
+    canRemember: Boolean(args.memory?.isEnabled()),
   });
 
   const messages: ChatMessage[] = [
@@ -271,7 +337,7 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
         enabledGroups.add(requested);
         const revealed = visibleTools().filter((t) => !before.has(t.name));
         // Recomputed now, so the tools are on the very next model call rather than the one after.
-        openAiTools = toOpenAiTools(visibleTools());
+        openAiTools = toOpenAiTools([...visibleTools(), ...memoryTools]);
 
         const summary = describeRevealedGroup(requested, revealed);
         messages.push({ role: 'tool', tool_call_id: call.id, name: call.function.name, content: summary });
@@ -283,6 +349,48 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
           summary: `Revealed ${revealed.length} tool(s) in "${requested}"`,
         });
         console.log(`[tools] revealed group "${requested}": ${revealed.length} tool(s) now visible`);
+        continue;
+      }
+
+      // Memory tools, handled here for the same reason as the group gate: they are the
+      // orchestrator's own and never reach the MCP server.
+      if (args.memory && (call.function.name === REMEMBER_MEMORY || call.function.name === FORGET_MEMORY)) {
+        let summary: string;
+        let ok = true;
+
+        if (call.function.name === REMEMBER_MEMORY) {
+          const scope = String(parsedArgs.scope ?? 'user') as MemoryScope;
+          const scopeId =
+            scope === 'container' ? (context.containerId ?? null) : scope === 'property' ? (context.propertyId ?? null) : null;
+          const result = await args.memory.remember(user.id, {
+            content: String(parsedArgs.content ?? ''),
+            scope,
+            scopeId,
+          });
+          ok = result.stored;
+          summary = result.stored
+            ? `Remembered${result.reason ? ` (${result.reason})` : ''}. It will apply in future conversations${scope === 'user' ? '' : ` for this ${scope}`}.`
+            : (result.reason ?? 'Could not remember that.');
+        } else {
+          const removed = await args.memory.forget(user.id, String(parsedArgs.id ?? ''));
+          ok = removed;
+          summary = removed ? 'Forgotten. It will no longer be applied.' : 'No memory with that id belongs to you.';
+        }
+
+        messages.push({ role: 'tool', tool_call_id: call.id, name: call.function.name, content: summary });
+        emit({ type: 'tool_result', id: call.id, name: call.function.name, ok, summary });
+        args.audit?.recordToolEvent(args.conversationId ?? null, user.id, {
+          ...target,
+          toolName: call.function.name,
+          product: context.product,
+          isWrite: false,
+          isDelete: false,
+          approval: 'not_required',
+          args: parsedArgs,
+          ok,
+          resultSummary: summary,
+          durationMs: 0,
+        });
         continue;
       }
 
