@@ -1,3 +1,9 @@
+## [1.470.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.469.1...v1.470.0) (2026-08-10)
+
+### Features
+
+* **gtm:** name the gallery template instead of settling for Custom HTML ([#856](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/856)) ([1026481](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/10264815bc0caae096963f59e03e9e073a97a747))
+
 ## [1.469.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.469.0...v1.469.1) (2026-08-10)
 
 ### Bug Fixes
