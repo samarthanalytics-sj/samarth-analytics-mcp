@@ -348,9 +348,8 @@ function registerGalleryImport(server: McpServer, getClient: () => GtmClient): v
           );
         }
 
-        const api = getClient().accounts.containers.workspaces.templates as unknown as WorkspaceResourceApi & {
-          import_from_gallery(params: Record<string, unknown>): Promise<{ data: Record<string, unknown> }>;
-        };
+        const client = getClient();
+        const api = client.accounts.containers.workspaces.templates as unknown as WorkspaceResourceApi;
         const parent = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`;
 
         // Already installed? Compared case-insensitively, because the gallery is not consistent
@@ -375,28 +374,77 @@ function registerGalleryImport(server: McpServer, getClient: () => GtmClient): v
           });
         }
 
-        const res = await api.import_from_gallery({
-          parent,
-          galleryOwner: owner,
-          galleryRepository: repository,
-          ...(sha ? { gallerySha: sha } : {}),
-          // Gallery templates declare the permissions they need (network access, cookie reads).
-          // The API refuses the import without this acknowledgement. Set here rather than exposed
-          // as an argument: a caller answering "no" gets a failed import and nothing else, so the
-          // choice is not a real one. The permissions are visible on the template afterwards.
-          acknowledgePermissions: true,
-        });
+        const imported = await importFromGallery(client, parent, owner, repository, sha);
 
         return jsonResult({
           imported: true,
-          template: res.data,
-          tagType: galleryTagType(res.data, containerId),
+          template: imported,
+          tagType: galleryTagType(imported, containerId),
         });
       } catch (err) {
         return errorResult('templates_import_from_gallery', err);
       }
     }
   );
+}
+
+/**
+ * Imports a gallery template over REST, because the SDK has no method for it.
+ *
+ * googleapis 140's tagmanager v2 client exposes list/get/create/update/delete/revert on templates
+ * and NOTHING for the gallery: the generated client has no import method at all, in types or at
+ * runtime. (The desktop app calls `import_from_gallery` happily because it uses the separate,
+ * newer @googleapis/tagmanager package. Copying that call here produced
+ * "api.import_from_gallery is not a function" against a live container.)
+ *
+ * The REST endpoint exists regardless, so this issues the request through the client's own
+ * OAuth2Client. That matters: it reuses the same credentials, refresh behaviour and retry
+ * configuration as every other call, rather than introducing a second way of talking to Google.
+ *
+ * The alternative was upgrading or adding a Google client package for one method. Not worth the
+ * dependency risk across a 179-tool server.
+ */
+async function importFromGallery(
+  client: GtmClient,
+  parent: string,
+  owner: string,
+  repository: string,
+  sha?: string,
+): Promise<Record<string, unknown>> {
+  // The auth lives on the generated client's context. Reached defensively: if a future googleapis
+  // version moves it, this must fail with a sentence someone can act on rather than a TypeError.
+  const auth = (client as unknown as { context?: { _options?: { auth?: unknown } } }).context?._options?.auth as
+    | { request?: (opts: Record<string, unknown>) => Promise<{ data: unknown }> }
+    | undefined;
+
+  if (!auth || typeof auth.request !== 'function') {
+    throw new Error(
+      'Could not reach the authenticated request client to call templates:import_from_gallery. ' +
+        'The googleapis client shape may have changed; the gallery import needs updating.',
+    );
+  }
+
+  const url = `https://tagmanager.googleapis.com/tagmanager/v2/${parent}/templates:import_from_gallery`;
+  const res = await auth.request({
+    url,
+    method: 'POST',
+    params: {
+      galleryOwner: owner,
+      galleryRepository: repository,
+      ...(sha ? { gallerySha: sha } : {}),
+      // Gallery templates declare the permissions they need (network access, cookie reads) and the
+      // API refuses the import without this acknowledgement. Set here rather than exposed as an
+      // argument: a caller answering "no" gets a failed import and nothing else, so the choice is
+      // not a real one. The permissions stay visible on the imported template.
+      acknowledgePermissions: true,
+    },
+  });
+
+  const data = res.data as Record<string, unknown> | null;
+  if (!data || typeof data !== 'object') {
+    throw new Error('The gallery import returned no template. Check the owner and repository are correct.');
+  }
+  return data;
 }
 
 /**
