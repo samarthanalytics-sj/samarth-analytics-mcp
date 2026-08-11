@@ -1,3 +1,9 @@
+## [1.473.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.472.0...v1.473.0) (2026-08-11)
+
+### Features
+
+* **orchestrator:** pin, archive and remove conversations ([#862](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/862)) ([716c0f6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/716c0f6e67921929428a26463df0f03e5e69cd2c))
+
 ## [1.472.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.471.2...v1.472.0) (2026-08-11)
 
 ### Features
