@@ -1,3 +1,9 @@
+## [1.473.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.473.2...v1.473.3) (2026-08-11)
+
+### Performance Improvements
+
+* **orchestrator:** stop resending every tool result on every round trip ([#865](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/865)) ([1fa1479](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/1fa147992f4357ffdd7b2ab0441d4b9a5d6e376e))
+
 ## [1.473.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.473.1...v1.473.2) (2026-08-11)
 
 ### Bug Fixes
