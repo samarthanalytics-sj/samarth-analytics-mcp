@@ -62,8 +62,26 @@ Keep `mem_limit` in `compose.yaml` and `MCP_POOL_MAX_SESSIONS` in `.env` in agre
 cap is higher than the memory can hold, the OOM killer enforces the real limit and takes the whole
 container with it.
 
-CPU is close to idle: the orchestrator is I/O bound on OpenAI and Google. Disk is small (no
-database yet); allow 5 GB for images and logs.
+CPU is close to idle: the orchestrator is I/O bound on OpenAI and Google. Disk stays small because
+this host stores nothing durable of its own: conversations, memories and the audit trail all live
+in Supabase Postgres. Allow 5 GB for images and logs.
+
+## Where to run it
+
+**Memory is the binding constraint, not CPU.** The pool holds one MCP child per active user at
+roughly 150-300 MB, for 15 minutes after their last message; the orchestrator itself is I/O bound
+on OpenAI and Google and barely touches the processor. That rules out the cheap end of most
+platform tiers: 512 MB to 1 GB will OOM at three or four concurrent users, and the OOM killer takes
+the whole container with it rather than one session.
+
+| Option | Rough cost at 4 GB | Trade |
+|---|---|---|
+| Hetzner / DigitalOcean VPS | 6-24 EUR/month | Exactly what this document describes. You patch the OS. |
+| Render / Railway | ~25 USD/month | TLS, restarts and deploys handled; skip the nginx and certbot steps. Confirm the request timeout covers a 120s agentic turn, or long answers will be cut off mid-stream. |
+| GCP Compute Engine | ~25 USD/month | Same as a VPS, inside the project the OAuth client already lives in. |
+
+A 4 GB VPS with `MCP_POOL_MAX_SESSIONS=10` is the straightforward starting point, and the compose
+files here assume it.
 
 ## Prerequisites
 
@@ -71,7 +89,12 @@ database yet); allow 5 GB for images and logs.
 - DNS: `chat.aitagmanager.com` A record pointing at the server.
 - Ports 80 and 443 reachable from the internet (80 is needed for certificate issuance).
 - An OpenAI API key, ideally on its own project with a monthly cap.
-- The website's Google OAuth client id and secret, used to refresh expired user tokens.
+- The website's Google OAuth client id and secret, used to refresh expired user tokens. It must be
+  the SAME client the website signs users in with. A mismatch is not obvious: sign-in keeps working
+  (that is Supabase Auth's own client) and then every token refresh fails an hour later, because a
+  refresh token can only be exchanged by the client that issued it.
+- The Supabase service-role key. See the note in step 1: without it the audit trail, chat memory
+  and usage metering are all off, and all three fail quietly.
 
 ## First deploy
 
@@ -95,14 +118,32 @@ GOOGLE_OAUTH_CLIENT_ID=            # same OAuth client the website signs users i
 GOOGLE_OAUTH_CLIENT_SECRET=
 SUPABASE_JWKS_URL=https://aujpsdjoomykwklvtcza.supabase.co/auth/v1/.well-known/jwks.json
 SUPABASE_JWT_ISSUER=https://aujpsdjoomykwklvtcza.supabase.co/auth/v1
+SUPABASE_SERVICE_ROLE_KEY=   # Project Settings > API > service_role
 ALLOWED_ORIGINS=https://aitagmanager.com,https://www.aitagmanager.com
 MCP_POOL_MAX_SESSIONS=25
 ```
 
-Leave `ORCHESTRATOR_ENABLE_WRITE_TOOLS=false` and every `*_ENABLE_WRITES` flag false. The chat is
-read-only until the approval flow exists.
+**`SUPABASE_SERVICE_ROLE_KEY` is not optional in practice.** Three features read it, and all three
+fail SILENTLY without it: the audit trail (what the assistant changed, and who asked), usage
+metering (per-plan message counts), and chat memory (preferences carried into future
+conversations). Each logs a warning at boot and then simply does nothing, so a deployment missing
+it looks healthy while keeping no record of its own writes. Check the banner (below) rather than
+assuming.
 
-`chmod 600 .env`. It holds an API key and an OAuth client secret.
+That key bypasses RLS. Treat it as root: never expose it to a browser, and never put it in the
+website bundle.
+
+**Writes.** `ORCHESTRATOR_ENABLE_WRITE_TOOLS=true` is the normal setting now. The approval flow it
+used to wait for exists: writes are tiered by where they land (a GTM workspace draft applies
+directly; anything live asks first), and deletes are stopped and require the user to type a word.
+Setting it false gives a read-only chat that can answer questions and change nothing, which is a
+reasonable choice for a first deploy but is no longer the only safe one.
+
+Deletes additionally need `ORCHESTRATOR_ENABLE_DELETE_TOOLS=true`; they are refused without it even
+when writes are on. `GTM_MCP_ENABLE_PUBLISH` should stay false: publishing is the one action with
+no draft step and no undo.
+
+`chmod 600 .env`. It holds an API key, an OAuth client secret, and the service-role key.
 
 **2. Issue the certificate.** nginx will not start without one, so obtain it first with a temporary
 HTTP-only server:
@@ -122,15 +163,9 @@ docker compose -f apps/chat-orchestrator/compose.yaml up -d --build
 docker compose -f apps/chat-orchestrator/compose.yaml logs -f orchestrator
 ```
 
-A healthy start looks like this. If the tool count is missing, the MCP link is broken:
-
-```
-[orchestrator] Google identity mode: supabase
-[orchestrator] probing MCP server...
-[orchestrator] MCP connected: 173 tools (52 read, 121 write-gated), 7 prompts
-[orchestrator] visible to model: GTM 40, GA4 15 (read-only)
-[orchestrator] listening on http://0.0.0.0:8787
-```
+Read the banner it prints before going further: every feature that can be silently missing
+announces itself there. See **Check the boot banner** below for what it should say and what each
+warning means.
 
 **4. Verify from outside.**
 
@@ -138,11 +173,41 @@ A healthy start looks like this. If the tool count is missing, the MCP link is b
 curl -s https://chat.aitagmanager.com/health | jq
 ```
 
-Expect `googleIdentityMode: "supabase"`, `authRequired: true`, `writeToolsVisible: false`, and a
-non-zero `mcpTools`.
+Expect `googleIdentityMode: "supabase"`, `authRequired: true`, a non-zero `mcpTools`, and
+`writeToolsVisible` matching what you set in step 1 (`true` on a normal deploy).
 
 **5. Point the website at it.** In Vercel, set `VITE_ORCHESTRATOR_URL=https://chat.aitagmanager.com`
 and redeploy. The CSP already allows that origin. The AI Chat tab stops showing its setup notice.
+
+## Check the boot banner
+
+The first thing to read after starting, because everything that can be silently absent says so
+here:
+
+```bash
+docker compose logs orchestrator | head -30
+```
+
+Expected on a correctly configured host:
+
+```
+[orchestrator] Google identity mode: supabase
+[orchestrator] MCP connected: 179 tools (53 read, 126 write-gated), 7 prompts
+[orchestrator] visible to model: GTM 94, GA4 84 (writes ENABLED, deletes ENABLED)
+[orchestrator] audit trail ON (chat_conversations, chat_messages, chat_tool_events)
+[orchestrator] chat memory ON (chat_memories: durable preferences applied to future turns)
+[orchestrator] usage metering ON (user_plans.current_usage_chat / current_usage_tokens)
+```
+
+Any `WARNING` line is a feature that will not work. The three worth knowing:
+
+- `audit trail OFF` / `chat memory OFF` / `usage metering OFF` -- `SUPABASE_SERVICE_ROLE_KEY` is
+  missing or wrong.
+- `every user shares one Google account` -- `GOOGLE_IDENTITY_MODE` is not `supabase`. Do not put
+  that in front of real users.
+- `cross-platform allowlist entr(ies) match no registered tool` -- a tool was renamed in the MCP
+  server and `integrations.ts` was not updated. That write is withheld while the prompt still
+  offers it.
 
 ## Certificate renewal
 
@@ -194,10 +259,15 @@ monthly budget limit on the OpenAI project until per-plan metering exists.
 
 Deliberate, and listed so nobody discovers them in production:
 
-1. **No conversation persistence.** History lives in the browser tab; a refresh loses the thread.
-2. **No usage metering or per-plan caps.** Every user can send until the global rate limit stops
-   them. On a paid tier that is a margin question; on a free tier it is an uncapped cost.
-3. **Rate limiting is per-process.** Correct for one container, wrong the moment you run two. Moving
-   it to Redis is the first thing to do before scaling horizontally.
-4. **Single host.** No failover. A host loss is a chat outage, not data loss, since nothing is
-   stored yet.
+1. **Rate limiting is per-process.** Correct for one container, wrong the moment you run two.
+   Moving it to Redis is the first thing to do before scaling horizontally.
+2. **Single host.** No failover, so a host loss is a chat outage. Conversations, memories and the
+   audit trail live in Postgres and survive it; only in-flight turns and parked approvals are lost.
+3. **OpenAI spend is uncapped by this stack.** Per-plan message limits are enforced, but a single
+   expensive conversation is not. Keep a monthly budget limit on the OpenAI project.
+4. **Attachments are processed in-process.** A 20 MB upload is decoded and parsed on the same
+   container serving chat; several at once compete with turns for CPU.
+
+Previously listed here and now shipped, so do not plan around them: conversation persistence and
+resume (`chat_conversations` / `chat_messages`, with history and replay endpoints), and usage
+metering with per-plan caps (`user_plans`).
