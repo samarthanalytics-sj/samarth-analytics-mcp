@@ -1,3 +1,9 @@
+## [1.472.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.471.2...v1.472.0) (2026-08-11)
+
+### Features
+
+* **orchestrator:** scope the conversation list to one container ([#861](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/861)) ([ed68dd4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/ed68dd45c54003b6ac7ee91b53eec0377e00995d))
+
 ## [1.471.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.471.1...v1.471.2) (2026-08-10)
 
 ### Bug Fixes
