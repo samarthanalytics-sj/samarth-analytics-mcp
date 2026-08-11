@@ -34,7 +34,7 @@ export function registerTagTools(server: McpServer, getClient: () => GtmClient):
           (data) => data.tag,
           { pageToken, maxPages }
         );
-        return jsonResult(buildListResult('tags', result));
+        return jsonResult(buildListResult('tags', result, { accountId, containerId, workspaceId }));
       } catch (err) {
         return errorResult('tags_list', err);
       }

@@ -26,7 +26,7 @@ export function registerFolderTools(server: McpServer, getClient: () => GtmClien
           (data) => data.folder,
           { pageToken, maxPages }
         );
-        return jsonResult(buildListResult('folders', result));
+        return jsonResult(buildListResult('folders', result, { accountId, containerId, workspaceId }));
       } catch (err) {
         return errorResult('folders_list', err);
       }

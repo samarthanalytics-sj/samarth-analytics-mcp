@@ -56,7 +56,7 @@ export function registerBuiltInVariableTools(server: McpServer, getClient: () =>
           (data) => data.builtInVariable,
           { pageToken, maxPages }
         );
-        return jsonResult(buildListResult('builtInVariables', result));
+        return jsonResult(buildListResult('builtInVariables', result, { accountId, containerId, workspaceId }));
       } catch (err) {
         return errorResult('built_in_variables_list', err);
       }

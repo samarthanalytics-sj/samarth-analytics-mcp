@@ -29,7 +29,7 @@ export function registerVariableTools(server: McpServer, getClient: () => GtmCli
           (data) => data.variable,
           { pageToken, maxPages }
         );
-        return jsonResult(buildListResult('variables', result));
+        return jsonResult(buildListResult('variables', result, { accountId, containerId, workspaceId }));
       } catch (err) {
         return errorResult('variables_list', err);
       }

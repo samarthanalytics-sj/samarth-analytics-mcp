@@ -90,20 +90,39 @@ export async function paginate<TData, TItem>(
   return { items, pagesFetched, truncated: false };
 }
 
+/** Where a list was read from. Carried back so an answer can say WHERE it looked. */
+export interface ListScope {
+  accountId?: string;
+  containerId?: string;
+  workspaceId?: string;
+  propertyId?: string;
+}
+
 /**
  * Shape a paginated result into the standard list-tool response body. Keeps
  * the existing `{ <key>: [...], count }` shape and only adds pagination
  * metadata (`nextPageToken`, `truncated`) when the result was actually
  * truncated, so non-truncated responses are unchanged from before.
+ *
+ * `scope` echoes the ids the list was read from. An empty list is the case that
+ * needs it: "there are no tags in your selected workspace" is unfalsifiable
+ * without knowing which workspace that was, and a container can hold several.
+ * Returning the ids means an answer can name them instead of the user having to
+ * trust that the right one was read.
  */
 export function buildListResult<T>(
   key: string,
-  result: PaginatedResult<T>
+  result: PaginatedResult<T>,
+  scope?: ListScope
 ): Record<string, unknown> {
   const body: Record<string, unknown> = {
     [key]: result.items,
     count: result.items.length,
   };
+  if (scope) {
+    const defined = Object.fromEntries(Object.entries(scope).filter(([, v]) => v != null && v !== ''));
+    if (Object.keys(defined).length > 0) body['scope'] = defined;
+  }
   if (result.truncated) {
     body['truncated'] = true;
     body['nextPageToken'] = result.nextPageToken;
