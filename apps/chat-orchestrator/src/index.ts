@@ -193,7 +193,9 @@ async function main(): Promise<void> {
         cb(null, cfg.allowedOrigins.includes(origin));
       },
       credentials: false,
-      methods: ['GET', 'POST', 'OPTIONS'],
+      // PATCH and DELETE are here for the conversation rail's pin, archive and remove. Both are
+      // preflighted, so leaving them out fails in the browser rather than at the route.
+      methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
       allowedHeaders: ['Authorization', 'Content-Type'],
     }),
   );
@@ -283,6 +285,7 @@ async function main(): Promise<void> {
       const scope = {
         containerId: idOf(req.query.containerId),
         propertyId: idOf(req.query.propertyId),
+        archived: req.query.archived === 'true',
       };
       res.json({ conversations: await audit.listConversations(user.id, 30, scope) });
     } catch (err) {
@@ -313,6 +316,87 @@ async function main(): Promise<void> {
     } catch (err) {
       console.error('[conversations] get failed:', forLog(err instanceof Error ? err.message : String(err)));
       res.status(502).json({ error: 'history_failed', message: 'Could not load that conversation.' });
+    }
+  });
+
+  /**
+   * Pin or archive one conversation.
+   *
+   * Both are the user's own filing, so neither needs an approval step. Ownership is not checked
+   * here and then trusted: it is part of the update's own filter, so a request naming somebody
+   * else's conversation matches nothing and is answered as not found.
+   */
+  app.patch('/v1/conversations/:id', async (req, res) => {
+    let user: AuthedUser;
+    try {
+      user = await authenticate(req.headers.authorization);
+    } catch (err) {
+      return sendAuthError(res, err);
+    }
+    if (!audit.isEnabled()) {
+      return res.status(503).json({
+        error: 'history_unavailable',
+        message: 'Conversation history is not configured on this deployment.',
+      });
+    }
+
+    const body = (req.body ?? {}) as { pinned?: unknown; archived?: unknown };
+    const state: { pinned?: boolean; archived?: boolean } = {};
+    if (typeof body.pinned === 'boolean') state.pinned = body.pinned;
+    if (typeof body.archived === 'boolean') state.archived = body.archived;
+    if (Object.keys(state).length === 0) {
+      return res
+        .status(400)
+        .json({ error: 'bad_request', message: 'Send pinned and/or archived as booleans.' });
+    }
+
+    try {
+      const conversation = await audit.setConversationState(user.id, req.params.id, state);
+      if (!conversation) {
+        return res.status(404).json({ error: 'not_found', message: 'Conversation not found.' });
+      }
+      res.json({ conversation });
+    } catch (err) {
+      console.error(
+        '[conversations] update failed:',
+        forLog(err instanceof Error ? err.message : String(err)),
+      );
+      res.status(502).json({ error: 'history_failed', message: 'Could not update that conversation.' });
+    }
+  });
+
+  /**
+   * Remove a conversation from the user's history.
+   *
+   * Soft on purpose. chat_tool_events cascades from chat_conversations and holds what the assistant
+   * actually changed in a live container; a hard delete would let the subject of the audit erase
+   * the record of their own writes. The user's history loses it either way.
+   */
+  app.delete('/v1/conversations/:id', async (req, res) => {
+    let user: AuthedUser;
+    try {
+      user = await authenticate(req.headers.authorization);
+    } catch (err) {
+      return sendAuthError(res, err);
+    }
+    if (!audit.isEnabled()) {
+      return res.status(503).json({
+        error: 'history_unavailable',
+        message: 'Conversation history is not configured on this deployment.',
+      });
+    }
+    try {
+      const removed = await audit.deleteConversation(user.id, req.params.id);
+      if (!removed) {
+        return res.status(404).json({ error: 'not_found', message: 'Conversation not found.' });
+      }
+      res.json({ ok: true });
+    } catch (err) {
+      console.error(
+        '[conversations] delete failed:',
+        forLog(err instanceof Error ? err.message : String(err)),
+      );
+      res.status(502).json({ error: 'history_failed', message: 'Could not delete that conversation.' });
     }
   });
 
