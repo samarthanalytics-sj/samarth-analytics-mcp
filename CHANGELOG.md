@@ -1,3 +1,9 @@
+## [1.473.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.473.0...v1.473.1) (2026-08-11)
+
+### Bug Fixes
+
+* **tools:** tags_create advertised a tag type that does not exist ([#863](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/863)) ([77d577f](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/77d577facc4ed292ebf4588b233aecf3a1f6be92))
+
 ## [1.473.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.472.0...v1.473.0) (2026-08-11)
 
 ### Features
