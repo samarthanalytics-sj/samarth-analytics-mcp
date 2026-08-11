@@ -120,5 +120,27 @@ await test('trigger conditions warn that a built-in variable must be enabled fir
   );
 });
 
+await test('workspace-scoped list results echo the scope they were read from', async () => {
+  const scoped = new McpServer({ name: 'scope-test', version: '0.0.1' }, { capabilities: { tools: {} } });
+  registerTagTools(scoped, () => ({
+    accounts: { containers: { workspaces: { tags: { list: () => Promise.resolve({ data: { tag: [] } }) } } } },
+  }));
+
+  const res = await scoped._registeredTools.tags_list.handler(
+    { accountId: '6300744495', containerId: '223151851', workspaceId: '2' },
+    { requestId: 'test' },
+  );
+  const body = JSON.parse(res.content[0].text);
+
+  // The EMPTY case is the one that needs this. "There are no tags in your selected workspace"
+  // cannot be checked by the person reading it, and a container holds more than one workspace,
+  // so an empty answer from the wrong one looks exactly like an empty answer from the right one.
+  assert.strictEqual(body.count, 0, 'fixture returns no tags');
+  assert.ok(body.scope, 'an empty list must still say where it looked');
+  assert.strictEqual(body.scope.workspaceId, '2');
+  assert.strictEqual(body.scope.containerId, '223151851');
+  assert.strictEqual(body.scope.accountId, '6300744495');
+});
+
 console.log(`\n${passed} passed, ${failed} failed\n`);
 process.exit(failed === 0 ? 0 : 1);

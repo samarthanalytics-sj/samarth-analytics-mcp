@@ -79,7 +79,7 @@ export function registerTriggerTools(server: McpServer, getClient: () => GtmClie
           (data) => data.trigger,
           { pageToken, maxPages }
         );
-        return jsonResult(buildListResult('triggers', result));
+        return jsonResult(buildListResult('triggers', result, { accountId, containerId, workspaceId }));
       } catch (err) {
         return errorResult('triggers_list', err);
       }

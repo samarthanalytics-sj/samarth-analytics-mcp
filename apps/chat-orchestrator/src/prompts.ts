@@ -66,7 +66,12 @@ const TOOL_RULES =
   'so list or look them up rather than assuming. ' +
   'Prefer one broad read (a list or an audit) over many narrow ones. ' +
   'GTM ids are numeric internal ids, not the public GTM-XXXXXX container id. Look up the numeric id ' +
-  'when the user gives you the public one.';
+  'when the user gives you the public one. ' +
+  'SAY WHERE YOU LOOKED. When a read comes back empty or you report that something does not exist, ' +
+  'name the container and workspace you read — list results carry a `scope` with those ids. ' +
+  '"There are no tags in your selected workspace" is not checkable by the person reading it: a ' +
+  'container holds several workspaces, and an empty answer from the wrong one looks exactly like an ' +
+  'empty answer from the right one. "No tags in workspace 2 of container 223151851" is.';
 
 const READ_ONLY_RULES =
   'THIS CONVERSATION IS READ-ONLY. You can inspect anything the user has granted access to, but you ' +
