@@ -7,7 +7,7 @@
 import type { OrchestratorConfig } from './config.js';
 import type { McpConnection } from './mcp-client.js';
 import type { OpenAiClient } from './openai.js';
-import { capToolResult, scopeTools, toOpenAiTools } from './tools.js';
+import { capToolResult, compactToolHistory, scopeTools, toOpenAiTools } from './tools.js';
 import { buildSituationalContext, buildStaticSystem } from './prompts.js';
 import { GoogleIdentityError, isGoogleAuthFailure } from './google-identity.js';
 import { forLog, userRef } from './redact.js';
@@ -243,8 +243,10 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
       return;
     }
 
+    // Shrink results the model has already acted on. Without this the array grows on every round
+    // trip and the LAST call of a long turn pays for every read the turn ever made.
     const result = await llm.streamChat(
-      messages,
+      compactToolHistory(messages, cfg.limits.maxToolHistoryChars),
       openAiTools,
       {
         onDelta: (text) => emit({ type: 'token', text }),

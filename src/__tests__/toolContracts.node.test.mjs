@@ -120,6 +120,15 @@ await test('trigger conditions warn that a built-in variable must be enabled fir
   );
 });
 
+await test('tags_create states what a GA4 event tag needs to be accepted', () => {
+  const d = fieldDescription('tags_create', 'parameter');
+  // The observed failure: "vendorTemplate.parameter.measurementIdOverride: The value must not be
+  // empty" — an error naming a field the caller never sent. Cost a whole round trip to discover.
+  assert.ok(/measurementIdOverride/.test(d), 'must name the field the API demands');
+  assert.ok(/tagReference/.test(d), 'must show the measurementId tagReference that pairs with it');
+  assert.ok(/eventSettingsTable/.test(d), 'must keep the shared nesting example, not replace it');
+});
+
 await test('workspace-scoped list results echo the scope they were read from', async () => {
   const scoped = new McpServer({ name: 'scope-test', version: '0.0.1' }, { capabilities: { tools: {} } });
   registerTagTools(scoped, () => ({

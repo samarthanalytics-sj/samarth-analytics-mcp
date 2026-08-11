@@ -116,6 +116,7 @@ export interface OrchestratorConfig {
     maxTurnMs: number;
     maxHistoryMessages: number;
     maxToolResultChars: number;
+    maxToolHistoryChars: number;
     turnsPerMinutePerUser: number;
   };
   /**
@@ -341,6 +342,19 @@ export function loadConfig(): OrchestratorConfig {
        */
       maxHistoryMessages: num('MAX_HISTORY_MESSAGES', 10),
       maxToolResultChars: num('MAX_TOOL_RESULT_CHARS', 16_000),
+      /*
+       * Total size of tool results carried into ONE model call, oldest shortened first.
+       *
+       * maxToolResultChars caps a single result; this caps their SUM. Without it a multi-step turn
+       * re-sends every result on every round trip and the prompt grows quadratically — a measured
+       * tag-creation turn spent 117 of its 125 seconds inside the model, with round-trip gaps
+       * climbing 3s, 4s, 26s, 26s, 30s as the array filled up.
+       *
+       * 24,000 characters is about 6,000 tokens: room for the newest result at full size plus the
+       * working set around it, while an old container listing is reduced to a digest that still
+       * says what it was.
+       */
+      maxToolHistoryChars: num('MAX_TOOL_HISTORY_CHARS', 24_000),
       turnsPerMinutePerUser: num('TURNS_PER_MINUTE_PER_USER', 10),
     },
     enableWriteTools: bool('ORCHESTRATOR_ENABLE_WRITE_TOOLS'),
