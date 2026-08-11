@@ -9,13 +9,30 @@ import { checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
 import { paginate, paginationFields, buildListResult } from '../utils/pagination.js';
 import { jsonResult, textResult, errorResult } from '../utils/toolResponse.js';
 import { addEventParameters, mergeParametersByKey } from '../utils/tagParams.js';
-import { gtmParameterArray as parameterSchema } from '../utils/paramSchema.js';
+import { gtmParameterArray, gtmParameterArray as parameterSchema } from '../utils/paramSchema.js';
 
 const wsBase = z.object({
   accountId: z.string().describe('The GTM account ID.'),
   containerId: z.string().describe('The GTM container ID.'),
   workspaceId: z.string().describe('The GTM workspace ID.'),
 });
+
+/**
+ * What a GA4 event tag needs before the API will accept it.
+ *
+ * A gaawe tag with no measurement id fails with
+ * "vendorTemplate.parameter.measurementIdOverride: The value must not be empty" — an error that
+ * names a field the caller never sent. The required pair was written down, but only inside the
+ * ecommerce guided prompt, so an ordinary "create a GA4 event tag" conversation never saw it and
+ * burned a round trip discovering it.
+ */
+const GAAWE_PARAM_HINT =
+  (gtmParameterArray.description ?? '') +
+  ' A GA4 EVENT TAG (type "gaawe") MUST carry a measurement id or the API rejects it: send BOTH ' +
+  '{"type":"tagReference","key":"measurementId","value":"<googtag tag id, or empty string>"} AND ' +
+  '{"type":"template","key":"measurementIdOverride","value":"G-XXXXXXX"}, plus ' +
+  '{"type":"template","key":"eventName","value":"<event>"}. Read the G- id from the existing ' +
+  'Google tag in this container (type "googtag", parameter key "tagId") via tags_list rather than inventing one.';
 
 export function registerTagTools(server: McpServer, getClient: () => GtmClient): void {
   // ── tags/list ────────────────────────────────────────────────────────────
@@ -84,7 +101,7 @@ export function registerTagTools(server: McpServer, getClient: () => GtmClient):
               'Google Ads conversion: "awct". Google Ads remarketing: "sp". Floodlight counter: "flc". ' +
               'A gallery/community template tag uses "cvt_<templateId>" — read the id from templates_list.',
           ),
-        parameter: parameterSchema,
+        parameter: parameterSchema.describe(GAAWE_PARAM_HINT),
         firingTriggerId: z.array(z.string()).optional().describe('IDs of firing triggers.'),
         blockingTriggerId: z.array(z.string()).optional().describe('IDs of blocking triggers.'),
         notes: z.string().optional().describe('Optional notes.'),

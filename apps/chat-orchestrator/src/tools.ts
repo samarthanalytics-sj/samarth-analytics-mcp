@@ -7,7 +7,7 @@
  */
 import type { Product } from './config.js';
 import { connectedWriteAllowed } from './integrations.js';
-import type { ToolDef } from './types.js';
+import type { ChatMessage, ToolDef } from './types.js';
 
 /** GA4 tools are the ga4_-prefixed ones; everything else in this server is GTM. */
 export function productOf(toolName: string): Product {
@@ -144,4 +144,58 @@ export function capToolResult(text: string, maxChars: number): string {
     `result. This list is INCOMPLETE. Say so explicitly, and narrow the query or paginate rather ` +
     `than presenting it as the full set.]`
   );
+}
+
+/** Enough of a result to keep reasoning with, once the full text has aged out. */
+const DIGEST_CHARS = 400;
+
+/**
+ * Shrinks OLD tool results so a multi-step turn stops re-sending everything it has ever read.
+ *
+ * The message array is resent in full on every round trip, so a turn that calls seven tools pays
+ * for the first tool's output seven times. Measured on a real tag-creation turn: seven calls,
+ * 7.8s of actual tool time, 125s of wall clock, 98,123 prompt tokens. The per-round-trip gaps grew
+ * 3s, 4s, 26s, 26s, 30s — the shape of a prompt getting longer, not of work getting harder.
+ *
+ * Newest results are kept whole, because those are what the model is reasoning about right now.
+ * Older ones are cut to a digest once the budget is spent. Nothing is REMOVED: OpenAI rejects an
+ * assistant message whose tool_call_id has no matching tool message, and more importantly a
+ * silently vanished result would read as a tool that returned nothing.
+ *
+ * Returns a new array; the input is not mutated.
+ */
+export function compactToolHistory(messages: ChatMessage[], budgetChars: number): ChatMessage[] {
+  let spent = 0;
+  const out = [...messages];
+
+  // Backwards: the most recent results are the ones worth their full size.
+  for (let i = out.length - 1; i >= 0; i--) {
+    const m = out[i];
+    if (m.role !== 'tool' || typeof m.content !== 'string') continue;
+    const content: string = m.content;
+
+    if (spent + content.length <= budgetChars) {
+      spent += content.length;
+      continue;
+    }
+
+    // Already short enough that a digest would not save anything worth the loss.
+    if (content.length <= DIGEST_CHARS) {
+      spent += content.length;
+      continue;
+    }
+
+    const dropped = content.length - DIGEST_CHARS;
+    out[i] = {
+      ...m,
+      content:
+        `${m.content.slice(0, DIGEST_CHARS)}\n\n[EARLIER RESULT, SHORTENED: ${dropped.toLocaleString()} ` +
+        `characters from this tool result are no longer in context. It is not empty and it did not ` +
+        `fail — only the tail was dropped to keep this turn fast. Call the tool again if you need ` +
+        `the part that is missing.]`,
+    };
+    spent += DIGEST_CHARS;
+  }
+
+  return out;
 }

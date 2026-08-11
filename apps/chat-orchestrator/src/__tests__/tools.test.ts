@@ -2,7 +2,7 @@
  * Tool scoping and truncation tests. No network, no credentials.
  */
 import assert from 'node:assert/strict';
-import { capToolResult, productOf, scopeTools, toOpenAiTools } from '../tools.js';
+import { capToolResult, compactToolHistory, productOf, scopeTools, toOpenAiTools } from '../tools.js';
 import type { ToolDef } from '../types.js';
 
 let passed = 0;
@@ -181,6 +181,62 @@ test('long results are marked INCOMPLETE, never silently cut', () => {
   assert.ok(capped.startsWith('x'.repeat(100)));
   assert.match(capped, /TRUNCATED/);
   assert.match(capped, /INCOMPLETE/);
+});
+
+console.log('tool-history compaction');
+
+const toolMsg = (id: string, len: number) =>
+  ({ role: 'tool' as const, tool_call_id: id, name: 't', content: 'x'.repeat(len) });
+
+test('a turn under budget is returned untouched', () => {
+  const msgs = [toolMsg('a', 100), toolMsg('b', 100)];
+  const out = compactToolHistory(msgs, 1000);
+  assert.deepEqual(
+    out.map((m) => m.content),
+    msgs.map((m) => m.content),
+  );
+});
+
+test('the NEWEST result keeps its full size, the oldest gives way', () => {
+  const out = compactToolHistory([toolMsg('old', 5000), toolMsg('new', 5000)], 6000);
+  assert.equal(out[1].content?.length, 5000, 'the newest result must survive whole');
+  assert.ok((out[0].content?.length ?? 0) < 5000, 'the oldest must be the one shortened');
+});
+
+test('a shortened result says so, and says it did not fail', () => {
+  const out = compactToolHistory([toolMsg('old', 9000), toolMsg('new', 9000)], 9000);
+  const older = out[0].content ?? '';
+  assert.match(older, /SHORTENED/);
+  // The dangerous misreading: a digest that looks like a tool which returned nothing.
+  assert.match(older, /did not\s+fail/);
+  assert.match(older, /Call the tool again/, 'must say how to recover the dropped part');
+});
+
+test('EVERY tool message survives — dropping one breaks the tool_call_id pairing', () => {
+  const msgs = [toolMsg('a', 9000), toolMsg('b', 9000), toolMsg('c', 9000)];
+  const out = compactToolHistory(msgs, 1000);
+  assert.equal(out.length, msgs.length, 'no message may be removed');
+});
+
+test('non-tool messages are never touched', () => {
+  const sys = { role: 'system' as const, content: 'y'.repeat(9000) };
+  const out = compactToolHistory([sys, toolMsg('a', 9000)], 100);
+  assert.equal(out[0].content?.length, 9000, 'the system prompt is not a tool result');
+});
+
+test('the input array is not mutated', () => {
+  const msgs = [toolMsg('a', 9000), toolMsg('b', 9000)];
+  compactToolHistory(msgs, 1000);
+  assert.equal(msgs[0].content?.length, 9000);
+});
+
+test('a seven-call turn is bounded instead of growing without limit', () => {
+  // The measured failure: seven results at the 16k per-result cap, resent on every round trip.
+  const msgs = Array.from({ length: 7 }, (_, i) => toolMsg(String(i), 16_000));
+  const before = msgs.reduce((n, m) => n + (m.content?.length ?? 0), 0);
+  const after = compactToolHistory(msgs, 24_000).reduce((n, m) => n + (m.content?.length ?? 0), 0);
+  assert.equal(before, 112_000);
+  assert.ok(after < 30_000, `expected the turn to fit its budget, got ${after}`);
 });
 
 console.log(`\n${passed} assertions passed`);
