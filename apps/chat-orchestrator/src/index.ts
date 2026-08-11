@@ -275,7 +275,16 @@ async function main(): Promise<void> {
       });
     }
     try {
-      res.json({ conversations: await audit.listConversations(user.id) });
+      // Scope comes from the query string so the sidebar asks for the container it is showing.
+      // Ids are shape-checked before reaching a filter, not because PostgREST would be injected
+      // but because a malformed value should be an empty list, not a confusing 400.
+      const idOf = (v: unknown): string | undefined =>
+        typeof v === 'string' && /^[0-9]{1,20}$/.test(v.trim()) ? v.trim() : undefined;
+      const scope = {
+        containerId: idOf(req.query.containerId),
+        propertyId: idOf(req.query.propertyId),
+      };
+      res.json({ conversations: await audit.listConversations(user.id, 30, scope) });
     } catch (err) {
       console.error('[conversations] list failed:', forLog(err instanceof Error ? err.message : String(err)));
       res.status(502).json({ error: 'history_failed', message: 'Could not load your conversations.' });

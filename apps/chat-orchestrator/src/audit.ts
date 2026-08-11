@@ -279,10 +279,29 @@ export class AuditRecorder {
   // returning [] would tell them their conversations are gone.
 
   /** The caller's recent conversations, newest activity first. */
-  async listConversations(userId: string, limit = 30): Promise<ConversationSummary[]> {
+  /**
+   * Scoped to ONE container or property when asked.
+   *
+   * The sidebar shows the conversations for wherever you are, not everything you have ever said.
+   * Filtering server-side rather than in the client matters once someone has more than a page of
+   * history: a client-side filter over the newest 30 rows would show an empty list for a container
+   * whose conversations are all older than that, which reads as "this container has no history"
+   * when it has plenty.
+   */
+  async listConversations(
+    userId: string,
+    limit = 30,
+    scope?: { containerId?: string; propertyId?: string },
+  ): Promise<ConversationSummary[]> {
+    const filter = scope?.containerId
+      ? `&container_id=eq.${encodeURIComponent(scope.containerId)}`
+      : scope?.propertyId
+        ? `&property_id=eq.${encodeURIComponent(scope.propertyId)}`
+        : '';
+
     const rows = (await this.request(
       'GET',
-      `chat_conversations?user_id=eq.${encodeURIComponent(userId)}` +
+      `chat_conversations?user_id=eq.${encodeURIComponent(userId)}${filter}` +
         `&select=id,title,product,account_id,container_id,workspace_id,property_id,created_at,updated_at` +
         `&order=updated_at.desc.nullslast,created_at.desc&limit=${Math.min(Math.max(limit, 1), 100)}`,
       undefined,
