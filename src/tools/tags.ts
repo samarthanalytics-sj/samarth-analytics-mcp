@@ -72,7 +72,18 @@ export function registerTagTools(server: McpServer, getClient: () => GtmClient):
         'Pass the full tag configuration as parameters.',
       inputSchema: wsBase.extend({
         name: z.string().describe('Tag name.'),
-        type: z.string().describe('Tag type (e.g. "ua", "ga4", "html", "img").'),
+        // "ga4" was listed here and is NOT a GTM tag type. The API rejects it with
+        // "vendorTemplate.key: Unknown entity type", and a model following this description had no
+        // way to know the real value. These are the actual strings the GTM API accepts.
+        type: z
+          .string()
+          .describe(
+            'GTM tag type, EXACTLY as the API names it. There is no "ga4" type. ' +
+              'GA4 event: "gaawe". Google tag / GA4 configuration: "googtag" (legacy GA4 config: "gaawc"). ' +
+              'Custom HTML: "html". Custom Image: "img". Universal Analytics (legacy): "ua". ' +
+              'Google Ads conversion: "awct". Google Ads remarketing: "sp". Floodlight counter: "flc". ' +
+              'A gallery/community template tag uses "cvt_<templateId>" — read the id from templates_list.',
+          ),
         parameter: parameterSchema,
         firingTriggerId: z.array(z.string()).optional().describe('IDs of firing triggers.'),
         blockingTriggerId: z.array(z.string()).optional().describe('IDs of blocking triggers.'),
@@ -116,7 +127,10 @@ export function registerTagTools(server: McpServer, getClient: () => GtmClient):
       inputSchema: wsBase.extend({
         tagId: z.string().describe('The GTM tag ID to update.'),
         name: z.string().optional().describe('New tag name.'),
-        type: z.string().optional().describe('New tag type.'),
+        type: z
+          .string()
+          .optional()
+          .describe('New tag type, using the same exact strings as tags_create ("gaawe", "googtag", "html", ...). There is no "ga4" type.'),
         parameter: parameterSchema,
         firingTriggerId: z.array(z.string()).optional().describe('IDs of firing triggers.'),
         blockingTriggerId: z.array(z.string()).optional().describe('IDs of blocking triggers.'),

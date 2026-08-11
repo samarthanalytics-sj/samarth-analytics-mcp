@@ -13,13 +13,48 @@ import { gtmParameterArray } from '../utils/paramSchema.js';
 import { mergeParametersByKey } from '../utils/tagParams.js';
 import type { tagmanager_v2 } from 'googleapis';
 
+/**
+ * A GTM trigger condition.
+ *
+ * The arg0/arg1 contract is stated here rather than only in the guided prompts. It used to live
+ * only in the ecommerce and server-side prompts, so a plain "create a click trigger on Click URL"
+ * conversation saw a `key` field with no description, guessed one, and got back
+ * `filter[0].parameter[0]: Parameter key is unknown` — an error that says nothing about what the
+ * key should have been.
+ */
 const conditionSchema = z
   .array(
     z.object({
       type: z.string().describe('Condition type: contains, cssSelector, endsWith, equals, greater, greaterOrEquals, less, lessOrEquals, matchRegex, startsWith, urlMatches.'),
-      parameter: z.array(
-        z.object({ type: z.string(), key: z.string().optional(), value: z.string().optional() })
-      ),
+      parameter: z
+        .array(
+          z.object({
+            type: z.string().describe('Almost always "template".'),
+            key: z
+              .string()
+              .optional()
+              .describe(
+                'MUST be "arg0" or "arg1" — GTM accepts no other key here, and anything else fails ' +
+                  'with "Parameter key is unknown". arg0 is the LEFT side (the variable being tested), ' +
+                  'arg1 is the RIGHT side (the value compared against).',
+              ),
+            value: z
+              .string()
+              .optional()
+              .describe(
+                'For arg0, a variable reference in double braces, e.g. "{{Click URL}}", "{{_event}}", ' +
+                  '"{{Page Path}}". For arg1, the literal to compare, e.g. "mailto:". A built-in ' +
+                  'variable referenced in arg0 must be ENABLED in the workspace first — see ' +
+                  'built_in_variables_enable (Click URL is "clickUrl", Click Text "clickText", ' +
+                  'Form ID "formId", and so on).',
+              ),
+          }),
+        )
+        .describe(
+          'EXACTLY TWO entries, keyed arg0 then arg1. Example, a link click on a mailto: address: ' +
+            '[{"type":"template","key":"arg0","value":"{{Click URL}}"},' +
+            '{"type":"template","key":"arg1","value":"mailto:"}] with condition type "contains".',
+        ),
     })
   )
   .optional();
