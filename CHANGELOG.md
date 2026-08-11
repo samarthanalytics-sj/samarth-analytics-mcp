@@ -1,3 +1,9 @@
+## [1.473.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.473.1...v1.473.2) (2026-08-11)
+
+### Bug Fixes
+
+* say which workspace a read came from ([#864](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/864)) ([8f28384](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/8f28384847bf00656546131213d02a2ca46bf060))
+
 ## [1.473.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.473.0...v1.473.1) (2026-08-11)
 
 ### Bug Fixes
