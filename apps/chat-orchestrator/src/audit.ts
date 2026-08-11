@@ -291,7 +291,7 @@ export class AuditRecorder {
   async listConversations(
     userId: string,
     limit = 30,
-    scope?: { containerId?: string; propertyId?: string },
+    scope?: { containerId?: string; propertyId?: string; archived?: boolean },
   ): Promise<ConversationSummary[]> {
     const filter = scope?.containerId
       ? `&container_id=eq.${encodeURIComponent(scope.containerId)}`
@@ -299,25 +299,71 @@ export class AuditRecorder {
         ? `&property_id=eq.${encodeURIComponent(scope.propertyId)}`
         : '';
 
+    // Deleted rows are never returned to anyone. Archived ones are one query away, because
+    // archiving something you cannot then find again is a delete wearing a softer word.
+    const shelf = scope?.archived ? '&archived_at=not.is.null' : '&archived_at=is.null';
+
     const rows = (await this.request(
       'GET',
-      `chat_conversations?user_id=eq.${encodeURIComponent(userId)}${filter}` +
-        `&select=id,title,product,account_id,container_id,workspace_id,property_id,created_at,updated_at` +
-        `&order=updated_at.desc.nullslast,created_at.desc&limit=${Math.min(Math.max(limit, 1), 100)}`,
+      `chat_conversations?user_id=eq.${encodeURIComponent(userId)}${filter}${shelf}&deleted_at=is.null` +
+        `&select=${CONVERSATION_COLUMNS}` +
+        `&order=pinned.desc,updated_at.desc.nullslast,created_at.desc&limit=${Math.min(Math.max(limit, 1), 100)}`,
       undefined,
       'return=representation',
     )) as ConversationRow[] | null;
 
-    return (rows ?? []).map((r) => ({
-      id: r.id,
-      title: r.title ?? 'Untitled conversation',
-      product: r.product === 'ga4' ? 'ga4' : 'gtm',
-      accountId: r.account_id ?? undefined,
-      containerId: r.container_id ?? undefined,
-      workspaceId: r.workspace_id ?? undefined,
-      propertyId: r.property_id ?? undefined,
-      updatedAt: r.updated_at ?? r.created_at,
-    }));
+    return (rows ?? []).map(toSummary);
+  }
+
+  /**
+   * Pin or archive one conversation.
+   *
+   * Scoped by user_id as well as id, so the filter itself is the authorisation: a request for
+   * someone else's conversation matches no row and changes nothing, rather than being checked and
+   * then trusted.
+   */
+  async setConversationState(
+    userId: string,
+    conversationId: string,
+    state: { pinned?: boolean; archived?: boolean },
+  ): Promise<ConversationSummary | null> {
+    const patch: Record<string, unknown> = {};
+    if (typeof state.pinned === 'boolean') patch.pinned = state.pinned;
+    if (typeof state.archived === 'boolean') {
+      patch.archived_at = state.archived ? new Date().toISOString() : null;
+    }
+    if (Object.keys(patch).length === 0) return null;
+
+    const rows = (await this.request(
+      'PATCH',
+      `chat_conversations?id=eq.${encodeURIComponent(conversationId)}` +
+        `&user_id=eq.${encodeURIComponent(userId)}&deleted_at=is.null&select=${CONVERSATION_COLUMNS}`,
+      patch,
+      'return=representation',
+    )) as ConversationRow[] | null;
+
+    const row = rows?.[0];
+    return row ? toSummary(row) : null;
+  }
+
+  /**
+   * Remove a conversation from the user's history.
+   *
+   * Soft, and not as a shortcut. chat_tool_events cascades from this table and records what the
+   * assistant actually changed in a live GTM container; a hard delete would let the subject of the
+   * audit erase the record of their own writes. The row stays, every user-facing read filters it
+   * out, and the user sees it gone.
+   */
+  async deleteConversation(userId: string, conversationId: string): Promise<boolean> {
+    const rows = (await this.request(
+      'PATCH',
+      `chat_conversations?id=eq.${encodeURIComponent(conversationId)}` +
+        `&user_id=eq.${encodeURIComponent(userId)}&deleted_at=is.null&select=id`,
+      { deleted_at: new Date().toISOString() },
+      'return=representation',
+    )) as { id: string }[] | null;
+
+    return (rows?.length ?? 0) > 0;
   }
 
   /**
@@ -333,7 +379,7 @@ export class AuditRecorder {
       'GET',
       `chat_conversations?id=eq.${encodeURIComponent(conversationId)}` +
         `&user_id=eq.${encodeURIComponent(userId)}` +
-        `&select=id,title,product,account_id,container_id,workspace_id,property_id,created_at,updated_at&limit=1`,
+        `&deleted_at=is.null&select=${CONVERSATION_COLUMNS}&limit=1`,
       undefined,
       'return=representation',
     )) as ConversationRow[] | null;
@@ -368,6 +414,24 @@ export class AuditRecorder {
   }
 }
 
+const CONVERSATION_COLUMNS =
+  'id,title,product,account_id,container_id,workspace_id,property_id,pinned,archived_at,created_at,updated_at';
+
+function toSummary(r: ConversationRow): ConversationSummary {
+  return {
+    id: r.id,
+    title: r.title ?? 'Untitled conversation',
+    product: r.product === 'ga4' ? 'ga4' : 'gtm',
+    accountId: r.account_id ?? undefined,
+    containerId: r.container_id ?? undefined,
+    workspaceId: r.workspace_id ?? undefined,
+    propertyId: r.property_id ?? undefined,
+    pinned: r.pinned === true,
+    archived: r.archived_at != null,
+    updatedAt: r.updated_at ?? r.created_at,
+  };
+}
+
 interface ConversationRow {
   id: string;
   title: string | null;
@@ -376,6 +440,8 @@ interface ConversationRow {
   container_id: string | null;
   workspace_id: string | null;
   property_id: string | null;
+  pinned?: boolean | null;
+  archived_at?: string | null;
   created_at: string;
   updated_at: string | null;
 }
@@ -394,6 +460,8 @@ export interface ConversationSummary {
   containerId?: string;
   workspaceId?: string;
   propertyId?: string;
+  pinned?: boolean;
+  archived?: boolean;
   updatedAt: string;
 }
 
