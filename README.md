@@ -1,5 +1,7 @@
 # Samarth GTM MCP Server
 
+[![MCP Toplist](https://mcptoplist.com/badge/io.github.samarthanalytics-sj%2Fsamarth-gtm-mcp.svg)](https://mcptoplist.com/server/io.github.samarthanalytics-sj%2Fsamarth-gtm-mcp)
+
 [![CI](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/actions/workflows/ci.yml)
 
 A production-ready [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server for the **Google Tag Manager API v2**, built for Samarth Analytics.
