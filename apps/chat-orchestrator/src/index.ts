@@ -53,54 +53,6 @@ const REQUEST_FAULT_CODES = new Set([
   'bad_result',
 ]);
 
-/* ───────────────────── Conversation titles and groups ─────────────────────── */
-
-/** A renamed thread still has to fit the rail without becoming the rail. */
-const MAX_CONVERSATION_TITLE = 200;
-/** Matches the chat_conversation_groups name CHECK, so a refusal costs no round trip. */
-const MAX_GROUP_NAME = 80;
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/**
- * The (product, scopeId) pair a group belongs to, from a query string or a JSON body.
- *
- * Ids are shape-checked for the same reason the conversation list checks them: a malformed value
- * should be a clear 400, not a confusing PostgREST error. Returns null when the pair is incomplete,
- * because a group with no container is not a thing this design allows.
- */
-function groupScopeFrom(source: unknown): { product: 'gtm' | 'ga4'; scopeId: string } | null {
-  const q = (source ?? {}) as Record<string, unknown>;
-  const id = (v: unknown): string | undefined =>
-    typeof v === 'string' && /^[0-9]{1,20}$/.test(v.trim()) ? v.trim() : undefined;
-
-  if (q.product === 'ga4') {
-    const propertyId = id(q.propertyId);
-    return propertyId ? { product: 'ga4', scopeId: propertyId } : null;
-  }
-  if (q.product === 'gtm') {
-    const containerId = id(q.containerId);
-    return containerId ? { product: 'gtm', scopeId: containerId } : null;
-  }
-  return null;
-}
-
-/** True when Postgres refused a filing because the group belongs to another container. */
-function isGroupMismatch(detail: string): boolean {
-  return /this group belongs to|cannot put a|another user's group|group .* does not exist/i.test(detail);
-}
-
-/**
- * The human sentence out of a PostgREST error body.
- *
- * The trigger's RAISE text is written for the person reading it, and it arrives wrapped in JSON
- * with a hint and a code. Passing the raw body through would show them all of that.
- */
-function pgMessage(detail: string): string {
-  const match = detail.match(/"message"\s*:\s*"((?:[^"\\]|\\.)*)"/);
-  const raw = match ? match[1].replace(/\\"/g, '"').replace(/\\n/g, ' ') : detail;
-  return raw.length > 400 ? `${raw.slice(0, 400)}…` : raw;
-}
-
 /** Fixed-window per-user turn limiter. Replace with Redis when this runs on more than one node. */
 class RateLimiter {
   private hits = new Map<string, number[]>();
@@ -393,45 +345,14 @@ async function main(): Promise<void> {
       });
     }
 
-    const body = (req.body ?? {}) as {
-      pinned?: unknown;
-      archived?: unknown;
-      title?: unknown;
-      groupId?: unknown;
-    };
-    const state: { pinned?: boolean; archived?: boolean; title?: string; groupId?: string | null } = {};
+    const body = (req.body ?? {}) as { pinned?: unknown; archived?: unknown };
+    const state: { pinned?: boolean; archived?: boolean } = {};
     if (typeof body.pinned === 'boolean') state.pinned = body.pinned;
     if (typeof body.archived === 'boolean') state.archived = body.archived;
-
-    if (body.title !== undefined) {
-      const title = typeof body.title === 'string' ? body.title.trim() : '';
-      if (!title || title.length > MAX_CONVERSATION_TITLE) {
-        return res.status(400).json({
-          error: 'bad_request',
-          message: `A title must be between 1 and ${MAX_CONVERSATION_TITLE} characters.`,
-        });
-      }
-      state.title = title;
-    }
-
-    // null is "take it out of its group", which is a different request from not mentioning the
-    // group at all — hence undefined and null are distinguished rather than both read as falsy.
-    if (body.groupId !== undefined) {
-      if (body.groupId === null) {
-        state.groupId = null;
-      } else if (typeof body.groupId === 'string' && UUID_RE.test(body.groupId.trim())) {
-        state.groupId = body.groupId.trim();
-      } else {
-        return res
-          .status(400)
-          .json({ error: 'bad_request', message: 'groupId must be a group id, or null to ungroup.' });
-      }
-    }
-
     if (Object.keys(state).length === 0) {
       return res
         .status(400)
-        .json({ error: 'bad_request', message: 'Send pinned, archived, title, or groupId.' });
+        .json({ error: 'bad_request', message: 'Send pinned and/or archived as booleans.' });
     }
 
     try {
@@ -441,162 +362,11 @@ async function main(): Promise<void> {
       }
       res.json({ conversation });
     } catch (err) {
-      const detail = err instanceof Error ? err.message : String(err);
-      console.error('[conversations] update failed:', forLog(detail));
-      // The group-matching trigger fires when a thread is filed under a group belonging to a
-      // different container, and its message already says precisely what is wrong. That is the
-      // caller's mistake rather than a server fault, so it goes back as a 409 with the reason
-      // instead of being flattened into "could not update".
-      if (isGroupMismatch(detail)) {
-        return res.status(409).json({ error: 'group_mismatch', message: pgMessage(detail) });
-      }
+      console.error(
+        '[conversations] update failed:',
+        forLog(err instanceof Error ? err.message : String(err)),
+      );
       res.status(502).json({ error: 'history_failed', message: 'Could not update that conversation.' });
-    }
-  });
-
-  /**
-   * The caller's groups for one container or property.
-   *
-   * Scope is required rather than optional. A group is bound to one container, so an unscoped list
-   * would mix folders from every container the user has ever opened and offer them as targets the
-   * database would then refuse.
-   */
-  app.get('/v1/conversation-groups', async (req, res) => {
-    let user: AuthedUser;
-    try {
-      user = await authenticate(req.headers.authorization);
-    } catch (err) {
-      return sendAuthError(res, err);
-    }
-    if (!audit.isEnabled()) {
-      return res.status(503).json({
-        error: 'history_unavailable',
-        message: 'Conversation history is not configured on this deployment.',
-      });
-    }
-
-    const scope = groupScopeFrom(req.query);
-    if (!scope) {
-      return res.status(400).json({
-        error: 'bad_request',
-        message: 'Send product=gtm with containerId, or product=ga4 with propertyId.',
-      });
-    }
-
-    try {
-      res.json({ groups: await audit.listGroups(user.id, scope) });
-    } catch (err) {
-      console.error('[groups] list failed:', forLog(err instanceof Error ? err.message : String(err)));
-      res.status(502).json({ error: 'groups_failed', message: 'Could not load your groups.' });
-    }
-  });
-
-  /** Create a group, or return the one that already has that name in this container. */
-  app.post('/v1/conversation-groups', async (req, res) => {
-    let user: AuthedUser;
-    try {
-      user = await authenticate(req.headers.authorization);
-    } catch (err) {
-      return sendAuthError(res, err);
-    }
-    if (!audit.isEnabled()) {
-      return res.status(503).json({
-        error: 'history_unavailable',
-        message: 'Conversation history is not configured on this deployment.',
-      });
-    }
-
-    const body = (req.body ?? {}) as { name?: unknown };
-    const name = typeof body.name === 'string' ? body.name.trim() : '';
-    if (!name || name.length > MAX_GROUP_NAME) {
-      return res.status(400).json({
-        error: 'bad_request',
-        message: `A group name must be between 1 and ${MAX_GROUP_NAME} characters.`,
-      });
-    }
-    const scope = groupScopeFrom(req.body ?? {});
-    if (!scope) {
-      return res.status(400).json({
-        error: 'bad_request',
-        message: 'Send product=gtm with containerId, or product=ga4 with propertyId.',
-      });
-    }
-
-    try {
-      const group = await audit.createGroup(user.id, { name, ...scope });
-      if (!group) {
-        return res.status(502).json({ error: 'groups_failed', message: 'Could not create that group.' });
-      }
-      res.status(201).json({ group });
-    } catch (err) {
-      console.error('[groups] create failed:', forLog(err instanceof Error ? err.message : String(err)));
-      res.status(502).json({ error: 'groups_failed', message: 'Could not create that group.' });
-    }
-  });
-
-  /** Rename a group. */
-  app.patch('/v1/conversation-groups/:id', async (req, res) => {
-    let user: AuthedUser;
-    try {
-      user = await authenticate(req.headers.authorization);
-    } catch (err) {
-      return sendAuthError(res, err);
-    }
-    if (!audit.isEnabled()) {
-      return res.status(503).json({
-        error: 'history_unavailable',
-        message: 'Conversation history is not configured on this deployment.',
-      });
-    }
-
-    const body = (req.body ?? {}) as { name?: unknown };
-    const name = typeof body.name === 'string' ? body.name.trim() : '';
-    if (!name || name.length > MAX_GROUP_NAME) {
-      return res.status(400).json({
-        error: 'bad_request',
-        message: `A group name must be between 1 and ${MAX_GROUP_NAME} characters.`,
-      });
-    }
-
-    try {
-      const group = await audit.renameGroup(user.id, req.params.id, name);
-      if (!group) return res.status(404).json({ error: 'not_found', message: 'Group not found.' });
-      res.json({ group });
-    } catch (err) {
-      const detail = err instanceof Error ? err.message : String(err);
-      console.error('[groups] rename failed:', forLog(detail));
-      if (/23505|duplicate key/i.test(detail)) {
-        return res.status(409).json({
-          error: 'name_taken',
-          message: 'A group with that name already exists for this container.',
-        });
-      }
-      res.status(502).json({ error: 'groups_failed', message: 'Could not rename that group.' });
-    }
-  });
-
-  /** Remove a group. The conversations in it survive, ungrouped. */
-  app.delete('/v1/conversation-groups/:id', async (req, res) => {
-    let user: AuthedUser;
-    try {
-      user = await authenticate(req.headers.authorization);
-    } catch (err) {
-      return sendAuthError(res, err);
-    }
-    if (!audit.isEnabled()) {
-      return res.status(503).json({
-        error: 'history_unavailable',
-        message: 'Conversation history is not configured on this deployment.',
-      });
-    }
-
-    try {
-      const removed = await audit.deleteGroup(user.id, req.params.id);
-      if (!removed) return res.status(404).json({ error: 'not_found', message: 'Group not found.' });
-      res.json({ ok: true });
-    } catch (err) {
-      console.error('[groups] delete failed:', forLog(err instanceof Error ? err.message : String(err)));
-      res.status(502).json({ error: 'groups_failed', message: 'Could not remove that group.' });
     }
   });
 
@@ -1096,21 +866,6 @@ async function main(): Promise<void> {
 
     if (conversationId) stream.send({ type: 'conversation', conversationId });
 
-    /**
-     * The group this thread is filed under, read from the row rather than taken from the request.
-     *
-     * Group memory is shared, so a client that could name its own group could name someone else's
-     * and have its rules injected into this turn. The lookup is scoped by user_id, so an id that is
-     * not theirs simply resolves to null. Best-effort: memory is an enhancement, and losing it is
-     * better than failing the turn.
-     */
-    const groupId = conversationId
-      ? await audit.getConversationGroupId(user.id, conversationId).catch((err) => {
-          console.error('[chat] group lookup failed:', forLog(err instanceof Error ? err.message : String(err)));
-          return null;
-        })
-      : null;
-
     try {
       await runTurn({
         cfg,
@@ -1118,7 +873,6 @@ async function main(): Promise<void> {
         llm,
         history: body.messages,
         context: { ...body.context, product },
-        groupId,
         user,
         attachments: extracted,
         emit: (event) => stream.send(event),
