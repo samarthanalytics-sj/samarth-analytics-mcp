@@ -15,7 +15,7 @@ import { McpPool } from './mcp-pool.js';
 import { createTokenProvider, GoogleIdentityError } from './google-identity.js';
 import { forLog, userRef } from './redact.js';
 import { ApprovalBroker, ApprovalError } from './approvals.js';
-import { OpenAiClient, OpenAiError } from './openai.js';
+import { isBillingFailure, OpenAiClient, OpenAiError } from './openai.js';
 import { runTurn } from './loop.js';
 import { AuditRecorder } from './audit.js';
 import { UsageMeter, quotaMessage } from './usage.js';
@@ -949,8 +949,8 @@ function friendlyError(err: unknown): string {
     }
     // A 429 has two causes that need opposite responses from the reader, and "retry in a moment"
     // is only right for one of them.
-    if (err.code === 'insufficient_quota' || err.code === 'billing_hard_limit_reached') {
-      return 'The OpenAI account has no remaining credit, so this will not succeed on a retry. Top up the balance or raise the billing limit.';
+    if (isBillingFailure(err.code)) {
+      return 'The OpenAI account has no remaining credit, so this will not succeed on a retry. Add credits at platform.openai.com/settings/organization/billing, then send the message again.';
     }
     if (err.status === 429) {
       const ceiling = err.limitTokens

@@ -212,3 +212,28 @@ test('the read that used to unlock writes still reaches the GA4 read tools', () 
   const selected = selectToolGroups({ messages: ['Which key events are configured on this property?'] });
   assert.ok(selected.has('ga4-read'), 'a GA4 read question still needs the GA4 read group');
 });
+
+// ── Asking for a group that a keyword already opened is not a refusal ────────
+//
+// Observed: "Create a GA4 email_click tag ... Create the required trigger/variables". The word
+// "Create" opens gtm-write by keyword, so when the model then called enable_tool_group('gtm-write')
+// nothing was NEWLY revealed. The reply was "No tools in group are available in this conversation.
+// Do not claim the capability exists here; say what the user would need to do instead." The model
+// obeyed: it wrote out the manual GTM steps while tags_create and triggers_create were visible the
+// whole time.
+
+test('a group that was already open reports its tools, not emptiness', () => {
+  const alreadyOpen = ALL.filter((t) => t.name === 'tags_create' || t.name === 'triggers_create');
+  const text = describeRevealedGroup('gtm-write', [], alreadyOpen);
+  assert.match(text, /already open/i);
+  assert.match(text, /tags_create/, 'must name the tools that are callable right now');
+  assert.equal(/no tools/i.test(text), false, 'must not say the group is empty');
+  // The instruction that produced the manual walkthrough must not survive in this branch.
+  assert.equal(/what the user would need to do instead/i.test(text), false);
+  assert.match(text, /manual/i, 'must explicitly forbid falling back to manual instructions');
+});
+
+test('a genuinely empty group still says so', () => {
+  const text = describeRevealedGroup('gtm-write', [], []);
+  assert.match(text, /No tools in group/i);
+});
