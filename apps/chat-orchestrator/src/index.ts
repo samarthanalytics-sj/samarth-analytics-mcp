@@ -21,6 +21,7 @@ import { AuditRecorder } from './audit.js';
 import { UsageMeter, quotaMessage } from './usage.js';
 import { planFix, FIXABLE_CATEGORIES, type AuditFinding } from './audit-fix.js';
 import { SseStream } from './sse.js';
+import { deadline, DeadlineError } from './deadline.js';
 import { scopeTools } from './tools.js';
 import { checkAllowlistAgainstServer } from './integrations.js';
 import { extractAll, type ExtractedAttachment } from './attachments.js';
@@ -534,8 +535,17 @@ async function main(): Promise<void> {
 
     let mcp: McpConnection;
     try {
-      mcp = await pool.acquire(user.id, userJwt);
+      mcp = await deadline(
+        pool.acquire(user.id, userJwt),
+        cfg.limits.resourceDeadlineMs,
+        'Starting a tool session took too long.',
+      );
     } catch (err) {
+      if (err instanceof DeadlineError) {
+        console.error(`[resources] ${req.path} timed out starting a session for ${userRef(user.id)}`);
+        res.status(504).json({ code: 'timed_out', message: err.message });
+        return;
+      }
       if (err instanceof GoogleIdentityError) {
         console.error(`[identity] ${err.code} for user ${userRef(user.id)}: ${forLog(err.message)}`);
         res.status(err.code === 'not_connected' ? 428 : 502).json({
@@ -552,8 +562,19 @@ async function main(): Promise<void> {
     }
 
     try {
-      res.json(await fn(mcp, user));
+      res.json(
+        await deadline(
+          Promise.resolve(fn(mcp, user)),
+          cfg.limits.resourceDeadlineMs,
+          'That lookup took too long and was stopped.',
+        ),
+      );
     } catch (err) {
+      if (err instanceof DeadlineError) {
+        console.error(`[resources] ${req.path} exceeded the deadline for user ${userRef(user.id)}`);
+        res.status(504).json({ code: 'timed_out', message: err.message });
+        return;
+      }
       const code = err instanceof ResourceError ? err.code : 'resource_failed';
       console.error(`[resources] ${req.path} failed for user ${userRef(user.id)}: ${forLog(String(err))}`);
       // Not everything reaching here is an upstream fault. A refused fix and a missing typed
