@@ -118,6 +118,14 @@ export interface OrchestratorConfig {
     maxToolResultChars: number;
     maxToolHistoryChars: number;
     turnsPerMinutePerUser: number;
+    /**
+     * How long a /v1/resources read may take before this server answers 504 itself.
+     *
+     * Must stay comfortably under the proxy's own origin timeout (100s on Cloudflare), because a
+     * proxy-generated error page carries no CORS headers and reaches the browser as an unexplained
+     * network failure. See deadline.ts.
+     */
+    resourceDeadlineMs: number;
   };
   /**
    * Write tools are withheld from the model unless this is true. Independent of the MCP's own
@@ -356,6 +364,9 @@ export function loadConfig(): OrchestratorConfig {
        */
       maxToolHistoryChars: num('MAX_TOOL_HISTORY_CHARS', 24_000),
       turnsPerMinutePerUser: num('TURNS_PER_MINUTE_PER_USER', 10),
+      // 60s: generous for a picker that may scan up to 30 GTM accounts, and far enough below
+      // Cloudflare's 100s cut that this server always answers first.
+      resourceDeadlineMs: num('RESOURCE_DEADLINE_MS', 60_000),
     },
     enableWriteTools: bool('ORCHESTRATOR_ENABLE_WRITE_TOOLS'),
     // Deletes require writes. Enabling deletes alone would be incoherent.
