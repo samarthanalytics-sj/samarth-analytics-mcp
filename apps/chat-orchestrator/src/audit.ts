@@ -325,13 +325,19 @@ export class AuditRecorder {
   async setConversationState(
     userId: string,
     conversationId: string,
-    state: { pinned?: boolean; archived?: boolean },
+    state: { pinned?: boolean; archived?: boolean; title?: string; groupId?: string | null },
   ): Promise<ConversationSummary | null> {
     const patch: Record<string, unknown> = {};
     if (typeof state.pinned === 'boolean') patch.pinned = state.pinned;
     if (typeof state.archived === 'boolean') {
       patch.archived_at = state.archived ? new Date().toISOString() : null;
     }
+    // A rename replaces the auto-generated first-message title, so it must survive whatever
+    // generated that; nothing here writes title again after creation.
+    if (typeof state.title === 'string') patch.title = state.title;
+    // Explicit null is "take it out of its group", which is different from not mentioning it.
+    // Hence the `in` check rather than a truthiness test.
+    if ('groupId' in state) patch.group_id = state.groupId;
     if (Object.keys(patch).length === 0) return null;
 
     const rows = (await this.request(
@@ -344,6 +350,121 @@ export class AuditRecorder {
 
     const row = rows?.[0];
     return row ? toSummary(row) : null;
+  }
+
+  /* ─────────────────────────── Conversation groups ───────────────────────────
+   *
+   * A group is a folder whose members share their memory, which is why it is bound to one product
+   * and one container: see the migration, and MemoryScope in memory.ts. The binding is enforced by
+   * a database trigger, so a bug here cannot leak one container's memory into another's threads —
+   * a filing mistake becomes a 502 rather than a silent cross-contamination.
+   */
+
+  /** The caller's groups for one container or property. */
+  async listGroups(
+    userId: string,
+    scope: { product: 'gtm' | 'ga4'; scopeId: string },
+  ): Promise<ConversationGroup[]> {
+    const rows = (await this.request(
+      'GET',
+      `chat_conversation_groups?user_id=eq.${encodeURIComponent(userId)}` +
+        `&product=eq.${encodeURIComponent(scope.product)}` +
+        `&scope_id=eq.${encodeURIComponent(scope.scopeId)}` +
+        `&deleted_at=is.null&select=${GROUP_COLUMNS}&order=name.asc`,
+      undefined,
+      'return=representation',
+    )) as GroupRow[] | null;
+
+    return (rows ?? []).map(toGroup);
+  }
+
+  /**
+   * Creates a group, or returns the existing one with that name.
+   *
+   * Idempotent because the caller is "add this chat to a group, making it if needed": a second
+   * click, or two tabs, must not produce two folders with the same name. The unique index is what
+   * makes that safe — this reads after the conflict rather than checking first and racing.
+   */
+  async createGroup(
+    userId: string,
+    input: { name: string; product: 'gtm' | 'ga4'; scopeId: string },
+  ): Promise<ConversationGroup | null> {
+    const name = input.name.trim();
+    if (!name) return null;
+
+    try {
+      const rows = (await this.request(
+        'POST',
+        `chat_conversation_groups?select=${GROUP_COLUMNS}`,
+        { user_id: userId, name, product: input.product, scope_id: input.scopeId },
+        'return=representation',
+      )) as GroupRow[] | null;
+      const row = rows?.[0];
+      if (row) return toGroup(row);
+    } catch (err) {
+      // 23505 is the unique index doing its job. Anything else is a real failure.
+      if (!/23505|duplicate key/i.test(err instanceof Error ? err.message : String(err))) throw err;
+    }
+
+    const existing = await this.listGroups(userId, { product: input.product, scopeId: input.scopeId });
+    return existing.find((g) => g.name.trim().toLowerCase() === name.toLowerCase()) ?? null;
+  }
+
+  /** Rename a group. Scoped by user_id, so the filter is the authorisation. */
+  async renameGroup(userId: string, groupId: string, name: string): Promise<ConversationGroup | null> {
+    const rows = (await this.request(
+      'PATCH',
+      `chat_conversation_groups?id=eq.${encodeURIComponent(groupId)}` +
+        `&user_id=eq.${encodeURIComponent(userId)}&deleted_at=is.null&select=${GROUP_COLUMNS}`,
+      { name: name.trim(), updated_at: new Date().toISOString() },
+      'return=representation',
+    )) as GroupRow[] | null;
+
+    const row = rows?.[0];
+    return row ? toGroup(row) : null;
+  }
+
+  /**
+   * Remove a group. The conversations in it survive, ungrouped.
+   *
+   * Soft-deleted like conversations, and for a related reason: group-scoped memories point at this
+   * id, and hard-deleting the row would leave them orphaned and unreadable rather than simply
+   * unused. The unique-name index excludes deleted rows, so the name is immediately reusable.
+   */
+  async deleteGroup(userId: string, groupId: string): Promise<boolean> {
+    const rows = (await this.request(
+      'PATCH',
+      `chat_conversation_groups?id=eq.${encodeURIComponent(groupId)}` +
+        `&user_id=eq.${encodeURIComponent(userId)}&deleted_at=is.null&select=id`,
+      { deleted_at: new Date().toISOString() },
+      'return=representation',
+    )) as { id: string }[] | null;
+
+    if ((rows?.length ?? 0) === 0) return false;
+
+    // The FK is ON DELETE SET NULL, which a soft delete never triggers, so the threads would keep
+    // pointing at a group the user has removed and the trigger would then refuse edits to them.
+    await this.request(
+      'PATCH',
+      `chat_conversations?group_id=eq.${encodeURIComponent(groupId)}` +
+        `&user_id=eq.${encodeURIComponent(userId)}&select=id`,
+      { group_id: null },
+      'return=minimal',
+    );
+    return true;
+  }
+
+  /** The group a conversation is filed under, for the memory scope. Null when it has none. */
+  async getConversationGroupId(userId: string, conversationId: string): Promise<string | null> {
+    const rows = (await this.request(
+      'GET',
+      `chat_conversations?id=eq.${encodeURIComponent(conversationId)}` +
+        `&user_id=eq.${encodeURIComponent(userId)}&deleted_at=is.null&select=group_id&limit=1`,
+      undefined,
+      'return=representation',
+    )) as { group_id: string | null }[] | null;
+
+    return rows?.[0]?.group_id ?? null;
   }
 
   /**
@@ -409,13 +530,19 @@ export class AuditRecorder {
       updatedAt: conv.updated_at ?? conv.created_at,
       messages: (rows ?? [])
         .filter((m) => m.role === 'user' || m.role === 'assistant')
-        .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content ?? '' })),
+        // created_at was already selected and then dropped here, so a reopened conversation lost
+        // the times its messages were sent while the database had them all along.
+        .map((m) => ({
+          role: m.role as 'user' | 'assistant',
+          content: m.content ?? '',
+          createdAt: m.created_at,
+        })),
     };
   }
 }
 
 const CONVERSATION_COLUMNS =
-  'id,title,product,account_id,container_id,workspace_id,property_id,pinned,archived_at,created_at,updated_at';
+  'id,title,product,account_id,container_id,workspace_id,property_id,pinned,archived_at,created_at,updated_at,group_id';
 
 function toSummary(r: ConversationRow): ConversationSummary {
   return {
@@ -428,6 +555,7 @@ function toSummary(r: ConversationRow): ConversationSummary {
     propertyId: r.property_id ?? undefined,
     pinned: r.pinned === true,
     archived: r.archived_at != null,
+    groupId: r.group_id ?? undefined,
     updatedAt: r.updated_at ?? r.created_at,
   };
 }
@@ -444,6 +572,7 @@ interface ConversationRow {
   archived_at?: string | null;
   created_at: string;
   updated_at: string | null;
+  group_id?: string | null;
 }
 
 interface MessageRow {
@@ -462,9 +591,41 @@ export interface ConversationSummary {
   propertyId?: string;
   pinned?: boolean;
   archived?: boolean;
+  /** The group this thread is filed under, if any. Its memory is shared with its siblings. */
+  groupId?: string;
   updatedAt: string;
 }
 
 export interface ConversationDetail extends ConversationSummary {
-  messages: { role: 'user' | 'assistant'; content: string }[];
+  messages: { role: 'user' | 'assistant'; content: string; createdAt: string }[];
+}
+
+const GROUP_COLUMNS = 'id,name,product,scope_id,created_at,updated_at';
+
+function toGroup(r: GroupRow): ConversationGroup {
+  return {
+    id: r.id,
+    name: r.name,
+    product: r.product === 'ga4' ? 'ga4' : 'gtm',
+    scopeId: r.scope_id,
+    updatedAt: r.updated_at ?? r.created_at,
+  };
+}
+
+interface GroupRow {
+  id: string;
+  name: string;
+  product: string | null;
+  scope_id: string;
+  created_at: string;
+  updated_at: string | null;
+}
+
+export interface ConversationGroup {
+  id: string;
+  name: string;
+  product: 'gtm' | 'ga4';
+  /** The container_id (gtm) or property_id (ga4) every thread in this group belongs to. */
+  scopeId: string;
+  updatedAt: string;
 }
