@@ -10,8 +10,8 @@
     "check": "tsc --noEmit"
   },
   "dependencies": {
-    "@stytch/react": "^19.0.0",
-    "@stytch/vanilla-js": "^5.0.0",
+    "@stytch/react": "^20.1.0",
+    "@stytch/vanilla-js": "^6.1.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
@@ -20,6 +20,6 @@
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
     "typescript": "^5.4.5",
-    "vite": "^5.4.11"
+    "vite": "^8.2.1"
   }
 }
