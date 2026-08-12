@@ -18,7 +18,9 @@
  *   node scripts/supervise.mjs
  */
 import { spawn } from 'node:child_process';
-import { createWriteStream, mkdirSync, renameSync, statSync } from 'node:fs';
+import {
+  createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync,
+} from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -27,10 +29,49 @@ const entry = join(packageRoot, 'dist', 'chat-orchestrator', 'src', 'index.js');
 const logDir = join(packageRoot, 'logs');
 const logFile = join(logDir, 'orchestrator.log');
 
+/**
+ * Where a deploy declares itself, and where it finds the process to stop.
+ *
+ * A deploy and a crash used to be the same line in this log. Both arrive as an
+ * external kill, so the child exits with no signal and code -1 (4294967295
+ * unsigned), and the supervisor could only report what it saw:
+ *
+ *   orchestrator exited (code 4294967295, signal none) after 2470s
+ *
+ * On 2026-08-12 five of those lines were routine deploys, one per merged PR,
+ * and reading the log back they were indistinguishable from a service falling
+ * over every half hour. Two days of apparent crash-looping were a healthy
+ * service being redeployed.
+ *
+ * The obvious fix, having the deploy send SIGTERM so the child shuts down
+ * cleanly, does not work here: this host is Windows, where killing another
+ * process maps to TerminateProcess whatever signal is named, and the target
+ * never runs its handler. The orchestrator's own SIGTERM handler is real but
+ * unreachable from outside the process.
+ *
+ * So intent is declared out of band instead. scripts/restart.mjs writes the
+ * flag, then stops the pid in the pid file; this loop reads the flag and says
+ * which kind of stop it was. The kill is still abrupt. What changed is that the
+ * log no longer implies an incident when there wasn't one.
+ */
+const pidFile = join(logDir, 'orchestrator.pid');
+const restartFlag = join(logDir, 'restart-requested');
+
+/**
+ * How long a restart request stays believable.
+ *
+ * Without an expiry, a flag written by a deploy whose kill then failed would sit
+ * on disk and relabel the next genuine crash as planned — the one failure mode
+ * that would make this worse than no feature at all.
+ */
+const RESTART_FLAG_TTL_MS = 120_000;
+
 /** A run shorter than this did not get as far as serving anything, so it counts as a failed start. */
 const HEALTHY_RUN_MS = 20_000;
 const MAX_LOG_BYTES = 5 * 1024 * 1024;
 const BACKOFF_MS = [1_000, 2_000, 5_000, 15_000, 30_000, 60_000];
+/** A planned restart is not backing off from anything; just let the port clear. */
+const PLANNED_RESTART_MS = 500;
 
 mkdirSync(logDir, { recursive: true });
 
@@ -62,6 +103,63 @@ let child = null;
 let stopping = false;
 let consecutiveFastExits = 0;
 
+/**
+ * Reads and clears a restart request, returning null when there isn't a usable one.
+ *
+ * Always deletes the file it read, including when it was too old to honour: a
+ * flag left behind is exactly what would mislabel a later crash.
+ */
+function consumeRestartRequest() {
+  if (!existsSync(restartFlag)) return null;
+  let raw = '';
+  try {
+    raw = readFileSync(restartFlag, 'utf8');
+  } catch {
+    // Unreadable is as good as absent; fall through and clear it.
+  }
+  try {
+    unlinkSync(restartFlag);
+  } catch {
+    // Losing this race means a duplicate label at worst, never a missed crash.
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    // Hand-written or truncated. Honour the intent, describe it as unknown.
+    parsed = {};
+  }
+
+  const requestedAt = Number(parsed.at);
+  const age = Number.isFinite(requestedAt) ? Date.now() - requestedAt : Number.POSITIVE_INFINITY;
+  if (age > RESTART_FLAG_TTL_MS) {
+    note(
+      `ignoring a restart request that was ${Number.isFinite(age) ? `${Math.round(age / 1000)}s` : 'un-timestamped and'} ` +
+        `old — treating this stop as unplanned`,
+    );
+    return null;
+  }
+  return { reason: typeof parsed.reason === 'string' && parsed.reason ? parsed.reason : 'no reason given', age };
+}
+
+/** Publishes the child's pid so a deploy can stop the right process. */
+function writePidFile(pid) {
+  try {
+    writeFileSync(pidFile, String(pid), 'utf8');
+  } catch (err) {
+    note(`could not write ${pidFile}: ${err.message}. scripts/restart.mjs will not find the process.`);
+  }
+}
+
+function clearPidFile() {
+  try {
+    if (existsSync(pidFile)) unlinkSync(pidFile);
+  } catch {
+    // A stale pid file is handled by the reader, which checks the process exists.
+  }
+}
+
 function start() {
   const startedAt = Date.now();
   child = spawn(process.execPath, [entry], {
@@ -75,24 +173,42 @@ function start() {
 
   child.on('exit', (code, signal) => {
     child = null;
+    clearPidFile();
     if (stopping) return;
 
     const ranFor = Date.now() - startedAt;
-    note(`orchestrator exited (code ${code ?? 'null'}, signal ${signal ?? 'none'}) after ${Math.round(ranFor / 1000)}s`);
+    const seconds = Math.round(ranFor / 1000);
+    const planned = consumeRestartRequest();
 
-    if (ranFor < HEALTHY_RUN_MS) {
-      consecutiveFastExits++;
-    } else {
-      // It ran long enough to have served traffic, so this is a crash rather than a bad start.
-      consecutiveFastExits = 0;
-    }
-
-    const delay = BACKOFF_MS[Math.min(consecutiveFastExits, BACKOFF_MS.length - 1)];
-    if (consecutiveFastExits >= 3) {
+    let delay;
+    if (planned) {
+      // Said plainly, because the whole point is that this line is not an incident.
       note(
-        `${consecutiveFastExits} fast exits in a row. This is usually configuration, not bad luck: ` +
-          `check the error above and .env before waiting for the next attempt.`,
+        `orchestrator stopped for a PLANNED RESTART after ${seconds}s — reason: ${planned.reason}. ` +
+          `Not a crash; the exit code below is just how Windows reports an external stop ` +
+          `(code ${code ?? 'null'}, signal ${signal ?? 'none'}).`,
       );
+      // A deploy is not evidence of instability, so it must not push the backoff
+      // ladder up and slow down the restart the operator is waiting on.
+      consecutiveFastExits = 0;
+      delay = PLANNED_RESTART_MS;
+    } else {
+      note(`orchestrator exited UNEXPECTEDLY (code ${code ?? 'null'}, signal ${signal ?? 'none'}) after ${seconds}s`);
+
+      if (ranFor < HEALTHY_RUN_MS) {
+        consecutiveFastExits++;
+      } else {
+        // It ran long enough to have served traffic, so this is a crash rather than a bad start.
+        consecutiveFastExits = 0;
+      }
+
+      delay = BACKOFF_MS[Math.min(consecutiveFastExits, BACKOFF_MS.length - 1)];
+      if (consecutiveFastExits >= 3) {
+        note(
+          `${consecutiveFastExits} fast exits in a row. This is usually configuration, not bad luck: ` +
+            `check the error above and .env before waiting for the next attempt.`,
+        );
+      }
     }
     note(`restarting in ${delay / 1000}s`);
 
@@ -109,6 +225,7 @@ function start() {
   });
 
   child.on('error', (err) => note(`failed to spawn: ${err.message}`));
+  writePidFile(child.pid);
   note(`started orchestrator (pid ${child.pid})`);
 }
 
@@ -118,6 +235,7 @@ function shutdown(signal) {
   stopping = true;
   note(`supervisor received ${signal}, stopping orchestrator`);
   child?.kill();
+  clearPidFile();
   // Give it a moment to close listeners, then leave regardless.
   setTimeout(() => process.exit(0), 3_000).unref?.();
 }
