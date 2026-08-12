@@ -29,6 +29,7 @@ import { z } from 'zod';
 import type { GtmClient } from '../utils/gtmClient.js';
 import { checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
 import { jsonResult, textResult, errorResult } from '../utils/toolResponse.js';
+import { paginate } from '../utils/pagination.js';
 import {
   buildGa4EventTag,
   buildTrigger,
@@ -94,14 +95,24 @@ interface CreatedTrigger {
   reused: boolean;
 }
 
-/** Finds a trigger by name, so a second tag on the same event does not create a second trigger. */
+/**
+ * Finds a trigger by name, so a second tag on the same event does not create a second trigger.
+ *
+ * Paginated, because "not found" here is acted on by CREATING one. An unpaginated read would miss
+ * an existing trigger that happened to fall on the second page and quietly duplicate it, which is
+ * the precise failure this reuse check exists to prevent.
+ */
 async function findOrCreateTrigger(
   client: GtmClient,
   parent: string,
   input: TriggerInput,
 ): Promise<CreatedTrigger> {
-  const existing = await client.accounts.containers.workspaces.triggers.list({ parent });
-  const match = (existing.data.trigger ?? []).find((t) => t.name === input.name);
+  const existing = await paginate(
+    (token) => client.accounts.containers.workspaces.triggers.list({ parent, pageToken: token }).then((r) => r.data),
+    (data) => data.trigger,
+    {},
+  );
+  const match = existing.items.find((t) => t.name === input.name);
   if (match?.triggerId) {
     return { triggerId: match.triggerId, name: match.name ?? input.name, reused: true };
   }
