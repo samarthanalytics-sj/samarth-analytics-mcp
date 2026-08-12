@@ -129,6 +129,11 @@ export function groupOf(name: string): ToolGroup | undefined {
   // build a Meta or LinkedIn PIXEL TAG - an everyday web-container job. Left in server-side it was
   // invisible to "add the meta pixel", which is the only request that ever needs it.
   if (name === 'templates_import_from_gallery') return 'gtm-write';
+  // The typed one-call builders. They create tags, triggers and variables, so they belong with the
+  // rest of the tag-building surface; the noun_verb prefix rules below cannot see that from the
+  // name. Left unclassified they would fail open and be sent on every turn, including read-only
+  // ones, which is the cost progressive disclosure exists to avoid.
+  if (name === 'create_gtm_tracking_tag' || name === 'create_gtm_variable_typed') return 'gtm-write';
 
   if (name.startsWith('ga4_')) return GA4_WRITE.test(name) ? 'ga4-write' : 'ga4-read';
   if (SERVER_SIDE.test(name)) return 'server-side';

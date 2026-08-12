@@ -45,7 +45,8 @@ const ALL: ToolDef[] = RAW.map(
 // ── The classification cannot rot ────────────────────────────────────────────
 
 test('the fixture is the real server inventory, not a sample', () => {
-  assert.equal(ALL.length, 179, 'refresh the fixture if the server tool count changed');
+  // 181 = 179 primitives + create_gtm_tracking_tag + create_gtm_variable_typed.
+  assert.equal(ALL.length, 181, 'refresh the fixture if the server tool count changed');
 });
 
 test('every real tool is classified: nothing falls through to always-sent', () => {

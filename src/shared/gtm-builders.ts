@@ -649,3 +649,118 @@ export function buildVariable(o: VariableInput): GtmVariableResource {
       throw new Error(`Unknown variable kind "${String(o.kind)}" — use constant / data_layer / javascript / event_data / request_header (or create_gtm_variable for raw types).`);
   }
 }
+
+
+
+/** Built-in variables a trigger needs (so we can auto-enable them). */
+/** The distinct, non-empty dataLayer KEYS a custom_event trigger scopes on via {{dlv - <key>}}
+ *  (from `dataLayerConditions`). Each drives auto-creation of its `dlv - <key>` Data Layer Variable
+ *  so the {{dlv - <key>}} the trigger references actually resolves. [] for any non-custom_event kind
+ *  (native {{Form ID}} works on form_submit — no dlv needed there). PURE. */
+/** URL variables a trigger references and that must be auto-created for its conditions to resolve.
+ *  Currently just {{URL - query}} for a queryString condition: web containers have NO built-in
+ *  query-string variable, so it has to be a user-defined URL variable with component QUERY. */
+export function triggerUrlVarNames(o: TriggerInput): string[] {
+  return o.queryStringValue ? [URL_QUERY_VAR] : [];
+}
+
+
+
+export function triggerDataLayerVarKeys(o: TriggerInput): string[] {
+  if (o.kind !== 'custom_event') return [];
+  const out: string[] = [];
+  for (const c of o.dataLayerConditions ?? []) {
+    const key = (c?.key ?? '').trim();
+    if (key && !out.includes(key)) out.push(key);
+  }
+  return out;
+}
+
+
+
+export function triggerBuiltInVars(o: TriggerInput): string[] {
+  const vars: string[] = [];
+  // Page-context conditions are valid on ANY filter-capable kind, so their built-ins are declared
+  // before the per-kind block. Without the variable enabled the condition reads undefined and the
+  // trigger silently never fires. {{URL - query}} is NOT here: it is a USER variable (web
+  // containers have no query-string built-in), provisioned via triggerUrlVarNames.
+  if (o.pageHostnameValue) vars.push('pageHostname');
+  if (o.referrerValue) vars.push('referrer');
+  if (o.kind === 'history_change') {
+    // The History built-ins a historyChange trigger's tags almost always read.
+    vars.push('newHistoryFragment', 'oldHistoryFragment', 'newHistoryUrl', 'oldHistoryUrl', 'historySource');
+  }
+  if (o.kind === 'scroll_depth') vars.push('scrollDepthThreshold', 'scrollDepthUnits', 'scrollDepthDirection');
+  if (o.kind === 'element_visibility') vars.push('elementVisibilityRatio', 'elementVisibilityTime');
+  if (o.kind === 'dom_ready' || o.kind === 'window_loaded' || o.kind === 'history_change' || o.kind === 'js_error' || o.kind === 'scroll_depth' || o.kind === 'element_visibility') {
+    if (o.pagePathValue) vars.push('pagePath');
+    if (o.pageUrlValue) vars.push('pageUrl');
+  }
+  if (o.kind === 'link_click' || o.kind === 'all_clicks') {
+    if (o.clickUrlValue) vars.push('clickUrl');
+    // A lookup-table trigger reads {{Click Text}} through its companion smm variable.
+    if (o.clickTextValue || o.lookupTable?.name) vars.push('clickText');
+    if (o.clickElementValue) vars.push('clickElement');
+    // Without these the container has no {{Click Classes}} / {{Click ID}} to evaluate, so the
+    // condition reads undefined and the trigger never fires.
+    if (o.clickClassesValue) vars.push('clickClasses');
+    if (o.clickIdValue) vars.push('clickId');
+    if (o.pagePathValue) vars.push('pagePath');
+  }
+  if (o.kind === 'form_submit') {
+    if (o.formIdValue) vars.push('formId');
+    if (o.formClassesValue) vars.push('formClasses');
+    if (o.pagePathValue) vars.push('pagePath'); // ANDed alongside Form ID/Classes (page-scoped form tag)
+  }
+  if (o.kind === 'custom_event') {
+    if (o.formIdValue) vars.push('formId');
+    if (o.pagePathValue) vars.push('pagePath');
+    if (o.pageUrlValue) vars.push('pageUrl');
+  }
+  if (o.kind === 'pageview' && o.pageUrlValue) vars.push('pageUrl');
+  // The YouTube Video trigger surfaces the "Video" built-in variables — enable them
+  // all so the tag's {{Video Title}}/{{Video Percent}}/… and event-name {{Video
+  // Status}} resolve.
+  if (o.kind === 'youtube_video') vars.push(...VIDEO_BUILT_IN_VARS);
+  return vars;
+}
+
+
+
+// GTM built-in variable DISPLAY NAME → API `type` key, for the ones a tag's
+// event/config parameters commonly reference. Used to auto-enable exactly the
+// built-in variables a tag's {{...}} values need (user variables like
+// {{GA4 Measurement ID}} are not built-in and are intentionally absent here).
+const BUILT_IN_VAR_KEYS: Record<string, string> = {
+  'page url': 'pageUrl', 'page hostname': 'pageHostname', 'page path': 'pagePath', 'referrer': 'referrer',
+  'click element': 'clickElement', 'click classes': 'clickClasses', 'click id': 'clickId',
+  'click target': 'clickTarget', 'click url': 'clickUrl', 'click text': 'clickText',
+  'form element': 'formElement', 'form classes': 'formClasses', 'form id': 'formId',
+  'form target': 'formTarget', 'form url': 'formUrl', 'form text': 'formText',
+  'video provider': 'videoProvider', 'video url': 'videoUrl', 'video title': 'videoTitle',
+  'video duration': 'videoDuration', 'video current time': 'videoCurrentTime',
+  'video percent': 'videoPercent', 'video status': 'videoStatus', 'video visible': 'videoVisible',
+  'history source': 'historySource', 'new history fragment': 'newHistoryFragment',
+  'old history fragment': 'oldHistoryFragment', 'new history state': 'newHistoryState',
+  'old history state': 'oldHistoryState', 'new history url': 'newHistoryUrl', 'old history url': 'oldHistoryUrl',
+  'scroll depth threshold': 'scrollDepthThreshold', 'scroll depth units': 'scrollDepthUnits',
+  'scroll direction': 'scrollDepthDirection',
+  'percent visible': 'elementVisibilityRatio', 'on-screen duration': 'elementVisibilityTime',
+};
+
+
+
+/** Built-in variable type keys referenced by {{Name}} tokens in the given values
+ *  (e.g. an event parameter value "{{Click Text}}" → "clickText"). Unknown names
+ *  (user-defined variables) are skipped. */
+export function builtInVarsForTemplates(values: Array<string | undefined>): string[] {
+  const out = new Set<string>();
+  for (const v of values) {
+    if (typeof v !== 'string') continue;
+    for (const m of v.matchAll(/\{\{([^}]+)\}\}/g)) {
+      const key = BUILT_IN_VAR_KEYS[m[1].trim().toLowerCase()];
+      if (key) out.add(key);
+    }
+  }
+  return [...out];
+}

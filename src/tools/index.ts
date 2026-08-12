@@ -19,6 +19,7 @@ import { registerTriggerTools } from './triggers.js';
 import { registerVariableTools } from './variables.js';
 import { registerFolderTools } from './folders.js';
 import { registerBuiltInVariableTools } from './builtInVariables.js';
+import { registerTypedBuilderTools } from './typedBuilders.js';
 import { registerVersionTools } from './versions.js';
 import { registerPublishTools } from './publish.js';
 import { registerAuditTools } from './audit.js';
@@ -45,6 +46,9 @@ export function registerAllTools(
   registerVariableTools(server, getClient);
   registerFolderTools(server, getClient);
   registerBuiltInVariableTools(server, getClient);
+  // Typed one-call builders. Registered after the primitives they are built on, so a reader sees
+  // what they wrap. See src/tools/typedBuilders.ts for why they exist.
+  registerTypedBuilderTools(server, getClient);
   registerVersionTools(server, getClient);
   registerPublishTools(server, getClient);
   registerEnvironmentTools(server, getClient);
