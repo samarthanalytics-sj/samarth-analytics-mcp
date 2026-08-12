@@ -31,10 +31,10 @@ const { registerTypedBuilderTools } = await import(pathToFileURL(dist).href);
 const { McpServer } = await import(pathToFileURL(sdk).href);
 
 /** A GTM client that records calls instead of making them. */
-function stubClient({ existingTriggers = [] } = {}) {
+function stubClient({ existingTriggers = [], existingTags = [] } = {}) {
   const calls = [];
   const record = (kind) => ({
-    list: async () => ({ data: { trigger: existingTriggers } }),
+    list: async () => ({ data: { trigger: existingTriggers, tag: existingTags } }),
     create: async (a) => {
       calls.push({ kind, body: a.requestBody, type: a.type });
       return {
@@ -173,12 +173,55 @@ await test('an existing trigger of the same name is REUSED, never duplicated', a
 
 console.log('\nrefusals that prevent a tag which looks created and records nothing:');
 
-await test('a placeholder Measurement ID is refused before anything is written', async () => {
-  // GTM accepts G-123456789 happily and the tag then reports to nothing.
+await test('a placeholder is RESOLVED from the container, not handed back to the user', async () => {
+  // Refusing and asking cost three turns for a fourteen-second job, and the third only succeeded
+  // because the user invented a different id that happened not to match the pattern. The container
+  // already knows the answer.
+  const client = stubClient({
+    existingTags: [{ type: 'googtag', parameter: [{ key: 'tagId', value: 'G-REAL9876' }] }],
+  });
+  const res = await call(serverWith(client), 'create_gtm_tracking_tag', { ...EMAIL_TAG, measurementId: 'G-123456789' });
+  const tag = client.calls.find((c) => c.kind === 'tag').body;
+  const override = tag.parameter.find((p) => p.key === 'measurementIdOverride');
+  assert.strictEqual(override.value, 'G-REAL9876', 'the container id must be used');
+  assert.match(json(res).measurementIdNote, /placeholder/i, 'a substitution must never be silent');
+  assert.match(json(res).measurementIdNote, /G-REAL9876/);
+});
+
+await test('a gaawe tag is a fallback source for the real id when there is no googtag', async () => {
+  const client = stubClient({
+    existingTags: [{ type: 'gaawe', parameter: [{ key: 'measurementIdOverride', value: 'G-FROMEVENT' }] }],
+  });
+  await call(serverWith(client), 'create_gtm_tracking_tag', { ...EMAIL_TAG, measurementId: 'G-123456789' });
+  const tag = client.calls.find((c) => c.kind === 'tag').body;
+  assert.strictEqual(tag.parameter.find((p) => p.key === 'measurementIdOverride').value, 'G-FROMEVENT');
+});
+
+await test('an empty container has nothing to resolve, so it asks, and says how to override', async () => {
   const client = stubClient();
   const res = await call(serverWith(client), 'create_gtm_tracking_tag', { ...EMAIL_TAG, measurementId: 'G-123456789' });
   assert.match(text(res), /placeholder/i);
-  assert.strictEqual(client.calls.length, 0, 'nothing may be created for a placeholder id');
+  assert.match(text(res), /allowPlaceholderId/, 'a guard with no way through is a wall');
+  assert.strictEqual(client.calls.some((c) => c.kind === 'tag'), false, 'no tag may be created');
+});
+
+await test('allowPlaceholderId honours a confirmed id instead of refusing again', async () => {
+  // The observed loop: the user sent the same id twice and was refused both times.
+  const client = stubClient();
+  await call(serverWith(client), 'create_gtm_tracking_tag', {
+    ...EMAIL_TAG, measurementId: 'G-123456789', allowPlaceholderId: true,
+  });
+  const tag = client.calls.find((c) => c.kind === 'tag').body;
+  assert.strictEqual(tag.parameter.find((p) => p.key === 'measurementIdOverride').value, 'G-123456789');
+});
+
+await test('a container whose only id is ALSO a placeholder is not laundered into a real one', async () => {
+  const client = stubClient({
+    existingTags: [{ type: 'googtag', parameter: [{ key: 'tagId', value: 'G-1234567890' }] }],
+  });
+  const res = await call(serverWith(client), 'create_gtm_tracking_tag', { ...EMAIL_TAG, measurementId: 'G-123456789' });
+  assert.match(text(res), /placeholder/i);
+  assert.strictEqual(client.calls.some((c) => c.kind === 'tag'), false);
 });
 
 await test('a {{variable}} measurement id is allowed through', async () => {
