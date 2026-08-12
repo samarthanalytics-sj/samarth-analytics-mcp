@@ -12,7 +12,7 @@
     "start": "node dist/chat-orchestrator/src/index.js",
     "models": "node scripts/check-model.mjs",
     "smoke": "node scripts/smoke.mjs",
-    "test": "tsx src/__tests__/tools.test.ts && tsx src/__tests__/prompts.test.ts && tsx src/__tests__/identity.test.ts && tsx src/__tests__/auth.test.ts && tsx src/__tests__/redact.test.ts && tsx src/__tests__/approvals.test.ts && tsx src/__tests__/resources.test.ts && tsx src/__tests__/writeTiers.test.ts && tsx src/__tests__/audit.test.ts && tsx src/__tests__/usage.test.ts && tsx src/__tests__/auditFix.test.ts && tsx --test src/__tests__/attachments.test.ts && tsx --test src/__tests__/integrations.test.ts && tsx --test src/__tests__/toolGroups.test.ts && tsx --test src/__tests__/deadline.test.ts && tsx --test src/__tests__/openaiErrors.test.ts",
+    "test": "tsx src/__tests__/tools.test.ts && tsx src/__tests__/prompts.test.ts && tsx src/__tests__/identity.test.ts && tsx src/__tests__/auth.test.ts && tsx src/__tests__/redact.test.ts && tsx src/__tests__/approvals.test.ts && tsx src/__tests__/resources.test.ts && tsx src/__tests__/writeTiers.test.ts && tsx src/__tests__/audit.test.ts && tsx src/__tests__/usage.test.ts && tsx src/__tests__/auditFix.test.ts && tsx --test src/__tests__/attachments.test.ts && tsx --test src/__tests__/integrations.test.ts && tsx --test src/__tests__/toolGroups.test.ts && tsx --test src/__tests__/deadline.test.ts && tsx --test src/__tests__/openaiErrors.test.ts && tsx --test src/__tests__/workspaceSnapshot.test.ts",
     "test:build": "npm run build && tsx src/__tests__/build.test.ts",
     "supervise": "node scripts/supervise.mjs"
   },
