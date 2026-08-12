@@ -8,7 +8,11 @@
  * The domain guidance is imported from the desktop chat's shared methodology so the web assistant
  * and the desktop assistant give the same answers.
  */
-import { GA4_EVENT_SELECTION, GTM_DECISION_RULES } from '../../desktop/src/shared/gtm-methodology.js';
+import {
+  GA4_EVENT_SELECTION,
+  GTM_DECISION_RULES,
+  GTM_TRIGGER_VARIABLE_REFERENCE,
+} from '../../desktop/src/shared/gtm-methodology.js';
 import type { Product } from './config.js';
 import { buildIntegrationPrompt, INTEGRATION_LABEL, sanitizeIntegrations } from './integrations.js';
 import { MEMORY_TOOL_RULES } from './memory.js';
@@ -109,6 +113,41 @@ const STYLE_RULES =
  * The fixed half of the system prompt. Identical for every user on a given product, which is what
  * makes it cacheable.
  */
+/**
+ * The desktop's tool names, translated to this server's.
+ *
+ * The shared methodology is written against the desktop assistant's registry, and most of it now
+ * applies verbatim because create_gtm_tracking_tag and create_gtm_variable_typed exist on both
+ * sides. The rest do not, and naming a tool that is not in the model's list is a specific, observed
+ * failure: it either announces the capability is missing and writes out manual UI steps, or it
+ * calls the name and gets an unknown-tool error. Both cost a round trip and one of them costs the
+ * whole request.
+ *
+ * Longest keys are applied first, so create_gtm_tag_with_trigger is not half-rewritten by the
+ * create_gtm_tag rule.
+ */
+const TOOL_NAME_MAP: Record<string, string> = {
+  // No single-call equivalent here; the typed builder IS the tag-plus-trigger path.
+  create_gtm_tag_with_trigger: 'create_gtm_tracking_tag',
+  enable_gtm_builtin_variables: 'built_in_variables_enable',
+  import_gallery_template: 'templates_import_from_gallery',
+  // A Meta pixel is built here by importing its gallery template and then creating a tag on the
+  // cvt_ type it installs, which is what the surrounding text already describes.
+  create_meta_pixel_tag: 'templates_import_from_gallery',
+  create_gtm_variable: 'variables_create',
+  create_gtm_trigger: 'triggers_create',
+  create_gtm_tag: 'tags_create',
+};
+
+/** Rewrites desktop tool names in shared prompt text to the ones this server actually registers. */
+export function retargetToolNames(text: string): string {
+  let out = text;
+  for (const [from, to] of Object.entries(TOOL_NAME_MAP).sort((a, b) => b[0].length - a[0].length)) {
+    out = out.replace(new RegExp(`\\b${from}\\b`, 'g'), to);
+  }
+  return out;
+}
+
 export function buildStaticSystem(opts: {
   product: Product;
   canWrite: boolean;
@@ -148,6 +187,11 @@ export function buildStaticSystem(opts: {
     // Tool-agnostic domain expertise: which GA4 event an intent maps to, and how an expert picks
     // trigger conditions. Shared verbatim with the desktop assistant.
     parts.push(GA4_EVENT_SELECTION);
+    // Which trigger and which VARIABLE KIND to reach for. Withholding this is what made the two
+    // assistants answer differently: asked to capture an email from a mailto: link, the desktop
+    // used a Custom JavaScript variable that reads the click URL, and this one used a Data Layer
+    // Variable reading a key the site never pushes, so the tag reported a blank address.
+    parts.push(retargetToolNames(GTM_TRIGGER_VARIABLE_REFERENCE));
     parts.push(GTM_DECISION_RULES);
   } else {
     parts.push(GA4_EVENT_SELECTION);
