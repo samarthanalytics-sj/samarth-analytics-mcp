@@ -27,6 +27,7 @@ import {
   enableToolGroupDef,
   filterToolsByGroup,
   groupCounts,
+  groupOf,
   selectToolGroups,
   type ToolGroup,
 } from './tool-groups.js';
@@ -335,13 +336,17 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
           continue;
         }
 
-        const before = new Set(visibleTools().map((t) => t.name));
+        const visibleBefore = visibleTools();
+        const before = new Set(visibleBefore.map((t) => t.name));
         enabledGroups.add(requested);
         const revealed = visibleTools().filter((t) => !before.has(t.name));
         // Recomputed now, so the tools are on the very next model call rather than the one after.
         openAiTools = toOpenAiTools([...visibleTools(), ...memoryTools]);
 
-        const summary = describeRevealedGroup(requested, revealed);
+        // A keyword may have opened this group already, in which case nothing is newly revealed
+        // even though the tools are right there. Those two cases need opposite answers.
+        const alreadyOpen = visibleBefore.filter((t) => groupOf(t.name) === requested);
+        const summary = describeRevealedGroup(requested, revealed, alreadyOpen);
         messages.push({ role: 'tool', tool_call_id: call.id, name: call.function.name, content: summary });
         emit({
           type: 'tool_result',

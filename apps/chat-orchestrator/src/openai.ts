@@ -31,11 +31,21 @@ export class OpenAiError extends Error {
   }
 }
 
-/** The `error.code` (or `error.type`) OpenAI puts in the body, which the status alone does not say. */
+/**
+ * The `error.code` (or `error.type`) OpenAI puts in the body, which the status alone does not say.
+ *
+ * A billing failure is reported in whichever of the two fields carries it, because OpenAI puts
+ * `insufficient_quota` in `type` and `credit_balance_exhausted` in `code` for the same event, and
+ * preferring one field silently loses the classification.
+ */
 function parseUpstreamCode(body: string): string | null {
   try {
     const parsed = JSON.parse(body) as { error?: { code?: string; type?: string } };
-    return parsed.error?.code ?? parsed.error?.type ?? null;
+    const code = parsed.error?.code ?? null;
+    const type = parsed.error?.type ?? null;
+    if (code && NEVER_RETRY.has(code)) return code;
+    if (type && NEVER_RETRY.has(type)) return type;
+    return code ?? type;
   } catch {
     return null;
   }
@@ -48,8 +58,22 @@ const RETRYABLE = new Set([408, 429, 500, 502, 503, 504]);
  * A 429 that retrying cannot fix. OpenAI returns the same status for "you are going too fast" and
  * "your balance is spent"; only the second is permanent, and backing off three times before
  * reporting it just makes the user wait longer for the same answer.
+ *
+ * Matched against BOTH `error.code` and `error.type`, because OpenAI splits this one across the
+ * two: an exhausted balance arrives as `type: "insufficient_quota"` with
+ * `code: "credit_balance_exhausted"`. Reading either field alone misses it, which is exactly what
+ * happened here - the retries ran anyway and the user was shown the rate-limit wording.
  */
-const NEVER_RETRY = new Set(['insufficient_quota', 'billing_hard_limit_reached']);
+const NEVER_RETRY = new Set([
+  'insufficient_quota',
+  'credit_balance_exhausted',
+  'billing_hard_limit_reached',
+]);
+
+/** True when this failure is about money rather than pace, so no amount of waiting helps. */
+export function isBillingFailure(code: string): boolean {
+  return NEVER_RETRY.has(code);
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));

@@ -296,8 +296,29 @@ export function buildToolGroupPrompt(available: readonly Exclude<ToolGroup, 'cor
   );
 }
 
-/** The result text for an enable_tool_group call: the names that just became callable. */
-export function describeRevealedGroup(group: ToolGroup, revealed: readonly ToolDef[]): string {
+/**
+ * The result text for an enable_tool_group call: the names that just became callable.
+ *
+ * `alreadyOpen` is the group's tools that were visible BEFORE the call, and it is the difference
+ * between two states this used to collapse into one. A keyword can open a group on its own, so a
+ * model that then asks for it by name reveals nothing NEW while every tool in it is sitting right
+ * there. Answering "no tools are available, say what the user would need to do instead" turned a
+ * redundant call into a refusal: asked to create a GA4 email_click tag, with tags_create and
+ * triggers_create both visible, the model wrote out the steps for doing it by hand instead.
+ */
+export function describeRevealedGroup(
+  group: ToolGroup,
+  revealed: readonly ToolDef[],
+  alreadyOpen: readonly ToolDef[] = [],
+): string {
+  if (revealed.length === 0 && alreadyOpen.length > 0) {
+    const names = alreadyOpen.map((t) => t.name).join(', ');
+    return (
+      `Group "${group}" was already open, so nothing changed: its ${alreadyOpen.length} tool(s) ` +
+      `are visible to you right now. ${names}. Call the one you need. Do NOT say the capability ` +
+      `is unavailable and do NOT give the user manual instructions for it.`
+    );
+  }
   if (revealed.length === 0) {
     return `No tools in group "${group}" are available in this conversation. Do not claim the capability exists here; say what the user would need to do instead.`;
   }
