@@ -52,8 +52,13 @@ const wsBase = z.object({
  * Measurement ids that are obviously stand-ins.
  *
  * GTM accepts them happily and the tag then reports to nothing, so a placeholder produces a tag
- * that looks created and is dead. Better to refuse and make the real id be looked up. A
- * {{variable}} reference is fine: it has no literal id to check.
+ * that looks created and is dead. A {{variable}} reference is fine: it has no literal id to check.
+ *
+ * Detecting one is NOT a reason to hand the problem back to the user. Doing that turned a
+ * fourteen-second job into three turns: refused, user re-sent the same id, refused again, user
+ * invented a different one. A guard that cannot be satisfied is a wall. So detection now leads to
+ * either resolving the real id from the container without a round trip, or, when the caller has
+ * confirmed the id is deliberate, honouring it.
  */
 const PLACEHOLDER_IDS = /^(G-)?(X{3,}|1234567890?|0{6,}|XXXXXXX|ABCDEFG)$/i;
 
@@ -64,6 +69,35 @@ function isPlaceholderMeasurementId(id: string): boolean {
   // G-123456789 and friends: the shape is right but the body is a counting sequence.
   const body = v.replace(/^G-/i, '');
   return /^(0123456789|123456789\d?|1234567890)$/.test(body);
+}
+
+/**
+ * The measurement id already configured in this container, read off its Google tag.
+ *
+ * This is the answer to "what should the id have been", and the container knows it, so asking the
+ * user costs a round trip to learn something we could have looked up. Returns null when the
+ * container has no Google tag to read, which is a real situation in an empty workspace and the one
+ * case where the caller genuinely has to be asked.
+ */
+async function measurementIdFromContainer(client: GtmClient, parent: string): Promise<string | null> {
+  try {
+    const tags = await paginate(
+      (token) => client.accounts.containers.workspaces.tags.list({ parent, pageToken: token }).then((r) => r.data),
+      (data) => data.tag,
+      {},
+    );
+    for (const tag of tags.items) {
+      // googtag carries it as `tagId`; a gaawe carries the override it was built with.
+      const key = tag.type === 'googtag' ? 'tagId' : tag.type === 'gaawe' ? 'measurementIdOverride' : null;
+      if (!key) continue;
+      const found = (tag.parameter ?? []).find((p) => p.key === key)?.value;
+      if (found && /^G-[A-Z0-9]+$/i.test(found) && !isPlaceholderMeasurementId(found)) return found;
+    }
+    return null;
+  } catch {
+    // A read failure here must not fail the write path; fall back to asking.
+    return null;
+  }
 }
 
 const triggerSchema = z
@@ -165,25 +199,24 @@ export function registerTypedBuilderTools(server: McpServer, getClient: () => Gt
           .array(z.string())
           .optional()
           .describe('Extra built-in variable types to enable beyond the ones inferred, e.g. ["formElement"].'),
+        allowPlaceholderId: z
+          .boolean()
+          .optional()
+          .describe(
+            'Set true ONLY when the user has been told the Measurement ID looks like a placeholder and ' +
+              'has confirmed they want it anyway, e.g. a test container. Without it, a placeholder id is ' +
+              'first resolved from the container and only refused if the container has none.',
+          ),
         confirm: z.boolean().describe('Must be true to confirm this write operation.'),
       }),
     },
     async ({
       accountId, containerId, workspaceId,
-      tagName, measurementId, eventName, eventParameters, trigger, builtInVariables, confirm,
+      tagName, measurementId, eventName, eventParameters, trigger, builtInVariables, allowPlaceholderId, confirm,
     }) => {
       try {
         const config = getGuardrailConfig();
         const { dryRun } = checkGuardrails('write', confirm, config);
-
-        if (isPlaceholderMeasurementId(measurementId)) {
-          return textResult(
-            `Refusing to create "${tagName}": "${measurementId}" looks like a placeholder Measurement ID. ` +
-              'GTM would accept it and the tag would report to nothing. Read the real G- id from this ' +
-              "container's Google tag (tags_list, type \"googtag\", parameter \"tagId\") or ask the user, " +
-              'then call again.',
-          );
-        }
 
         const triggerInput = { ...trigger, kind: trigger.kind as TriggerKind } as TriggerInput;
         if (triggerInput.kind === 'timer' && !String(triggerInput.intervalMs ?? '').trim()) {
@@ -219,6 +252,34 @@ export function registerTypedBuilderTools(server: McpServer, getClient: () => Gt
         const client = getClient();
         const parent = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`;
 
+        /**
+         * A placeholder id is resolved here, not handed back.
+         *
+         * Refusing and asking cost three turns for one fourteen-second job, and the third only
+         * succeeded because a different made-up id happened not to match the pattern. The container
+         * already knows the right answer, so read it. Only an empty container, with no Google tag
+         * to read, genuinely has to ask.
+         */
+        let effectiveMeasurementId = measurementId;
+        let measurementIdNote: string | undefined;
+        if (isPlaceholderMeasurementId(measurementId) && !allowPlaceholderId) {
+          const real = await measurementIdFromContainer(client, parent);
+          if (real) {
+            effectiveMeasurementId = real;
+            measurementIdNote =
+              `"${measurementId}" looked like a placeholder, so the Measurement ID configured in this ` +
+              `container (${real}) was used instead. Say so in your answer.`;
+          } else {
+            return textResult(
+              `Not creating "${tagName}": "${measurementId}" looks like a placeholder Measurement ID, and ` +
+                'this workspace has no Google tag to read the real one from, so there is nothing to fall ' +
+                'back to. GTM would accept the id and the tag would report to nothing. Ask the user for ' +
+                'their real G- id. If they confirm they DO want this exact id anyway (a test container, ' +
+                'for example), call again with allowPlaceholderId: true and it will be created as asked.',
+            );
+          }
+        }
+
         // Best-effort: a built-in that is already enabled is not an error worth failing the tag over.
         let enabledVariables: string[] = [];
         if (builtIns.length) {
@@ -237,7 +298,7 @@ export function registerTypedBuilderTools(server: McpServer, getClient: () => Gt
 
         const tag = buildGa4EventTag({
           name: tagName,
-          measurementId,
+          measurementId: effectiveMeasurementId,
           eventName,
           eventParameters,
           firingTriggerId: trig.triggerId ? [trig.triggerId] : undefined,
@@ -251,8 +312,12 @@ export function registerTypedBuilderTools(server: McpServer, getClient: () => Gt
           tag: { tagId: created.data.tagId, name: created.data.name, type: created.data.type },
           trigger: trig,
           enabledVariables,
+          measurementId: effectiveMeasurementId,
           workspace: { accountId, containerId, workspaceId },
           note: 'Created in the DRAFT workspace. Nothing is published.',
+          // Present only when the id sent was not the id used. A silent substitution would be
+          // worse than the refusal it replaced.
+          ...(measurementIdNote ? { measurementIdNote } : {}),
         });
       } catch (err) {
         return errorResult('create_gtm_tracking_tag', err);
