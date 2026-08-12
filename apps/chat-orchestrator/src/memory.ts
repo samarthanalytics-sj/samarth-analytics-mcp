@@ -21,7 +21,14 @@
  */
 import { forLog, redactSecrets } from './redact.js';
 
-export type MemoryScope = 'user' | 'container' | 'property';
+/**
+ * `group` is a folder of conversations that share their memory, and it is safe to add here only
+ * because a group is bound to one container in the database: the chat_conversations_group_matches
+ * trigger refuses to file a thread under a group belonging to a different container. Without that
+ * the scope rule above would have a hole in it — a group spanning containers would carry Acme's
+ * convention into Globex's threads, which is the exact failure this design exists to prevent.
+ */
+export type MemoryScope = 'user' | 'container' | 'property' | 'group';
 
 /** Orchestrator-owned tool names. Handled in the turn loop; never sent to the MCP server. */
 export const REMEMBER_MEMORY = 'remember_memory';
@@ -40,6 +47,13 @@ export interface MemoryRecord {
 export interface MemoryContext {
   containerId?: string;
   propertyId?: string;
+  /**
+   * The group this conversation is filed under, if any.
+   *
+   * Read from the conversation row by the caller, never accepted from the client. A request that
+   * could name its own group could name somebody else's and read their memory with it.
+   */
+  groupId?: string;
 }
 
 /** How many memories may be injected into one turn. */
@@ -94,6 +108,9 @@ export class MemoryStore {
     const clauses = ['and(scope.eq.user,scope_id.is.null)'];
     if (ctx.containerId) clauses.push(`and(scope.eq.container,scope_id.eq.${encodeURIComponent(ctx.containerId)})`);
     if (ctx.propertyId) clauses.push(`and(scope.eq.property,scope_id.eq.${encodeURIComponent(ctx.propertyId)})`);
+    // Only when this conversation is actually in a group. A group memory reaches its siblings and
+    // nothing else, which is the whole point of filing threads together.
+    if (ctx.groupId) clauses.push(`and(scope.eq.group,scope_id.eq.${encodeURIComponent(ctx.groupId)})`);
 
     try {
       const rows = (await this.request(
@@ -149,7 +166,10 @@ export class MemoryStore {
       // which would apply one customer's rules to another's.
       return {
         stored: false,
-        reason: `Cannot store a ${scope}-scoped memory: no ${scope} is selected in this conversation. Ask the user to select one, or store it for the whole account with scope "user".`,
+        reason:
+          scope === 'group'
+            ? 'Cannot store a group-scoped memory: this conversation is not filed in a group. Ask the user to add it to one from the conversation list, or scope the rule to the container instead.'
+            : `Cannot store a ${scope}-scoped memory: no ${scope} is selected in this conversation. Ask the user to select one, or store it for the whole account with scope "user".`,
       };
     }
 
@@ -227,10 +247,15 @@ export class MemoryStore {
  */
 export function buildMemoryPrompt(memories: readonly MemoryRecord[]): string {
   if (memories.length === 0) return '';
-  const lines = memories.map((m) => {
-    const where = m.scope === 'user' ? 'always' : m.scope === 'container' ? 'this container' : 'this property';
-    return `- (${where}) ${m.content}`;
-  });
+  // Exhaustive by name rather than by a trailing else, which silently mislabelled the scope added
+  // after it was written: a group memory read as "this property".
+  const WHERE: Record<MemoryScope, string> = {
+    user: 'always',
+    container: 'this container',
+    property: 'this property',
+    group: 'this group of chats',
+  };
+  const lines = memories.map((m) => `- (${WHERE[m.scope] ?? 'always'}) ${m.content}`);
   return (
     'REMEMBERED PREFERENCES. The user has told you these before, in earlier conversations, and ' +
     'expects them applied without being restated. Follow them when building or naming anything:\n' +
@@ -248,6 +273,9 @@ export const MEMORY_TOOL_RULES =
   'format they always want, a policy for this container), call remember_memory so it survives into ' +
   'later conversations, and say briefly that you have. Scope it to the container or property when it ' +
   'belongs to that one, and to the user only when it is genuinely account-wide. ' +
+  'Scope "group" is available only when this conversation is filed in a group, and reaches every ' +
+  'chat in that group and no others: use it for a rule that belongs to this piece of work rather ' +
+  'than to the whole container. ' +
   'Do NOT remember facts you can look up again (how many tags exist, what an id is): those go stale ' +
   'and a stale memory is worse than none. Do not remember one-off instructions that only applied to ' +
   'the current request.';

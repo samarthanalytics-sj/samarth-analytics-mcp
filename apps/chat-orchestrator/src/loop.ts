@@ -59,6 +59,13 @@ export interface RunTurnArgs {
   memory?: MemoryStore;
   /** Null when auditing is off or the conversation could not be opened; recording is then skipped. */
   conversationId?: string | null;
+  /**
+   * The group this conversation is filed under, resolved from the conversation row by the caller.
+   *
+   * Deliberately not part of ChatContext: that arrives from the browser, and a client able to name
+   * its own group could name someone else's and read their memory through it.
+   */
+  groupId?: string | null;
   /** Counts this turn against the user's plan. Never allowed to fail a turn; see usage.ts. */
   usage?: UsageMeter;
 }
@@ -145,9 +152,15 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
               content: { type: 'string', description: 'The rule, in one sentence, in the user\'s own terms.' },
               scope: {
                 type: 'string',
-                enum: ['user', 'container', 'property'],
+                // "group" is offered only when there is a group to scope to. Advertising a scope
+                // the session cannot satisfy just buys a refused call and a wasted round trip,
+                // which is the same reasoning as the container/property guard in remember().
+                enum: args.groupId ? ['user', 'container', 'property', 'group'] : ['user', 'container', 'property'],
                 description:
-                  '"container" or "property" when the rule belongs to the selected one; "user" only when it is genuinely account-wide.',
+                  '"container" or "property" when the rule belongs to the selected one; "user" only when it is genuinely account-wide.' +
+                  (args.groupId
+                    ? ' "group" when it belongs to this piece of work rather than the whole container: it reaches every chat filed in this group and no others.'
+                    : ''),
               },
             },
             required: ['content', 'scope'],
@@ -191,7 +204,11 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
   // Fetched before the prompt: what the user told us in earlier conversations, scoped to where
   // this session actually is. Failure returns [] inside the store, so a turn never dies for it.
   const memories: MemoryRecord[] = args.memory
-    ? await args.memory.forSession(user.id, { containerId: context.containerId, propertyId: context.propertyId })
+    ? await args.memory.forSession(user.id, {
+        containerId: context.containerId,
+        propertyId: context.propertyId,
+        groupId: args.groupId ?? undefined,
+      })
     : [];
   if (memories.length > 0) {
     args.memory?.markUsed(memories.map((m) => m.id));
@@ -426,7 +443,13 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
         if (call.function.name === REMEMBER_MEMORY) {
           const scope = String(parsedArgs.scope ?? 'user') as MemoryScope;
           const scopeId =
-            scope === 'container' ? (context.containerId ?? null) : scope === 'property' ? (context.propertyId ?? null) : null;
+            scope === 'container'
+              ? (context.containerId ?? null)
+              : scope === 'property'
+                ? (context.propertyId ?? null)
+                : scope === 'group'
+                  ? (args.groupId ?? null)
+                  : null;
           const result = await args.memory.remember(user.id, {
             content: String(parsedArgs.content ?? ''),
             scope,
