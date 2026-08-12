@@ -1,3 +1,9 @@
+## [1.473.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.473.3...v1.473.4) (2026-08-12)
+
+### Bug Fixes
+
+* **orchestrator:** answer slow picker reads ourselves instead of letting the proxy cut them ([#868](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/868)) ([57b87b1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/57b87b1eff22420c0c6a0f64ac560310fbe32a27))
+
 ## [1.473.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.473.2...v1.473.3) (2026-08-11)
 
 ### Performance Improvements
