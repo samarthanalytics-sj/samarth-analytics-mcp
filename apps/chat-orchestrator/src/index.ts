@@ -22,6 +22,7 @@ import { UsageMeter, quotaMessage } from './usage.js';
 import { planFix, FIXABLE_CATEGORIES, type AuditFinding } from './audit-fix.js';
 import { SseStream } from './sse.js';
 import { deadline, DeadlineError } from './deadline.js';
+import { installTimestampedLogging } from './log-time.js';
 import { scopeTools } from './tools.js';
 import { checkAllowlistAgainstServer } from './integrations.js';
 import { extractAll, type ExtractedAttachment } from './attachments.js';
@@ -71,6 +72,9 @@ class RateLimiter {
 }
 
 async function main(): Promise<void> {
+  // First, so every line below is dated. See log-time.ts for why the log needed this.
+  installTimestampedLogging();
+
   const tokenProvider = createTokenProvider(cfg);
   const pool = new McpPool(cfg, tokenProvider);
   pool.start();
