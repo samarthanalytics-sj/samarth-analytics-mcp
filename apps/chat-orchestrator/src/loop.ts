@@ -93,17 +93,38 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
   const enabledGroups = new Set<ToolGroup>();
   const gateGroups = availableGroups(scoped);
   const gateCounts = groupCounts(scoped);
-  const gate = gateGroups.length > 0 ? enableToolGroupDef(gateGroups, gateCounts) : null;
 
-  const visibleTools = (): ToolDef[] => {
-    const selected = selectToolGroups({
+  const currentGroups = (): Set<ToolGroup> =>
+    selectToolGroups({
       messages: args.history.map((m) => m.content),
       enabled: enabledGroups,
       integrations,
     });
+
+  /**
+   * The gate offers only what is actually HIDDEN right now.
+   *
+   * It used to advertise every group in the inventory, including ones a keyword had already
+   * opened. So a "create a tag" turn, which opens gtm-write on the word "create", was still told
+   * gtm-write was available on request, and spent a round trip asking for tools it could already
+   * see. On this account that is ~6,000 of 30,000 tokens per minute for nothing.
+   *
+   * Recomputed per call, because revealing a group changes the answer.
+   */
+  const gateFor = (selected: ReadonlySet<ToolGroup>): ToolDef | null => {
+    const hidden = gateGroups.filter((g) => !selected.has(g));
+    return hidden.length > 0 ? enableToolGroupDef(hidden, gateCounts) : null;
+  };
+
+  const visibleTools = (): ToolDef[] => {
+    const selected = currentGroups();
     const shown = filterToolsByGroup(scoped, selected);
+    const gate = gateFor(selected);
     return gate ? [...shown, gate] : shown;
   };
+
+  /** Whether a gate is being offered at all, for the log line and the reveal bookkeeping. */
+  const gate = gateFor(currentGroups());
 
   /**
    * Memory tools are the orchestrator's own, like the group gate: the MCP server has no memory
@@ -358,7 +379,12 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
 
       // The gate is handled here rather than sent to the MCP: it is the orchestrator's own tool,
       // and its whole effect is on what the NEXT model call can see.
-      if (gate && call.function.name === ENABLE_TOOL_GROUP) {
+      //
+      // Handled whenever the name matches, not only while a gate is being offered. The offer now
+      // shrinks as groups open, so a model that saw the tool a step ago can still call it after the
+      // last group has been revealed; forwarding that to the MCP would fail as an unknown tool
+      // instead of answering the question it was actually asking.
+      if (call.function.name === ENABLE_TOOL_GROUP) {
         const requested = String(parsedArgs.group ?? '') as ToolGroup;
         const known = gateGroups.includes(requested as Exclude<ToolGroup, 'core'>);
         if (!known) {

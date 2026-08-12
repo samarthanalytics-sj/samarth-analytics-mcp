@@ -237,3 +237,21 @@ test('a genuinely empty group still says so', () => {
   const text = describeRevealedGroup('gtm-write', [], []);
   assert.match(text, /No tools in group/i);
 });
+
+// ── The gate must offer only what is actually hidden ─────────────────────────
+//
+// "Create a GA4 phone_click tag" opens gtm-write on the word "Create". The gate still advertised
+// gtm-write as available on request, so the model spent a round trip asking for tools it could
+// already see: ~6,000 of 30,000 tokens per minute, for nothing.
+
+test('a group the keywords already opened is not advertised as hidden', () => {
+  const selected = selectToolGroups({ messages: ['Create a GA4 phone_click tag for tel: clicks'] });
+  assert.ok(selected.has('gtm-write'), 'precondition: "Create" opens gtm-write');
+
+  const hidden = REQUESTABLE_GROUPS.filter((g) => !selected.has(g));
+  assert.equal(hidden.includes('gtm-write'), false, 'an open group must not be offered as hidden');
+
+  const menu = enableToolGroupDef(hidden).description;
+  assert.equal(/"gtm-write"/.test(menu), false, 'the gate menu still lists a group that is open');
+  assert.ok(hidden.length > 0 && /"/.test(menu), 'the genuinely hidden groups are still offered');
+});

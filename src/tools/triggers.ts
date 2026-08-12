@@ -63,6 +63,32 @@ const paramSchema = z
   .object({ type: z.string(), key: z.string().optional(), value: z.string().optional() })
   .optional();
 
+/**
+ * A GTM scalar field that must be sent as a one-entry Parameter, accepting the plain value too.
+ *
+ * `waitForTags` is conceptually a boolean and GTM insists on
+ * `{type:"boolean", value:"true"}`. Callers send `waitForTags: true`, which is the obvious
+ * reading of the name, and the API answers "Expected object, received boolean at waitForTags".
+ * Observed twice in one tag-creation turn: two failed writes and two wasted model round trips
+ * before the same request succeeded, on an account where a round trip is ~6,000 of 30,000 tokens
+ * per minute.
+ *
+ * Describing the shape harder did not work; it was already documented here. So accept the natural
+ * form and convert it, the way normalizeTriggerType already repairs `all_clicks` into `click`.
+ * A correctly shaped Parameter passes through untouched.
+ */
+function scalarParam(gtmType: 'boolean' | 'template', description: string) {
+  return z
+    .union([z.boolean(), z.number(), z.string(), paramSchema.unwrap()])
+    .optional()
+    .transform((v) => {
+      if (v === undefined) return undefined;
+      if (typeof v === 'object') return v;
+      return { type: gtmType, value: String(v) };
+    })
+    .describe(description);
+}
+
 export function registerTriggerTools(server: McpServer, getClient: () => GtmClient): void {
   server.registerTool(
     'triggers_list',
@@ -120,9 +146,9 @@ export function registerTriggerTools(server: McpServer, getClient: () => GtmClie
         intervalSeconds: paramSchema.describe('Timer trigger: firing interval in SECONDS as a single Parameter (no key). Top-level GTM field. Use interval (ms) OR intervalSeconds, not both.'),
         limit: paramSchema.describe('Timer trigger: max number of times the timer fires, as a single Parameter {type:"template", value:"3"} (no key). Dedicated TOP-LEVEL GTM field — do NOT put it in `parameter`.'),
         parameter: gtmParameterArray.describe('Trigger settings as a parameter list — e.g. a YouTube Video trigger\'s captureStart/progressThresholdsPercent, scroll thresholds, element-visibility selector. NOTE: a timer\'s interval/limit are the separate top-level `interval`/`limit` fields, NOT here.'),
-        waitForTags: paramSchema.describe('Form/link trigger: a single boolean Parameter {type:"boolean", value:"true|false"} (no key).'),
-        checkValidation: paramSchema.describe('Form/link trigger: a single boolean Parameter (no key).'),
-        waitForTagsTimeout: paramSchema.describe('Form/link trigger: a single template Parameter with the timeout ms.'),
+        waitForTags: scalarParam('boolean', 'Form/link trigger: send a plain boolean (true/false). A Parameter {type:"boolean", value:"true"} is also accepted.'),
+        checkValidation: scalarParam('boolean', 'Form/link trigger: send a plain boolean (true/false). A Parameter object is also accepted.'),
+        waitForTagsTimeout: scalarParam('template', 'Form/link trigger: timeout in milliseconds. Send a plain number (e.g. 2000). A Parameter object is also accepted.'),
         notes: z.string().optional(),
         parentFolderId: z.string().optional(),
         confirm: z.boolean(),
@@ -164,9 +190,9 @@ export function registerTriggerTools(server: McpServer, getClient: () => GtmClie
         intervalSeconds: paramSchema.describe('Timer trigger: firing interval in seconds as a single Parameter. Top-level GTM field.'),
         limit: paramSchema.describe('Timer trigger: max fire count as a single Parameter. Top-level GTM field — not in `parameter`.'),
         parameter: gtmParameterArray,
-        waitForTags: paramSchema,
-        checkValidation: paramSchema,
-        waitForTagsTimeout: paramSchema,
+        waitForTags: scalarParam('boolean', 'Form/link trigger: plain boolean, or a Parameter object.'),
+        checkValidation: scalarParam('boolean', 'Form/link trigger: plain boolean, or a Parameter object.'),
+        waitForTagsTimeout: scalarParam('template', 'Form/link trigger: timeout in milliseconds as a plain number, or a Parameter object.'),
         notes: z.string().optional(),
         fingerprint: z.string().optional(),
         confirm: z.boolean(),
