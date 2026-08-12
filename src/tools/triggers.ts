@@ -7,7 +7,8 @@ import { z } from 'zod';
 import type { GtmClient } from '../utils/gtmClient.js';
 import { checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
 import { paginate, paginationFields, buildListResult } from '../utils/pagination.js';
-import { jsonResult, textResult, errorResult } from '../utils/toolResponse.js';
+import { jsonResult, textResult, errorResult, errorText } from '../utils/toolResponse.js';
+import { googleErrorStatus, explainMissingEntity } from '../utils/writeDiagnostics.js';
 import { workspaceScope as wsBase } from '../utils/schemas.js';
 import { gtmParameterArray } from '../utils/paramSchema.js';
 import { mergeParametersByKey } from '../utils/tagParams.js';
@@ -253,6 +254,12 @@ export function registerTriggerTools(server: McpServer, getClient: () => GtmClie
         });
         return textResult(`Trigger ${triggerId} deleted successfully.`);
       } catch (err) {
+        // See tags_delete: a 404 is far more often a cross-type id than missing access.
+        if (googleErrorStatus(err) === 404) {
+          return errorText(
+            await explainMissingEntity(getClient(), { accountId, containerId, workspaceId }, 'trigger', triggerId, err),
+          );
+        }
         return errorResult('triggers_delete', err);
       }
     }
