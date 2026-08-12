@@ -7,7 +7,8 @@ import { z } from 'zod';
 import type { GtmClient } from '../utils/gtmClient.js';
 import { checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
 import { paginate, paginationFields, buildListResult } from '../utils/pagination.js';
-import { jsonResult, textResult, errorResult } from '../utils/toolResponse.js';
+import { jsonResult, textResult, errorResult, errorText } from '../utils/toolResponse.js';
+import { googleErrorStatus, explainMissingEntity } from '../utils/writeDiagnostics.js';
 import { addEventParameters, mergeParametersByKey } from '../utils/tagParams.js';
 import { gtmParameterArray, gtmParameterArray as parameterSchema } from '../utils/paramSchema.js';
 
@@ -266,6 +267,14 @@ export function registerTagTools(server: McpServer, getClient: () => GtmClient):
         });
         return textResult(`Tag ${tagId} deleted successfully from workspace ${workspaceId}.`);
       } catch (err) {
+        // A 404 here is nearly always an id belonging to a different entity type, not the
+        // missing access the API's "Not found or permission denied" implies. Only the failed
+        // request pays for the lookup that says which.
+        if (googleErrorStatus(err) === 404) {
+          return errorText(
+            await explainMissingEntity(getClient(), { accountId, containerId, workspaceId }, 'tag', tagId, err),
+          );
+        }
         return errorResult('tags_delete', err);
       }
     }

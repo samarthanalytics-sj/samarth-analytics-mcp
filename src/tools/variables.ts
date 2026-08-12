@@ -7,7 +7,10 @@ import { z } from 'zod';
 import type { GtmClient } from '../utils/gtmClient.js';
 import { checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
 import { paginate, paginationFields, buildListResult } from '../utils/pagination.js';
-import { jsonResult, textResult, errorResult } from '../utils/toolResponse.js';
+import { jsonResult, textResult, errorResult, errorText } from '../utils/toolResponse.js';
+import {
+  googleErrorStatus, isDuplicateNameError, explainMissingEntity, explainDuplicateName,
+} from '../utils/writeDiagnostics.js';
 import { workspaceScope as wsBase } from '../utils/schemas.js';
 import { gtmParameterArray as parameterSchema } from '../utils/paramSchema.js';
 import { mergeParametersByKey } from '../utils/tagParams.js';
@@ -84,6 +87,14 @@ export function registerVariableTools(server: McpServer, getClient: () => GtmCli
         });
         return jsonResult(res.data);
       } catch (err) {
+        // "Found entity with duplicate name" does not say what holds the name, and the
+        // usual culprit is an enabled built-in, which variables_list does not return —
+        // so the obvious pre-flight check finds nothing and the clash looks impossible.
+        if (isDuplicateNameError(err)) {
+          return errorText(
+            await explainDuplicateName(getClient(), { accountId, containerId, workspaceId }, name, err),
+          );
+        }
         return errorResult('variables_create', err);
       }
     }
@@ -159,6 +170,12 @@ export function registerVariableTools(server: McpServer, getClient: () => GtmCli
         });
         return textResult(`Variable ${variableId} deleted successfully.`);
       } catch (err) {
+        // See tags_delete: a 404 is far more often a cross-type id than missing access.
+        if (googleErrorStatus(err) === 404) {
+          return errorText(
+            await explainMissingEntity(getClient(), { accountId, containerId, workspaceId }, 'variable', variableId, err),
+          );
+        }
         return errorResult('variables_delete', err);
       }
     }
