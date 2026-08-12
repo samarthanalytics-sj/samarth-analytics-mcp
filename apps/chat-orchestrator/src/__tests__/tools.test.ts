@@ -205,7 +205,8 @@ test('the NEWEST result keeps its full size, the oldest gives way', () => {
 
 test('a shortened result says so, and says it did not fail', () => {
   const out = compactToolHistory([toolMsg('old', 9000), toolMsg('new', 9000)], 9000);
-  const older = out[0].content ?? '';
+  // ChatMessage.content is string | ChatContentPart[]; a tool result is always the string arm.
+  const older = typeof out[0].content === 'string' ? out[0].content : '';
   assert.match(older, /SHORTENED/);
   // The dangerous misreading: a digest that looks like a tool which returned nothing.
   assert.match(older, /did not\s+fail/);

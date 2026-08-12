@@ -32,6 +32,19 @@ jobs:
       - name: Test
         run: npm test
 
+      # Chat orchestrator. It has its OWN package and tsconfig, so the root typecheck above never
+      # touched it, and a type error reached main because the only thing that had ever run its
+      # code was tsx, which transpiles without checking. Build first, then test: the tests live
+      # inside the project, so only `tsc` catches a bad assertion in one of them.
+      - name: Install orchestrator dependencies
+        run: npm ci --prefix apps/chat-orchestrator
+
+      - name: Build orchestrator
+        run: npm --prefix apps/chat-orchestrator run build
+
+      - name: Test orchestrator
+        run: npm --prefix apps/chat-orchestrator test
+
       # Desktop app suite (registry approval guardrails, builders, smoke). Pure
       # Node via tsx — the Electron binary is never launched, so skip its download.
       - name: Install desktop dependencies
