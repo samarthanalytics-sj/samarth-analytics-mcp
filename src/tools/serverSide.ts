@@ -324,7 +324,11 @@ function registerGalleryImport(server: McpServer, getClient: () => GtmClient): v
     {
       description:
         '[WRITE] Install a Community Template Gallery template into a workspace by GitHub owner and repository, ' +
-        'so a pixel can use its official sandboxed template instead of Custom HTML. ' +
+        'so a THIRD-PARTY pixel can use its official sandboxed template instead of Custom HTML. ' +
+        'NOT for Google\'s own tags. GA4, Google Ads and Floodlight are BUILT IN to GTM as native tag ' +
+        'types (googtag, gaawe, awct, sp, flc), there is no gallery repository for them, and asking ' +
+        'for one answers "404 Not found or permission denied". To build a GA4 event tag call ' +
+        'tags_create with type "gaawe" directly; do not import anything first. ' +
         'Requires GTM_MCP_ENABLE_WRITES=true and confirm=true. ' +
         'The GTM API DOES support this (templates.import_from_gallery); never tell the user it is UI-only. ' +
         'Idempotent: importing one already present returns it unchanged rather than creating a duplicate. ' +

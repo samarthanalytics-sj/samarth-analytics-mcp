@@ -18,6 +18,7 @@ import type { UsageMeter } from './usage.js';
 import { productOf } from './tools.js';
 import { attachmentPrompt, type ExtractedAttachment } from './attachments.js';
 import { sanitizeIntegrations } from './integrations.js';
+import { fetchWorkspaceSnapshot, renderWorkspaceSnapshot } from './workspace-snapshot.js';
 import { FORGET_MEMORY, REMEMBER_MEMORY, buildMemoryPrompt, type MemoryRecord, type MemoryScope, type MemoryStore } from './memory.js';
 import {
   ENABLE_TOOL_GROUP,
@@ -190,9 +191,40 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
     canRemember: Boolean(args.memory?.isEnabled()),
   });
 
+  /**
+   * What is already in the workspace, fetched here rather than left to the model.
+   *
+   * Turns that build something used to open with four list calls, one model round trip each, before
+   * writing anything. Doing it here costs four parallel MCP calls and no round trips at all. See
+   * workspace-snapshot.ts for the measurements.
+   *
+   * Failure is non-fatal on purpose: this is an accelerator, and a turn that can still work the old
+   * way by calling the list tools itself must not be refused because a snapshot did not load.
+   */
+  let workspaceSnapshot: string | null = null;
+  if (context.product === 'gtm' && context.accountId && context.containerId && context.workspaceId) {
+    try {
+      const snap = await fetchWorkspaceSnapshot(mcp, {
+        accountId: context.accountId,
+        containerId: context.containerId,
+        workspaceId: context.workspaceId,
+      });
+      workspaceSnapshot = renderWorkspaceSnapshot(snap);
+      console.log(
+        `[snapshot] workspace ${context.workspaceId}: ${snap.tags.length} tag(s), ` +
+          `${snap.triggers.length} trigger(s), ${snap.variables.length} variable(s), ` +
+          `${snap.builtIns.length} built-in(s)` +
+          (snap.incomplete.length ? ` (incomplete: ${snap.incomplete.join(', ')})` : ''),
+      );
+    } catch (err) {
+      console.error(`[snapshot] could not read workspace ${context.workspaceId}: ${forLog(String(err))}`);
+    }
+  }
+
   const messages: ChatMessage[] = [
     { role: 'system', content: staticSystem },
     { role: 'system', content: buildSituationalContext(context, user) },
+    ...(workspaceSnapshot ? [{ role: 'system' as const, content: workspaceSnapshot }] : []),
     ...withAttachments(
       boundHistory(args.history, cfg.limits.maxHistoryMessages),
       args.attachments ?? [],
