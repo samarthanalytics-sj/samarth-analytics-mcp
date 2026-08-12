@@ -153,7 +153,23 @@ const GROUP_KEYWORDS: Record<Exclude<ToolGroup, 'core'>, RegExp> = {
     /\b(workspace|version|publish|environment|permission|user access|share|new container|combine|merge)\w*\b/i,
   'server-side': /\b(server[- ]?side|sgtm|server container|client|transformation|zone|template|gtag|first[- ]?party)\w*\b/i,
   'ga4-read': /\b(ga4|analytics|propert|measurement|stream|key event|conversion|dimension|metric|report|sessions?|users?|traffic)\w*\b/i,
-  'ga4-write': /\b(ga4|analytics|key event|custom dimension|custom metric|audience|retention|data stream)\w*\b/i,
+  /**
+   * Verb-led, like gtm-write, and deliberately NOT noun-led.
+   *
+   * This used to match `ga4|analytics|key event|custom dimension|custom metric|audience|retention|
+   * data stream`, which are the nouns every GA4 question is made of. "Which key events are
+   * configured on this property?" is a read, and it turned on all 68 Admin write tools; since the
+   * whole history is scanned, they then stayed on for the rest of the conversation. Measured, that
+   * is 16,190 of the 19,282 tokens of GA4 tool schemas, resent on every round trip, against an
+   * account limited to 30,000 tokens per minute. It made an audit impossible to complete.
+   *
+   * The group is already GA4-scoped by the time this runs, so the noun carries no information and
+   * only the intent to change something does. `configur` is left out on purpose because
+   * "configured" is how people ask what something IS, and `set` and `add` need boundaries or they
+   * match inside "settings" and "address".
+   */
+  'ga4-write':
+    /\b(creat\w*|add|adds|added|adding|new|updat\w*|chang\w*|edit\w*|modif\w*|renam\w*|delet\w*|archiv\w*|remov\w*|enable|enabling|disable|disabling|turn (?:on|off)|set up|setup|rename)\b/i,
   audit: /\b(audit|review|health|check|export|score|problem|issue|broken|wrong)\w*\b/i,
 };
 

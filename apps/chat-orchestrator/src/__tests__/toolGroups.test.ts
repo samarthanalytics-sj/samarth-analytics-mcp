@@ -163,3 +163,52 @@ test('every group has a summary, so the menu is never blank', () => {
     assert.ok(GROUP_SUMMARIES[g] && GROUP_SUMMARIES[g].length > 20, `${g} needs a real summary`);
   }
 });
+
+// ── A GA4 read must not unlock the GA4 Admin write surface ───────────────────
+//
+// The measured failure. `ga4-write` was selected by nouns (ga4, analytics, key event, audience,
+// custom dimension, retention, data stream), which are the words every GA4 question is built from,
+// so it was on from the first message. Since the whole history is scanned, it then stayed on. That
+// is 68 tools and ~16,190 of the ~19,282 tokens of GA4 schemas, resent every round trip against an
+// account capped at 30,000 tokens per minute: "audit this property" answered "OpenAI rate limit
+// reached" and could never do anything else.
+
+test('read-only GA4 questions leave the 68 Admin write tools hidden', () => {
+  const reads = [
+    'Which key events are configured on this property?',
+    'audit this property',
+    'what custom dimensions and metrics exist?',
+    'is enhanced measurement on, and what is it collecting?',
+    'show me sessions by channel for the last 28 days',
+    'which data streams does this property have?',
+    'what is the data retention setting?',
+    'list the audiences on this property',
+  ];
+  for (const text of reads) {
+    const selected = selectToolGroups({ messages: [text] });
+    assert.equal(selected.has('ga4-write'), false, `"${text}" is a read and must not unlock GA4 writes`);
+  }
+});
+
+test('an actual GA4 change request still selects the write group', () => {
+  const writes = [
+    'add a custom dimension in GA4',
+    'create a key event called signup',
+    'update the data retention to 14 months',
+    'archive that audience',
+    'turn off enhanced measurement',
+    'rename the data stream',
+    'delete the custom metric',
+    'enable enhanced measurement',
+  ];
+  for (const text of writes) {
+    const selected = selectToolGroups({ messages: [text] });
+    assert.ok(selected.has('ga4-write'), `"${text}" asks for a change and must select ga4-write`);
+  }
+});
+
+test('the read that used to unlock writes still reaches the GA4 read tools', () => {
+  // Narrowing must not cost the capability the question actually needs.
+  const selected = selectToolGroups({ messages: ['Which key events are configured on this property?'] });
+  assert.ok(selected.has('ga4-read'), 'a GA4 read question still needs the GA4 read group');
+});

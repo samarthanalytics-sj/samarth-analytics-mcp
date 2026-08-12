@@ -24,13 +24,32 @@ export class OpenAiError extends Error {
     message: string,
     readonly status: number,
     readonly code: string,
+    /** The account's tokens-per-minute ceiling, when the response reported one. */
+    readonly limitTokens?: number,
   ) {
     super(message);
   }
 }
 
+/** The `error.code` (or `error.type`) OpenAI puts in the body, which the status alone does not say. */
+function parseUpstreamCode(body: string): string | null {
+  try {
+    const parsed = JSON.parse(body) as { error?: { code?: string; type?: string } };
+    return parsed.error?.code ?? parsed.error?.type ?? null;
+  } catch {
+    return null;
+  }
+}
+
 const MAX_RETRIES = 3;
 const RETRYABLE = new Set([408, 429, 500, 502, 503, 504]);
+
+/**
+ * A 429 that retrying cannot fix. OpenAI returns the same status for "you are going too fast" and
+ * "your balance is spent"; only the second is permanent, and backing off three times before
+ * reporting it just makes the user wait longer for the same answer.
+ */
+const NEVER_RETRY = new Set(['insufficient_quota', 'billing_hard_limit_reached']);
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -72,6 +91,7 @@ export class OpenAiClient {
         return await this.attempt(messages, tools, cbs, signal);
       } catch (err) {
         if (!(err instanceof OpenAiError) || !RETRYABLE.has(err.status)) throw err;
+        if (NEVER_RETRY.has(err.code)) throw err;
         lastError = err;
         if (attempt === MAX_RETRIES) break;
         await sleep(retryDelayMs(attempt, err.message.match(/retry-after:(\S+)/)?.[1] ?? null));
@@ -113,10 +133,31 @@ export class OpenAiClient {
       const text = await res.text().catch(() => '');
       const retryAfter = res.headers.get('retry-after');
       const suffix = retryAfter ? ` retry-after:${retryAfter}` : '';
+
+      // The upstream code is the only thing that separates causes a 429 lumps together: a
+      // per-minute limit that clears on its own, and an exhausted balance that never will. It used
+      // to be thrown away, so the log said nothing and the user was told to retry either way.
+      const upstream = parseUpstreamCode(text);
+
+      // What the account is actually allowed, straight from the response. A turn that cannot fit
+      // inside the per-minute token budget will fail identically forever, and this is the number
+      // that says so.
+      const limitTokens = res.headers.get('x-ratelimit-limit-tokens');
+      const remainingTokens = res.headers.get('x-ratelimit-remaining-tokens');
+      const budget =
+        res.status === 429 && limitTokens
+          ? ` tokens-per-minute:${remainingTokens ?? '?'}/${limitTokens}`
+          : '';
+
+      console.error(
+        `[openai] ${res.status} ${upstream ?? 'unknown'}${budget} :: ${text.slice(0, 300).replace(/\s+/g, ' ')}`,
+      );
+
       throw new OpenAiError(
         `OpenAI returned ${res.status}: ${text.slice(0, 500)}${suffix}`,
         res.status,
-        res.status === 404 ? 'model_not_found' : 'upstream_error',
+        res.status === 404 ? 'model_not_found' : (upstream ?? 'upstream_error'),
+        limitTokens ? Number(limitTokens) : undefined,
       );
     }
 
