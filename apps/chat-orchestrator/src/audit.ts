@@ -409,7 +409,13 @@ export class AuditRecorder {
       updatedAt: conv.updated_at ?? conv.created_at,
       messages: (rows ?? [])
         .filter((m) => m.role === 'user' || m.role === 'assistant')
-        .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content ?? '' })),
+        // created_at was already selected and then dropped here, so a reopened conversation lost
+        // the times its messages were sent while the database had them all along.
+        .map((m) => ({
+          role: m.role as 'user' | 'assistant',
+          content: m.content ?? '',
+          createdAt: m.created_at,
+        })),
     };
   }
 }
@@ -466,5 +472,5 @@ export interface ConversationSummary {
 }
 
 export interface ConversationDetail extends ConversationSummary {
-  messages: { role: 'user' | 'assistant'; content: string }[];
+  messages: { role: 'user' | 'assistant'; content: string; createdAt: string }[];
 }
