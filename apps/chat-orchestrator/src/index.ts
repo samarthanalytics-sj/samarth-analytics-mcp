@@ -947,8 +947,20 @@ function friendlyError(err: unknown): string {
     if (err.code === 'model_not_found') {
       return `The configured model "${cfg.openai.model}" was rejected by OpenAI. Run "npm run models" to list the ids your key can use, then set OPENAI_MODEL.`;
     }
+    // A 429 has two causes that need opposite responses from the reader, and "retry in a moment"
+    // is only right for one of them.
+    if (err.code === 'insufficient_quota' || err.code === 'billing_hard_limit_reached') {
+      return 'The OpenAI account has no remaining credit, so this will not succeed on a retry. Top up the balance or raise the billing limit.';
+    }
     if (err.status === 429) {
-      return 'OpenAI rate limit reached. Please retry in a moment.';
+      const ceiling = err.limitTokens
+        ? ` This account is limited to ${err.limitTokens.toLocaleString()} tokens per minute, shared by every step of a turn.`
+        : '';
+      return (
+        `OpenAI rate limit reached.${ceiling} Waiting a minute usually clears it; if the same ` +
+        `request fails again straight away it is too large for that limit, so ask for less at once ` +
+        `or raise the account's rate limit.`
+      );
     }
     return `The model provider returned an error (${err.status}).`;
   }
