@@ -10,6 +10,8 @@
  * ordinary error prose passes through untouched and stays useful.
  */
 
+import { createHash } from 'node:crypto';
+
 const PATTERNS: { re: RegExp; label: string }[] = [
   // Google OAuth access tokens.
   { re: /ya29\.[A-Za-z0-9._-]+/g, label: '[redacted:google-access-token]' },
@@ -52,4 +54,26 @@ export function forLog(text: string, maxChars = 400): string {
  */
 export function userRef(userId: string): string {
   return userId.length <= 8 ? userId : userId.slice(0, 8);
+}
+
+/**
+ * A stable, non-obvious handle for a person, from their email.
+ *
+ * The log is read by an operator asking "who did this", and a truncated UUID answers that only if
+ * they already have the UUID. A hash of the email is stable across sessions and derivable from an
+ * address they DO have, so a support question ("what happened for jane@acme.com") becomes a filter.
+ *
+ * NOT a secret. Email addresses come from a small space and this is a plain digest, so anyone
+ * holding a list of addresses can match them. It keeps addresses out of a file that gets copied and
+ * pasted; it does not make the reader anonymous, and nothing should be built as though it does.
+ *
+ * The domain is kept in the clear on purpose: it identifies the tenant, which is what an operator
+ * usually needs, and it is not personal on its own.
+ */
+export function userTag(user: { id?: string; email?: string }): string {
+  const email = String(user.email ?? '').trim().toLowerCase();
+  if (!email) return `u:${userRef(String(user.id ?? 'anonymous'))}`;
+  const [, domain = ''] = email.split('@');
+  const digest = createHash('sha256').update(email).digest('hex').slice(0, 10);
+  return domain ? `${digest}@${domain}` : digest;
 }
