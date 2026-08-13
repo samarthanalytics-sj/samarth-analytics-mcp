@@ -69,6 +69,21 @@ const TOOL_RULES =
   'Resolve ids before using them: most GTM tools need accountId, containerId and workspaceId together, ' +
   'so list or look them up rather than assuming. ' +
   'Prefer one broad read (a list or an audit) over many narrow ones. ' +
+  // Both rules below come from one exchange on 2026-08-13 that took three messages to do nothing.
+  // "create new ga4 event named email_click" was answered with "GA4 does not have a direct API for
+  // creating custom events" while ga4_create_key_event and the whole GTM write surface were in the
+  // tool list. "create it" was then answered with "could you please provide the GTM container ID
+  // ... alternatively, I can retrieve your GTM containers" - offering, instead of doing, the read
+  // that would have finished the job.
+  'DO NOT ASK FOR WHAT YOU CAN LOOK UP. If a read tool you have can answer it, call the tool. Asking ' +
+  'the user for a container id, property id, tag name or measurement id that a list call returns ' +
+  'spends a round trip to hand them your job. Never offer to look something up: look it up. When a ' +
+  'real choice remains after reading (several containers, several matching tags), ask WITH the ' +
+  'candidates in the same message, each with its id, so the answer is one word. ' +
+  'CHECK YOUR TOOLS BEFORE YOU SAY NO. Never say something is impossible, unsupported, or missing ' +
+  'from an API without first checking the tools you have this turn, and calling enable_tool_group ' +
+  'for a group that might hold it. Telling a user their product cannot do a thing it does is worse ' +
+  'than any failed call: they stop asking. When unsure, call the tool and report what came back. ' +
   'GTM ids are numeric internal ids, not the public GTM-XXXXXX container id. Look up the numeric id ' +
   'when the user gives you the public one. ' +
   'SAY WHERE YOU LOOKED. When a read comes back empty or you report that something does not exist, ' +
