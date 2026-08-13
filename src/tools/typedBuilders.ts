@@ -36,6 +36,10 @@ import {
   buildVariable,
   triggerBuiltInVars,
   builtInVarsForTemplates,
+  sanitizeName,
+  tpl,
+  boolean,
+  type GtmTagResource,
   type TriggerInput,
   type TriggerKind,
   type VariableKind,
@@ -177,15 +181,34 @@ export function registerTypedBuilderTools(server: McpServer, getClient: () => Gt
         'Requires GTM_MCP_ENABLE_WRITES=true and confirm=true.',
       inputSchema: wsBase.extend({
         tagName: z.string().describe('Name for the tag, e.g. "GA4 Event - Email Click".'),
+        platform: z
+          .string()
+          .optional()
+          .describe(
+            'What KIND of tag to build. "ga4_event" (the default) builds a GA4 event tag from ' +
+              'measurementId + eventName. "custom_html" builds a Custom HTML tag from `html`, which is ' +
+              'how a dataLayer LISTENER is installed for forms GTM cannot see natively (an AJAX or ' +
+              'cross-origin embed). Any OTHER value is REFUSED rather than quietly built as GA4: a Meta ' +
+              'or Ads tag asked for here would otherwise come out as a GA4 tag pointing at that ' +
+              "platform's id, which looks created and is wrong.",
+          ),
+        html: z
+          .string()
+          .optional()
+          .describe('For platform "custom_html": the complete tag body, a single self-contained <script>.'),
         measurementId: z
           .string()
+          .optional()
           .describe(
             'The GA4 Measurement ID, e.g. "G-ABC123XYZ", or a {{variable}} reference. Read the real id ' +
               'from the container\'s Google tag (type "googtag", parameter "tagId") rather than inventing ' +
               'one: an obvious placeholder is refused, because GTM would accept it and the tag would ' +
               'report to nothing.',
           ),
-        eventName: z.string().describe('The GA4 event name, snake_case, e.g. "email_click".'),
+        eventName: z
+          .string()
+          .optional()
+          .describe('The GA4 event name, snake_case, e.g. "email_click". Required for platform "ga4_event".'),
         eventParameters: z
           .array(z.object({ name: z.string(), value: z.string() }))
           .optional()
@@ -212,11 +235,37 @@ export function registerTypedBuilderTools(server: McpServer, getClient: () => Gt
     },
     async ({
       accountId, containerId, workspaceId,
-      tagName, measurementId, eventName, eventParameters, trigger, builtInVariables, allowPlaceholderId, confirm,
+      tagName, platform, html, measurementId, eventName, eventParameters, trigger, builtInVariables, allowPlaceholderId, confirm,
     }) => {
       try {
         const config = getGuardrailConfig();
         const { dryRun } = checkGuardrails('write', confirm, config);
+
+        /**
+         * Refuse a platform this tool cannot build, rather than building the wrong thing.
+         *
+         * The schema used to have no platform field at all, and callers were passing one: the
+         * suggestion engine emits meta_pixel, google_ads_conversion and the rest. Zod strips unknown
+         * keys, so those arrived here as a GA4 event tag whose measurementId was a Meta pixel id.
+         * That is created, correct-looking, and wrong. The desktop app builds those; this tool does
+         * not, and now says so.
+         */
+        const kindOfTag = (platform ?? 'ga4_event').trim() || 'ga4_event';
+        if (kindOfTag !== 'ga4_event' && kindOfTag !== 'custom_html') {
+          return textResult(
+            `Not creating "${tagName}": this tool builds "ga4_event" and "custom_html" tags, not ` +
+              `"${kindOfTag}". Building it as GA4 anyway would produce a tag pointing at another ` +
+              "platform's id, which looks created and reports nowhere.",
+          );
+        }
+        if (kindOfTag === 'custom_html' && !String(html ?? '').trim()) {
+          return textResult(`Not creating "${tagName}": platform "custom_html" needs \`html\`, the tag body.`);
+        }
+        if (kindOfTag === 'ga4_event' && (!String(measurementId ?? '').trim() || !String(eventName ?? '').trim())) {
+          return textResult(
+            `Not creating "${tagName}": a GA4 event tag needs both measurementId and eventName.`,
+          );
+        }
 
         const triggerInput = { ...trigger, kind: trigger.kind as TriggerKind } as TriggerInput;
         if (triggerInput.kind === 'timer' && !String(triggerInput.intervalMs ?? '').trim()) {
@@ -243,7 +292,8 @@ export function registerTypedBuilderTools(server: McpServer, getClient: () => Gt
 
         if (dryRun) {
           return textResult(
-            `[DRY RUN] Would create GA4 event tag "${tagName}" (${eventName}) on trigger ` +
+            `[DRY RUN] Would create ${platform === 'custom_html' ? 'Custom HTML' : 'GA4 event'} tag ` +
+              `"${tagName}" (${eventName ?? 'no event'}) on trigger ` +
               `"${trigger.name}" (${trigger.kind}) in workspace ${workspaceId}` +
               (builtIns.length ? `, enabling built-in variables: ${builtIns.join(', ')}` : ''),
           );
@@ -260,9 +310,9 @@ export function registerTypedBuilderTools(server: McpServer, getClient: () => Gt
          * already knows the right answer, so read it. Only an empty container, with no Google tag
          * to read, genuinely has to ask.
          */
-        let effectiveMeasurementId = measurementId;
+        let effectiveMeasurementId = measurementId ?? '';
         let measurementIdNote: string | undefined;
-        if (isPlaceholderMeasurementId(measurementId) && !allowPlaceholderId) {
+        if (kindOfTag === 'ga4_event' && isPlaceholderMeasurementId(effectiveMeasurementId) && !allowPlaceholderId) {
           const real = await measurementIdFromContainer(client, parent);
           if (real) {
             effectiveMeasurementId = real;
@@ -296,13 +346,27 @@ export function registerTypedBuilderTools(server: McpServer, getClient: () => Gt
 
         const trig = await findOrCreateTrigger(client, parent, triggerInput);
 
-        const tag = buildGa4EventTag({
-          name: tagName,
-          measurementId: effectiveMeasurementId,
-          eventName,
-          eventParameters,
-          firingTriggerId: trig.triggerId ? [trig.triggerId] : undefined,
-        });
+        const firingTriggerId = trig.triggerId ? [trig.triggerId] : undefined;
+        const tag =
+          kindOfTag === 'custom_html'
+            ? ({
+                name: sanitizeName(tagName),
+                type: 'html',
+                parameter: [
+                  tpl('html', String(html)),
+                  // GTM defaults this on, and document.write in a listener breaks pages loaded
+                  // asynchronously. A listener never needs it.
+                  boolean('supportDocumentWrite', false),
+                ],
+                ...(firingTriggerId ? { firingTriggerId } : {}),
+              } as GtmTagResource)
+            : buildGa4EventTag({
+                name: tagName,
+                measurementId: effectiveMeasurementId,
+                eventName: String(eventName),
+                eventParameters,
+                firingTriggerId,
+              });
         const created = await client.accounts.containers.workspaces.tags.create({
           parent,
           requestBody: tag as tagmanager_v2.Schema$Tag,

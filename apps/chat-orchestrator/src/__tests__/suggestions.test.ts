@@ -374,3 +374,101 @@ test('no plan at all stays absent rather than becoming an empty one', async () =
   assert.equal(installSummary(undefined), undefined);
   assert.equal(installSummary({ summary: 'x', requires: [] }), undefined);
 });
+
+// ── What can actually be created, and the listener that makes it fire ────────
+
+test('a platform this deployment cannot build is refused before anything is written', async () => {
+  // The MCP's create tool builds GA4 and Custom HTML tags. It had no platform field at all, so zod
+  // dropped the key and a Meta row came back "Created" as a GA4 tag carrying a Meta pixel id.
+  const { splitCreatable } = await import('../suggestions.js');
+  const { supported, unsupported } = splitCreatable([
+    { id: 'a', platform: 'ga4_event', tagName: 'A' },
+    { id: 'b', platform: 'meta_pixel', tagName: 'B' },
+    { id: 'c', platform: 'google_ads_conversion', tagName: 'C' },
+  ] as unknown as SuggestedTagView[]);
+  assert.deepEqual(supported.map((s) => s.id), ['a']);
+  assert.deepEqual(unsupported.map((u) => u.id), ['b', 'c']);
+  assert.match(unsupported[0].reason, /desktop app/, 'the reason names where it can be done');
+});
+
+test('one listener serves every row that needs it', async () => {
+  // A listener is per site behaviour, not per tag. Three forms behind the same embed need one
+  // listener between them; creating it three times leaves three copies pushing on every page.
+  const { listenerTagsFor } = await import('../suggestions.js');
+  const rows = [1, 2, 3].map((n) => ({
+    id: `s${n}`,
+    platform: 'ga4_event',
+    tagName: `Form ${n}`,
+    install: {
+      requires: [{ kind: 'listener-tag', tag: { name: 'cHTML - Calendly listener', html: '<script></script>', fires: 'all_pages' } }],
+    },
+  })) as unknown as SuggestedTagView[];
+  const listeners = listenerTagsFor(rows);
+  assert.equal(listeners.length, 1);
+  assert.deepEqual(listeners[0].forRows, ['s1', 's2', 's3']);
+});
+
+test('a row with nothing to install asks for no listener', async () => {
+  const { listenerTagsFor } = await import('../suggestions.js');
+  const rows = [
+    { id: 'a', platform: 'ga4_event', tagName: 'A', install: { requires: [{ kind: 'native', detail: 'x' }] } },
+    { id: 'b', platform: 'ga4_event', tagName: 'B' },
+  ] as unknown as SuggestedTagView[];
+  assert.deepEqual(listenerTagsFor(rows), []);
+});
+
+test('the listener is created before the tag that depends on it', async () => {
+  // A GA4 tag on a Custom Event trigger does nothing until something pushes that event. Creating the
+  // listener afterwards leaves a window where the container looks complete and reports nothing.
+  const order: string[] = [];
+  const execute = async (_n: string, args: Record<string, unknown>): Promise<string> => {
+    order.push(String(args.platform ?? 'ga4_event'));
+    return JSON.stringify({ tag: { name: args.tagName, tagId: '1' }, trigger: { reused: false } });
+  };
+  const rows = [
+    {
+      id: 's1',
+      platform: 'ga4_event',
+      tagName: 'Contact Form',
+      trigger: { name: 'T', kind: 'custom_event', eventName: 'form_submit' },
+      install: { requires: [{ kind: 'listener-tag', tag: { name: 'cHTML - listener', html: '<script></script>', fires: 'all_pages' } }] },
+    },
+  ] as unknown as SuggestedTagView[];
+
+  const result = await createSelected(execute, { accountId: '1', containerId: '2', workspaceId: '3' }, rows);
+  assert.deepEqual(order, ['custom_html', 'ga4_event'], 'listener first, then the tag');
+  assert.equal(result.listeners.length, 1);
+  assert.equal(result.listeners[0].ok, true);
+  assert.equal(result.created, 1);
+});
+
+test('a failed listener does not stop its tag being created', async () => {
+  // The tag is still correct, and a half-built pair someone can finish by hand beats nothing, as
+  // long as the failure is reported.
+  const execute = async (_n: string, args: Record<string, unknown>): Promise<string> => {
+    if (args.platform === 'custom_html') throw new Error('quota exceeded for this container');
+    return JSON.stringify({ tag: { name: args.tagName, tagId: '1' }, trigger: { reused: true } });
+  };
+  const rows = [
+    {
+      id: 's1',
+      platform: 'ga4_event',
+      tagName: 'Contact Form',
+      trigger: { name: 'T', kind: 'custom_event' },
+      install: { requires: [{ kind: 'listener-tag', tag: { name: 'cHTML - listener', html: '<script></script>', fires: 'all_pages' } }] },
+    },
+  ] as unknown as SuggestedTagView[];
+
+  const result = await createSelected(execute, { accountId: '1', containerId: '2', workspaceId: '3' }, rows);
+  assert.equal(result.listeners[0].ok, false);
+  assert.match(result.listeners[0].error ?? '', /quota/);
+  assert.equal(result.created, 1, 'the tag is still created');
+});
+
+test('the trigger a listener fires on follows the plan', async () => {
+  const { listenerTrigger } = await import('../suggestions.js');
+  assert.deepEqual(listenerTrigger('all_pages'), { name: 'All Pages', kind: 'pageview' });
+  assert.deepEqual(listenerTrigger('dom_ready'), { name: 'DOM Ready', kind: 'dom_ready' });
+  assert.deepEqual(listenerTrigger('window_loaded'), { name: 'Window Loaded', kind: 'window_loaded' });
+  assert.deepEqual(listenerTrigger('anything else'), { name: 'All Pages', kind: 'pageview' });
+});
