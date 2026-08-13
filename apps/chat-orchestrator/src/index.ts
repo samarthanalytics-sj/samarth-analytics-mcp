@@ -27,6 +27,8 @@ import { scopeTools } from './tools.js';
 import { checkAllowlistAgainstServer } from './integrations.js';
 import { extractAll, type ExtractedAttachment } from './attachments.js';
 import { MemoryStore } from './memory.js';
+import { SiteScanner, ScanError } from './scan-client.js';
+import { ScanStore, toRows, selectRows, withMeasurementId, createSelected } from './suggestions.js';
 import {
   findGtmContainer,
   listGa4Properties,
@@ -204,6 +206,10 @@ async function main(): Promise<void> {
 
   const llm = new OpenAiClient(cfg);
   const limiter = new RateLimiter();
+  // The scanner starts no child until a scan is asked for, so a deployment without a browser costs
+  // nothing here and fails only on the page that needs it.
+  const scanner = new SiteScanner(cfg);
+  const scanStore = new ScanStore();
   // Only constructed when writes are enabled. Its absence is what makes a write impossible: the
   // turn loop refuses any write tool it cannot route through a broker.
   const approvals = cfg.enableWriteTools ? new ApprovalBroker() : null;
@@ -989,6 +995,121 @@ async function main(): Promise<void> {
   /** Every GA4 property across every account, in one call. */
   app.get('/v1/resources/ga4/properties', (req, res) => {
     void withUserMcp(req, res, (mcp) => listGa4Properties(mcp));
+  });
+
+  /**
+   * Scan a site and return the tags worth creating.
+   *
+   * No MCP child of the user's is involved: the scan reads public pages and touches nothing in their
+   * account, so it authenticates the caller and then uses the shared, credential-free scanner.
+   */
+  app.post('/v1/suggestions/scan', async (req, res) => {
+    let user: AuthedUser;
+    try {
+      user = await authenticate(req.headers.authorization);
+    } catch (err) {
+      return sendAuthError(res, err);
+    }
+    // A crawl is far more expensive than a picker refresh, so it gets the turn budget, not the
+    // looser lookup one.
+    if (!limiter.allow(`scan:${user.id}`, cfg.limits.turnsPerMinutePerUser)) {
+      res.setHeader('Retry-After', '60');
+      return res.status(429).json({ code: 'rate_limited', message: 'Too many scans. Try again shortly.' });
+    }
+    const url = String(req.body?.url ?? '').trim();
+    if (!url) return res.status(400).json({ code: 'bad_request', message: 'A site URL is required.' });
+
+    const startedAt = Date.now();
+    try {
+      const result = await scanner.scan(url, {
+        maxPages: Number(req.body?.maxPages) || undefined,
+        maxDepth: Number(req.body?.maxDepth) || undefined,
+      });
+      const scan = scanStore.put(user.id, result);
+      console.log(
+        `[scan] ${forLog(url)} -> ${scan.suggestions.length} suggestion(s) in ${Date.now() - startedAt}ms`,
+      );
+      res.json({
+        scanId: scan.id,
+        site: scan.site,
+        suggestions: toRows(scan.suggestions),
+        warnings: scan.warnings,
+        ...(result.scanned !== undefined ? { scanned: result.scanned } : {}),
+      });
+    } catch (err) {
+      const code = err instanceof ScanError ? err.code : 'scan_failed';
+      const message = err instanceof Error ? err.message : 'The scan failed.';
+      console.error(`[scan] ${forLog(url)} failed after ${Date.now() - startedAt}ms: ${forLog(message)}`);
+      // 502 rather than 500: the failure is in the thing being scanned or in the scanner, and the
+      // page shows this sentence to the user, so it has to be the sentence they can act on.
+      res.status(502).json({ code, message });
+    }
+  });
+
+  /**
+   * Create the ticked suggestions as draft tags.
+   *
+   * The request carries a scan id and row ids, never a tool name or arguments. The payload is
+   * rebuilt from this process's own copy of the scan, so this endpoint can only ever create tags
+   * that a scan actually produced for this user.
+   */
+  app.post('/v1/suggestions/create', (req, res) => {
+    const ws = {
+      accountId: idParam(req.body?.accountId) ?? '',
+      containerId: idParam(req.body?.containerId) ?? '',
+      workspaceId: idParam(req.body?.workspaceId) ?? '',
+    };
+    const scanId = String(req.body?.scanId ?? '');
+    const ids: string[] = Array.isArray(req.body?.ids) ? req.body.ids.map(String) : [];
+
+    void withUserMcp(
+      req,
+      res,
+      async (mcp, user) => {
+        if (!cfg.enableWriteTools) {
+          throw new ResourceError('This deployment is read-only, so tags cannot be created.', 'read_only');
+        }
+        const scan = scanStore.get(user.id, scanId);
+        if (!scan) {
+          throw new ResourceError(
+            'That scan has expired. Run the scan again and reselect the tags you want.',
+            'scan_expired',
+          );
+        }
+        const { selected, unknown } = selectRows(scan, ids);
+        if (unknown.length > 0) {
+          throw new ResourceError(
+            `That scan has no suggestion with id ${unknown.join(', ')}. Run the scan again.`,
+            'unknown_suggestion',
+          );
+        }
+        if (selected.length === 0) throw new ResourceError('Select at least one tag to create.', 'nothing_selected');
+
+        const tags = withMeasurementId(selected, String(req.body?.measurementId ?? ''));
+        const execute = async (name: string, args: Record<string, unknown>): Promise<string> => {
+          const { ok, text } = await mcp.callTool(name, args);
+          // Thrown, not returned: createSuggestedTags reads failures off the exception, and that is
+          // where its duplicate-name and quota-backoff handling lives.
+          if (!ok) throw new Error(text);
+          return text;
+        };
+
+        const result = await createSelected(execute, ws, tags);
+        console.log(
+          `[suggestions] created ${result.created}/${tags.length} tag(s) in workspace ${ws.workspaceId} ` +
+            `of container ${ws.containerId} for user ${user.id.slice(0, 8)}`,
+        );
+        return { ...result, site: scan.site };
+      },
+      () => {
+        if (!ws.accountId || !ws.containerId || !ws.workspaceId) {
+          return 'A valid accountId, containerId and workspaceId are required.';
+        }
+        if (!scanId) return 'A scanId is required.';
+        if (ids.length === 0) return 'Select at least one tag to create.';
+        return null;
+      },
+    );
   });
 
   app.post('/v1/chat', async (req, res) => {

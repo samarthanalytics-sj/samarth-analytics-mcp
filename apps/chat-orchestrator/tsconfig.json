@@ -28,6 +28,15 @@
     "declaration": false,
     "sourceMap": true
   },
-  "include": ["src/**/*.ts", "../desktop/src/shared/gtm-methodology.ts"],
+  // The two desktop files are pulled in on purpose, so the website runs the SAME create loop as the
+  // desktop app rather than a second copy of it. create-suggested-tags.ts was split out of
+  // suggestion-service.ts for exactly this: the rest of that module reaches ../google/gtm-builders,
+  // which re-exports the repo-root src/, and rootDir here is "..".
+  "include": [
+    "src/**/*.ts",
+    "../desktop/src/shared/gtm-methodology.ts",
+    "../desktop/src/main/suggestions/create-suggested-tags.ts",
+    "../desktop/src/main/google/quota-retry.ts"
+  ],
   "exclude": ["node_modules", "dist"]
 }
