@@ -28,12 +28,26 @@ const { registerGa4AdminWriteTools } = await import(pathToFileURL(distTools).hre
 const { McpServer } = await import(pathToFileURL(distSdk).href);
 
 // A recording sub-resource with all four verbs; each returns { data } echoing the params.
+//
+// Each verb is a `function` (not an arrow) that reads `this.context` first, because that is what a
+// real googleapis resource method does. The fakes used to be arrows that ignored `this`, so a tool
+// that pulled a verb off its object and called it bare passed every test here and then died in
+// production with "Cannot read properties of undefined (reading 'context')". Modelling the receiver
+// is the only reason that class of bug is catchable from a unit test.
 function makeSub(calls, label) {
-  const rec = (verb) => (params) => {
-    calls.push({ label, verb, params });
-    return Promise.resolve({ data: { echoed: verb, ...params } });
+  const rec = (verb) =>
+    function (params) {
+      void this.context;
+      calls.push({ label, verb, params });
+      return Promise.resolve({ data: { echoed: verb, ...params } });
+    };
+  return {
+    context: { _options: {} },
+    create: rec('create'),
+    patch: rec('patch'),
+    delete: rec('delete'),
+    archive: rec('archive'),
   };
-  return { create: rec('create'), patch: rec('patch'), delete: rec('delete'), archive: rec('archive') };
 }
 
 function buildServer() {

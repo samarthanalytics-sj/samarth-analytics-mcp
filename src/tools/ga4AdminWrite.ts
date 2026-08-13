@@ -45,6 +45,24 @@ interface Ga4SubResource {
 
 type AnyGa4Client = Ga4AdminClient | Ga4AdminAlphaClient;
 
+/**
+ * Look a verb up on the sub-resource WITH its receiver still attached.
+ *
+ * googleapis resource methods are prototype methods that read `this.context._options` on the way
+ * in. Pulling one out as a bare function (`const fn = sub().delete`) drops the receiver, so the
+ * call dies with "Cannot read properties of undefined (reading 'context')" BEFORE any request goes
+ * out. That surfaced to a user as "a temporary glitch with the GA4 API", which was neither
+ * temporary nor GA4: it was every write tool in this file, on every call.
+ *
+ * The old unit tests could not catch it - their fake sub-resources are plain closures that never
+ * touch `this`, so a detached call works fine against the fake and fails against Google.
+ */
+function bindVerb<K extends keyof Ga4SubResource>(s: Ga4SubResource, verb: K): Ga4SubResource[K] {
+  const fn = s[verb];
+  if (typeof fn !== 'function') return undefined;
+  return (fn as (...a: never[]) => unknown).bind(s) as Ga4SubResource[K];
+}
+
 /** Normalize an account id into `accounts/{id}`. */
 function toAccountName(account: string): string {
   const t = account.trim();
@@ -179,7 +197,7 @@ function registerResource(
           spec.validate?.(requestBody);
           const parent = parentPath(a);
           if (dryRun) return textResult(`[DRY RUN] Would create ${r.plural} under ${parent}: ${JSON.stringify(requestBody)}`);
-          const fn = sub().create;
+          const fn = bindVerb(sub(), 'create');
           if (!fn) return errorText(`ga4_create_${r.key} failed: create is not supported for ${r.plural}.`);
           const res = await fn({ parent, requestBody, ...(spec.query ? spec.query(a) : {}) });
           return jsonResult(res.data);
@@ -216,7 +234,7 @@ function registerResource(
           if (!updateMask) return errorText(`ga4_update_${r.key} failed: nothing to update — supply at least one field or updateMask.`);
           const name = String(a.name).trim();
           if (dryRun) return textResult(`[DRY RUN] Would patch ${name} (mask ${updateMask}): ${JSON.stringify(requestBody)}`);
-          const fn = sub().patch;
+          const fn = bindVerb(sub(), 'patch');
           if (!fn) return errorText(`ga4_update_${r.key} failed: update is not supported for ${r.plural}.`);
           const res = await fn({ name, updateMask, requestBody });
           return jsonResult(res.data);
@@ -240,7 +258,7 @@ function registerResource(
           const { dryRun } = checkGa4Guardrails('delete', a.confirm as boolean, getGuardrailConfig());
           const name = String(a.name).trim();
           if (dryRun) return textResult(`[DRY RUN] Would delete ${name}`);
-          const fn = sub().delete;
+          const fn = bindVerb(sub(), 'delete');
           if (!fn) return errorText(`ga4_delete_${r.key} failed: delete is not supported for ${r.plural}.`);
           await fn({ name });
           return textResult(`Deleted ${name}.`);
@@ -266,7 +284,7 @@ function registerResource(
           const { dryRun } = checkGa4Guardrails('delete', a.confirm as boolean, getGuardrailConfig());
           const name = String(a.name).trim();
           if (dryRun) return textResult(`[DRY RUN] Would archive ${name}`);
-          const fn = sub().archive;
+          const fn = bindVerb(sub(), 'archive');
           if (!fn) return errorText(`ga4_archive_${r.key} failed: archive is not supported for ${r.plural}.`);
           await fn({ name, requestBody: {} });
           return textResult(`Archived ${name}.`);
