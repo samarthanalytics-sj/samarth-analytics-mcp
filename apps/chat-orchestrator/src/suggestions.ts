@@ -134,16 +134,30 @@ export function selectRows(
 }
 
 /**
- * Apply the measurement id the user supplied, if any.
+ * Ask the tool to resolve the id from the container, unless the user named one.
  *
- * When they supply none, the field is left alone and create_gtm_tracking_tag resolves it from the
- * container's own Google tag. Inventing one here, or defaulting to a placeholder, would produce a
- * tag that looks created and reports to nowhere.
+ * The scanner cannot know a measurement id, so it emits the reference "{{GA4 Measurement ID}}" as a
+ * stand-in. create_gtm_tracking_tag passes a {{variable}} through untouched, and deliberately so: a
+ * chat caller who types one has chosen a variable that exists. Here nobody chose it. If the
+ * container has no variable by that name, GTM accepts the tag and it reports to nothing, which is
+ * the one outcome worth engineering against, because it looks like success.
+ *
+ * So an unresolved reference is turned into the literal placeholder the tool already knows how to
+ * handle: it reads the real id off the container's Google tag, or refuses and says the workspace has
+ * none. That reuses one tested resolution path instead of adding a second one here.
  */
+const VARIABLE_REFERENCE = /^\s*\{\{.+\}\}\s*$/;
+/** Recognised by isPlaceholderMeasurementId in the MCP, which triggers the container lookup. */
+const RESOLVE_FROM_CONTAINER = 'G-XXXXXXXXXX';
+
 export function withMeasurementId(list: SuggestedTagView[], measurementId?: string): SuggestedTagView[] {
   const id = (measurementId ?? '').trim();
-  if (!id) return list;
-  return list.map((s) => ({ ...s, measurementId: id }));
+  if (id) return list.map((s) => ({ ...s, measurementId: id }));
+  return list.map((s) =>
+    VARIABLE_REFERENCE.test(String(s.measurementId ?? ''))
+      ? { ...s, measurementId: RESOLVE_FROM_CONTAINER }
+      : s,
+  );
 }
 
 export type ToolExecute = (name: string, args: Record<string, unknown>) => Promise<string>;

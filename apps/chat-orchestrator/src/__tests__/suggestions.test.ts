@@ -92,12 +92,37 @@ test('rows sent to the browser carry no tool payload', () => {
   assert.equal(row.eventParameters, undefined);
 });
 
-test('no measurement id means the field is left for the container to resolve', () => {
-  // Defaulting to a placeholder here would produce a tag that looks created and reports nowhere.
+test('a supplied measurement id is used verbatim', () => {
   const list = [{ id: 's1', tagName: 'T', platform: 'ga4_event' }] as unknown as SuggestedTagView[];
-  assert.equal(withMeasurementId(list, '')[0].measurementId, undefined);
-  assert.equal(withMeasurementId(list, undefined)[0].measurementId, undefined);
   assert.equal(withMeasurementId(list, ' G-ABC123 ')[0].measurementId, 'G-ABC123');
+});
+
+test("the scanner's variable stand-in becomes a lookup, not a live reference", () => {
+  // Observed on a real scan: the engine emits measurementId "{{GA4 Measurement ID}}" because it
+  // cannot know the id. Sent through as-is, GTM accepts a reference to a variable that may not
+  // exist, and the tag reports to nothing while looking created.
+  const list = [
+    { id: 's1', tagName: 'T', platform: 'ga4_event', measurementId: '{{GA4 Measurement ID}}' },
+  ] as unknown as SuggestedTagView[];
+  assert.equal(withMeasurementId(list, '')[0].measurementId, 'G-XXXXXXXXXX');
+  assert.equal(withMeasurementId(list, undefined)[0].measurementId, 'G-XXXXXXXXXX');
+});
+
+test('a real id already on a row is left alone', () => {
+  const list = [
+    { id: 's1', tagName: 'T', platform: 'ga4_event', measurementId: 'G-REAL123' },
+    { id: 's2', tagName: 'U', platform: 'ga4_event' },
+  ] as unknown as SuggestedTagView[];
+  const out = withMeasurementId(list, undefined);
+  assert.equal(out[0].measurementId, 'G-REAL123');
+  assert.equal(out[1].measurementId, undefined, 'no id and no stand-in stays absent');
+});
+
+test('an explicit id beats the stand-in', () => {
+  const list = [
+    { id: 's1', tagName: 'T', platform: 'ga4_event', measurementId: '{{GA4 Measurement ID}}' },
+  ] as unknown as SuggestedTagView[];
+  assert.equal(withMeasurementId(list, 'G-MINE99')[0].measurementId, 'G-MINE99');
 });
 
 test('outcomes are counted apart: created, already there, and failed', async () => {
