@@ -1087,9 +1087,14 @@ async function main(): Promise<void> {
       // it. An admin of the product is not enough; only a super admin is.
       return res.status(404).json({ code: 'not_found', message: 'No such endpoint.' });
     }
+    const category = typeof req.query.category === 'string' ? req.query.category : '';
     const tail = tailLog({
       lines: Number(req.query.lines) || undefined,
       filter: typeof req.query.filter === 'string' ? req.query.filter : undefined,
+      // An unrecognised category is ignored rather than honoured as a filter that matches nothing,
+      // which would show an empty log and read as a quiet system.
+      ...(['chat', 'suggestions', 'writes', 'system'].includes(category) ? { category: category as never } : {}),
+      ...(req.query.problems === 'true' ? { problemsOnly: true } : {}),
     });
     if (!tail) {
       return res.status(503).json({

@@ -98,3 +98,72 @@ test('the line ceiling is a real ceiling', () => {
   assert.ok(DEFAULT_LINES < MAX_LINES, 'the default must be below the cap');
   assert.ok(MAX_LINES <= 5000, 'a request must not be able to ask for the whole 5MB file');
 });
+
+// ── Telling the two stories apart ────────────────────────────────────────────
+//
+// One process serves the chat and the tag-suggestions page, so the log interleaves them. Answering
+// "why was that scan slow" means skipping past chat turns, and a text box only helps someone who
+// already knows which prefixes to type.
+
+test('a line is filed under the part of the system it came from', async () => {
+  const { classifyLine } = await import('../logs.js');
+  const cases: Array<[string, string | undefined]> = [
+    ['[2026-08-13 17:00:00] [scan] https://x.com -> 13 suggestion(s) in 9000ms', 'suggestions'],
+    ['[2026-08-13 17:00:00] [suggestions] created 3/3 tag(s)', 'suggestions'],
+    ['[2026-08-13 17:00:00] [req] POST /v1/suggestions/scan -> 200 9801ms', 'suggestions'],
+    ['[2026-08-13 17:00:00] [tools] 38 of 97 tools visible this turn', 'chat'],
+    ['[2026-08-13 17:00:00] [openai] 429 rate_limit_exceeded', 'chat'],
+    ['[2026-08-13 17:00:00] [req] POST /v1/chat -> 200 6355ms', 'chat'],
+    ['[2026-08-13 17:00:00] [orchestrator] listening on http://127.0.0.1:8787', 'system'],
+    ['[2026-08-13 17:00:00] [pool] closed MCP session (idle)', 'system'],
+  ];
+  for (const [line, expected] of cases) {
+    assert.equal(classifyLine(line), expected, line);
+  }
+});
+
+test('a write gets its own category rather than being guessed at', async () => {
+  // Both surfaces create tags and the line does not say which asked. Filing every write under chat
+  // would hide the ones a scan made from someone looking for exactly those; leaving them
+  // uncategorised would make the most interesting lines unreachable from every filter.
+  const { classifyLine } = await import('../logs.js');
+  assert.equal(classifyLine('[2026-08-13 17:00:00] [write] create_gtm_tracking_tag applied'), 'writes');
+  assert.equal(classifyLine('[2026-08-13 17:00:00] [tool] ga4_delete_key_event failed'), 'writes');
+  assert.equal(classifyLine('a line with no tag at all'), undefined);
+});
+
+test('the other shapes in this file are classified too', async () => {
+  // Measured against the real log: these three accounted for two thirds of what used to fall
+  // through, so every category filter was hiding most of the file.
+  const { classifyLine } = await import('../logs.js');
+  assert.equal(classifyLine('[supervisor 2026-08-13T12:35:10.443Z] started orchestrator (pid 18360)'), 'system');
+  assert.equal(classifyLine('[samarth-gtm-mcp] Server ready on stdio transport'), 'system');
+  assert.equal(classifyLine('[auth] Using OAuth2 user credentials'), 'system');
+  assert.equal(classifyLine('[req] GET /.aws/credentials -> 404 1ms origin=-'), 'system', 'a probe is not chat');
+  assert.equal(classifyLine('[req] GET /v1/resources/gtm/accounts -> 200 2630ms'), 'chat');
+});
+
+test('a whole crash lands in one place, not half of it', async () => {
+  // The half that names the cause is usually the useful half.
+  const { classifyLine } = await import('../logs.js');
+  for (const line of [
+    'Error: listen EADDRINUSE: address already in use 127.0.0.1:8787',
+    "  code: 'EADDRINUSE',",
+    '  errno: -4091,',
+    '    at Server.setupListenHandle (node:net:1817:16)',
+    "Emitted 'error' event on Server instance at:",
+  ]) {
+    assert.equal(classifyLine(line), 'system', line);
+  }
+});
+
+test('problems are found across categories, and a duration is not a status code', async () => {
+  const { isProblem } = await import('../logs.js');
+  assert.equal(isProblem('[openai] 429 rate_limit_exceeded tokens-per-minute:0/30000'), true);
+  assert.equal(isProblem('[tool] ga4_delete_key_event failed for user f5f1283f'), true);
+  assert.equal(isProblem('[req] GET /v1/resources/gtm/accounts -> 502 1341ms'), true);
+  assert.equal(isProblem('Not creating "X": placeholder Measurement ID'), true);
+  // The one that matters: a healthy request that took 500ms is not a 500.
+  assert.equal(isProblem('[req] POST /v1/chat -> 200 500ms origin=https://aitagmanager.com'), false);
+  assert.equal(isProblem('[orchestrator] listening on http://127.0.0.1:8787'), false);
+});
