@@ -310,5 +310,74 @@ await test('with writes DISABLED the tool creates nothing', async () => {
   assert.ok(/disabled|not enabled|GTM_MCP_ENABLE_WRITES|read-only/i.test(text(res)), `unexpected: ${text(res)}`);
 });
 
+
+console.log('\ncreate_gtm_tracking_tag - platforms it can and cannot build:');
+
+await test('a Custom HTML listener tag is built from html, with no measurement id', async () => {
+  // How a dataLayer listener gets installed for a form GTM cannot see natively: an AJAX plugin or a
+  // cross-origin embed. Without this the suggestion is a note, not something anyone can act on.
+  const client = stubClient();
+  const res = await call(serverWith(client), 'create_gtm_tracking_tag', {
+    ...WS,
+    platform: 'custom_html',
+    tagName: 'cHTML - Calendly listener',
+    html: '<script>window.dataLayer.push({event:"form_submit"});</script>',
+    trigger: { name: 'All Pages', kind: 'pageview' },
+    confirm: true,
+  });
+  const tag = client.calls.find((c) => c.kind === 'tag');
+  assert.ok(tag, 'a tag must be created');
+  assert.strictEqual(tag.body.type, 'html');
+  const htmlParam = tag.body.parameter.find((p) => p.key === 'html');
+  assert.ok(htmlParam.value.includes('dataLayer.push'), 'the script is the tag body');
+  const docWrite = tag.body.parameter.find((p) => p.key === 'supportDocumentWrite');
+  assert.strictEqual(docWrite.value, 'false', 'document.write breaks async-loaded pages');
+  assert.ok(!text(res).includes('Not creating'), 'it must not be refused');
+});
+
+await test('a platform this tool cannot build is REFUSED, not built as GA4', async () => {
+  // The schema had no platform field, so callers passing meta_pixel had it stripped by zod and got a
+  // GA4 tag whose measurementId was a Meta pixel id: created, correct-looking, wrong.
+  const client = stubClient();
+  const res = await call(serverWith(client), 'create_gtm_tracking_tag', {
+    ...WS,
+    platform: 'meta_pixel',
+    tagName: 'Meta Pixel - Lead',
+    measurementId: '{{Meta Pixel ID}}',
+    eventName: 'Lead',
+    trigger: { name: 'Lead Trigger', kind: 'form_submit' },
+    confirm: true,
+  });
+  assert.ok(/not creating/i.test(text(res)), 'it must refuse');
+  assert.ok(/meta_pixel/.test(text(res)), 'it must name what was asked for');
+  assert.strictEqual(client.calls.length, 0, 'nothing may be written');
+});
+
+await test('custom_html without html is refused before anything is written', async () => {
+  const client = stubClient();
+  const res = await call(serverWith(client), 'create_gtm_tracking_tag', {
+    ...WS, platform: 'custom_html', tagName: 'cHTML - empty',
+    trigger: { name: 'All Pages', kind: 'pageview' }, confirm: true,
+  });
+  assert.ok(/needs `html`/.test(text(res)));
+  assert.strictEqual(client.calls.length, 0);
+});
+
+await test('a GA4 tag still requires its measurement id and event name', async () => {
+  const client = stubClient();
+  const res = await call(serverWith(client), 'create_gtm_tracking_tag', {
+    ...WS, tagName: 'GA4 - nothing', trigger: { name: 'T', kind: 'pageview' }, confirm: true,
+  });
+  assert.ok(/needs both measurementId and eventName/.test(text(res)));
+  assert.strictEqual(client.calls.length, 0);
+});
+
+await test('the default platform is still GA4, so existing callers are unchanged', async () => {
+  const client = stubClient();
+  await call(serverWith(client), 'create_gtm_tracking_tag', EMAIL_TAG);
+  const tag = client.calls.find((c) => c.kind === 'tag');
+  assert.strictEqual(tag.body.type, 'gaawe');
+});
+
 console.log(`\n${passed} passed, ${failed} failed\n`);
 process.exit(failed === 0 ? 0 : 1);

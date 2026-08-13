@@ -28,7 +28,15 @@ import { checkAllowlistAgainstServer } from './integrations.js';
 import { extractAll, type ExtractedAttachment } from './attachments.js';
 import { MemoryStore } from './memory.js';
 import { SiteScanner, ScanError, validPlatforms, MAX_SCAN_PAGES } from './scan-client.js';
-import { ScanStore, toRows, selectRows, withMeasurementId, createSelected, imageForRow } from './suggestions.js';
+import {
+  ScanStore,
+  toRows,
+  selectRows,
+  withMeasurementId,
+  createSelected,
+  imageForRow,
+  splitCreatable,
+} from './suggestions.js';
 import {
   findGtmContainer,
   listGa4Properties,
@@ -1125,7 +1133,17 @@ async function main(): Promise<void> {
         }
         if (selected.length === 0) throw new ResourceError('Select at least one tag to create.', 'nothing_selected');
 
-        const tags = withMeasurementId(selected, String(req.body?.measurementId ?? ''));
+        // Refused here, before a single write, rather than per row afterwards. The MCP's create tool
+        // builds GA4 and Custom HTML tags only, and a Meta row sent to it used to come back "Created"
+        // as a GA4 tag carrying a Meta pixel id.
+        const { supported, unsupported } = splitCreatable(selected);
+        if (supported.length === 0) {
+          throw new ResourceError(
+            unsupported[0]?.reason ?? 'None of the selected rows can be created here.',
+            'unsupported_platform',
+          );
+        }
+        const tags = withMeasurementId(supported, String(req.body?.measurementId ?? ''));
         const execute = async (name: string, args: Record<string, unknown>): Promise<string> => {
           const { ok, text } = await mcp.callTool(name, args);
           // Thrown, not returned: createSuggestedTags reads failures off the exception, and that is
@@ -1135,11 +1153,17 @@ async function main(): Promise<void> {
         };
 
         const result = await createSelected(execute, ws, tags);
+        if (result.listeners.length) {
+          console.log(
+            `[suggestions] ${result.listeners.filter((l) => l.ok).length}/${result.listeners.length} ` +
+              'listener tag(s) created',
+          );
+        }
         console.log(
           `[suggestions] created ${result.created}/${tags.length} tag(s) in workspace ${ws.workspaceId} ` +
             `of container ${ws.containerId} for user ${user.id.slice(0, 8)}`,
         );
-        return { ...result, site: scan.site };
+        return { ...result, site: scan.site, ...(unsupported.length ? { unsupported } : {}) };
       },
       () => {
         if (!ws.accountId || !ws.containerId || !ws.workspaceId) {

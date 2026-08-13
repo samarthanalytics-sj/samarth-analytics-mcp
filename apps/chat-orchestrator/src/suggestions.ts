@@ -387,25 +387,139 @@ export function withMeasurementId(list: SuggestedTagView[], measurementId?: stri
 
 export type ToolExecute = (name: string, args: Record<string, unknown>) => Promise<string>;
 
+/**
+ * The platforms the MCP's create tool can actually build.
+ *
+ * It builds GA4 event tags and Custom HTML tags. It does NOT build Meta, TikTok, LinkedIn, Reddit,
+ * Pinterest or Google Ads tags: the desktop app does that through its own registry. Sending one here
+ * used to produce a GA4 tag carrying that platform's id, because the schema had no platform field
+ * and zod dropped the key, so the row reported "Created" and the tag pointed at nothing usable.
+ *
+ * The scan offers those platforms, so this list is what keeps the offer honest at the point of
+ * writing rather than at the point of scanning.
+ */
+export const CREATABLE_PLATFORMS = new Set(['ga4_event', 'custom_html']);
+
+export interface Creatable {
+  /** Rows this deployment can create. */
+  supported: SuggestedTagView[];
+  /** Rows it cannot, each with the reason to show. */
+  unsupported: Array<{ id: string; platform: string; reason: string }>;
+}
+
+/** Split a selection into what can be created here and what cannot, before anything is written. */
+export function splitCreatable(list: SuggestedTagView[]): Creatable {
+  const supported: SuggestedTagView[] = [];
+  const unsupported: Creatable['unsupported'] = [];
+  for (const s of list) {
+    const platform = String(s.platform ?? '');
+    if (CREATABLE_PLATFORMS.has(platform)) supported.push(s);
+    else {
+      unsupported.push({
+        id: s.id,
+        platform,
+        reason:
+          `Creating ${platform.replace(/_/g, ' ')} tags from the website is not supported yet. ` +
+          'The scan finds them, and the desktop app can create them.',
+      });
+    }
+  }
+  return { supported, unsupported };
+}
+
+/**
+ * The Custom HTML listener tags a selection needs, deduped by tag name.
+ *
+ * A listener is per SITE behaviour, not per tag: three forms behind the same Calendly embed need one
+ * listener between them, and creating it three times would leave three copies pushing the same event
+ * on every page.
+ */
+export function listenerTagsFor(list: SuggestedTagView[]): Array<{
+  tagName: string;
+  html: string;
+  fires: string;
+  forRows: string[];
+}> {
+  const byName = new Map<string, { tagName: string; html: string; fires: string; forRows: string[] }>();
+  for (const s of list) {
+    const install = (s as unknown as { install?: { requires?: unknown } }).install;
+    const requires = Array.isArray(install?.requires) ? (install?.requires as Record<string, unknown>[]) : [];
+    for (const r of requires) {
+      if (r.kind !== 'listener-tag') continue;
+      const tag = r.tag as { name?: unknown; html?: unknown; fires?: unknown } | undefined;
+      const name = typeof tag?.name === 'string' ? tag.name : '';
+      const html = typeof tag?.html === 'string' ? tag.html : '';
+      if (!name || !html) continue;
+      const existing = byName.get(name);
+      if (existing) existing.forRows.push(s.id);
+      else byName.set(name, { tagName: name, html, fires: String(tag?.fires ?? 'all_pages'), forRows: [s.id] });
+    }
+  }
+  return [...byName.values()];
+}
+
+/** The install plan's `fires` value as a GTM trigger this tool understands. */
+export function listenerTrigger(fires: string): { name: string; kind: string } {
+  if (fires === 'dom_ready') return { name: 'DOM Ready', kind: 'dom_ready' };
+  if (fires === 'window_loaded') return { name: 'Window Loaded', kind: 'window_loaded' };
+  return { name: 'All Pages', kind: 'pageview' };
+}
+
 export interface CreateResult {
   outcomes: CreateTagOutcome[];
   created: number;
   existing: number;
   failed: number;
+  /** Listener tags created for the rows that needed one, each with what happened. */
+  listeners: Array<{ tagName: string; ok: boolean; existing?: boolean; error?: string }>;
 }
 
-/** Create the selected suggestions as DRAFT tags, then count the outcomes for the summary line. */
+/**
+ * Create the selected suggestions as DRAFT tags.
+ *
+ * Listeners go FIRST, and that order is the point rather than tidiness: a GA4 tag on a Custom Event
+ * trigger does nothing until something pushes that event, so creating the listener afterwards leaves
+ * a window where the container looks complete and reports nothing. Same reason the form recipes in
+ * the desktop say "create this FIRST".
+ *
+ * A listener that fails does NOT stop its GA4 tag being created. The tag is still correct, and a
+ * half-built pair someone can finish by hand beats nothing at all, as long as the failure is
+ * reported, which it is.
+ */
 export async function createSelected(
   execute: ToolExecute,
   ids: { accountId: string; containerId: string; workspaceId: string },
   tags: SuggestedTagView[],
   onProgress?: (done: number, total: number) => void,
 ): Promise<CreateResult> {
+  const listeners: CreateResult['listeners'] = [];
+  for (const listener of listenerTagsFor(tags)) {
+    try {
+      const raw = await execute('create_gtm_tracking_tag', {
+        ...ids,
+        platform: 'custom_html',
+        tagName: listener.tagName,
+        html: listener.html,
+        trigger: listenerTrigger(listener.fires),
+      });
+      const out = JSON.parse(raw) as { alreadyExists?: boolean };
+      listeners.push({ tagName: listener.tagName, ok: out?.alreadyExists !== true, existing: out?.alreadyExists === true });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      listeners.push({
+        tagName: listener.tagName,
+        ok: false,
+        ...(/duplicate name|already exists/i.test(message) ? { existing: true } : { error: message }),
+      });
+    }
+  }
+
   const outcomes = await createSuggestedTags(execute, ids, tags, onProgress ? { onProgress } : {});
   return {
     outcomes,
     created: outcomes.filter((o) => o.ok).length,
     existing: outcomes.filter((o) => !o.ok && o.existing).length,
     failed: outcomes.filter((o) => !o.ok && !o.existing).length,
+    listeners,
   };
 }
