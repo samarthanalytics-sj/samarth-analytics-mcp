@@ -256,3 +256,49 @@ test('a group the keywords already opened is not advertised as hidden', () => {
   assert.equal(/"gtm-write"/.test(menu), false, 'the gate menu still lists a group that is open');
   assert.ok(hidden.length > 0 && /"/.test(menu), 'the genuinely hidden groups are still offered');
 });
+
+// ── Intent expires; the keyword scan reads recent turns, not the whole thread ─
+//
+// The real sequence, from the orchestrator log of 2026-08-13. Turn 3 and turn 8 are the same
+// question about the same property in the same thread:
+//
+//   11:58:24  [tools] 16 of 84 tools visible this turn   ->  6,355ms, no rate limiting
+//   12:00:33  [tools] 84 of 84 tools visible this turn   -> 56,881ms, six 429s
+//
+// Nothing about the question changed. A "create" and a "remove" earlier in the thread were still
+// being counted, so 84 tool schemas went on the wire against a 30,000 tokens-per-minute account.
+
+test('a write word from earlier in the thread stops selecting writes', () => {
+  const thread = [
+    'create new ga4 event named email_click',
+    'create it',
+    'remove the purchase as a key event',
+    'CONFIRM',
+    'Which key events are configured on this property?',
+  ];
+  const selected = selectToolGroups({ messages: thread });
+  assert.ok(selected.has('ga4-read'), 'the question still needs the GA4 read group');
+  assert.equal(selected.has('ga4-write'), false, 'a read-only question must not resend the write surface');
+});
+
+test('a confirmation still sees the request it is confirming', () => {
+  // "yes proceed" carries no keyword of its own. Narrowing to the single last message would drop
+  // the write tools at exactly the moment the user approved the write.
+  const selected = selectToolGroups({
+    messages: ['create a ga4 tag for email click on mailto: links', 'yes proceed'],
+  });
+  assert.ok(selected.has('gtm-write'), 'the confirm turn still needs the tools it is approving');
+});
+
+test('the window counts user messages, not how many were sent', () => {
+  // Blank entries must not consume the window, or one empty turn would expire live intent.
+  const selected = selectToolGroups({ messages: ['create a ga4 email_click tag', '   ', 'yes'] });
+  assert.ok(selected.has('gtm-write'), 'a blank message must not push the request out of the window');
+});
+
+test('an explicitly revealed group survives regardless of what was said', () => {
+  // enable_tool_group is a deliberate act by the model, not a guess from wording, so the recency
+  // window must not undo it mid-turn.
+  const selected = selectToolGroups({ messages: ['what is in my container?'], enabled: ['ga4-write'] });
+  assert.ok(selected.has('ga4-write'), 'an explicit reveal outranks the keyword scan');
+});

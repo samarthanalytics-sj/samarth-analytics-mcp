@@ -101,9 +101,14 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
   const gateGroups = availableGroups(scoped);
   const gateCounts = groupCounts(scoped);
 
+  /**
+   * User turns only. The assistant's own text echoes the user's verb back in nearly every reply, so
+   * feeding it to the classifier keeps a group open long after the request that opened it is done.
+   * selectToolGroups reads the last couple of these; passing the full list is expected.
+   */
   const currentGroups = (): Set<ToolGroup> =>
     selectToolGroups({
-      messages: args.history.map((m) => m.content),
+      messages: args.history.filter((m) => m.role === 'user').map((m) => m.content),
       enabled: enabledGroups,
       integrations,
     });
