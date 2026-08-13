@@ -126,18 +126,26 @@ test('outcomes are counted apart: created, already there, and failed', async () 
 // apps/chat-orchestrator/dist/chat-orchestrator/src after a build. A fixed number of ".." segments is
 // right in exactly one of them, and wrong silently in the other.
 
-test('the built scanner is found from wherever this module runs', async () => {
+test('the built scanner is found from either depth this module runs at', async () => {
+  // Against a fake tree rather than the real repo. The first version of this test asserted that the
+  // web-audit MCP was built, which is true on a development machine and false on CI, where dist is
+  // not checked in and nothing builds that package before these tests. That is an assertion about
+  // the environment wearing the costume of an assertion about the code.
   const { findWebAuditEntry } = await import('../scan-client.js');
-  const fromSrc = findWebAuditEntry();
-  assert.ok(fromSrc, 'the web-audit MCP is built in this repo, so it must be found from src/');
-  assert.match(fromSrc, /web-audit-mcp/);
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
 
-  // The post-build depth: two directories deeper than src/.
-  const { dirname, join } = await import('node:path');
-  const { fileURLToPath } = await import('node:url');
-  const srcDir = dirname(fileURLToPath(import.meta.url));
-  const asIfBuilt = join(srcDir, '..', '..', 'dist', 'chat-orchestrator', 'src');
-  assert.equal(findWebAuditEntry(asIfBuilt), fromSrc, 'both depths must resolve to the same file');
+  const root = mkdtempSync(path.join(tmpdir(), 'scan-entry-'));
+  const entry = path.join(root, 'apps/web-audit-mcp/dist/web-audit-mcp/src/index.js');
+  mkdirSync(path.dirname(entry), { recursive: true });
+  writeFileSync(entry, '// built scanner\n');
+
+  const fromSrc = path.join(root, 'apps/chat-orchestrator/src');
+  const fromDist = path.join(root, 'apps/chat-orchestrator/dist/chat-orchestrator/src');
+  mkdirSync(fromDist, { recursive: true });
+
+  assert.equal(findWebAuditEntry(fromSrc), entry, 'must be found from the tsx depth');
+  assert.equal(findWebAuditEntry(fromDist), entry, 'must be found from the post-build depth');
 });
 
 test('an unbuilt scanner is reported as missing rather than guessed at', async () => {
