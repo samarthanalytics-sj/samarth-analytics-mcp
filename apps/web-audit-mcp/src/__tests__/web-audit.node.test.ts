@@ -14,7 +14,8 @@ import { CMP_VENDORS, ACCEPT_TEXT_RE, REJECT_TEXT_RE } from '../agent/cmp.js';
 import { analyzeForms, classifyFieldPii, type RawForm, type RawFormField } from '../agent/forms.js';
 import { buildFillPlan, classifyFieldRole, selectorFor, localeById, US_LOCALE } from '../agent/form-fill.js';
 import { sameSite, normalizeUrl, urlPriority } from '../agent/crawler.js';
-import { buildExclude } from '../agent/tag-suggest/scan.js';
+import { buildExclude, attachRects } from '../agent/tag-suggest/scan.js';
+import type { PageScan } from '../agent/tag-suggest/collect.js';
 import { extractConsentEvents, extractEventNames, type ScenarioCapture } from '../agent/capture.js';
 import {
   evaluateBannerRules,
@@ -658,6 +659,67 @@ check('embed: HubSpot embed surfaces beside an unrelated search form', buildSugg
   check('skip: extra patterns leave everything else alone', !onCustom('/contact'));
 }
 
+
+
+/* ── ringing the element a suggestion is about ─────────────────────────────── */
+{
+  const rect = { x: 10, y: 20, w: 100, h: 40 };
+  const other = { x: 500, y: 600, w: 80, h: 30 };
+  const page = (over: Partial<PageScan>): PageScan =>
+    ({ page: '/contact', elements: [], forms: [], signals: {} as never, ...over }) as PageScan;
+  const sug = (over: Record<string, unknown>): SuggestedTag =>
+    ({ id: 'x', page: '/contact', platform: 'ga4_event', tagName: 'T', measurementId: 'G-1', ...over }) as SuggestedTag;
+
+  // Exactly one element with that href → ringed.
+  const one = attachRects(
+    [sug({ trigger: { name: 'Email', kind: 'link_click', clickUrlValue: 'mailto:' } })],
+    [page({ elements: [{ page: '/contact', kind: 'email', text: 'hi', href: 'mailto:a@b.com', rect }] as never })],
+  );
+  check('rect: a single matching element is ringed', JSON.stringify(one[0].rect) === JSON.stringify(rect));
+
+  // Two candidates → nothing, because a ring around the wrong control is worse than no ring.
+  const two = attachRects(
+    [sug({ trigger: { name: 'Email', kind: 'link_click', clickUrlValue: 'mailto:' } })],
+    [page({
+      elements: [
+        { page: '/contact', kind: 'email', text: 'a', href: 'mailto:a@b.com', rect },
+        { page: '/contact', kind: 'email', text: 'b', href: 'mailto:c@d.com', rect: other },
+      ] as never,
+    })],
+  );
+  check('rect: an ambiguous match is left unringed', two[0].rect === undefined);
+
+  // A site-wide suggestion is proved on the first page carrying exactly one match.
+  const wide = attachRects(
+    [sug({ page: 'site-wide', trigger: { name: 'Phone', kind: 'link_click', clickUrlValue: 'tel:' } })],
+    [
+      page({ page: '/', elements: [] }),
+      page({ page: '/contact', elements: [{ page: '/contact', kind: 'phone', text: 'call', href: 'tel:+1', rect }] as never }),
+    ],
+  );
+  check('rect: a site-wide tag is ringed on an example page', JSON.stringify(wide[0].rect) === JSON.stringify(rect));
+  check('rect: and it names the page that example came from', wide[0].proofPage === '/contact');
+
+  // A form suggestion rings the form, and only when one form is unambiguous.
+  const form = attachRects(
+    [sug({ trigger: { name: 'Contact', kind: 'form_submit' } })],
+    [page({ forms: [{ purpose: 'contact', action: '/x', rect }] as never })],
+  );
+  check('rect: a single form on the page is ringed', JSON.stringify(form[0].rect) === JSON.stringify(rect));
+
+  const forms2 = attachRects(
+    [sug({ trigger: { name: 'Contact', kind: 'form_submit' } })],
+    [page({ forms: [{ purpose: 'contact', action: '/x', rect }, { purpose: 'signup', action: '/y', rect: other }] as never })],
+  );
+  check('rect: two forms with nothing to tell them apart stay unringed', forms2[0].rect === undefined);
+
+  // An element the collector could not measure (the layout-less path) is not invented.
+  const noRect = attachRects(
+    [sug({ trigger: { name: 'Email', kind: 'link_click', clickUrlValue: 'mailto:' } })],
+    [page({ elements: [{ page: '/contact', kind: 'email', text: 'hi', href: 'mailto:a@b.com' }] as never })],
+  );
+  check('rect: an unmeasured element yields no rectangle', noRect[0].rect === undefined);
+}
 
 console.log(`web-audit tests: ${passed} passed, ${failed} failed`);
 if (failed > 0) {

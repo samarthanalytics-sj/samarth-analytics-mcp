@@ -70,6 +70,11 @@ export interface SuggestionRow {
   install?: InstallSummary;
   /** True when GA4 Enhanced Measurement already tracks this, so creating it would double-count. */
   enhancedMeasurementOverlap?: boolean;
+  /** Where the thing this tag tracks sits on the page, in the screenshot's own coordinates, so the
+   *  viewer can ring it. Absent when the scan could not identify exactly one element. */
+  rect?: { x: number; y: number; w: number; h: number };
+  /** For a site-wide row: the page the screenshot and rect belong to. */
+  proofPage?: string;
   /** Whether a screenshot of this row's page exists to open. Never assumed from `page` alone: a
    *  capture can fail, and an offered picture that 404s is worse than one that was never offered. */
   hasImage?: boolean;
@@ -266,7 +271,9 @@ export function toRows(list: SuggestedTagView[], images?: ReadonlyMap<string, Bu
       ...(gtmType ? { triggerType: gtmType } : {}),
       ...(conditions.length ? { conditions } : {}),
       ...(installSummary(raw.install) ? { install: installSummary(raw.install) } : {}),
-      ...(typeof raw.page === 'string' && images?.has(raw.page) ? { hasImage: true } : {}),
+      ...(raw.rect ? { rect: raw.rect as SuggestionRow['rect'] } : {}),
+      ...(typeof raw.proofPage === 'string' ? { proofPage: raw.proofPage } : {}),
+      ...(images?.has(proofPageOf(raw) ?? '') ? { hasImage: true } : {}),
       ...(raw.enhancedMeasurementOverlap === true ? { enhancedMeasurementOverlap: true } : {}),
     };
   });
@@ -335,11 +342,22 @@ export class ScanStore {
  * Looked up through the ROW rather than by page path from the request, so a caller cannot ask this
  * scan for a page it never scanned, and cannot probe which paths exist on someone's site.
  */
+/**
+ * The page a row's proof belongs to: its own, or the example page chosen for a site-wide row.
+ *
+ * A site-wide row has no page of its own, which is why it had no picture at all. The scan now names
+ * the page it measured the element on, so the footer email link can be shown where it was found.
+ */
+function proofPageOf(row: unknown): string | undefined {
+  const r = row as { page?: unknown; proofPage?: unknown } | undefined;
+  const proof = typeof r?.proofPage === 'string' ? r.proofPage : undefined;
+  const page = typeof r?.page === 'string' ? r.page : undefined;
+  return proof ?? (page === 'site-wide' ? undefined : page);
+}
+
 export function imageForRow(scan: StoredScan, rowId: string): Buffer | null {
-  const row = scan.suggestions.find((s) => s.id === rowId);
-  const page = (row as unknown as { page?: unknown } | undefined)?.page;
-  if (typeof page !== 'string') return null;
-  return scan.images.get(page) ?? null;
+  const page = proofPageOf(scan.suggestions.find((s) => s.id === rowId));
+  return page ? (scan.images.get(page) ?? null) : null;
 }
 
 /**

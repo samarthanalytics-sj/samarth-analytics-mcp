@@ -137,10 +137,89 @@ export interface AssembleArgs {
   pageImages?: PageImage[];
 }
 
+/** A rectangle in full-page-screenshot coordinates. */
+export interface Rect { x: number; y: number; w: number; h: number }
+
+/**
+ * Find the thing on the page each suggestion is about, so it can be shown ringed.
+ *
+ * Matched AFTER the fact rather than threaded through the engine. A suggestion is built at eight
+ * places in a two-thousand-line file, several of them from a GROUP of elements rather than one, and
+ * editing all of them to carry a rectangle would risk the scan itself for a picture.
+ *
+ * The rule that keeps it honest: a rect is attached only when exactly ONE candidate matches. A ring
+ * drawn around the wrong button is worse than no ring, because someone will believe it. Ambiguity,
+ * a site-wide suggestion (it belongs to no single page), or a source with no measurement all mean
+ * no highlight, and the picture is still shown unmarked.
+ */
+export function attachRects(suggestions: SuggestedTag[], pageScans: PageScan[]): SuggestedTag[] {
+  const byPage = new Map(pageScans.map((p) => [p.page, p]));
+
+  return suggestions.map((s) => {
+    const t = s.trigger as Record<string, unknown>;
+    // A site-wide suggestion belongs to no one page, so no page is THE page. It is still worth
+    // showing: an email link in a footer is the same link everywhere, and seeing it once answers
+    // "which link is this". The first page carrying exactly one match becomes the example, and the
+    // suggestion records WHICH page that was, so nothing implies it is the only one.
+    const candidates = s.page === 'site-wide' ? pageScans : ([byPage.get(s.page)].filter(Boolean) as PageScan[]);
+    if (candidates.length === 0) return s;
+
+    for (const scan of candidates) {
+      const found = rectIn(scan, t);
+      if (found) {
+        return {
+          ...s,
+          rect: found,
+          ...(s.page === 'site-wide' ? { proofPage: scan.page } : {}),
+        } as SuggestedTag;
+      }
+    }
+    return s;
+  });
+}
+
+/** The one element or form on this page that a trigger points at, or nothing when it is not one. */
+function rectIn(scan: PageScan, t: Record<string, unknown>): Rect | undefined {
+  {
+    const only = <T>(list: T[]): T | undefined => (list.length === 1 ? list[0] : undefined);
+
+    let rect: Rect | undefined;
+
+    if (t.kind === 'form_submit' || (t.kind === 'custom_event' && scan.forms.length > 0)) {
+      const id = String(t.formIdValue ?? '').trim();
+      const withRect = scan.forms.filter((f) => f.rect);
+      const matched = id ? withRect.filter((f) => f.formId === id) : withRect;
+      rect = only(matched)?.rect;
+    }
+
+    if (!rect) {
+      const url = String(t.clickUrlValue ?? '').trim().toLowerCase();
+      const text = String(t.clickTextValue ?? '').trim().toLowerCase();
+      const elementId = String(t.clickIdValue ?? '').trim();
+      const withRect = scan.elements.filter((e) => e.rect);
+
+      // An id is the strongest signal there is: the author chose it, and it is unique by definition.
+      if (elementId) rect = only(withRect.filter((e) => e.elementId === elementId))?.rect;
+      // Then the exact label, which is how a CTA trigger is scoped.
+      if (!rect && text) rect = only(withRect.filter((e) => (e.text ?? '').trim().toLowerCase() === text))?.rect;
+      // Then the href. mailto:/tel: values are prefixes, so this is a startsWith rather than equals,
+      // and a page with two different mailto links correctly matches neither.
+      if (!rect && url) {
+        rect = only(withRect.filter((e) => (e.href ?? '').toLowerCase().startsWith(url)))?.rect;
+      }
+    }
+
+    return rect;
+  }
+}
+
 /** Combine per-page scans → SuggestInput → ranked suggestions → the report. Pure. */
 export function assembleTagReport(args: AssembleArgs): TagSuggestionReport {
   const input = buildSuggestInput(args.pageScans, args.siteHost);
-  const suggestions = buildSuggestions(input, args.platforms ? { platforms: args.platforms } : {});
+  const suggestions = attachRects(
+    buildSuggestions(input, args.platforms ? { platforms: args.platforms } : {}),
+    args.pageScans,
+  );
 
   const byConfidence = { high: 0, medium: 0, low: 0 };
   let em = 0;
@@ -383,7 +462,7 @@ export async function scanSiteForTagSuggestions(
             }
           }
           pageScans.push(
-            toPageScan(target.url, raw, forms.map((f) => ({ purpose: f.purpose, action: f.action, method: f.method, formId: f.formId, providerFormId: f.providerFormId, formClasses: f.formClasses, title: f.title, fields: f.fields.map((x) => ({ type: x.type, name: x.name, required: x.required })), hidden: f.hidden })), siteHost),
+            toPageScan(target.url, raw, forms.map((f) => ({ purpose: f.purpose, action: f.action, method: f.method, formId: f.formId, providerFormId: f.providerFormId, formClasses: f.formClasses, title: f.title, fields: f.fields.map((x) => ({ type: x.type, name: x.name, required: x.required })), hidden: f.hidden, rect: f.rect })), siteHost),
           );
         } catch (err) {
           collectFailures.push({
