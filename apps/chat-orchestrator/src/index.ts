@@ -27,7 +27,7 @@ import { scopeTools } from './tools.js';
 import { checkAllowlistAgainstServer } from './integrations.js';
 import { extractAll, type ExtractedAttachment } from './attachments.js';
 import { MemoryStore } from './memory.js';
-import { SiteScanner, ScanError } from './scan-client.js';
+import { SiteScanner, ScanError, validPlatforms } from './scan-client.js';
 import { ScanStore, toRows, selectRows, withMeasurementId, createSelected } from './suggestions.js';
 import {
   findGtmContainer,
@@ -1021,9 +1021,11 @@ async function main(): Promise<void> {
 
     const startedAt = Date.now();
     try {
+      const platforms = validPlatforms(req.body?.platforms);
       const result = await scanner.scan(url, {
         maxPages: Number(req.body?.maxPages) || undefined,
         maxDepth: Number(req.body?.maxDepth) || undefined,
+        ...(platforms.length ? { platforms } : {}),
       });
       const scan = scanStore.put(user.id, result);
       console.log(

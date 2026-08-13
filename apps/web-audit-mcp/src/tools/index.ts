@@ -233,14 +233,22 @@ export function registerAllTools(server: McpServer): void {
           .describe('How many crawled pages to deep-scan for tags (default = pages crawled, cap 25). Entry page + most form-heavy first.'),
         debug: z.boolean().optional()
           .describe('Include a `debug` block (browser console/page errors across scanned pages + run mode) for troubleshooting a scan that finds nothing.'),
+        platforms: z
+          .array(z.enum(['ga4', 'meta', 'google_ads', 'tiktok', 'linkedin', 'reddit', 'pinterest']))
+          .optional()
+          .describe(
+            'Ad platforms to build tags for (default ["ga4"]). The non-GA4 platforms derive from the ' +
+              'GA4 suggestions and SHARE one trigger per detection, so asking for several costs no extra ' +
+              'crawling and creates one trigger, not one per platform.',
+          ),
       }),
     },
-    async ({ url, maxPages, maxDepth, scanPages, debug }) => {
+    async ({ url, maxPages, maxDepth, scanPages, debug, platforms }) => {
       const rejected = admit(url);
       if (rejected) return rejected;
       try {
         const { scanSiteForTagSuggestions } = await import('../agent/tag-suggest/scan.js');
-        const report = await scanSiteForTagSuggestions(url, { maxPages, maxDepth, scanPages, debug });
+        const report = await scanSiteForTagSuggestions(url, { maxPages, maxDepth, scanPages, debug, platforms });
         return jsonResult(report);
       } catch (err) {
         return errorResult('gtm_tag_suggestions', err);

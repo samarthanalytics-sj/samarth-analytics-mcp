@@ -31,7 +31,7 @@ import {
 } from './collect.js';
 import { buildSuggestions } from './suggest.js';
 import { detectExistingTracking, type ExistingTracking } from './existing-tracking.js';
-import type { SuggestedTag, FormPurpose } from './types.js';
+import type { SuggestedTag, FormPurpose, SuggestPlatform } from './types.js';
 
 /** A page that was discovered but not turned into suggestions, with the reason. */
 export interface NotScanned {
@@ -124,12 +124,15 @@ export interface AssembleArgs {
   notScanned: NotScanned[];
   notes: string[];
   debug?: SuggestDebug;
+  /** Ad platforms to build tags for. Omitted means GA4 only, which is what every caller got
+   *  before the option was reachable from a tool call. */
+  platforms?: SuggestPlatform[];
 }
 
 /** Combine per-page scans → SuggestInput → ranked suggestions → the report. Pure. */
 export function assembleTagReport(args: AssembleArgs): TagSuggestionReport {
   const input = buildSuggestInput(args.pageScans, args.siteHost);
-  const suggestions = buildSuggestions(input);
+  const suggestions = buildSuggestions(input, args.platforms ? { platforms: args.platforms } : {});
 
   const byConfidence = { high: 0, medium: 0, low: 0 };
   let em = 0;
@@ -200,6 +203,15 @@ export interface TagSuggestOptions {
   scanPages?: number;
   /** Include a SuggestDebug block (browser console/page errors + run mode) for troubleshooting. */
   debug?: boolean;
+  /**
+   * Which ad platforms to build tags for (default ['ga4']).
+   *
+   * buildSuggestions has taken this since it was written; the option simply had no way in from a
+   * tool call, so every caller through MCP got GA4 only. The extra platforms derive from the GA4
+   * suggestions and share one trigger per detection, so asking for three platforms costs no extra
+   * crawling.
+   */
+  platforms?: SuggestPlatform[];
 }
 
 /**
@@ -309,6 +321,7 @@ export async function scanSiteForTagSuggestions(
       notScanned,
       notes: [CREATE_NOTE],
       ...(debugData ? { debug: debugData } : {}),
+      ...(options.platforms?.length ? { platforms: options.platforms } : {}),
     });
   } finally {
     await browser.close();
