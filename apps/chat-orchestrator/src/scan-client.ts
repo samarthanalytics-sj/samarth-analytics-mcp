@@ -48,11 +48,24 @@ export function findWebAuditEntry(from?: string): string | null {
   return null;
 }
 
+/** The ad platforms the engine can build tags for. GA4 is the default and the base for the rest. */
+export const SCAN_PLATFORMS = ['ga4', 'meta', 'google_ads', 'tiktok', 'linkedin', 'reddit', 'pinterest'] as const;
+export type ScanPlatform = (typeof SCAN_PLATFORMS)[number];
+
+/** Keep only names the engine knows, so a typo from the browser cannot silently widen a scan. */
+export function validPlatforms(input: unknown): ScanPlatform[] {
+  if (!Array.isArray(input)) return [];
+  const known = new Set<string>(SCAN_PLATFORMS);
+  return [...new Set(input.map(String).filter((p) => known.has(p)))] as ScanPlatform[];
+}
+
 export interface ScanOptions {
   /** Pages to open (the tool clamps this itself). */
   maxPages?: number;
   /** Link depth from the start URL. */
   maxDepth?: number;
+  /** Ad platforms to build tags for. Empty or omitted means the engine's default, GA4 only. */
+  platforms?: ScanPlatform[];
 }
 
 export interface ScanResult {
@@ -144,6 +157,7 @@ export class SiteScanner {
         url,
         ...(opts.maxPages ? { maxPages: opts.maxPages } : {}),
         ...(opts.maxDepth ? { maxDepth: opts.maxDepth } : {}),
+        ...(opts.platforms?.length ? { platforms: opts.platforms } : {}),
       }),
       SCAN_TIMEOUT_MS,
       'The scan took too long and was stopped. Try fewer pages.',

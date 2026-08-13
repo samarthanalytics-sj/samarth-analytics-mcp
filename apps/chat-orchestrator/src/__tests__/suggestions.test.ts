@@ -178,3 +178,39 @@ test('an unbuilt scanner is reported as missing rather than guessed at', async (
   // The filesystem root: the walk hits the top without finding a build and gives up.
   assert.equal(findWebAuditEntry(path.parse(process.cwd()).root), null);
 });
+
+// ── The type column ──────────────────────────────────────────────────────────
+//
+// The engine writes trigger.kind; create_gtm_tracking_tag's schema calls the same thing type. The
+// first version read only `type`, and a live scan came back with every row's type blank.
+
+test('the trigger kind is read from whichever field carries it', () => {
+  const rows = toRows([
+    { id: 'a', tagName: 'A', platform: 'ga4_event', trigger: { kind: 'link_click' } },
+    { id: 'b', tagName: 'B', platform: 'ga4_event', trigger: { type: 'form_submit' } },
+    { id: 'c', tagName: 'C', platform: 'ga4_event', trigger: { kind: 'custom_event' } },
+  ] as unknown as SuggestedTagView[]);
+  assert.deepEqual(
+    rows.map((r) => r.triggerKind),
+    ['Click', 'Form', 'Custom event'],
+  );
+});
+
+test('an unrecognised kind is shown, not dropped', () => {
+  // A new trigger type in the engine must not silently blank the column.
+  const rows = toRows([
+    { id: 'a', tagName: 'A', platform: 'ga4_event', trigger: { kind: 'history_change' } },
+    { id: 'b', tagName: 'B', platform: 'ga4_event', trigger: {} },
+  ] as unknown as SuggestedTagView[]);
+  assert.equal(rows[0].triggerKind, 'history change');
+  assert.equal(rows[1].triggerKind, undefined, 'no kind at all stays absent rather than guessing');
+});
+
+test('only platforms the engine knows survive the request', async () => {
+  const { validPlatforms } = await import('../scan-client.js');
+  assert.deepEqual(validPlatforms(['ga4', 'meta']), ['ga4', 'meta']);
+  assert.deepEqual(validPlatforms(['ga4', 'facebook', 'GA4']), ['ga4'], 'unknown names are dropped');
+  assert.deepEqual(validPlatforms(['meta', 'meta']), ['meta'], 'duplicates collapse');
+  assert.deepEqual(validPlatforms('ga4'), [], 'a non-array is not a platform list');
+  assert.deepEqual(validPlatforms(undefined), []);
+});

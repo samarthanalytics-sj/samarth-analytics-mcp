@@ -41,8 +41,36 @@ export interface SuggestionRow {
   eventName?: string;
   page?: string;
   trigger?: unknown;
+  /**
+   * What kind of interaction fires this: click, form submit, scroll, and so on.
+   *
+   * Sent as its own field rather than left for the browser to infer from the tag name. Names like
+   * "GA4 - Event - Contact Form Tag" read as a form and usually are, but "Get Your Free GA4
+   * Implementation Consultation Form Tag" is a CTA click on a page about forms, and a reader
+   * skimming 47 rows cannot tell those apart from the name.
+   */
+  triggerKind?: string;
   /** True when GA4 Enhanced Measurement already tracks this, so creating it would double-count. */
   enhancedMeasurementOverlap?: boolean;
+}
+
+/** GTM trigger types as a person describes them. Unknown kinds pass through rather than vanish. */
+const TRIGGER_KIND_LABEL: Record<string, string> = {
+  link_click: 'Click',
+  all_clicks: 'Click',
+  form_submit: 'Form',
+  custom_event: 'Custom event',
+  pageview: 'Pageview',
+  youtube_video: 'Video',
+  scroll: 'Scroll',
+  element_visibility: 'Visibility',
+  timer: 'Timer',
+};
+
+export function triggerKindLabel(type: unknown): string | undefined {
+  const key = String(type ?? '').trim();
+  if (!key) return undefined;
+  return TRIGGER_KIND_LABEL[key] ?? key.replace(/_/g, ' ');
 }
 
 /** Give every suggestion a stable id, since the browser refers to rows by id alone. */
@@ -53,6 +81,10 @@ function withIds(list: Record<string, unknown>[]): SuggestedTagView[] {
 export function toRows(list: SuggestedTagView[]): SuggestionRow[] {
   return list.map((s) => {
     const raw = s as unknown as Record<string, unknown>;
+    // The engine writes `kind`; create_gtm_tracking_tag's own schema calls the same thing `type`.
+    // Read both: the first version of this read only `type` and every row came back blank.
+    const trigger = (s.trigger ?? {}) as { kind?: unknown; type?: unknown };
+    const kind = triggerKindLabel(trigger.kind ?? trigger.type);
     return {
       id: s.id,
       tagName: s.tagName,
@@ -60,6 +92,7 @@ export function toRows(list: SuggestedTagView[]): SuggestionRow[] {
       ...(s.eventName ? { eventName: s.eventName } : {}),
       ...(typeof raw.page === 'string' ? { page: raw.page } : {}),
       ...(s.trigger ? { trigger: s.trigger } : {}),
+      ...(kind ? { triggerKind: kind } : {}),
       ...(raw.enhancedMeasurementOverlap === true ? { enhancedMeasurementOverlap: true } : {}),
     };
   });
