@@ -472,3 +472,45 @@ test('the trigger a listener fires on follows the plan', async () => {
   assert.deepEqual(listenerTrigger('window_loaded'), { name: 'Window Loaded', kind: 'window_loaded' });
   assert.deepEqual(listenerTrigger('anything else'), { name: 'All Pages', kind: 'pageview' });
 });
+
+// ── Ringing the element ──────────────────────────────────────────────────────
+
+test('a site-wide row is proved on the page its element was measured on', async () => {
+  // It has no page of its own, which is why it had no picture at all. The scan names the page it
+  // measured the element on, so a footer email link can be shown where it was found.
+  const store = new ScanStore();
+  const scan = store.put('u1', {
+    site: 'https://example.com',
+    warnings: [],
+    pageImages: [{ page: '/contact', image: Buffer.from('jpeg').toString('base64'), bytes: 4 }],
+    suggestions: [
+      { tagName: 'Email', platform: 'ga4_event', page: 'site-wide', proofPage: '/contact', rect: { x: 40, y: 2967, w: 185, h: 20 } },
+      { tagName: 'Social', platform: 'ga4_event', page: 'site-wide' },
+    ] as Record<string, unknown>[],
+  });
+  const rows = toRows(scan.suggestions, scan.images);
+  const { imageForRow } = await import('../suggestions.js');
+
+  assert.equal(rows[0].hasImage, true, 'the example page has a screenshot');
+  assert.deepEqual(rows[0].rect, { x: 40, y: 2967, w: 185, h: 20 });
+  assert.equal(rows[0].proofPage, '/contact', 'the row says which page it is showing');
+  assert.ok(imageForRow(scan, rows[0].id), 'and that page resolves to bytes');
+
+  assert.equal(rows[1].hasImage, undefined, 'a site-wide row with no example page still has none');
+  assert.equal(imageForRow(scan, rows[1].id), null);
+});
+
+test('a row with a picture but no rect keeps the picture', () => {
+  // The screenshot still answers "what does this page look like" even when the scan could not pin
+  // the tag to one element. Dropping it would lose that for no gain.
+  const store = new ScanStore();
+  const scan = store.put('u1', {
+    site: 'https://example.com',
+    warnings: [],
+    pageImages: [{ page: '/contact', image: Buffer.from('jpeg').toString('base64'), bytes: 4 }],
+    suggestions: [{ tagName: 'Address', platform: 'ga4_event', page: '/contact' }] as Record<string, unknown>[],
+  });
+  const rows = toRows(scan.suggestions, scan.images);
+  assert.equal(rows[0].hasImage, true);
+  assert.equal(rows[0].rect, undefined);
+});

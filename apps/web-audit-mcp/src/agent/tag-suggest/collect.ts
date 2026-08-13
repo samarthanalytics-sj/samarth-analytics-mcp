@@ -33,6 +33,15 @@ export interface RawElement {
    *  absent in the layout-less cheerio path). Fed to isStyledButton() to tell a real CTA button apart
    *  from a small chip/pill/badge that shares the same fill/border styling. */
   box?: { h: number; padX: number; padY: number; filled: boolean; bordered: boolean };
+  /**
+   * Where the element sits in the PAGE, in the same coordinate space as a full-page screenshot:
+   * viewport rect plus scroll offset, at scale 1.
+   *
+   * The collector has always measured the element and thrown the position away. Keeping it is what
+   * lets a suggestion be shown ringed on the page it came from, instead of handing someone a
+   * screenshot of a long page and the name of a button somewhere on it.
+   */
+  rect?: { x: number; y: number; w: number; h: number };
   /** The element's own class attribute — used to find a shared accordion/FAQ class so grouped FAQ
    *  questions can be tracked by ONE tag scoped to that class via {{Click Element}} matches CSS. */
   className?: string;
@@ -119,6 +128,25 @@ export function collectPageInBrowser(): PageScanRaw {
   // filled/bordered, padded, chunky box like a yellow "Get your recording" link) from a small
   // chip/pill/badge/switcher that merely shares that styling. getComputedStyle/getBoundingClientRect
   // exist only in a real browser (Electron/Playwright); the cheerio path has no layout, so box is absent.
+  // Page coordinates, so the rect lines up with a full-page screenshot rather than with whatever
+  // happened to be scrolled into view when the collector ran.
+  const measureRect = (el: Element): RawElement['rect'] => {
+    try {
+      const view = el.ownerDocument && el.ownerDocument.defaultView;
+      if (!view) return undefined;
+      const r = el.getBoundingClientRect();
+      if (r.width === 0 && r.height === 0) return undefined;
+      return {
+        x: Math.round(r.left + (view.scrollX || 0)),
+        y: Math.round(r.top + (view.scrollY || 0)),
+        w: Math.round(r.width),
+        h: Math.round(r.height),
+      };
+    } catch {
+      return undefined;
+    }
+  };
+
   const measureBox = (el: Element): RawElement['box'] => {
     try {
       const view = el.ownerDocument && el.ownerDocument.defaultView;
@@ -146,7 +174,7 @@ export function collectPageInBrowser(): PageScanRaw {
       seen.add(el);
       const cta = looksCta(el);
       // Only measure the box when the cheap class/role check didn't already flag it (measuring forces layout).
-      elements.push({ tag: 'a', href: el.href || '', text: txt(el), hasDownload: el.hasAttribute('download'), region: regionOf(el), cta, box: cta ? undefined : measureBox(el), className: el.getAttribute('class') || undefined, elementId: el.getAttribute('id') || undefined, cfEmail: el.getAttribute('data-cfemail') || undefined });
+      elements.push({ tag: 'a', href: el.href || '', text: txt(el), hasDownload: el.hasAttribute('download'), region: regionOf(el), cta, box: cta ? undefined : measureBox(el), rect: measureRect(el), className: el.getAttribute('class') || undefined, elementId: el.getAttribute('id') || undefined, cfEmail: el.getAttribute('data-cfemail') || undefined });
     }
     // :not(a) — an <a href role="button"> is already captured (with its href) by
     // the anchor query above; without this it would be emitted again as a hrefless
@@ -154,7 +182,7 @@ export function collectPageInBrowser(): PageScanRaw {
     for (const b of Array.from(doc.querySelectorAll('button, [role="button"]:not(a)')).slice(0, MAX)) {
       if (elements.length >= MAX * 2) break;
       seen.add(b);
-      elements.push({ tag: 'button', href: '', text: txt(b), hasDownload: false, region: regionOf(b), cta: true, className: b.getAttribute('class') || undefined, elementId: b.getAttribute('id') || undefined });
+      elements.push({ tag: 'button', href: '', text: txt(b), hasDownload: false, region: regionOf(b), cta: true, rect: measureRect(b), className: b.getAttribute('class') || undefined, elementId: b.getAttribute('id') || undefined });
     }
     // Non-semantic clickable controls: a bare <a> (no href, JS-routed), an [onclick], or a
     // btn/button/cta-classed div/span — emitted as a hrefless "button" so a styled CTA that isn't a
@@ -165,7 +193,7 @@ export function collectPageInBrowser(): PageScanRaw {
       const label = txt(c);
       if (!label) continue;
       seen.add(c);
-      elements.push({ tag: 'button', href: '', text: label, hasDownload: false, region: regionOf(c), cta: true, className: c.getAttribute('class') || undefined, elementId: c.getAttribute('id') || undefined });
+      elements.push({ tag: 'button', href: '', text: label, hasDownload: false, region: regionOf(c), cta: true, rect: measureRect(c), className: c.getAttribute('class') || undefined, elementId: c.getAttribute('id') || undefined });
     }
     // Contact/location blocks that are NOT links or buttons: a phone number or a postal address
     // rendered as a <div>/<p>/<span> with a meaningful class and no href. GTM can still fire on one
@@ -188,6 +216,7 @@ export function collectPageInBrowser(): PageScanRaw {
       seen.add(c);
       elements.push({
         tag: 'button', href: '', text: label, hasDownload: false, region: regionOf(c), cta: false,
+        rect: measureRect(c),
         className: c.getAttribute('class') || undefined, elementId: c.getAttribute('id') || undefined,
         nonLink: true,
       });
@@ -362,7 +391,8 @@ export function isStyledButton(box: NonNullable<RawElement['box']>): boolean {
 export function classifyElement(raw: RawElement, siteHost: string): DetectedElement | null {
   const href = raw.href || '';
   const region = raw.region || undefined;
-  const make = (kind: DetectedElement['kind']): DetectedElement => ({ page: '', kind, text: raw.text, href: href || undefined, region, className: raw.className, elementId: raw.elementId, nonLink: raw.nonLink || undefined });
+  // One construction site for every kind, so the rect rides through without touching each branch.
+  const make = (kind: DetectedElement['kind']): DetectedElement => ({ page: '', kind, text: raw.text, href: href || undefined, region, className: raw.className, elementId: raw.elementId, nonLink: raw.nonLink || undefined, rect: raw.rect });
   if (/^mailto:/i.test(href)) return make('email');
   // A Cloudflare-obfuscated mailto. The origin serves `/cdn-cgi/l/email-protection#HEX` and CF's own
   // script restores the real mailto in the browser, so without decoding here a JS scan finds the
@@ -478,6 +508,8 @@ export interface PageScan {
     title?: string;
     fields?: FormFieldSummary[];
     hidden?: boolean;
+    /** Where the form sits on its page, for the ringed screenshot. */
+    rect?: { x: number; y: number; w: number; h: number };
   }>;
   signals: PageSignals;
 }

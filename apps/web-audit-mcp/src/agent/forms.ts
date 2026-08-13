@@ -55,6 +55,9 @@ export interface RawForm {
   /** True when the form is not rendered at scan time (display:none / visibility:hidden — typically a
    *  modal/popup form that opens on a button click, e.g. a "Book a demo" Marketo modal). */
   hidden?: boolean;
+  /** Where the form sits on the page, in full-page-screenshot coordinates, so a form suggestion can
+   *  be shown ringed rather than described. Absent from the layout-less path. */
+  rect?: { x: number; y: number; w: number; h: number };
 }
 
 /** Serialized by Playwright/Electron and executed in the page. Self-contained.
@@ -149,6 +152,25 @@ export function extractFormsInPage(): RawForm[] {
   };
   // Not rendered at scan time: display:none (self or ancestor) collapses the box; visibility:hidden is
   // inherited into the computed style. Typically a modal/popup form that opens on a button click.
+  // Page coordinates, matching the element collector, so a form and a button on the same page are
+  // measured in the same space as the full-page screenshot they will be drawn on.
+  const rectOf = (el: Element): { x: number; y: number; w: number; h: number } | undefined => {
+    try {
+      const view = el.ownerDocument && el.ownerDocument.defaultView;
+      if (!view) return undefined;
+      const r = el.getBoundingClientRect();
+      if (r.width === 0 && r.height === 0) return undefined;
+      return {
+        x: Math.round(r.left + (view.scrollX || 0)),
+        y: Math.round(r.top + (view.scrollY || 0)),
+        w: Math.round(r.width),
+        h: Math.round(r.height),
+      };
+    } catch {
+      return undefined;
+    }
+  };
+
   const hiddenOf = (el: Element): boolean => {
     try {
       const view = el.ownerDocument && el.ownerDocument.defaultView;
@@ -254,6 +276,7 @@ export function extractFormsInPage(): RawForm[] {
         fieldCount: fields.length,
         fields,
         hasPrivacyLink: privacyIn(form),
+        ...(rectOf(form) ? { rect: rectOf(form) } : {}),
         text: (form.textContent || '').toLowerCase().replace(/\s+/g, ' ').slice(0, 1500),
         ...(hiddenOf(form) ? { hidden: true } : {}),
       });
@@ -302,6 +325,7 @@ export function extractFormsInPage(): RawForm[] {
         fieldCount: fields.length,
         fields,
         hasPrivacyLink: privacyIn(host),
+        ...(rectOf(host) ? { rect: rectOf(host) } : {}),
         text: ((host.textContent || '') + ' ' + label).toLowerCase().replace(/\s+/g, ' ').slice(0, 1500),
         ...(hiddenOf(host) ? { hidden: true } : {}),
       });
@@ -344,6 +368,7 @@ export function extractFormsInPage(): RawForm[] {
         fieldCount: fields.length,
         fields,
         hasPrivacyLink: privacyIn(host),
+        ...(rectOf(host) ? { rect: rectOf(host) } : {}),
         text: (host.textContent || '').toLowerCase().replace(/\s+/g, ' ').slice(0, 1500),
         ...(hiddenOf(host) ? { hidden: true } : {}),
       });
@@ -421,6 +446,8 @@ export interface FormIssue {
 
 export interface FormAnalysis {
   index: number;
+  /** Where the form sits on its page, in full-page-screenshot coordinates. */
+  rect?: { x: number; y: number; w: number; h: number };
   action: string;
   method: string;
   formId: string;
@@ -590,6 +617,7 @@ export function analyzeForms(rawForms: RawForm[], pageUrl: string): FormAnalysis
       hasPrivacyLink: form.hasPrivacyLink,
       issues,
       ...(form.hidden ? { hidden: true } : {}),
+      ...(form.rect ? { rect: form.rect } : {}),
     };
   });
 }

@@ -99,6 +99,9 @@ export interface DetectedElement {
   region?: 'header' | 'footer' | 'nav' | 'main';
   /** A stable CSS/text selector for the GTM trigger (Phase 2 fills this). */
   selector?: string;
+  /** Where it sits on the page, in full-page-screenshot coordinates, so a suggestion can be shown
+   *  ringed rather than described. Absent from the layout-less cheerio path. */
+  rect?: { x: number; y: number; w: number; h: number };
   /** The element's own class attribute (from the collector) — used to find a shared accordion/FAQ
    *  class so grouped FAQ question rows become ONE tag. */
   className?: string;
@@ -278,4 +281,11 @@ export interface SuggestedTag {
    *  captured by a locate-only pass that reuses the verify driver's screenshot logic. Absent when the
    *  element couldn't be located, the kind has no on-page element, or the screenshot cap was hit. */
   screenshot?: string;
+  /** Where the thing this tag tracks sits on its page, in full-page-screenshot coordinates. Present
+   *  only when exactly one element or form on that page matched: a ring around the wrong control is
+   *  worse than none, because someone will believe it. */
+  rect?: { x: number; y: number; w: number; h: number };
+  /** For a site-wide suggestion: the page the rect was measured on, so the screenshot shown is the
+   *  page the ring belongs to and nothing implies it is the only page. */
+  proofPage?: string;
 }
