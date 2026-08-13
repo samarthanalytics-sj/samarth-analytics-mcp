@@ -167,3 +167,40 @@ test('problems are found across categories, and a duration is not a status code'
   assert.equal(isProblem('[req] POST /v1/chat -> 200 500ms origin=https://aitagmanager.com'), false);
   assert.equal(isProblem('[orchestrator] listening on http://127.0.0.1:8787'), false);
 });
+
+// ── Who a line is about ──────────────────────────────────────────────────────
+
+test('a person is identified by a stable handle, not their address', async () => {
+  const { userTag } = await import('../redact.js');
+  const a = userTag({ id: 'u1', email: 'Jane@Acme.com' });
+  assert.equal(a, userTag({ id: 'different-id', email: 'jane@acme.com' }), 'stable, and case-insensitive');
+  assert.equal(a.includes('jane'), false, 'the local part does not appear');
+  assert.match(a, /^[0-9a-f]{10}@acme\.com$/, 'the domain stays readable: it names the tenant');
+});
+
+test('someone with no email is still followable through the log', async () => {
+  const { userTag } = await import('../redact.js');
+  assert.equal(userTag({ id: 'abcdefgh12345678' }), 'u:abcdefgh');
+  assert.equal(userTag({}), 'u:anonymou');
+});
+
+test('the new chat and scan lines land in the right categories', async () => {
+  const { classifyLine } = await import('../logs.js');
+  assert.equal(classifyLine('[2026-08-13 18:00:00] [chat] turn START user=abc@acme.com product=gtm'), 'chat');
+  assert.equal(classifyLine('[2026-08-13 18:00:00] [chat] turn FAILED user=abc code=rate_limited: ...'), 'chat');
+  assert.equal(classifyLine('[2026-08-13 18:00:00] [scan] OK user=abc url=https://x.com scanned=8'), 'suggestions');
+  assert.equal(classifyLine('[2026-08-13 18:00:00] [scan] not read: https://x.com/a - over scan budget'), 'suggestions');
+  assert.equal(classifyLine('[2026-08-13 18:00:00] [suggestions] INJECT user=abc created=3'), 'suggestions');
+  assert.equal(classifyLine('[2026-08-13 18:00:00] [suggestions] FAILED "GA4 - X": quota'), 'suggestions');
+});
+
+test('a failure line reads as a failure to the Problems filter', async () => {
+  const { isProblem } = await import('../logs.js');
+  assert.equal(isProblem('[chat] turn FAILED user=abc after 900ms code=rate_limited: Rate limit reached'), true);
+  assert.equal(isProblem('[scan] FAILED user=abc url=https://x.com code=scanner_not_built: not built'), true);
+  assert.equal(isProblem('[suggestions] FAILED "GA4 - Event - Email Click": quota exceeded'), true);
+  assert.equal(isProblem('[suggestions] listener FAILED "cHTML - Calendly": timeout'), true);
+  // And the successes do not, or the filter is just the log again.
+  assert.equal(isProblem('[chat] turn OK user=abc in 5300ms'), false);
+  assert.equal(isProblem('[suggestions] created "GA4 - Event - Email Click" id=12 trigger=created'), false);
+});

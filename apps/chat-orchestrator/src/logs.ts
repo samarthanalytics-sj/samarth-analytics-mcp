@@ -123,7 +123,12 @@ export function redactSecrets(line: string): string {
  */
 export type LogCategory = 'chat' | 'suggestions' | 'writes' | 'system';
 
-const CHAT_TAGS = new Set(['tools', 'openai', 'snapshot', 'approval', 'memory', 'memories', 'usage', 'audit', 'resources']);
+// 'chat' itself was missing from this set until the turn START/OK/FAILED lines were added and it
+// turned out the tag those use was the one tag not listed.
+const CHAT_TAGS = new Set([
+  'chat', 'tools', 'openai', 'snapshot', 'approval', 'memory', 'memories', 'usage', 'audit',
+  'resources', 'conversations', 'groups',
+]);
 const SUGGESTION_TAGS = new Set(['scan', 'suggestions']);
 const SYSTEM_TAGS = new Set(['orchestrator', 'deploy', 'pool', 'identity', 'logs', 'supervisor', 'auth']);
 /**

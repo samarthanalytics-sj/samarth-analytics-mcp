@@ -13,7 +13,7 @@ import { AuthError, SupabaseTokenVerifier } from './auth.js';
 import { McpConnection } from './mcp-client.js';
 import { McpPool } from './mcp-pool.js';
 import { createTokenProvider, GoogleIdentityError } from './google-identity.js';
-import { forLog, userRef } from './redact.js';
+import { forLog, userRef, userTag } from './redact.js';
 import { ApprovalBroker, ApprovalError } from './approvals.js';
 import { isBillingFailure, OpenAiClient, OpenAiError } from './openai.js';
 import { runTurn } from './loop.js';
@@ -1040,9 +1040,24 @@ async function main(): Promise<void> {
         ...(req.body?.skipBlog === true ? { skipBlog: true } : {}),
       });
       const scan = scanStore.put(user.id, result);
+      // The whole shape of the scan on one line: who ran it, what was asked for, what was read, and
+      // what came back. "13 suggestions" alone cannot tell a thin site from a crawl that only got
+      // one page in, and those need completely different answers.
+      const pages = (result.pages ?? []).map((p) => p.page);
       console.log(
-        `[scan] ${forLog(url)} -> ${scan.suggestions.length} suggestion(s) in ${Date.now() - startedAt}ms`,
+        `[scan] OK user=${userTag(user)} url=${forLog(url, 120)} ` +
+          `platforms=${platforms.length ? platforms.join('+') : 'ga4'} ` +
+          `budget=${Number(req.body?.maxPages) || 'default'} scanned=${pages.length} ` +
+          `skipped=${result.notScanned?.length ?? 0} excluded=${result.excluded ?? 0} ` +
+          `suggestions=${scan.suggestions.length} images=${scan.images.size} ` +
+          `in ${Date.now() - startedAt}ms`,
       );
+      if (pages.length) console.log(`[scan] pages read: ${forLog(pages.join(' '), 600)}`);
+      // Named individually: a page that was found and not read is the usual reason a tag someone
+      // expected is missing, and the reason differs per page.
+      for (const miss of (result.notScanned ?? []).slice(0, 20)) {
+        console.log(`[scan] not read: ${forLog(miss.url, 120)} - ${forLog(miss.reason, 80)}`);
+      }
       res.json({
         scanId: scan.id,
         site: scan.site,
@@ -1060,7 +1075,10 @@ async function main(): Promise<void> {
     } catch (err) {
       const code = err instanceof ScanError ? err.code : 'scan_failed';
       const message = err instanceof Error ? err.message : 'The scan failed.';
-      console.error(`[scan] ${forLog(url)} failed after ${Date.now() - startedAt}ms: ${forLog(message)}`);
+      console.error(
+        `[scan] FAILED user=${userTag(user)} url=${forLog(url, 120)} ` +
+          `after ${Date.now() - startedAt}ms code=${code}: ${forLog(message)}`,
+      );
       // 502 rather than 500: the failure is in the thing being scanned or in the scanner, and the
       // page shows this sentence to the user, so it has to be the sentence they can act on.
       res.status(502).json({ code, message });
@@ -1193,17 +1211,42 @@ async function main(): Promise<void> {
           return text;
         };
 
+        const createStartedAt = Date.now();
         const result = await createSelected(execute, ws, tags);
-        if (result.listeners.length) {
-          console.log(
-            `[suggestions] ${result.listeners.filter((l) => l.ok).length}/${result.listeners.length} ` +
-              'listener tag(s) created',
-          );
-        }
+
         console.log(
-          `[suggestions] created ${result.created}/${tags.length} tag(s) in workspace ${ws.workspaceId} ` +
-            `of container ${ws.containerId} for user ${user.id.slice(0, 8)}`,
+          `[suggestions] INJECT user=${userTag(user)} site=${forLog(scan.site, 120)} ` +
+            `container=${ws.containerId} workspace=${ws.workspaceId} ` +
+            `selected=${tags.length} created=${result.created} existing=${result.existing} ` +
+            `failed=${result.failed} unsupported=${unsupported.length} ` +
+            `in ${Date.now() - createStartedAt}ms`,
         );
+
+        // Every tag by name, with what happened to it. A count says three of five worked; only this
+        // says WHICH two did not and why, which is the question asked five minutes later.
+        for (const o of result.outcomes) {
+          const row = tags.find((t) => t.id === o.id);
+          const name = forLog(String(row?.tagName ?? o.id), 120);
+          if (o.ok) {
+            console.log(
+              `[suggestions] created "${name}"` +
+                (o.tagId ? ` id=${o.tagId}` : '') +
+                ` trigger=${o.triggerReused ? 'reused' : 'created'}`,
+            );
+          } else if (o.existing) {
+            console.log(`[suggestions] skipped "${name}": a tag with this name already exists`);
+          } else {
+            console.error(`[suggestions] FAILED "${name}": ${forLog(String(o.error ?? 'unknown error'))}`);
+          }
+        }
+        for (const l of result.listeners) {
+          if (l.ok) console.log(`[suggestions] listener created "${forLog(l.tagName, 120)}"`);
+          else if (l.existing) console.log(`[suggestions] listener already present "${forLog(l.tagName, 120)}"`);
+          else console.error(`[suggestions] listener FAILED "${forLog(l.tagName, 120)}": ${forLog(String(l.error))}`);
+        }
+        for (const u of unsupported) {
+          console.log(`[suggestions] not creatable here: ${u.id} (${u.platform})`);
+        }
         return { ...result, site: scan.site, ...(unsupported.length ? { unsupported } : {}) };
       },
       () => {
@@ -1337,6 +1380,16 @@ async function main(): Promise<void> {
         })
       : null;
 
+    // Who is asking, before the turn runs. A turn that hangs or crashes the process leaves no
+    // "finished" line, and without this there is nothing in the file saying it was ever attempted.
+    const turnStartedAt = Date.now();
+    console.log(
+      `[chat] turn START user=${userTag(user)} product=${product}` +
+        (body.context?.containerId ? ` container=${body.context.containerId}` : '') +
+        (body.context?.propertyId ? ` property=${body.context.propertyId}` : '') +
+        ` messages=${body.messages?.length ?? 0}`,
+    );
+
     try {
       await runTurn({
         cfg,
@@ -1361,10 +1414,21 @@ async function main(): Promise<void> {
         conversationId,
         usage,
       });
+      console.log(
+        `[chat] turn OK user=${userTag(user)} in ${Date.now() - turnStartedAt}ms`,
+      );
     } catch (err) {
+      // The reason, not just that it failed. friendlyError() is written for the person in the chat
+      // window; the operator reading this needs the code and the upstream text behind it.
+      const code = err instanceof OpenAiError ? err.code : 'internal_error';
+      const detail = err instanceof Error ? err.message : String(err);
+      console.error(
+        `[chat] turn FAILED user=${userTag(user)} after ${Date.now() - turnStartedAt}ms ` +
+          `code=${code}: ${forLog(detail)}`,
+      );
       stream.send({
         type: 'error',
-        code: err instanceof OpenAiError ? err.code : 'internal_error',
+        code,
         message: friendlyError(err),
       });
       stream.send({ type: 'done', reason: 'aborted' });
