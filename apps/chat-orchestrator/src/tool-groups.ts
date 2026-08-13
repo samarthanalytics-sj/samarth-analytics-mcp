@@ -178,13 +178,42 @@ const GROUP_KEYWORDS: Record<Exclude<ToolGroup, 'core'>, RegExp> = {
   audit: /\b(audit|review|health|check|export|score|problem|issue|broken|wrong)\w*\b/i,
 };
 
+/**
+ * How many of the most recent USER messages the keyword scan reads.
+ *
+ * It used to read the entire conversation, so a group opened by one word stayed open until the
+ * thread died. Measured on 2026-08-13: "which key events are configured on this property?" took
+ * 6.4s as the third message of a thread and 56.9s as the fifteenth. Same question, same account,
+ * same property. The difference was 16 tool schemas on the wire versus 84, because a "create" and a
+ * "remove" from earlier turns were still counted. That turn alone hit six 429s against a 30,000
+ * tokens-per-minute limit.
+ *
+ * Two rather than one, because a confirmation carries no keywords of its own: "yes proceed" and
+ * "CONFIRM" have to still see the request they are confirming, or the write tools vanish at exactly
+ * the moment they are needed. Two covers the confirm step without carrying the intent forward for
+ * the rest of the conversation.
+ *
+ * Assistant messages are excluded rather than counted in the window. The assistant restates the
+ * user's verb in nearly every reply ("I will CREATE the tag..."), so counting its text makes any
+ * window meaningless: the echo alone would hold the group open forever, which is most of how the
+ * old behaviour survived unnoticed.
+ */
+const RECENT_USER_MESSAGES = 2;
+
 export interface GroupSelectionInput {
-  /** Every visible message this turn: the history plus the new one. */
+  /**
+   * This conversation's USER messages, oldest first, the new one last. Assistant text does not
+   * belong here: see the note on RECENT_USER_MESSAGES for why counting it defeats the window.
+   *
+   * Only the last few are read. Passing the whole conversation is fine and expected.
+   */
   messages?: readonly string[];
   /** Groups already turned on, e.g. by an earlier enable_tool_group call in this turn. */
   enabled?: Iterable<ToolGroup>;
   /** Products connected via an integration chip: their tools must be reachable. */
   integrations?: readonly string[];
+  /** Override the recency window. For tests; production uses the default. */
+  recentMessages?: number;
 }
 
 /** The groups to send for a turn. Signals are ORed, and `core` is always in the result. */
@@ -199,7 +228,11 @@ export function selectToolGroups(input: GroupSelectionInput): Set<ToolGroup> {
     if (p === 'gtm') selected.add('core');
   }
 
-  const text = (input.messages ?? []).filter((m) => typeof m === 'string' && m.trim()).join('\n');
+  const window = Math.max(1, Math.trunc(input.recentMessages ?? RECENT_USER_MESSAGES));
+  const text = (input.messages ?? [])
+    .filter((m) => typeof m === 'string' && m.trim())
+    .slice(-window)
+    .join('\n');
   if (text) {
     for (const group of REQUESTABLE_GROUPS) {
       if (GROUP_KEYWORDS[group].test(text)) selected.add(group);
