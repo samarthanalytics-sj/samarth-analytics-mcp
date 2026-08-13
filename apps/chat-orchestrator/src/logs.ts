@@ -2,10 +2,8 @@
  * Reading the orchestrator's own log, for an operator looking at it from the website.
  *
  * This log is CROSS-TENANT. It holds every user's request paths, truncated user ids, tool names,
- * container and property ids, and write payloads. Nobody reaches it because they are signed in; they
- * reach it because this process was configured to let them, which is why the allowlist lives in the
- * orchestrator's own environment and not in a table. A compromised admin row in the database must
- * not be able to open a window onto other customers' activity.
+ * container and property ids, and write payloads. Reading it requires the product's SUPER ADMIN
+ * role, checked against the database on every request; an ordinary admin cannot open it.
  */
 
 import { existsSync, readFileSync, statSync, openSync, readSync, closeSync } from 'node:fs';
@@ -32,26 +30,63 @@ export const MAX_LINES = 2000;
 export const DEFAULT_LINES = 300;
 
 /**
- * Who may read it, from the orchestrator's environment.
+ * Who may read it: a super admin of the product, asked of the database at request time.
  *
- * Matched against both the user id and the email, because whoever configures this knows one or the
- * other and should not have to look up a UUID. Empty means nobody: the endpoint is off unless it has
- * been deliberately turned on, so a fresh deployment does not quietly expose its log.
+ * This was an allowlist in this process's environment, which nothing in the database could grant.
+ * The owner chose the role instead, so the boundary now sits where product roles are managed rather
+ * than where the process is deployed. That is a real trade and worth naming: anyone who can write a
+ * super_admin row into user_roles can read every tenant's activity in this log.
+ *
+ * Two things keep it as tight as that choice allows.
+ *
+ * It asks the database's own is_super_admin() rather than reading the table and deciding here, so
+ * there is ONE definition of super admin and a change to it takes effect everywhere at once.
+ *
+ * It asks on EVERY request, with no cache. Revoking the role takes effect on the next line someone
+ * loads, not a minute later, and the query is trivial next to the log read it guards.
  */
-export function logAdmins(): Set<string> {
-  const raw = process.env.ORCHESTRATOR_LOG_ADMINS ?? '';
-  return new Set(
-    raw
-      .split(',')
-      .map((v) => v.trim().toLowerCase())
-      .filter(Boolean),
-  );
+export interface SupabaseAccess {
+  url?: string;
+  serviceRoleKey?: string;
 }
 
-export function isLogAdmin(user: { id?: string; email?: string }): boolean {
-  const admins = logAdmins();
-  if (admins.size === 0) return false;
-  return admins.has(String(user.id ?? '').toLowerCase()) || admins.has(String(user.email ?? '').toLowerCase());
+export async function isSuperAdmin(
+  userId: string,
+  supabase: SupabaseAccess,
+  fetchImpl: typeof fetch = fetch,
+): Promise<boolean> {
+  const url = supabase.url?.trim();
+  const key = supabase.serviceRoleKey?.trim();
+  // No credentials, no answer, and the answer defaults to no. A deployment that cannot ask must not
+  // assume yes, and saying so in the log is how an operator finds out why their tab is empty.
+  if (!url || !key || !userId) {
+    console.warn('[logs] cannot check super admin: Supabase url or service role key is not configured');
+    return false;
+  }
+
+  try {
+    const res = await fetchImpl(`${url.replace(/\/$/, '')}/rest/v1/rpc/is_super_admin`, {
+      method: 'POST',
+      headers: {
+        apikey: key,
+        Authorization: `Bearer ${key}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ _user_id: userId }),
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) {
+      console.warn(`[logs] super admin check failed: ${res.status}`);
+      return false;
+    }
+    // The function returns a bare boolean. Anything else is treated as a no rather than guessed at.
+    return (await res.json()) === true;
+  } catch (err) {
+    // Fails CLOSED. An unreachable database means nobody reads the log, which is the safe direction
+    // for a cross-tenant one: the alternative is that a network problem opens it.
+    console.warn(`[logs] super admin check errored: ${err instanceof Error ? err.message : String(err)}`);
+    return false;
+  }
 }
 
 /**

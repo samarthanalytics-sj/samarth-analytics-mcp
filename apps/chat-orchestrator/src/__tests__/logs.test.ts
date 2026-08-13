@@ -1,50 +1,71 @@
 /**
  * Reading the orchestrator's log from the website.
  *
- * The property worth defending: this log is cross-tenant, so access is granted by THIS process's
- * environment and by nothing else, and an unconfigured deployment grants it to nobody.
+ * The property worth defending: this log is cross-tenant, so it opens for a SUPER ADMIN of the
+ * product and for nobody else, and every path that cannot establish that fails closed.
  */
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isLogAdmin, logAdmins, redactSecrets, MAX_LINES, DEFAULT_LINES } from '../logs.js';
+import { isSuperAdmin, redactSecrets, MAX_LINES, DEFAULT_LINES } from '../logs.js';
 
-const withEnv = (value: string | undefined, fn: () => void): void => {
-  const before = process.env.ORCHESTRATOR_LOG_ADMINS;
-  if (value === undefined) delete process.env.ORCHESTRATOR_LOG_ADMINS;
-  else process.env.ORCHESTRATOR_LOG_ADMINS = value;
-  try {
-    fn();
-  } finally {
-    if (before === undefined) delete process.env.ORCHESTRATOR_LOG_ADMINS;
-    else process.env.ORCHESTRATOR_LOG_ADMINS = before;
+const SUPABASE = { url: 'https://db.example.co', serviceRoleKey: 'service-key' };
+
+/** A fetch that answers the RPC with whatever is given, and records how it was called. */
+function fakeFetch(answer: unknown, status = 200) {
+  const calls: Array<{ url: string; body: unknown; headers: Record<string, string> }> = [];
+  const impl = (async (url: string, init: RequestInit) => {
+    calls.push({
+      url: String(url),
+      body: JSON.parse(String(init.body)),
+      headers: init.headers as Record<string, string>,
+    });
+    return {
+      ok: status >= 200 && status < 300,
+      status,
+      json: async () => answer,
+    } as Response;
+  }) as unknown as typeof fetch;
+  return { impl, calls };
+}
+
+test('a super admin may read it', async () => {
+  const { impl, calls } = fakeFetch(true);
+  assert.equal(await isSuperAdmin('user-1', SUPABASE, impl), true);
+  assert.match(calls[0].url, /\/rest\/v1\/rpc\/is_super_admin$/, "it asks the database's own definition");
+  assert.deepEqual(calls[0].body, { _user_id: 'user-1' });
+});
+
+test('an ordinary admin may not', async () => {
+  // The whole point of choosing super_admin over admin: an admin of the product does not get to
+  // read every tenant's activity.
+  const { impl } = fakeFetch(false);
+  assert.equal(await isSuperAdmin('user-2', SUPABASE, impl), false);
+});
+
+test('anything other than a plain true is a no', async () => {
+  for (const answer of [null, 'true', 1, {}, [true], undefined]) {
+    const { impl } = fakeFetch(answer);
+    assert.equal(await isSuperAdmin('u', SUPABASE, impl), false, `answer ${JSON.stringify(answer)} must not pass`);
   }
-};
-
-test('an unconfigured deployment lets nobody read the log', () => {
-  // The default has to be closed. A log that opens itself as soon as someone signs in as an admin
-  // somewhere else is not a decision this process made.
-  withEnv(undefined, () => {
-    assert.equal(logAdmins().size, 0);
-    assert.equal(isLogAdmin({ id: 'anyone', email: 'admin@example.com' }), false);
-  });
 });
 
-test('an empty or whitespace allowlist is still nobody', () => {
-  withEnv('  ,  , ', () => {
-    assert.equal(logAdmins().size, 0);
-    assert.equal(isLogAdmin({ id: 'x', email: 'y@example.com' }), false);
-  });
+test('an unreachable database means nobody, not everybody', async () => {
+  // Fails closed. The alternative is that a network problem opens a cross-tenant log.
+  const thrower = (async () => {
+    throw new Error('ECONNREFUSED');
+  }) as unknown as typeof fetch;
+  assert.equal(await isSuperAdmin('u', SUPABASE, thrower), false);
+
+  const { impl } = fakeFetch({ message: 'no such function' }, 404);
+  assert.equal(await isSuperAdmin('u', SUPABASE, impl), false, 'a missing RPC must not open the log');
 });
 
-test('the allowlist matches on id or email, case-insensitively', () => {
-  // Whoever configures this knows one or the other, and should not have to look up a UUID.
-  withEnv('Admin@Example.COM, 9f8e7d6c', () => {
-    assert.equal(isLogAdmin({ id: 'u1', email: 'admin@example.com' }), true);
-    assert.equal(isLogAdmin({ id: '9F8E7D6C', email: 'someone@else.com' }), true);
-    assert.equal(isLogAdmin({ id: 'u2', email: 'other@example.com' }), false);
-    assert.equal(isLogAdmin({}), false, 'a user with neither is not an admin by omission');
-  });
+test('a deployment with no service role key opens it to nobody', async () => {
+  const { impl } = fakeFetch(true);
+  assert.equal(await isSuperAdmin('u', {}, impl), false);
+  assert.equal(await isSuperAdmin('u', { url: SUPABASE.url }, impl), false);
+  assert.equal(await isSuperAdmin('', SUPABASE, impl), false, 'no user is not a super admin');
 });
 
 test('credentials are stripped on the way out', () => {
