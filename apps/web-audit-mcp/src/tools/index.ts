@@ -249,14 +249,28 @@ export function registerAllTools(server: McpServer): void {
               'Only ask for this if you can DISPLAY an image: a ten-page scan is several megabytes of ' +
               'base64, which is ruinous in a chat context and useful only to a UI that renders it.',
           ),
+        skipBlog: z
+          .boolean()
+          .optional()
+          .describe(
+            'Do not follow blog, news, article, category, tag, author or dated (/2026/08/) paths. A ' +
+              'content site can hold hundreds of structurally identical posts that eat the page budget ' +
+              'before the crawl reaches contact, pricing or checkout, and they produce near-duplicate ' +
+              'suggestions. Applied where links are discovered, so the budget is spent elsewhere. The ' +
+              'start URL is never excluded.',
+          ),
+        skipPatterns: z
+          .array(z.string())
+          .optional()
+          .describe('Extra URL path fragments to skip, matched case-insensitively (e.g. ["/careers", "/legal"]).'),
       }),
     },
-    async ({ url, maxPages, maxDepth, scanPages, debug, platforms, captureImages }) => {
+    async ({ url, maxPages, maxDepth, scanPages, debug, platforms, captureImages, skipBlog, skipPatterns }) => {
       const rejected = admit(url);
       if (rejected) return rejected;
       try {
         const { scanSiteForTagSuggestions } = await import('../agent/tag-suggest/scan.js');
-        const report = await scanSiteForTagSuggestions(url, { maxPages, maxDepth, scanPages, debug, platforms, captureImages });
+        const report = await scanSiteForTagSuggestions(url, { maxPages, maxDepth, scanPages, debug, platforms, captureImages, skipBlog, skipPatterns });
         return jsonResult(report);
       } catch (err) {
         return errorResult('gtm_tag_suggestions', err);

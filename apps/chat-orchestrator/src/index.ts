@@ -27,7 +27,7 @@ import { scopeTools } from './tools.js';
 import { checkAllowlistAgainstServer } from './integrations.js';
 import { extractAll, type ExtractedAttachment } from './attachments.js';
 import { MemoryStore } from './memory.js';
-import { SiteScanner, ScanError, validPlatforms } from './scan-client.js';
+import { SiteScanner, ScanError, validPlatforms, MAX_SCAN_PAGES } from './scan-client.js';
 import { ScanStore, toRows, selectRows, withMeasurementId, createSelected, imageForRow } from './suggestions.js';
 import {
   findGtmContainer,
@@ -1028,6 +1028,7 @@ async function main(): Promise<void> {
         ...(platforms.length ? { platforms } : {}),
         // This caller can display an image, which is the whole condition for asking for one.
         captureImages: req.body?.captureImages !== false,
+        ...(req.body?.skipBlog === true ? { skipBlog: true } : {}),
       });
       const scan = scanStore.put(user.id, result);
       console.log(
@@ -1039,6 +1040,13 @@ async function main(): Promise<void> {
         suggestions: toRows(scan.suggestions, scan.images),
         warnings: scan.warnings,
         ...(result.scanned !== undefined ? { scanned: result.scanned } : {}),
+        // What the crawl actually read, and what it did not. "10 pages" alone is not checkable by
+        // the person reading it: a budget of 10 that found 4 and a budget of 10 that skipped 6 look
+        // identical, and only one of them means the scan missed something.
+        ...(result.pages ? { pages: result.pages } : {}),
+        ...(result.notScanned?.length ? { notScanned: result.notScanned } : {}),
+        ...(result.excluded ? { excluded: result.excluded } : {}),
+        maxPages: MAX_SCAN_PAGES,
       });
     } catch (err) {
       const code = err instanceof ScanError ? err.code : 'scan_failed';

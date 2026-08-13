@@ -70,6 +70,8 @@ export interface TagSuggestionReport {
   debug?: SuggestDebug;
   /** Present only when the caller passed captureImages:true. One entry per page actually captured. */
   pageImages?: PageImage[];
+  /** Links the skip filter dropped before they could spend the page budget. */
+  excluded?: number;
 }
 
 /**
@@ -126,6 +128,8 @@ export interface AssembleArgs {
   notScanned: NotScanned[];
   notes: string[];
   debug?: SuggestDebug;
+  /** Links the skip filter dropped. */
+  excluded?: number;
   /** Ad platforms to build tags for. Omitted means GA4 only, which is what every caller got
    *  before the option was reachable from a tool call. */
   platforms?: SuggestPlatform[];
@@ -166,6 +170,7 @@ export function assembleTagReport(args: AssembleArgs): TagSuggestionReport {
     notes: args.notes,
     ...(args.debug ? { debug: args.debug } : {}),
     ...(args.pageImages?.length ? { pageImages: args.pageImages } : {}),
+    ...(args.excluded ? { excluded: args.excluded } : {}),
   };
 }
 
@@ -226,6 +231,46 @@ export interface TagSuggestOptions {
    * image should ask for one.
    */
   captureImages?: boolean;
+  /**
+   * Do not follow blog, news and article pages.
+   *
+   * A content site can hold hundreds of posts that are structurally identical, and they eat the page
+   * budget before the crawl reaches the pages worth tagging: contact, pricing, demo, checkout. The
+   * posts also produce near-duplicate suggestions (the same share and social links on every one).
+   */
+  skipBlog?: boolean;
+  /** Extra path fragments to skip, matched case-insensitively against the URL. */
+  skipPatterns?: string[];
+}
+
+/**
+ * Paths that are almost always editorial rather than something to tag.
+ *
+ * Date segments are included because "/2026/08/" is the most reliable blog marker there is: a site
+ * can call its section /insights or /resources, but a dated path is a post.
+ *
+ * Matched on the PATH only, so a query string cannot smuggle one of these words in and knock out a
+ * page the user needs.
+ */
+const BLOG_RE =
+  /(^|\/)(blog|blogs|news|newsroom|article|articles|post|posts|story|stories|press|category|categories|tag|tags|author|authors|archive|archives)(\/|$)|\/(19|20)\d{2}\/\d{1,2}(\/|$)/i;
+
+/** Build the crawl's exclude predicate. Returns undefined when nothing is being excluded, so the
+ *  crawler keeps its original behaviour rather than calling a filter that always says no. */
+export function buildExclude(opts: { skipBlog?: boolean; skipPatterns?: string[] }): ((url: string) => boolean) | undefined {
+  const patterns = (opts.skipPatterns ?? []).map((p) => p.trim().toLowerCase()).filter(Boolean);
+  if (!opts.skipBlog && patterns.length === 0) return undefined;
+  return (url: string): boolean => {
+    let pathname = url;
+    try {
+      pathname = new URL(url).pathname;
+    } catch {
+      /* not parseable: match against the whole string rather than admitting it blindly */
+    }
+    if (opts.skipBlog && BLOG_RE.test(pathname)) return true;
+    const lower = pathname.toLowerCase();
+    return patterns.some((p) => lower.includes(p));
+  };
 }
 
 /** A scanned page's screenshot. `image` is base64 JPEG with no data: prefix. */
@@ -274,11 +319,13 @@ export async function scanSiteForTagSuggestions(
   const collectFailures: NotScanned[] = [];
   const browser = await pw.chromium.launch({ headless: config.headless });
   try {
+    const exclude = buildExclude(options);
     const crawl = await crawlSite(browser, startUrl, {
       maxPages,
       maxDepth,
       navTimeoutMs: config.navTimeoutMs,
       allowlist: config.allowlist,
+      ...(exclude ? { exclude } : {}),
     });
     try {
       siteHost = new URL(crawl.startUrl).hostname;
@@ -372,6 +419,7 @@ export async function scanSiteForTagSuggestions(
       ...(debugData ? { debug: debugData } : {}),
       ...(options.platforms?.length ? { platforms: options.platforms } : {}),
       ...(pageImages.length ? { pageImages } : {}),
+      ...(crawl.excluded ? { excluded: crawl.excluded } : {}),
     });
   } finally {
     await browser.close();

@@ -14,6 +14,17 @@ export interface CrawlOptions {
   maxDepth: number;
   navTimeoutMs: number;
   allowlist: string[];
+  /**
+   * Return true for a URL the crawl should not follow.
+   *
+   * Applied where links are DISCOVERED, not where pages are chosen afterwards, because the page
+   * budget is spent by the crawl itself: filtering later would let 200 blog posts eat a 25-page
+   * budget and leave the pages someone actually wants to tag unvisited.
+   *
+   * Never applied to the start URL. A filter that excluded the page the user typed would return an
+   * empty scan and look like a broken site.
+   */
+  exclude?: (url: string) => boolean;
 }
 
 export interface CrawledPage {
@@ -34,6 +45,9 @@ export interface CrawlResult {
   skipped: { url: string; reason: string }[];
   /** All unique same-site URLs discovered (also beyond the page budget). */
   discovered: string[];
+  /** How many discovered links the exclude filter dropped. Counted rather than listed: a blog can
+   *  hold hundreds of posts and the number is the useful part, not the URLs. */
+  excluded?: number;
 }
 
 const ASSET_RE = /\.(pdf|jpe?g|png|gif|svg|webp|avif|css|js|mjs|ico|zip|gz|rar|mp3|mp4|webm|mov|woff2?|ttf|eot|xml|rss|json)([?#]|$)/i;
@@ -120,6 +134,7 @@ export async function crawlSite(
   const queue: { url: string; depth: number }[] = [];
 
   const start = normalizeUrl(startUrl, startUrl);
+  let excludedCount = 0;
   if (!start) return { startUrl, pages, skipped: [{ url: startUrl, reason: 'not a crawlable URL' }], discovered: [] };
   queue.push({ url: start, depth: 0 });
   discovered.add(start);
@@ -175,6 +190,10 @@ export async function crawlSite(
           const key = normalized.replace(/\/$/, '');
           if (visited.has(key) || discovered.has(normalized)) continue;
           discovered.add(normalized);
+          if (opts.exclude?.(normalized)) {
+            excludedCount += 1;
+            continue;
+          }
           queue.push({ url: normalized, depth: depth + 1 });
         }
       }
@@ -183,5 +202,5 @@ export async function crawlSite(
     await context.close();
   }
 
-  return { startUrl: start, pages, skipped, discovered: [...discovered] };
+  return { startUrl: start, pages, skipped, discovered: [...discovered], ...(excludedCount ? { excluded: excludedCount } : {}) };
 }
