@@ -241,14 +241,22 @@ export function registerAllTools(server: McpServer): void {
               'GA4 suggestions and SHARE one trigger per detection, so asking for several costs no extra ' +
               'crawling and creates one trigger, not one per platform.',
           ),
+        captureImages: z
+          .boolean()
+          .optional()
+          .describe(
+            'Attach a screenshot of each scanned page as base64 JPEG in `pageImages` (default false). ' +
+              'Only ask for this if you can DISPLAY an image: a ten-page scan is several megabytes of ' +
+              'base64, which is ruinous in a chat context and useful only to a UI that renders it.',
+          ),
       }),
     },
-    async ({ url, maxPages, maxDepth, scanPages, debug, platforms }) => {
+    async ({ url, maxPages, maxDepth, scanPages, debug, platforms, captureImages }) => {
       const rejected = admit(url);
       if (rejected) return rejected;
       try {
         const { scanSiteForTagSuggestions } = await import('../agent/tag-suggest/scan.js');
-        const report = await scanSiteForTagSuggestions(url, { maxPages, maxDepth, scanPages, debug, platforms });
+        const report = await scanSiteForTagSuggestions(url, { maxPages, maxDepth, scanPages, debug, platforms, captureImages });
         return jsonResult(report);
       } catch (err) {
         return errorResult('gtm_tag_suggestions', err);
