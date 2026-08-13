@@ -111,6 +111,79 @@ export function redactSecrets(line: string): string {
     );
 }
 
+/**
+ * What part of the system a line came from.
+ *
+ * One process serves the chat and the tag-suggestions page, so its log interleaves two unrelated
+ * stories. Reading it to answer "why was that scan slow" means skipping past chat turns, and a text
+ * box only helps someone who already knows which prefixes to type.
+ *
+ * Classified from the tag the line was written with, and for [req] lines from the PATH, because a
+ * request is only identifiable by where it went.
+ */
+export type LogCategory = 'chat' | 'suggestions' | 'writes' | 'system';
+
+const CHAT_TAGS = new Set(['tools', 'openai', 'snapshot', 'approval', 'memory', 'memories', 'usage', 'audit', 'resources']);
+const SUGGESTION_TAGS = new Set(['scan', 'suggestions']);
+const SYSTEM_TAGS = new Set(['orchestrator', 'deploy', 'pool', 'identity', 'logs', 'supervisor', 'auth']);
+/**
+ * A write belongs to whatever asked for it, and the line does not say which.
+ *
+ * Rather than guess, they get their own category. Filing them under chat would hide the ones a scan
+ * made from someone looking for exactly those, and leaving them uncategorised would make the most
+ * interesting lines in the file unreachable from every filter.
+ */
+const WRITE_TAGS = new Set(['write', 'tool']);
+
+export function classifyLine(line: string): LogCategory | undefined {
+  // Three shapes appear in this file: "[2026-01-01 00:00:00] [tag] ...", "[supervisor <iso>] ..."
+  // (the supervisor stamps its own), and bare child output like "[samarth-gtm-mcp] ...".
+  const tag = /\[(?:[\d-]+ [\d:]+\] \[)?([a-z][a-z-]*)[\s\]]/i.exec(line)?.[1]?.toLowerCase();
+
+  if (!tag) {
+    // Raw stderr from a crash: a stack frame or a node internal. It belongs with the lifecycle,
+    // which is where someone looks after a restart they did not expect.
+    // A crash is several lines: the message, the caret, the stack, then the error object's own
+    // fields. Catching only the first would put half a crash in System and half nowhere, and the
+    // half that names the cause (code: 'EADDRINUSE') is usually the useful half.
+    if (
+      /^\s+at\s|node:internal|node:events|throw er;/.test(line) ||
+      /^\s*(?:[A-Z]\w*Error|Error):/.test(line) ||
+      /^\s*(?:code|errno|syscall|address|port):/.test(line) ||
+      /emitted 'error' event/i.test(line) ||
+      /^\s*\^+\s*$/.test(line)
+    ) {
+      return 'system';
+    }
+    return undefined;
+  }
+
+  // The MCP children announce themselves by package name.
+  if (tag.startsWith('samarth')) return 'system';
+
+  if (tag === 'req') {
+    // The path is the only thing that identifies a request.
+    if (/\/v1\/suggestions/.test(line)) return 'suggestions';
+    if (/\/v1\/(chat|conversations|conversation-groups|commands|approvals|memories|resources|audit)/.test(line)) {
+      return 'chat';
+    }
+    // Everything else hitting this process, including the probes that find a public tunnel and ask
+    // for /.aws/credentials. Those are worth being able to see, and they are not chat.
+    return 'system';
+  }
+
+  if (SUGGESTION_TAGS.has(tag)) return 'suggestions';
+  if (WRITE_TAGS.has(tag)) return 'writes';
+  if (CHAT_TAGS.has(tag)) return 'chat';
+  if (SYSTEM_TAGS.has(tag)) return 'system';
+  return undefined;
+}
+
+/** Lines worth pulling out whatever they came from: something failed, was refused, or was throttled. */
+export function isProblem(line: string): boolean {
+  return /\berror\b|\bfailed\b|refused|rate limit|\b[45]\d\d\b(?!ms)|not creating|declined/i.test(line);
+}
+
 export interface LogTail {
   lines: string[];
   /** Bytes in the file, so a reader can see it is rotating rather than stalled. */
@@ -128,7 +201,9 @@ export interface LogTail {
  * show 300 lines would make the endpoint a way to make this process do pointless work. The chunk is
  * sized from the line count so a filter still has plenty to search.
  */
-export function tailLog(opts: { lines?: number; filter?: string } = {}): LogTail | null {
+export function tailLog(
+  opts: { lines?: number; filter?: string; category?: LogCategory; problemsOnly?: boolean } = {},
+): LogTail | null {
   const file = logFile();
   if (!file) return null;
 
@@ -136,7 +211,9 @@ export function tailLog(opts: { lines?: number; filter?: string } = {}): LogTail
   const size = statSync(file).size;
   // ~200 bytes per line, with a floor and a ceiling; a filter needs a bigger haystack than the
   // number of lines it will return, so the window is deliberately generous.
-  const window = Math.min(size, Math.max(64 * 1024, want * (opts.filter ? 1200 : 400)));
+  // A narrowed view needs a far bigger haystack than the number of lines it returns.
+  const narrowing = Boolean(opts.filter || opts.category || opts.problemsOnly);
+  const window = Math.min(size, Math.max(64 * 1024, want * (narrowing ? 1200 : 400)));
 
   let text: string;
   if (window >= size) {
@@ -157,6 +234,17 @@ export function tailLog(opts: { lines?: number; filter?: string } = {}): LogTail
 
   let lines = text.split('\n').filter((l) => l.length > 0);
   let matched: number | undefined;
+
+  // The filters compose, narrowest last, so "suggestions + problems + 429" answers one question.
+  if (opts.category) {
+    const wanted = opts.category;
+    lines = lines.filter((l) => classifyLine(l) === wanted);
+    matched = lines.length;
+  }
+  if (opts.problemsOnly) {
+    lines = lines.filter(isProblem);
+    matched = lines.length;
+  }
   const needle = opts.filter?.trim().toLowerCase();
   if (needle) {
     lines = lines.filter((l) => l.toLowerCase().includes(needle));
