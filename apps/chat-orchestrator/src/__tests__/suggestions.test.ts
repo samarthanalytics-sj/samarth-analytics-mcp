@@ -260,3 +260,4 @@ test('another user cannot reach the pictures of a scan', () => {
   const scan = store.put('u1', withImages(['/contact']));
   assert.equal(store.get('u2', scan.id), null, 'no scan, so no route to its images');
 });
+

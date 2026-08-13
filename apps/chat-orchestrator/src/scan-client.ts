@@ -68,6 +68,19 @@ export interface ScanOptions {
   platforms?: ScanPlatform[];
   /** Ask for a screenshot of each scanned page. Off in the tool by default, see the note there. */
   captureImages?: boolean;
+  /** Do not follow blog, news and article paths. */
+  skipBlog?: boolean;
+}
+
+/** The hard ceiling the scanner applies to the page budget, mirrored here so the browser can show
+ *  the real number instead of accepting one that will be silently clamped. */
+export const MAX_SCAN_PAGES = 25;
+
+/** A page the crawl opened and read. */
+export interface ScannedPage {
+  page: string;
+  forms: number;
+  elements: number;
 }
 
 /** A scanned page's screenshot, base64 JPEG. */
@@ -85,6 +98,12 @@ export interface ScanResult {
   scanned?: number;
   /** Screenshots of the scanned pages, when they were asked for. */
   pageImages?: PageImage[];
+  /** The pages actually read, so the answer to "what did you look at" is not a guess. */
+  pages?: ScannedPage[];
+  /** Discovered but not read, each with the reason. */
+  notScanned?: { url: string; reason: string }[];
+  /** Links dropped by the skip filter before they could spend the budget. */
+  excluded?: number;
 }
 
 /** A scan failed in a way the user can act on. Carries no stack, only the sentence to show. */
@@ -170,6 +189,7 @@ export class SiteScanner {
         ...(opts.maxDepth ? { maxDepth: opts.maxDepth } : {}),
         ...(opts.platforms?.length ? { platforms: opts.platforms } : {}),
         ...(opts.captureImages ? { captureImages: true } : {}),
+        ...(opts.skipBlog ? { skipBlog: true } : {}),
       }),
       SCAN_TIMEOUT_MS,
       'The scan took too long and was stopped. Try fewer pages.',
@@ -186,12 +206,20 @@ export class SiteScanner {
     const suggestions = Array.isArray(body.suggestions)
       ? (body.suggestions as Record<string, unknown>[])
       : [];
+    // The report nests its counts under `summary`; reading body.scanned found nothing, so the page
+    // count never appeared in the UI.
+    const summary = (body.summary ?? {}) as Record<string, unknown>;
     return {
       site: typeof body.site === 'string' ? body.site : url,
       suggestions,
       warnings: Array.isArray(body.warnings) ? (body.warnings as string[]).map(String) : [],
-      ...(typeof body.scanned === 'number' ? { scanned: body.scanned } : {}),
+      ...(typeof summary.pagesScanned === 'number' ? { scanned: summary.pagesScanned } : {}),
       ...(Array.isArray(body.pageImages) ? { pageImages: body.pageImages as PageImage[] } : {}),
+      ...(Array.isArray(body.pages) ? { pages: body.pages as ScannedPage[] } : {}),
+      ...(Array.isArray(body.notScanned)
+        ? { notScanned: (body.notScanned as { url: string; reason: string }[]).slice(0, 100) }
+        : {}),
+      ...(typeof body.excluded === 'number' ? { excluded: body.excluded } : {}),
     };
   }
 }

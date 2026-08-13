@@ -14,6 +14,7 @@ import { CMP_VENDORS, ACCEPT_TEXT_RE, REJECT_TEXT_RE } from '../agent/cmp.js';
 import { analyzeForms, classifyFieldPii, type RawForm, type RawFormField } from '../agent/forms.js';
 import { buildFillPlan, classifyFieldRole, selectorFor, localeById, US_LOCALE } from '../agent/form-fill.js';
 import { sameSite, normalizeUrl, urlPriority } from '../agent/crawler.js';
+import { buildExclude } from '../agent/tag-suggest/scan.js';
 import { extractConsentEvents, extractEventNames, type ScenarioCapture } from '../agent/capture.js';
 import {
   evaluateBannerRules,
@@ -630,6 +631,33 @@ const pgHubBeside: PageScan = {
 check('embed: HubSpot embed surfaces beside an unrelated search form', buildSuggestInput([pgHubBeside], 'example.com').forms.some((f) => f.provider.vendor === 'hubspot'));
 
 // ── report ──────────────────────────────────────────────────────────────────
+
+/* ── skip filter: which pages a crawl refuses to follow ───────────────────── */
+{
+  const skip = buildExclude({ skipBlog: true });
+  check('skip: asking to skip blogs produces a filter', typeof skip === 'function');
+  const on = (p: string): boolean => (skip ? skip(`https://x.com${p}`) : false);
+  for (const p of ['/blog', '/blog/post-1', '/news/', '/2026/08/a-post', '/press', '/author/sam']) {
+    check(`skip: ${p} is treated as editorial`, on(p));
+  }
+  // The ones that must survive: a "tag-management" service page is the whole point of the scan, and
+  // "blogger-outreach" only contains the word blog.
+  for (const p of ['/contact', '/pricing', '/solutions/tag-management', '/blogger-outreach', '/free-audit']) {
+    check(`skip: ${p} is kept`, !on(p));
+  }
+  check('skip: a query string cannot smuggle a skip word past a needed page', !on('/contact?from=/blog'));
+
+  // undefined, not a predicate that always says no, so the crawler keeps its original behaviour
+  // rather than calling a filter that cannot exclude anything.
+  check('skip: no options means no filter', buildExclude({}) === undefined);
+  check('skip: blank patterns mean no filter', buildExclude({ skipPatterns: ['  '] }) === undefined);
+
+  const custom = buildExclude({ skipPatterns: ['/Careers', '/legal'] });
+  const onCustom = (p: string): boolean => (custom ? custom(`https://x.com${p}`) : false);
+  check('skip: extra patterns match case-insensitively', onCustom('/careers/engineer') && onCustom('/legal/terms'));
+  check('skip: extra patterns leave everything else alone', !onCustom('/contact'));
+}
+
 
 console.log(`web-audit tests: ${passed} passed, ${failed} failed`);
 if (failed > 0) {
