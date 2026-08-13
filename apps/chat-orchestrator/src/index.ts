@@ -27,6 +27,7 @@ import { scopeTools } from './tools.js';
 import { checkAllowlistAgainstServer } from './integrations.js';
 import { extractAll, type ExtractedAttachment } from './attachments.js';
 import { MemoryStore } from './memory.js';
+import { isLogAdmin, tailLog, MAX_LINES } from './logs.js';
 import { SiteScanner, ScanError, validPlatforms, MAX_SCAN_PAGES } from './scan-client.js';
 import {
   ScanStore,
@@ -1064,6 +1065,40 @@ async function main(): Promise<void> {
       // page shows this sentence to the user, so it has to be the sentence they can act on.
       res.status(502).json({ code, message });
     }
+  });
+
+  /**
+   * The orchestrator's own log, for an operator looking at it from the website.
+   *
+   * Gated on an allowlist in THIS process's environment, not on a role in the database. The log is
+   * cross-tenant: it holds every user's request paths, tool names and write payloads. A compromised
+   * admin row must not be able to open a window onto other customers' activity, and an unconfigured
+   * deployment must expose nothing at all, which is why an empty allowlist means nobody.
+   */
+  app.get('/v1/logs', async (req, res) => {
+    let user: AuthedUser;
+    try {
+      user = await authenticate(req.headers.authorization);
+    } catch (err) {
+      return sendAuthError(res, err);
+    }
+    if (!isLogAdmin(user)) {
+      // 404, not 403: whether this deployment has log readers at all is not worth confirming to
+      // someone who is not one.
+      return res.status(404).json({ code: 'not_found', message: 'No such endpoint.' });
+    }
+    const tail = tailLog({
+      lines: Number(req.query.lines) || undefined,
+      filter: typeof req.query.filter === 'string' ? req.query.filter : undefined,
+    });
+    if (!tail) {
+      return res.status(503).json({
+        code: 'no_log',
+        message: 'No log file was found. The orchestrator writes one only when started by its supervisor.',
+      });
+    }
+    console.log(`[logs] ${user.id.slice(0, 8)} read ${tail.lines.length} line(s)`);
+    res.json({ ...tail, maxLines: MAX_LINES });
   });
 
   /**
