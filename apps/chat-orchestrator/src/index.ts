@@ -27,7 +27,7 @@ import { scopeTools } from './tools.js';
 import { checkAllowlistAgainstServer } from './integrations.js';
 import { extractAll, type ExtractedAttachment } from './attachments.js';
 import { MemoryStore } from './memory.js';
-import { isLogAdmin, tailLog, MAX_LINES } from './logs.js';
+import { isSuperAdmin, tailLog, MAX_LINES } from './logs.js';
 import { SiteScanner, ScanError, validPlatforms, MAX_SCAN_PAGES } from './scan-client.js';
 import {
   ScanStore,
@@ -1082,9 +1082,9 @@ async function main(): Promise<void> {
     } catch (err) {
       return sendAuthError(res, err);
     }
-    if (!isLogAdmin(user)) {
-      // 404, not 403: whether this deployment has log readers at all is not worth confirming to
-      // someone who is not one.
+    if (!(await isSuperAdmin(user.id, cfg.supabase))) {
+      // 404, not 403: that this endpoint exists is not worth confirming to someone who may not read
+      // it. An admin of the product is not enough; only a super admin is.
       return res.status(404).json({ code: 'not_found', message: 'No such endpoint.' });
     }
     const tail = tailLog({
@@ -1097,7 +1097,8 @@ async function main(): Promise<void> {
         message: 'No log file was found. The orchestrator writes one only when started by its supervisor.',
       });
     }
-    console.log(`[logs] ${user.id.slice(0, 8)} read ${tail.lines.length} line(s)`);
+    // Named in the log itself: reading everyone's activity is an act worth leaving a trace of.
+    console.log(`[logs] super admin ${user.id.slice(0, 8)} read ${tail.lines.length} line(s)`);
     res.json({ ...tail, maxLines: MAX_LINES });
   });
 
