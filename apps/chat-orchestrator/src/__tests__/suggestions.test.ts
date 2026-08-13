@@ -327,3 +327,50 @@ test('a trigger with no filters says so rather than looking like missing data', 
   assert.equal(rows[0].conditions, undefined);
   assert.equal(rows[0].triggerType, 'Form Submission');
 });
+
+// ── Install plans ────────────────────────────────────────────────────────────
+//
+// A row that can never fire looked exactly like one that fires the moment it is created. On a real
+// scan the Contact Form row is a Custom Event on form_submit against a Calendly embed: created
+// as-is it is correct, permanent and silent, because nothing on the site pushes that event.
+
+test('a native element needs nothing, and says so', async () => {
+  const { installSummary } = await import('../suggestions.js');
+  const plan = installSummary({
+    summary: 'Native Link Click - nothing to install.',
+    requires: [{ kind: 'native', detail: "GTM's built-in trigger fires on the link click." }],
+  });
+  assert.equal(plan?.firesAsIs, true);
+  assert.equal(plan?.listenerAvailable, false);
+  assert.equal(plan?.needsSiteCode, false);
+});
+
+test('a cross-origin form reports that a listener tag is available', async () => {
+  const { installSummary } = await import('../suggestions.js');
+  const plan = installSummary({
+    summary: 'Auto-create 1 Custom HTML listener tag; no site code needed.',
+    requires: [{ kind: 'listener-tag', event: 'form_submit', detail: 'Calendly submits in an iframe.' }],
+  });
+  assert.equal(plan?.firesAsIs, false, 'this cannot fire as things stand');
+  assert.equal(plan?.listenerAvailable, true);
+  assert.equal(plan?.needsSiteCode, false, 'a listener tag is not site code: GTM can hold it');
+});
+
+test('a plan needing a developer is not softened into one that does not', async () => {
+  const { installSummary } = await import('../suggestions.js');
+  const plan = installSummary({
+    summary: 'Your developer must push the event.',
+    requires: [
+      { kind: 'html-attribute', detail: 'Add id="contact" to the form.' },
+      { kind: 'site-code', detail: 'Push form_submit on success.' },
+    ],
+  });
+  assert.equal(plan?.needsSiteCode, true);
+  assert.equal(plan?.firesAsIs, false);
+});
+
+test('no plan at all stays absent rather than becoming an empty one', async () => {
+  const { installSummary } = await import('../suggestions.js');
+  assert.equal(installSummary(undefined), undefined);
+  assert.equal(installSummary({ summary: 'x', requires: [] }), undefined);
+});

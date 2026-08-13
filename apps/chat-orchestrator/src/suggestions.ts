@@ -66,6 +66,8 @@ export interface SuggestionRow {
   /** Every condition the trigger will carry, so the table can show what it FIRES ON rather than only
    *  what someone named it. */
   conditions?: TriggerCondition[];
+  /** What the SITE needs before this tag can fire. Absent when the engine attached no plan. */
+  install?: InstallSummary;
   /** True when GA4 Enhanced Measurement already tracks this, so creating it would double-count. */
   enhancedMeasurementOverlap?: boolean;
   /** Whether a screenshot of this row's page exists to open. Never assumed from `page` alone: a
@@ -94,6 +96,51 @@ const GTM_TRIGGER_TYPE: Record<string, string> = {
 export function gtmTriggerType(kind: unknown): string | undefined {
   const key = String(kind ?? '').trim();
   return key ? (GTM_TRIGGER_TYPE[key] ?? key.replace(/_/g, ' ')) : undefined;
+}
+
+/**
+ * What has to exist on the SITE before a suggested tag can fire.
+ *
+ * The engine computes this per suggestion and nothing surfaced it, so a row that could never fire
+ * looked exactly like one that fires the moment it is created. The Contact Form row on a real scan
+ * is a Custom Event on form_submit: created as-is it is correct, permanent and silent, because
+ * nothing on the site pushes that event.
+ */
+export interface InstallSummary {
+  /** Plain-English "what you must do", from the engine. */
+  summary: string;
+  /** Each requirement, reduced to what a reader needs: what kind it is and what it says. */
+  requires: Array<{ kind: string; detail: string }>;
+  /**
+   * Nothing has to change on the site: every requirement is a native element or a provider that
+   * already pushes the event.
+   */
+  firesAsIs: boolean;
+  /** A GTM Custom HTML listener tag exists that would satisfy this without touching the site. */
+  listenerAvailable: boolean;
+  /** A developer has to add code. No tag creation makes this row fire. */
+  needsSiteCode: boolean;
+}
+
+/** Requirement kinds that mean the site is already fine as it stands. */
+const SATISFIED_KINDS = new Set(['native', 'provider-native']);
+
+export function installSummary(install: unknown): InstallSummary | undefined {
+  const plan = install as { summary?: unknown; requires?: unknown } | undefined;
+  const list = Array.isArray(plan?.requires) ? (plan?.requires as Record<string, unknown>[]) : [];
+  if (!plan || list.length === 0) return undefined;
+
+  const requires = list.map((r) => ({
+    kind: String(r.kind ?? ''),
+    detail: String(r.detail ?? ''),
+  }));
+  return {
+    summary: typeof plan.summary === 'string' ? plan.summary : '',
+    requires,
+    firesAsIs: requires.every((r) => SATISFIED_KINDS.has(r.kind)),
+    listenerAvailable: requires.some((r) => r.kind === 'listener-tag'),
+    needsSiteCode: requires.some((r) => r.kind === 'site-code'),
+  };
 }
 
 /** One row of a GTM trigger's condition table: variable, operator, value. */
@@ -218,6 +265,7 @@ export function toRows(list: SuggestedTagView[], images?: ReadonlyMap<string, Bu
       ...(typeof triggerName === 'string' && triggerName ? { triggerName } : {}),
       ...(gtmType ? { triggerType: gtmType } : {}),
       ...(conditions.length ? { conditions } : {}),
+      ...(installSummary(raw.install) ? { install: installSummary(raw.install) } : {}),
       ...(typeof raw.page === 'string' && images?.has(raw.page) ? { hasImage: true } : {}),
       ...(raw.enhancedMeasurementOverlap === true ? { enhancedMeasurementOverlap: true } : {}),
     };
