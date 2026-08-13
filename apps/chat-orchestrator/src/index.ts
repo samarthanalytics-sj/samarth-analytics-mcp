@@ -28,7 +28,7 @@ import { checkAllowlistAgainstServer } from './integrations.js';
 import { extractAll, type ExtractedAttachment } from './attachments.js';
 import { MemoryStore } from './memory.js';
 import { SiteScanner, ScanError, validPlatforms } from './scan-client.js';
-import { ScanStore, toRows, selectRows, withMeasurementId, createSelected } from './suggestions.js';
+import { ScanStore, toRows, selectRows, withMeasurementId, createSelected, imageForRow } from './suggestions.js';
 import {
   findGtmContainer,
   listGa4Properties,
@@ -1026,6 +1026,8 @@ async function main(): Promise<void> {
         maxPages: Number(req.body?.maxPages) || undefined,
         maxDepth: Number(req.body?.maxDepth) || undefined,
         ...(platforms.length ? { platforms } : {}),
+        // This caller can display an image, which is the whole condition for asking for one.
+        captureImages: req.body?.captureImages !== false,
       });
       const scan = scanStore.put(user.id, result);
       console.log(
@@ -1034,7 +1036,7 @@ async function main(): Promise<void> {
       res.json({
         scanId: scan.id,
         site: scan.site,
-        suggestions: toRows(scan.suggestions),
+        suggestions: toRows(scan.suggestions, scan.images),
         warnings: scan.warnings,
         ...(result.scanned !== undefined ? { scanned: result.scanned } : {}),
       });
@@ -1046,6 +1048,34 @@ async function main(): Promise<void> {
       // page shows this sentence to the user, so it has to be the sentence they can act on.
       res.status(502).json({ code, message });
     }
+  });
+
+  /**
+   * One row's page screenshot, as an image.
+   *
+   * A GET so the browser can hand it to an <img>, but still authenticated, so the fetch is done with
+   * a header and turned into a blob URL on the page. Serving these unauthenticated would publish a
+   * crawl of a customer's site to anyone holding a scan id.
+   */
+  app.get('/v1/suggestions/:scanId/image/:rowId', async (req, res) => {
+    let user: AuthedUser;
+    try {
+      user = await authenticate(req.headers.authorization);
+    } catch (err) {
+      return sendAuthError(res, err);
+    }
+    const scan = scanStore.get(user.id, req.params.scanId);
+    if (!scan) {
+      return res.status(404).json({ code: 'scan_expired', message: 'That scan is no longer available.' });
+    }
+    const image = imageForRow(scan, req.params.rowId);
+    if (!image) {
+      return res.status(404).json({ code: 'no_image', message: 'No screenshot was captured for that page.' });
+    }
+    res.setHeader('Content-Type', 'image/jpeg');
+    // Private: this is a picture of someone's site, fetched under their session.
+    res.setHeader('Cache-Control', 'private, max-age=600');
+    res.send(image);
   });
 
   /**

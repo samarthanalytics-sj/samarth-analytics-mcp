@@ -66,6 +66,15 @@ export interface ScanOptions {
   maxDepth?: number;
   /** Ad platforms to build tags for. Empty or omitted means the engine's default, GA4 only. */
   platforms?: ScanPlatform[];
+  /** Ask for a screenshot of each scanned page. Off in the tool by default, see the note there. */
+  captureImages?: boolean;
+}
+
+/** A scanned page's screenshot, base64 JPEG. */
+export interface PageImage {
+  page: string;
+  image: string;
+  bytes: number;
 }
 
 export interface ScanResult {
@@ -74,6 +83,8 @@ export interface ScanResult {
   warnings: string[];
   /** Pages the crawl actually opened, as reported by the tool. */
   scanned?: number;
+  /** Screenshots of the scanned pages, when they were asked for. */
+  pageImages?: PageImage[];
 }
 
 /** A scan failed in a way the user can act on. Carries no stack, only the sentence to show. */
@@ -158,6 +169,7 @@ export class SiteScanner {
         ...(opts.maxPages ? { maxPages: opts.maxPages } : {}),
         ...(opts.maxDepth ? { maxDepth: opts.maxDepth } : {}),
         ...(opts.platforms?.length ? { platforms: opts.platforms } : {}),
+        ...(opts.captureImages ? { captureImages: true } : {}),
       }),
       SCAN_TIMEOUT_MS,
       'The scan took too long and was stopped. Try fewer pages.',
@@ -179,6 +191,7 @@ export class SiteScanner {
       suggestions,
       warnings: Array.isArray(body.warnings) ? (body.warnings as string[]).map(String) : [],
       ...(typeof body.scanned === 'number' ? { scanned: body.scanned } : {}),
+      ...(Array.isArray(body.pageImages) ? { pageImages: body.pageImages as PageImage[] } : {}),
     };
   }
 }

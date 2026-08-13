@@ -214,3 +214,49 @@ test('only platforms the engine knows survive the request', async () => {
   assert.deepEqual(validPlatforms('ga4'), [], 'a non-array is not a platform list');
   assert.deepEqual(validPlatforms(undefined), []);
 });
+
+// ── Screenshots ──────────────────────────────────────────────────────────────
+
+const withImages = (pages: string[]) => ({
+  site: 'https://example.com',
+  warnings: [],
+  suggestions: pages.map((p, i) => ({
+    tagName: `Tag ${i + 1}`,
+    platform: 'ga4_event',
+    page: p,
+    trigger: { kind: 'link_click' },
+  })) as Record<string, unknown>[],
+  pageImages: [{ page: '/contact', image: Buffer.from('jpeg-bytes').toString('base64'), bytes: 10 }],
+});
+
+test('a row says it has a picture only when one was actually captured', async () => {
+  // A capture can fail while its page still yields suggestions. Offering a View button that 404s is
+  // worse than not offering one, so this is a stored fact rather than an inference from `page`.
+  const { imageForRow } = await import('../suggestions.js');
+  const store = new ScanStore();
+  const scan = store.put('u1', withImages(['/contact', '/pricing', 'site-wide']));
+  const rows = toRows(scan.suggestions, scan.images);
+  assert.deepEqual(
+    rows.map((r) => r.hasImage === true),
+    [true, false, false],
+  );
+  assert.ok(imageForRow(scan, rows[0].id), 'the captured page resolves to bytes');
+  assert.equal(imageForRow(scan, rows[1].id), null, 'an uncaptured page has none');
+  assert.equal(imageForRow(scan, 'nope'), null, 'an unknown row has none');
+});
+
+test('an image is reached through a row, never by page path from the request', async () => {
+  // Looking it up by a path in the URL would let a caller ask a scan for pages it never scanned, and
+  // probe which paths exist on someone else's site.
+  const { imageForRow } = await import('../suggestions.js');
+  const store = new ScanStore();
+  const scan = store.put('u1', withImages(['/contact']));
+  const bytes = imageForRow(scan, scan.suggestions[0].id);
+  assert.equal(bytes?.toString(), 'jpeg-bytes');
+});
+
+test('another user cannot reach the pictures of a scan', () => {
+  const store = new ScanStore();
+  const scan = store.put('u1', withImages(['/contact']));
+  assert.equal(store.get('u2', scan.id), null, 'no scan, so no route to its images');
+});

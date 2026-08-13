@@ -38,6 +38,8 @@ export interface PwPage {
   title(): Promise<string>;
   url(): string;
   waitForTimeout(ms: number): Promise<void>;
+  /** Returns the encoded image. Only the options this codebase passes are declared. */
+  screenshot(opts?: { fullPage?: boolean; type?: 'png' | 'jpeg'; quality?: number }): Promise<Buffer>;
   close(): Promise<void>;
 }
 export interface PwContext {

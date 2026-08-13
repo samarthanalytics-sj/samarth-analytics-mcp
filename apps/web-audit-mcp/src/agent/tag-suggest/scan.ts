@@ -68,6 +68,8 @@ export interface TagSuggestionReport {
   notes: string[];
   /** Present only when the caller passed debug:true — see SuggestDebug. */
   debug?: SuggestDebug;
+  /** Present only when the caller passed captureImages:true. One entry per page actually captured. */
+  pageImages?: PageImage[];
 }
 
 /**
@@ -127,6 +129,8 @@ export interface AssembleArgs {
   /** Ad platforms to build tags for. Omitted means GA4 only, which is what every caller got
    *  before the option was reachable from a tool call. */
   platforms?: SuggestPlatform[];
+  /** Screenshots of the scanned pages, when the caller asked for them. */
+  pageImages?: PageImage[];
 }
 
 /** Combine per-page scans → SuggestInput → ranked suggestions → the report. Pure. */
@@ -161,6 +165,7 @@ export function assembleTagReport(args: AssembleArgs): TagSuggestionReport {
     notScanned: args.notScanned,
     notes: args.notes,
     ...(args.debug ? { debug: args.debug } : {}),
+    ...(args.pageImages?.length ? { pageImages: args.pageImages } : {}),
   };
 }
 
@@ -212,7 +217,29 @@ export interface TagSuggestOptions {
    * crawling.
    */
   platforms?: SuggestPlatform[];
+  /**
+   * Capture a screenshot of each scanned page, returned as base64 JPEG in `pageImages`.
+   *
+   * OFF by default, and that default is load-bearing rather than cautious: this tool is callable
+   * from chat, where the result is text a model reads. A ten-page scan is several megabytes of
+   * base64, which would blow a context window to no purpose. Only a caller that can display an
+   * image should ask for one.
+   */
+  captureImages?: boolean;
 }
+
+/** A scanned page's screenshot. `image` is base64 JPEG with no data: prefix. */
+export interface PageImage {
+  page: string;
+  image: string;
+  bytes: number;
+}
+
+/** Per-image ceiling. A long marketing page can screenshot to several megabytes, and past this the
+ *  proof is not worth what it costs to move through stdio and hold in memory. */
+const MAX_IMAGE_BYTES = 1_500_000;
+/** Whole-scan ceiling, so a 25-page scan cannot pin tens of megabytes in the orchestrator. */
+const MAX_TOTAL_IMAGE_BYTES = 12_000_000;
 
 /**
  * Crawl a site and suggest the GA4 event tags worth creating. Throws
@@ -274,6 +301,8 @@ export async function scanSiteForTagSuggestions(
     }
 
     const pageScans: PageScan[] = [];
+    const pageImages: PageImage[] = [];
+    let totalImageBytes = 0;
     let debugData: SuggestDebug | undefined;
     const context = await browser.newContext({ viewport: { width: 1366, height: 900 } });
     try {
@@ -286,6 +315,26 @@ export async function scanSiteForTagSuggestions(
           await page.waitForTimeout(settleMs);
           const raw = await collectPageRaw(page);
           const forms = await scanForms(page, page.url());
+          if (options.captureImages && totalImageBytes < MAX_TOTAL_IMAGE_BYTES) {
+            // After the collect, never before: the screenshot must show the page the suggestions
+            // were read from, including anything the settle time brought in.
+            //
+            // A capture failure is swallowed on purpose. A screenshot is supporting evidence, and
+            // losing the scan of a page because its picture did not take would be the wrong trade.
+            try {
+              const shot = await page.screenshot({ fullPage: true, type: 'jpeg', quality: 55 });
+              if (shot.byteLength <= MAX_IMAGE_BYTES) {
+                totalImageBytes += shot.byteLength;
+                pageImages.push({
+                  page: pagePath(target.url),
+                  image: shot.toString('base64'),
+                  bytes: shot.byteLength,
+                });
+              }
+            } catch {
+              /* no proof for this page; the suggestions from it still stand */
+            }
+          }
           pageScans.push(
             toPageScan(target.url, raw, forms.map((f) => ({ purpose: f.purpose, action: f.action, method: f.method, formId: f.formId, providerFormId: f.providerFormId, formClasses: f.formClasses, title: f.title, fields: f.fields.map((x) => ({ type: x.type, name: x.name, required: x.required })), hidden: f.hidden })), siteHost),
           );
@@ -322,6 +371,7 @@ export async function scanSiteForTagSuggestions(
       notes: [CREATE_NOTE],
       ...(debugData ? { debug: debugData } : {}),
       ...(options.platforms?.length ? { platforms: options.platforms } : {}),
+      ...(pageImages.length ? { pageImages } : {}),
     });
   } finally {
     await browser.close();

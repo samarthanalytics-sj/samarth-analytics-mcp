@@ -28,6 +28,15 @@ export interface StoredScan {
   createdAt: number;
   suggestions: SuggestedTagView[];
   warnings: string[];
+  /**
+   * Page path -> screenshot bytes.
+   *
+   * Held here rather than sent with the list. A ten-page scan is megabytes of image, the table shows
+   * 47 rows, and almost none of them get opened: shipping every picture to render a list of names
+   * would be paid on every scan for a view that is rarely used. The rows say WHICH page they have a
+   * picture of, and the picture itself is fetched when one is opened.
+   */
+  images: Map<string, Buffer>;
 }
 
 /**
@@ -52,6 +61,9 @@ export interface SuggestionRow {
   triggerKind?: string;
   /** True when GA4 Enhanced Measurement already tracks this, so creating it would double-count. */
   enhancedMeasurementOverlap?: boolean;
+  /** Whether a screenshot of this row's page exists to open. Never assumed from `page` alone: a
+   *  capture can fail, and an offered picture that 404s is worse than one that was never offered. */
+  hasImage?: boolean;
 }
 
 /** GTM trigger types as a person describes them. Unknown kinds pass through rather than vanish. */
@@ -78,7 +90,7 @@ function withIds(list: Record<string, unknown>[]): SuggestedTagView[] {
   return list.map((s, i) => ({ ...(s as object), id: typeof s.id === 'string' && s.id ? s.id : `s${i + 1}` }) as SuggestedTagView);
 }
 
-export function toRows(list: SuggestedTagView[]): SuggestionRow[] {
+export function toRows(list: SuggestedTagView[], images?: ReadonlyMap<string, Buffer>): SuggestionRow[] {
   return list.map((s) => {
     const raw = s as unknown as Record<string, unknown>;
     // The engine writes `kind`; create_gtm_tracking_tag's own schema calls the same thing `type`.
@@ -93,6 +105,7 @@ export function toRows(list: SuggestedTagView[]): SuggestionRow[] {
       ...(typeof raw.page === 'string' ? { page: raw.page } : {}),
       ...(s.trigger ? { trigger: s.trigger } : {}),
       ...(kind ? { triggerKind: kind } : {}),
+      ...(typeof raw.page === 'string' && images?.has(raw.page) ? { hasImage: true } : {}),
       ...(raw.enhancedMeasurementOverlap === true ? { enhancedMeasurementOverlap: true } : {}),
     };
   });
@@ -109,6 +122,10 @@ export class ScanStore {
 
   put(userId: string, result: ScanResult): StoredScan {
     this.purge();
+    const images = new Map<string, Buffer>();
+    for (const img of result.pageImages ?? []) {
+      if (img?.page && img.image) images.set(img.page, Buffer.from(img.image, 'base64'));
+    }
     const record: StoredScan = {
       id: randomUUID(),
       userId,
@@ -116,6 +133,7 @@ export class ScanStore {
       createdAt: Date.now(),
       suggestions: withIds(result.suggestions),
       warnings: result.warnings,
+      images,
     };
     this.scans.set(record.id, record);
     return record;
@@ -148,6 +166,19 @@ export class ScanStore {
   get size(): number {
     return this.scans.size;
   }
+}
+
+/**
+ * The screenshot for one row, by row id.
+ *
+ * Looked up through the ROW rather than by page path from the request, so a caller cannot ask this
+ * scan for a page it never scanned, and cannot probe which paths exist on someone's site.
+ */
+export function imageForRow(scan: StoredScan, rowId: string): Buffer | null {
+  const row = scan.suggestions.find((s) => s.id === rowId);
+  const page = (row as unknown as { page?: unknown } | undefined)?.page;
+  if (typeof page !== 'string') return null;
+  return scan.images.get(page) ?? null;
 }
 
 /**
