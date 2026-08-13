@@ -59,11 +59,118 @@ export interface SuggestionRow {
    * skimming 47 rows cannot tell those apart from the name.
    */
   triggerKind?: string;
+  /** The trigger's name, as it will appear in GTM. */
+  triggerName?: string;
+  /** The GTM trigger type, in GTM's own wording ("Click - Just Links"). */
+  triggerType?: string;
+  /** Every condition the trigger will carry, so the table can show what it FIRES ON rather than only
+   *  what someone named it. */
+  conditions?: TriggerCondition[];
   /** True when GA4 Enhanced Measurement already tracks this, so creating it would double-count. */
   enhancedMeasurementOverlap?: boolean;
   /** Whether a screenshot of this row's page exists to open. Never assumed from `page` alone: a
    *  capture can fail, and an offered picture that 404s is worse than one that was never offered. */
   hasImage?: boolean;
+}
+
+/**
+ * The GTM trigger type, named the way GTM names it.
+ *
+ * "Click" is what the Type column says because it is scannable; this is what someone types into GTM
+ * to find the same thing. Both are shown, in different places, on purpose.
+ */
+const GTM_TRIGGER_TYPE: Record<string, string> = {
+  link_click: 'Click - Just Links',
+  all_clicks: 'Click - All Elements',
+  form_submit: 'Form Submission',
+  custom_event: 'Custom Event',
+  pageview: 'Page View',
+  youtube_video: 'YouTube Video',
+  scroll: 'Scroll Depth',
+  element_visibility: 'Element Visibility',
+  timer: 'Timer',
+};
+
+export function gtmTriggerType(kind: unknown): string | undefined {
+  const key = String(kind ?? '').trim();
+  return key ? (GTM_TRIGGER_TYPE[key] ?? key.replace(/_/g, ' ')) : undefined;
+}
+
+/** One row of a GTM trigger's condition table: variable, operator, value. */
+export interface TriggerCondition {
+  variable: string;
+  operator: string;
+  value: string;
+}
+
+/** GTM's own wording for a filter operator. */
+const OPERATOR_LABEL: Record<string, string> = {
+  equals: 'equals',
+  contains: 'contains',
+  startsWith: 'starts with',
+  endsWith: 'ends with',
+  matchRegex: 'matches RegEx',
+  cssSelector: 'matches CSS selector',
+};
+
+const op = (v: unknown, fallback = 'equals'): string =>
+  OPERATOR_LABEL[String(v ?? '')] ?? OPERATOR_LABEL[fallback];
+
+/**
+ * Flatten a suggestion's trigger into the condition rows GTM would show.
+ *
+ * The table used to print the trigger's NAME and nothing else. "Get In Touch Form Trigger" tells you
+ * what someone called it, not what it fires on, and the difference between a form trigger scoped to
+ * one form id and one scoped to a page path is the difference between a tag that works and a tag
+ * that fires on every form on the site. All of it was already in the payload, unread.
+ */
+export function triggerConditions(trigger: unknown): TriggerCondition[] {
+  const t = (trigger ?? {}) as Record<string, unknown>;
+  const out: TriggerCondition[] = [];
+  const pair = (variable: string, value: unknown, operator: unknown, fallback = 'equals'): void => {
+    const v = typeof value === 'string' ? value.trim() : '';
+    if (v) out.push({ variable, operator: op(operator, fallback), value: v });
+  };
+
+  // custom_event keys on the pushed event name, which is the condition that matters most for it.
+  const kind = String(t.kind ?? t.type ?? '');
+  if (kind === 'custom_event' && typeof t.eventName === 'string' && t.eventName.trim()) {
+    out.push({ variable: 'Event name', operator: 'equals', value: t.eventName.trim() });
+  }
+
+  pair('Click URL', t.clickUrlValue, t.clickUrlOperator, 'contains');
+  pair('Click Text', t.clickTextValue, t.clickTextOperator);
+  pair('Click Element', t.clickElementValue, t.clickElementOperator, 'cssSelector');
+  pair('Click ID', t.clickIdValue, t.clickIdOperator);
+  pair('Click Classes', t.clickClassesValue, t.clickClassesOperator, 'matchRegex');
+  pair('Form ID', t.formIdValue, t.formIdOperator);
+  pair('Form Classes', t.formClassesValue, t.formClassesOperator);
+  pair('Page Path', t.pagePathValue, t.pagePathOperator);
+  pair('Page URL', t.pageUrlValue, t.pageUrlOperator);
+
+  // A lookup table is one condition in GTM (the variable returns "true"), but the texts behind it are
+  // the actual scope, so they are named rather than hidden behind the variable's name.
+  const lookup = t.lookupTable as { name?: unknown; texts?: unknown } | undefined;
+  if (lookup && typeof lookup.name === 'string') {
+    const texts = Array.isArray(lookup.texts) ? lookup.texts.map(String) : [];
+    out.push({
+      variable: lookup.name,
+      operator: 'equals',
+      value: texts.length ? `true (for: ${texts.join(', ')})` : 'true',
+    });
+  }
+
+  for (const c of Array.isArray(t.dataLayerConditions) ? t.dataLayerConditions : []) {
+    const cond = c as { key?: unknown; value?: unknown; operator?: unknown };
+    if (typeof cond.key === 'string' && cond.key.trim()) {
+      out.push({
+        variable: `dlv - ${cond.key.trim()}`,
+        operator: op(cond.operator),
+        value: String(cond.value ?? ''),
+      });
+    }
+  }
+  return out;
 }
 
 /** GTM trigger types as a person describes them. Unknown kinds pass through rather than vanish. */
@@ -97,6 +204,9 @@ export function toRows(list: SuggestedTagView[], images?: ReadonlyMap<string, Bu
     // Read both: the first version of this read only `type` and every row came back blank.
     const trigger = (s.trigger ?? {}) as { kind?: unknown; type?: unknown };
     const kind = triggerKindLabel(trigger.kind ?? trigger.type);
+    const conditions = triggerConditions(s.trigger);
+    const triggerName = (trigger as { name?: unknown }).name;
+    const gtmType = gtmTriggerType(trigger.kind ?? trigger.type);
     return {
       id: s.id,
       tagName: s.tagName,
@@ -105,6 +215,9 @@ export function toRows(list: SuggestedTagView[], images?: ReadonlyMap<string, Bu
       ...(typeof raw.page === 'string' ? { page: raw.page } : {}),
       ...(s.trigger ? { trigger: s.trigger } : {}),
       ...(kind ? { triggerKind: kind } : {}),
+      ...(typeof triggerName === 'string' && triggerName ? { triggerName } : {}),
+      ...(gtmType ? { triggerType: gtmType } : {}),
+      ...(conditions.length ? { conditions } : {}),
       ...(typeof raw.page === 'string' && images?.has(raw.page) ? { hasImage: true } : {}),
       ...(raw.enhancedMeasurementOverlap === true ? { enhancedMeasurementOverlap: true } : {}),
     };
