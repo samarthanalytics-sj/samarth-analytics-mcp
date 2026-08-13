@@ -261,3 +261,69 @@ test('another user cannot reach the pictures of a scan', () => {
   assert.equal(store.get('u2', scan.id), null, 'no scan, so no route to its images');
 });
 
+
+// ── Trigger detail ───────────────────────────────────────────────────────────
+//
+// The table printed the trigger's NAME and nothing else. A form trigger scoped to one form id and
+// one scoped to a page path have the same kind of name and completely different behaviour.
+
+test('a click trigger reports the variable, operator and value it filters on', () => {
+  const rows = toRows([
+    {
+      id: 'a',
+      tagName: 'Email',
+      platform: 'ga4_event',
+      trigger: { name: 'Email Click Trigger', kind: 'link_click', clickUrlValue: 'mailto:', clickUrlOperator: 'startsWith' },
+    },
+  ] as unknown as SuggestedTagView[]);
+  assert.equal(rows[0].triggerName, 'Email Click Trigger');
+  assert.equal(rows[0].triggerType, 'Click - Just Links', "GTM's own wording, not the internal kind");
+  assert.deepEqual(rows[0].conditions, [{ variable: 'Click URL', operator: 'starts with', value: 'mailto:' }]);
+});
+
+test('a custom event leads with the event name, then its scope', () => {
+  const rows = toRows([
+    {
+      id: 'a',
+      tagName: 'Contact',
+      platform: 'ga4_event',
+      trigger: {
+        name: 'Contact Form Trigger',
+        kind: 'custom_event',
+        eventName: 'form_submit',
+        pagePathValue: '/contact',
+        pagePathOperator: 'contains',
+        dataLayerConditions: [{ key: 'form_id', value: 'wpcf7-f12', operator: 'equals' }],
+      },
+    },
+  ] as unknown as SuggestedTagView[]);
+  assert.deepEqual(rows[0].conditions, [
+    { variable: 'Event name', operator: 'equals', value: 'form_submit' },
+    { variable: 'Page Path', operator: 'contains', value: '/contact' },
+    { variable: 'dlv - form_id', operator: 'equals', value: 'wpcf7-f12' },
+  ]);
+});
+
+test('a lookup table names the texts behind it, not just the variable', () => {
+  // The variable returning "true" is one GTM condition, but the texts ARE the scope, and hiding them
+  // behind a variable name makes the row unreadable.
+  const rows = toRows([
+    {
+      id: 'a',
+      tagName: 'CTA',
+      platform: 'ga4_event',
+      trigger: { name: 'CTA Trigger', kind: 'all_clicks', lookupTable: { name: 'lt - CTA', texts: ['Book a demo', 'Get started'] } },
+    },
+  ] as unknown as SuggestedTagView[]);
+  assert.deepEqual(rows[0].conditions, [
+    { variable: 'lt - CTA', operator: 'equals', value: 'true (for: Book a demo, Get started)' },
+  ]);
+});
+
+test('a trigger with no filters says so rather than looking like missing data', () => {
+  const rows = toRows([
+    { id: 'a', tagName: 'All', platform: 'ga4_event', trigger: { name: 'All Forms Trigger', kind: 'form_submit' } },
+  ] as unknown as SuggestedTagView[]);
+  assert.equal(rows[0].conditions, undefined);
+  assert.equal(rows[0].triggerType, 'Form Submission');
+});
