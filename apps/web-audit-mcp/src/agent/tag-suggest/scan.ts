@@ -424,9 +424,25 @@ export interface PageImage {
 
 /** Per-image ceiling. A long marketing page can screenshot to several megabytes, and past this the
  *  proof is not worth what it costs to move through stdio and hold in memory. */
+/**
+ * How many pages are scanned at once.
+ *
+ * Four, not more: each worker is a browser context with a live page, and the cost is memory on the
+ * machine running the scanner rather than anything the site notices.
+ *
+ * Measured on a real site, eight pages with screenshots: 45s sequential, 23s across four workers,
+ * same 20 suggestions and the same 8 images. Not the 4x the worker count suggests, because the
+ * crawl that precedes this is still sequential and a cold browser start is paid once either way.
+ * About 3s per page in practice, so a 200-page scan is roughly ten minutes rather than nineteen.
+ */
+export const SCAN_CONCURRENCY = 4;
+
 const MAX_IMAGE_BYTES = 1_500_000;
 /** Whole-scan ceiling, so a 25-page scan cannot pin tens of megabytes in the orchestrator. */
-const MAX_TOTAL_IMAGE_BYTES = 12_000_000;
+// Sized for the 200-page ceiling at the ~200KB a full-page JPEG actually measures. Still a cap:
+// past it the scan continues WITHOUT pictures rather than growing without bound, and the rows say
+// so by having no proof to open.
+const MAX_TOTAL_IMAGE_BYTES = 45_000_000;
 
 /**
  * Crawl a site and suggest the GA4 event tags worth creating. Throws
@@ -507,62 +523,104 @@ export async function scanSiteForTagSuggestions(
     }
     const targets: Array<{ url: string }> = chosen ? chosen.targets : crawled;
 
+    /**
+     * Scan the pages in PARALLEL, across a small pool of independent browser contexts.
+     *
+     * Measured on the built scanner: about six seconds per page sequentially, nearly all of it
+     * waiting - a navigation, a settle, and a full-page screenshot. That is 19 minutes for 200
+     * pages, past the orchestrator's scan timeout and past nginx's read timeout, so the higher page
+     * budgets would have produced a feature that always times out.
+     *
+     * A context per worker, not a page per worker. Contexts are isolated, so one page's dialogs,
+     * storage or a hung script cannot stall another's, and a crash takes one worker down instead of
+     * the run.
+     *
+     * The queue is claimed with a synchronous index increment. No await between reading `next` and
+     * incrementing it, so two workers can never take the same page: that exactly-once property is
+     * the whole correctness argument here, and an await in the middle would quietly break it.
+     */
     const pageScans: PageScan[] = [];
     const pageImages: PageImage[] = [];
     let totalImageBytes = 0;
     let debugData: SuggestDebug | undefined;
-    const context = await browser.newContext({ viewport: { width: 1366, height: 900 } });
-    try {
-      const inst = await openInstrumentedPage(context);
-      const page = inst.page;
-      for (const target of targets) {
-        try {
-          inst.markNavigationStart();
-          await page.goto(target.url, { waitUntil: 'domcontentloaded', timeout: config.navTimeoutMs });
-          await page.waitForTimeout(settleMs);
-          const raw = await collectPageRaw(page);
-          const forms = await scanForms(page, page.url());
-          if (options.captureImages && totalImageBytes < MAX_TOTAL_IMAGE_BYTES) {
-            // After the collect, never before: the screenshot must show the page the suggestions
-            // were read from, including anything the settle time brought in.
-            //
-            // A capture failure is swallowed on purpose. A screenshot is supporting evidence, and
-            // losing the scan of a page because its picture did not take would be the wrong trade.
-            try {
-              const shot = await page.screenshot({ fullPage: true, type: 'jpeg', quality: 55 });
-              if (shot.byteLength <= MAX_IMAGE_BYTES) {
-                totalImageBytes += shot.byteLength;
-                pageImages.push({
-                  page: pagePath(target.url),
-                  image: shot.toString('base64'),
-                  bytes: shot.byteLength,
-                });
+    const consoleErrors: string[] = [];
+    const pageErrors: string[] = [];
+
+    let next = 0;
+    const claim = (): { url: string } | undefined => (next < targets.length ? targets[next++] : undefined);
+    const workerCount = Math.max(1, Math.min(SCAN_CONCURRENCY, targets.length));
+
+    const worker = async (): Promise<void> => {
+      const context = await browser.newContext({ viewport: { width: 1366, height: 900 } });
+      try {
+        const inst = await openInstrumentedPage(context);
+        const page = inst.page;
+        for (let target = claim(); target; target = claim()) {
+          try {
+            inst.markNavigationStart();
+            await page.goto(target.url, { waitUntil: 'domcontentloaded', timeout: config.navTimeoutMs });
+            await page.waitForTimeout(settleMs);
+            const raw = await collectPageRaw(page);
+            const forms = await scanForms(page, page.url());
+            if (options.captureImages && totalImageBytes < MAX_TOTAL_IMAGE_BYTES) {
+              // After the collect, never before: the screenshot must show the page the suggestions
+              // were read from, including anything the settle time brought in.
+              //
+              // A capture failure is swallowed on purpose. A screenshot is supporting evidence, and
+              // losing the scan of a page because its picture did not take would be the wrong trade.
+              try {
+                const shot = await page.screenshot({ fullPage: true, type: 'jpeg', quality: 55 });
+                if (shot.byteLength <= MAX_IMAGE_BYTES) {
+                  totalImageBytes += shot.byteLength;
+                  pageImages.push({
+                    page: pagePath(target.url),
+                    image: shot.toString('base64'),
+                    bytes: shot.byteLength,
+                  });
+                }
+              } catch {
+                /* no proof for this page; the suggestions from it still stand */
               }
-            } catch {
-              /* no proof for this page; the suggestions from it still stand */
             }
+            pageScans.push(
+              toPageScan(target.url, raw, forms.map((f) => ({ purpose: f.purpose, action: f.action, method: f.method, formId: f.formId, providerFormId: f.providerFormId, formClasses: f.formClasses, title: f.title, fields: f.fields.map((x) => ({ type: x.type, name: x.name, required: x.required })), hidden: f.hidden, rect: f.rect })), siteHost),
+            );
+          } catch (err) {
+            collectFailures.push({
+              url: target.url,
+              reason: `scan failed: ${err instanceof Error ? err.message : String(err)}`.slice(0, 200),
+            });
           }
-          pageScans.push(
-            toPageScan(target.url, raw, forms.map((f) => ({ purpose: f.purpose, action: f.action, method: f.method, formId: f.formId, providerFormId: f.providerFormId, formClasses: f.formClasses, title: f.title, fields: f.fields.map((x) => ({ type: x.type, name: x.name, required: x.required })), hidden: f.hidden, rect: f.rect })), siteHost),
-          );
-        } catch (err) {
-          collectFailures.push({
-            url: target.url,
-            reason: `scan failed: ${err instanceof Error ? err.message : String(err)}`.slice(0, 200),
-          });
         }
+        // Merged rather than taken from one worker, or the debug block would report the console
+        // errors of whichever context happened to finish last.
+        consoleErrors.push(...inst.consoleErrors);
+        pageErrors.push(...inst.pageErrors);
+      } finally {
+        await context.close();
       }
-      if (options.debug) {
-        debugData = {
-          headless: config.headless,
-          navTimeoutMs: config.navTimeoutMs,
-          settleMs,
-          consoleErrors: inst.consoleErrors,
-          pageErrors: inst.pageErrors,
-        };
+    };
+
+    // A worker that dies must not take the run with it: the pages it did not reach are still in the
+    // queue for the others, and its failure is recorded like any other.
+    const results = await Promise.allSettled(Array.from({ length: workerCount }, () => worker()));
+    for (const r of results) {
+      if (r.status === 'rejected') {
+        collectFailures.push({
+          url: startUrl,
+          reason: `scan worker failed: ${r.reason instanceof Error ? r.reason.message : String(r.reason)}`.slice(0, 200),
+        });
       }
-    } finally {
-      await context.close();
+    }
+
+    if (options.debug) {
+      debugData = {
+        headless: config.headless,
+        navTimeoutMs: config.navTimeoutMs,
+        settleMs,
+        consoleErrors,
+        pageErrors,
+      };
     }
 
     const scannedTargetUrls = new Set(targets.map((t) => t.url));

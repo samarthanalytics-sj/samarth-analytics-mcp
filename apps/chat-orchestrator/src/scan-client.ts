@@ -107,7 +107,7 @@ export interface DiscoverResult {
 
 /** The hard ceiling the scanner applies to the page budget, mirrored here so the browser can show
  *  the real number instead of accepting one that will be silently clamped. */
-export const MAX_SCAN_PAGES = 25;
+export const MAX_SCAN_PAGES = 200;
 
 /** A page the crawl opened and read. */
 export interface ScannedPage {
@@ -298,11 +298,15 @@ export class SiteScanner {
 }
 
 /**
- * A crawl is slow by nature, and this ceiling is well past a normal one: a 10-page scan with a cold
- * browser start runs tens of seconds. It exists to stop a hung browser holding a request open
- * forever, not to bound a healthy scan.
+ * A crawl is slow by nature, and this ceiling is well past a normal one.
+ *
+ * Twenty minutes, up from four. Measured on the built scanner: about six seconds per page
+ * sequentially and about three across the worker pool, and the page budget now goes to 200. That
+ * puts a full 200-page scan near ten minutes, and a slow site or a cold browser can be well past
+ * that. A scan killed at four minutes threw away all of the work rather than some of it. This
+ * exists to stop a hung browser holding a request open forever, not to bound a healthy scan.
  */
-export const SCAN_TIMEOUT_MS = 240_000;
+export const SCAN_TIMEOUT_MS = 1_200_000;
 
 /** A discovery is HTTP GETs against public URLs, so a minute is already generous. */
 export const DISCOVER_TIMEOUT_MS = 60_000;

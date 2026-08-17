@@ -45,8 +45,11 @@ export function loadConfig(): WebAuditConfig {
     .filter(Boolean);
   return {
     allowlist,
-    maxPages: intEnv('WEB_AUDIT_MAX_PAGES', 10, 25),
-    maxPagesCap: 25,
+    maxPages: intEnv('WEB_AUDIT_MAX_PAGES', 10, 200),
+    // 200, up from 25. A page costs about six seconds, and the scan now runs a pool of contexts, so
+    // the ceiling is patience rather than a timeout. The default stays 10: a big scan should be a
+    // choice someone makes, not one they get by accident.
+    maxPagesCap: 200,
     maxDepth: intEnv('WEB_AUDIT_MAX_DEPTH', 2, 4),
     maxDepthCap: 4,
     navTimeoutMs: intEnv('WEB_AUDIT_NAV_TIMEOUT', 30_000, 60_000),
