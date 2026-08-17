@@ -78,6 +78,14 @@ export interface SuggestionRow {
   /** Whether a screenshot of this row's page exists to open. Never assumed from `page` alone: a
    *  capture can fail, and an offered picture that 404s is worse than one that was never offered. */
   hasImage?: boolean;
+  /**
+   * A person changed this row after the scan produced it.
+   *
+   * Shown in the table rather than kept quiet. Every other row can be checked against the site by
+   * rescanning; an edited one cannot, and someone reading the table an hour later has no other way
+   * to tell which rows are the scanner's findings and which are somebody's typing.
+   */
+  edited?: boolean;
 }
 
 /**
@@ -153,6 +161,31 @@ export interface TriggerCondition {
   variable: string;
   operator: string;
   value: string;
+  /**
+   * This condition can be changed from the table, and the change reaches GTM.
+   *
+   * Absent means read-only, and the two reasons for that are different. A lookup-table or dataLayer
+   * condition is read-only because the create path here cannot carry it at all (see `carried`); the
+   * custom_event name is read-only because a listener tag pushes that exact string, so renaming one
+   * without the other leaves a trigger waiting for an event nothing sends.
+   */
+  editable?: boolean;
+  /**
+   * The operators GTM offers for THIS condition, sent with it rather than known by the browser.
+   *
+   * One list, on the server, next to the validation that enforces it. A copy in the page would be a
+   * second list to keep in step, and the failure when they drift is a dropdown offering a choice
+   * the server refuses.
+   */
+  operators?: Array<{ key: string; label: string }>;
+  /**
+   * False when creating this row from the website drops the condition.
+   *
+   * Not a detail: a click trigger stripped of its {{Click Element}} scope does not fire less, it
+   * fires on EVERY click. The table showed all of these identically, so a condition that survives
+   * and one that is discarded looked the same right up until the container was wrong.
+   */
+  carried: boolean;
 }
 
 /** GTM's own wording for a filter operator. */
@@ -163,6 +196,49 @@ const OPERATOR_LABEL: Record<string, string> = {
   endsWith: 'ends with',
   matchRegex: 'matches RegEx',
   cssSelector: 'matches CSS selector',
+};
+
+/** Operator keys, with the wording to show for each. The browser sends the key, never the label. */
+export const OPERATORS: Array<{ key: string; label: string }> = Object.entries(OPERATOR_LABEL).map(
+  ([key, label]) => ({ key, label }),
+);
+
+/** What GTM offers on a plain string condition. cssSelector is not here: it is element-only. */
+const TEXT_OPERATORS = ['equals', 'contains', 'startsWith', 'endsWith', 'matchRegex'];
+
+/**
+ * The condition rows an edit may change, and the trigger fields each one writes back to.
+ *
+ * Keyed by the variable name the table prints, because that is what the browser can refer to: it is
+ * sent the flattened condition list, not the trigger object, and this map is the only thing that
+ * turns "Click Text" back into clickTextValue/clickTextOperator. Nothing outside this map is
+ * writable, so a request naming any other field changes nothing.
+ */
+export const EDITABLE_CONDITIONS: Record<
+  string,
+  { value: string; operator: string; operators: string[] }
+> = {
+  'Click URL': { value: 'clickUrlValue', operator: 'clickUrlOperator', operators: TEXT_OPERATORS },
+  'Click Text': { value: 'clickTextValue', operator: 'clickTextOperator', operators: TEXT_OPERATORS },
+  'Click Element': {
+    value: 'clickElementValue',
+    operator: 'clickElementOperator',
+    operators: ['cssSelector', 'equals', 'contains', 'matchRegex'],
+  },
+  'Click ID': { value: 'clickIdValue', operator: 'clickIdOperator', operators: TEXT_OPERATORS },
+  'Click Classes': {
+    value: 'clickClassesValue',
+    operator: 'clickClassesOperator',
+    operators: ['contains', 'equals', 'matchRegex'],
+  },
+  'Form ID': { value: 'formIdValue', operator: 'formIdOperator', operators: TEXT_OPERATORS },
+  'Form Classes': {
+    value: 'formClassesValue',
+    operator: 'formClassesOperator',
+    operators: ['contains', 'equals', 'matchRegex'],
+  },
+  'Page Path': { value: 'pagePathValue', operator: 'pagePathOperator', operators: TEXT_OPERATORS },
+  'Page URL': { value: 'pageUrlValue', operator: 'pageUrlOperator', operators: TEXT_OPERATORS },
 };
 
 const op = (v: unknown, fallback = 'equals'): string =>
@@ -181,13 +257,26 @@ export function triggerConditions(trigger: unknown): TriggerCondition[] {
   const out: TriggerCondition[] = [];
   const pair = (variable: string, value: unknown, operator: unknown, fallback = 'equals'): void => {
     const v = typeof value === 'string' ? value.trim() : '';
-    if (v) out.push({ variable, operator: op(operator, fallback), value: v });
+    if (!v) return;
+    const field = EDITABLE_CONDITIONS[variable];
+    out.push({
+      variable,
+      operator: op(operator, fallback),
+      value: v,
+      editable: true,
+      carried: true,
+      operators: field.operators.map((key) => ({ key, label: OPERATOR_LABEL[key] ?? key })),
+    });
   };
 
   // custom_event keys on the pushed event name, which is the condition that matters most for it.
+  //
+  // Carried, but not editable. The listener tag created alongside this row pushes this exact string,
+  // and the two are generated together; renaming one here would leave a trigger listening for an
+  // event that nothing on the site ever sends, and the tag would look perfectly correct in GTM.
   const kind = String(t.kind ?? t.type ?? '');
   if (kind === 'custom_event' && typeof t.eventName === 'string' && t.eventName.trim()) {
-    out.push({ variable: 'Event name', operator: 'equals', value: t.eventName.trim() });
+    out.push({ variable: 'Event name', operator: 'equals', value: t.eventName.trim(), carried: true });
   }
 
   pair('Click URL', t.clickUrlValue, t.clickUrlOperator, 'contains');
@@ -202,6 +291,10 @@ export function triggerConditions(trigger: unknown): TriggerCondition[] {
 
   // A lookup table is one condition in GTM (the variable returns "true"), but the texts behind it are
   // the actual scope, so they are named rather than hidden behind the variable's name.
+  //
+  // NOT carried. It needs a companion Lookup Table variable created alongside the trigger, and the
+  // MCP's create tool only enables BUILT-IN variables. A trigger pointing at a user variable that
+  // was never created is accepted by GTM and never fires.
   const lookup = t.lookupTable as { name?: unknown; texts?: unknown } | undefined;
   if (lookup && typeof lookup.name === 'string') {
     const texts = Array.isArray(lookup.texts) ? lookup.texts.map(String) : [];
@@ -209,9 +302,12 @@ export function triggerConditions(trigger: unknown): TriggerCondition[] {
       variable: lookup.name,
       operator: 'equals',
       value: texts.length ? `true (for: ${texts.join(', ')})` : 'true',
+      carried: false,
     });
   }
 
+  // Also not carried, and for the same reason: each needs its own `dlv - <key>` Data Layer Variable
+  // provisioned first, which the desktop does and this path does not.
   for (const c of Array.isArray(t.dataLayerConditions) ? t.dataLayerConditions : []) {
     const cond = c as { key?: unknown; value?: unknown; operator?: unknown };
     if (typeof cond.key === 'string' && cond.key.trim()) {
@@ -219,6 +315,7 @@ export function triggerConditions(trigger: unknown): TriggerCondition[] {
         variable: `dlv - ${cond.key.trim()}`,
         operator: op(cond.operator),
         value: String(cond.value ?? ''),
+        carried: false,
       });
     }
   }
@@ -275,8 +372,137 @@ export function toRows(list: SuggestedTagView[], images?: ReadonlyMap<string, Bu
       ...(typeof raw.proofPage === 'string' ? { proofPage: raw.proofPage } : {}),
       ...(images?.has(proofPageOf(raw) ?? '') ? { hasImage: true } : {}),
       ...(raw.enhancedMeasurementOverlap === true ? { enhancedMeasurementOverlap: true } : {}),
+      ...(raw.edited === true ? { edited: true } : {}),
     };
   });
+}
+
+/**
+ * A change to one scanned row, as the browser may express it.
+ *
+ * Deliberately not "here is the new suggestion". Every field is named, validated and written into
+ * THIS process's copy of the scan, which is what keeps /v1/suggestions/create unable to build a tag
+ * the scan never produced. An edit widens what the user may change; it does not widen what the
+ * endpoint can be talked into creating.
+ */
+export interface RowEdit {
+  tagName?: string;
+  eventName?: string;
+  triggerName?: string;
+  /** Condition changes, keyed by the variable name the table shows. An empty value removes it. */
+  conditions?: Array<{ variable: string; operator?: string; value?: string }>;
+}
+
+export interface EditResult {
+  row: SuggestedTagView;
+  /** What changed, in words, for the log and for the response. */
+  changed: string[];
+  /** What was asked for and refused, each with the reason to show. */
+  rejected: string[];
+}
+
+/** GTM's own ceiling on a name. Longer is refused by the API, after the round trip. */
+const MAX_NAME = 255;
+
+/**
+ * GA4's rules for an event name: start with a letter, then letters, digits and underscores, 40 max.
+ *
+ * Enforced here rather than left to GTM, because GTM does not enforce it. A tag named with a space
+ * or a leading digit is created happily, fires happily, and GA4 discards the event on receipt. The
+ * only symptom is a report that stays empty.
+ */
+const GA4_EVENT_NAME = /^[A-Za-z][A-Za-z0-9_]{0,39}$/;
+/** GA4 drops anything under these prefixes as reserved. */
+const GA4_RESERVED_PREFIX = /^(ga_|google_|firebase_)/i;
+
+/**
+ * Apply an edit to one suggestion, returning a new row.
+ *
+ * Field by field, and anything not recognised is REPORTED rather than ignored. A silent no-op on a
+ * misspelled field is the failure this whole page keeps hitting in other forms: the screen says the
+ * change was saved, the container disagrees, and nothing in between said so.
+ */
+export function applyRowEdit(row: SuggestedTagView, edit: RowEdit): EditResult {
+  const changed: string[] = [];
+  const rejected: string[] = [];
+  const next = { ...row, trigger: { ...row.trigger } } as SuggestedTagView;
+
+  const name = edit.tagName?.trim();
+  if (name !== undefined && name !== row.tagName) {
+    if (!name) rejected.push('A tag needs a name.');
+    else if (name.length > MAX_NAME) rejected.push(`That tag name is ${name.length} characters; GTM allows ${MAX_NAME}.`);
+    else {
+      next.tagName = name;
+      changed.push(`tag name -> "${name}"`);
+    }
+  }
+
+  const event = edit.eventName?.trim();
+  if (event !== undefined && event !== row.eventName) {
+    // Only GA4 gets GA4's rules. Meta, TikTok and the rest use their own standard event names, and
+    // "Lead" or "AddToCart" is correct there and would fail a lowercase-only check.
+    const ga4 = row.platform === 'ga4_event';
+    if (!event) rejected.push('An event name is required.');
+    else if (ga4 && !GA4_EVENT_NAME.test(event)) {
+      rejected.push(
+        `"${event}" is not a valid GA4 event name. Use a letter first, then letters, digits or ` +
+          'underscores, up to 40 characters. GA4 discards events it cannot parse, so the tag would ' +
+          'fire and report nothing.',
+      );
+    } else if (ga4 && GA4_RESERVED_PREFIX.test(event)) {
+      rejected.push(`"${event}" starts with a prefix GA4 reserves (ga_, google_, firebase_) and would be dropped.`);
+    } else if (event.length > MAX_NAME) rejected.push('That event name is too long.');
+    else {
+      next.eventName = event;
+      changed.push(`event name -> "${event}"`);
+    }
+  }
+
+  const triggerName = edit.triggerName?.trim();
+  if (triggerName !== undefined && triggerName !== row.trigger?.name) {
+    if (!triggerName) rejected.push('A trigger needs a name.');
+    else if (triggerName.length > MAX_NAME) rejected.push('That trigger name is too long.');
+    else {
+      next.trigger.name = triggerName;
+      changed.push(`trigger name -> "${triggerName}"`);
+    }
+  }
+
+  const trigger = next.trigger as unknown as Record<string, unknown>;
+  for (const c of edit.conditions ?? []) {
+    const field = EDITABLE_CONDITIONS[c.variable];
+    if (!field) {
+      rejected.push(`"${c.variable}" cannot be edited here.`);
+      continue;
+    }
+    // Only conditions the scan already put on this trigger. Adding one would mean the row fires on
+    // something no page was ever checked against, which is a suggestion the scan did not make.
+    if (!String(trigger[field.value] ?? '').trim()) {
+      rejected.push(`This trigger has no ${c.variable} condition to change.`);
+      continue;
+    }
+    if (c.operator !== undefined) {
+      if (!field.operators.includes(c.operator)) {
+        rejected.push(`"${c.operator}" is not an operator GTM offers for ${c.variable}.`);
+        continue;
+      }
+      if (c.operator !== trigger[field.operator]) {
+        trigger[field.operator] = c.operator;
+        changed.push(`${c.variable} operator -> ${OPERATOR_LABEL[c.operator] ?? c.operator}`);
+      }
+    }
+    if (c.value !== undefined) {
+      const value = c.value.trim();
+      if (value === String(trigger[field.value] ?? '').trim()) continue;
+      trigger[field.value] = value;
+      // Named as a removal, because that is what it does to the tag: a click trigger with its
+      // {{Click Element}} scope cleared fires on every click on the site, not on fewer of them.
+      changed.push(value ? `${c.variable} -> "${value}"` : `${c.variable} condition removed`);
+    }
+  }
+
+  if (changed.length) (next as unknown as Record<string, unknown>).edited = true;
+  return { row: next, changed, rejected };
 }
 
 /**
@@ -319,6 +545,29 @@ export class ScanStore {
       return null;
     }
     return found;
+  }
+
+  /**
+   * Change one row of a stored scan in place, so the create path sees the edit without being told.
+   *
+   * Written back into the store rather than carried on the create request. If the browser sent its
+   * edits at create time, the endpoint would be taking a tag payload from a browser by another
+   * route, and the whole reason this module holds the scan is that it does not do that. This way
+   * /v1/suggestions/create is unchanged: it still builds from the server's own copy.
+   *
+   * The scan's TTL is NOT extended. An edit is not a reason to keep a crawl of someone's site in
+   * memory longer, and a scan old enough to expire is old enough to be worth re-running anyway.
+   */
+  editRow(userId: string, scanId: string, rowId: string, edit: RowEdit): EditResult | null {
+    const scan = this.get(userId, scanId);
+    if (!scan) return null;
+    const index = scan.suggestions.findIndex((s) => s.id === rowId);
+    if (index < 0) return null;
+    const result = applyRowEdit(scan.suggestions[index], edit);
+    // Only on a real change. Rewriting the array for an edit that turned out to be a no-op would
+    // stamp the row "edited" for nothing.
+    if (result.changed.length) scan.suggestions[index] = result.row;
+    return result;
   }
 
   private purge(): void {
@@ -443,6 +692,30 @@ export function splitCreatable(list: SuggestedTagView[]): Creatable {
     }
   }
   return { supported, unsupported };
+}
+
+/**
+ * Conditions that will not survive the create, per row.
+ *
+ * Computed before anything is written and reported with the result, because the difference is not
+ * cosmetic: a click trigger that loses its scope fires on every click in the container, and a
+ * dataLayer-scoped form trigger that loses its scope fires for every form on the site. Both look
+ * like a successful create.
+ *
+ * These are the lookup-table and dataLayer conditions, which need a companion USER variable created
+ * alongside the trigger. The desktop app provisions those; the MCP's create tool enables built-in
+ * variables only, so pointing a trigger at one here would produce a trigger GTM accepts and never
+ * fires. Reported rather than half-built.
+ */
+export function droppedConditions(list: SuggestedTagView[]): Array<{ id: string; tagName: string; conditions: string[] }> {
+  const out: Array<{ id: string; tagName: string; conditions: string[] }> = [];
+  for (const s of list) {
+    const conditions = triggerConditions(s.trigger)
+      .filter((c) => !c.carried)
+      .map((c) => `${c.variable} ${c.operator} ${c.value}`);
+    if (conditions.length) out.push({ id: s.id, tagName: s.tagName, conditions });
+  }
+  return out;
 }
 
 /**

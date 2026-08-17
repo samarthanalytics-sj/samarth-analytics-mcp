@@ -37,6 +37,8 @@ import {
   createSelected,
   imageForRow,
   splitCreatable,
+  droppedConditions,
+  type RowEdit,
 } from './suggestions.js';
 import {
   findGtmContainer,
@@ -1154,6 +1156,74 @@ async function main(): Promise<void> {
   });
 
   /**
+   * Change one suggested row before it is created.
+   *
+   * Named fields only: the tag name, the event name, the trigger name, and the value or operator of
+   * a condition the scan already put on that trigger. Everything else in the request is refused and
+   * said so. This is not a relaxation of the rule the create path relies on - the edit is applied to
+   * the SERVER's copy of the scan, so /v1/suggestions/create still builds from what this process
+   * holds and still cannot be handed a tag payload by a browser.
+   *
+   * No write to GTM happens here. The row is only changed in memory, for the scan's remaining life.
+   */
+  app.patch('/v1/suggestions/:scanId/row/:rowId', async (req, res) => {
+    let user: AuthedUser;
+    try {
+      user = await authenticate(req.headers.authorization);
+    } catch (err) {
+      return sendAuthError(res, err);
+    }
+    // The picker's allowance, not the turn allowance. An edit is a cheap in-memory change and
+    // someone renaming ten rows before creating them is normal use, not abuse.
+    if (!limiter.allow(`edit:${user.id}`, cfg.limits.turnsPerMinutePerUser * 4)) {
+      res.setHeader('Retry-After', '60');
+      return res.status(429).json({ code: 'rate_limited', message: 'Too many edits. Try again shortly.' });
+    }
+
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const edit: RowEdit = {
+      ...(typeof body.tagName === 'string' ? { tagName: body.tagName } : {}),
+      ...(typeof body.eventName === 'string' ? { eventName: body.eventName } : {}),
+      ...(typeof body.triggerName === 'string' ? { triggerName: body.triggerName } : {}),
+      ...(Array.isArray(body.conditions)
+        ? {
+            conditions: (body.conditions as Record<string, unknown>[])
+              .filter((c) => c && typeof c.variable === 'string')
+              .map((c) => ({
+                variable: String(c.variable),
+                ...(typeof c.operator === 'string' ? { operator: c.operator } : {}),
+                ...(typeof c.value === 'string' ? { value: c.value } : {}),
+              })),
+          }
+        : {}),
+    };
+
+    const result = scanStore.editRow(user.id, req.params.scanId, req.params.rowId, edit);
+    if (!result) {
+      // One message for both cases on purpose. Whether the scan expired or the row id is wrong, the
+      // action is the same, and distinguishing them tells a caller which scan ids exist.
+      return res.status(404).json({
+        code: 'scan_expired',
+        message: 'That scan or row is no longer available. Run the scan again.',
+      });
+    }
+
+    // Logged with the same weight as a create. An edited row is the one row in the table that the
+    // site cannot be rescanned to verify, so what it used to say has to live somewhere.
+    if (result.changed.length) {
+      console.log(
+        `[suggestions] EDIT user=${userTag(user)} row=${req.params.rowId} ` +
+          `${forLog(result.changed.join('; '), 400)}`,
+      );
+    }
+    for (const reason of result.rejected) {
+      console.log(`[suggestions] edit refused user=${userTag(user)} row=${req.params.rowId}: ${forLog(reason, 200)}`);
+    }
+
+    res.json({ row: toRows([result.row])[0], changed: result.changed, rejected: result.rejected });
+  });
+
+  /**
    * Create the ticked suggestions as draft tags.
    *
    * The request carries a scan id and row ids, never a tool name or arguments. The payload is
@@ -1247,7 +1317,24 @@ async function main(): Promise<void> {
         for (const u of unsupported) {
           console.log(`[suggestions] not creatable here: ${u.id} (${u.platform})`);
         }
-        return { ...result, site: scan.site, ...(unsupported.length ? { unsupported } : {}) };
+
+        // Named per tag, before the counts are read as "all good". A trigger that lost its
+        // dataLayer or lookup-table scope was still created, and it fires far wider than the row
+        // said it would.
+        const dropped = droppedConditions(tags);
+        for (const d of dropped) {
+          console.log(
+            `[suggestions] conditions NOT carried on "${forLog(d.tagName, 120)}": ` +
+              `${forLog(d.conditions.join('; '), 300)}`,
+          );
+        }
+
+        return {
+          ...result,
+          site: scan.site,
+          ...(unsupported.length ? { unsupported } : {}),
+          ...(dropped.length ? { dropped } : {}),
+        };
       },
       () => {
         if (!ws.accountId || !ws.containerId || !ws.workspaceId) {
