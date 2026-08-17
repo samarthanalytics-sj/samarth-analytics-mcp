@@ -652,6 +652,147 @@ export function withMeasurementId(list: SuggestedTagView[], measurementId?: stri
   );
 }
 
+/* ── GA4 configuration: one Constant, one Google tag, every event tag pointing at it ────────── */
+
+/** The Constant that holds the Measurement ID. One name, so every tag references the same thing. */
+export const GA4_VARIABLE_NAME = 'GA4 Variable';
+/** The base Google tag's name. */
+export const GA4_CONFIG_TAG_NAME = 'GA4 Configuration';
+/** GTM's variable type code for a Constant. */
+const CONSTANT_TYPE = 'c';
+/** Tag types that ARE a GA4 base tag: the modern Google tag and the legacy GA4 Configuration. */
+const GA4_BASE_TYPES = new Set(['googtag', 'gaawc']);
+
+/** A real id is G-/GT-/AW- plus an alphanumeric suffix, and is not the all-X placeholder. */
+export function isRealMeasurementId(v: string): boolean {
+  const t = v.trim();
+  return /^(G|GT|AW)-[A-Z0-9]{4,}$/i.test(t) && !/^(G|GT|AW)-X+$/i.test(t);
+}
+
+/**
+ * Ids that are the right SHAPE but are obviously stand-ins. Allowed, but never silently.
+ *
+ * G-123456789 is the example everyone types when describing this setup. It builds a container that
+ * looks completely correct and reports to nothing, and the only moment anyone can be told is now.
+ */
+export function looksLikePlaceholderId(v: string): boolean {
+  const body = v.trim().replace(/^(G|GT|AW)-/i, '');
+  return /^(X{3,}|0{4,}|1234567890?|0123456789|123456789)$/i.test(body);
+}
+
+export interface Ga4ConfigPlan {
+  variableName: string;
+  /** What every GA4 tag will carry as its Measurement ID. */
+  reference: string;
+  /** A Constant of this name is not there yet and must be created. */
+  createVariable: boolean;
+  configTagName: string;
+  /** No GA4 base tag exists, so one must be created. */
+  createConfigTag: boolean;
+  /** The base tag already present, when there is one. Named so the result can say it was reused. */
+  existingConfigTag?: string;
+  /** Set when the setup must NOT run, with the sentence to show. Nothing is created. */
+  blocked?: string;
+  /** Set when it WILL run but something is worth saying out loud first. */
+  warning?: string;
+}
+
+/**
+ * Decide the GA4 configuration a container needs before its event tags are created.
+ *
+ * PURE: snapshot in, plan out. This is the setup a GTM implementer builds by hand every time - one
+ * Constant holding the Measurement ID, one Google tag referencing it, and every GA4 event tag
+ * referencing the same Constant instead of carrying its own copy of the id.
+ *
+ * Why it matters beyond tidiness: a container with the id hardcoded into forty tags takes forty
+ * edits to repoint at a different property, and the one tag somebody misses keeps reporting to the
+ * old one. It also removes the failure this page kept hitting, where a scanned tag carried a
+ * placeholder id and had nothing to resolve it from.
+ *
+ * Three refusals, each because proceeding would build something wrong:
+ *   - an id that is not a Measurement ID, so the Constant would hold nonsense
+ *   - a variable of that name that is NOT a Constant, so tags would bind to a dataLayer lookup or a
+ *     custom-JS value and misconfigure GA4 silently (the desktop's ga4VariablePlan guards this too)
+ *   - a container whose variable list could not be read, because "it is not there" and "I could not
+ *     look" are different, and only one of them is a reason to create
+ */
+export function planGa4Config(
+  snapshot: {
+    tags: Array<{ name: string; type?: string }>;
+    variables: Array<{ name: string; type?: string }>;
+    incomplete: string[];
+  },
+  measurementId: string,
+  names: { variableName?: string; configTagName?: string } = {},
+): Ga4ConfigPlan {
+  const variableName = names.variableName?.trim() || GA4_VARIABLE_NAME;
+  const configTagName = names.configTagName?.trim() || GA4_CONFIG_TAG_NAME;
+  const reference = `{{${variableName}}}`;
+  const base: Ga4ConfigPlan = {
+    variableName,
+    reference,
+    createVariable: false,
+    configTagName,
+    createConfigTag: false,
+  };
+
+  const id = measurementId.trim();
+  if (!isRealMeasurementId(id)) {
+    return {
+      ...base,
+      blocked:
+        `"${id}" is not a Measurement ID. Enter the real one from your GA4 data stream ` +
+        '(it starts with G-) in the Measurement ID field.',
+    };
+  }
+
+  // A list that did not come back is not an empty list. Creating on that basis is how you get a
+  // second "GA4 Variable", or a tag bound to a variable that turns out to be something else.
+  if (snapshot.incomplete.includes('variables') || snapshot.incomplete.includes('tags')) {
+    return {
+      ...base,
+      blocked:
+        "This workspace's existing tags and variables could not be read just now, so setting up the " +
+        'GA4 configuration would risk duplicating what is already there. Try again in a moment.',
+    };
+  }
+
+  const existingVar = snapshot.variables.find(
+    (v) => v.name.trim().toLowerCase() === variableName.toLowerCase(),
+  );
+  if (existingVar && existingVar.type !== CONSTANT_TYPE) {
+    return {
+      ...base,
+      blocked:
+        `A variable named "${variableName}" already exists in this workspace but is not a Constant ` +
+        `(type "${existingVar.type ?? 'unknown'}"). Rename it in GTM, or the GA4 tags would bind to ` +
+        'it and report to the wrong place.',
+    };
+  }
+
+  const existingConfig = snapshot.tags.find((t) => GA4_BASE_TYPES.has(String(t.type)));
+
+  return {
+    ...base,
+    createVariable: !existingVar,
+    createConfigTag: !existingConfig,
+    ...(existingConfig ? { existingConfigTag: existingConfig.name } : {}),
+    ...(looksLikePlaceholderId(id)
+      ? {
+          warning:
+            `"${id}" looks like a sample id rather than a real one. The setup will be built, and ` +
+            `every GA4 tag will report to nothing until you change "${variableName}" in GTM to your ` +
+            'real Measurement ID.',
+        }
+      : {}),
+  };
+}
+
+/** Point every GA4 event row at the Constant instead of its own copy of the id. */
+export function useGa4Variable(list: SuggestedTagView[], reference: string): SuggestedTagView[] {
+  return list.map((s) => (s.platform === 'ga4_event' ? { ...s, measurementId: reference } : s));
+}
+
 export type ToolExecute = (name: string, args: Record<string, unknown>) => Promise<string>;
 
 /**
@@ -783,6 +924,88 @@ export interface CreateResult {
   failed: number;
   /** Listener tags created for the rows that needed one, each with what happened. */
   listeners: Array<{ tagName: string; ok: boolean; existing?: boolean; error?: string }>;
+  /** What the GA4 configuration step did, when one ran. */
+  ga4Config?: Ga4ConfigOutcome;
+}
+
+export interface Ga4ConfigOutcome {
+  variableName: string;
+  configTagName: string;
+  /** What every created GA4 tag carries as its Measurement ID. */
+  reference: string;
+  variable: 'created' | 'reused' | 'failed';
+  configTag: 'created' | 'reused' | 'failed';
+  /** Named when the base tag was already there, so "reused" is checkable. */
+  existingConfigTag?: string;
+  error?: string;
+  warning?: string;
+}
+
+/**
+ * Stand up the GA4 configuration, then point the event tags at it.
+ *
+ * Order matters and is the same reason listeners go before their tags: the Constant must exist
+ * before the Google tag references it, and the Google tag should exist before the event tags that
+ * assume a configured property.
+ *
+ * A failure here does NOT silently fall back to hardcoding the id into every tag. That would be a
+ * different container from the one the user asked for, built without telling them.
+ */
+export async function setUpGa4Config(
+  execute: ToolExecute,
+  ids: { accountId: string; containerId: string; workspaceId: string },
+  plan: Ga4ConfigPlan,
+  measurementId: string,
+): Promise<Ga4ConfigOutcome> {
+  const out: Ga4ConfigOutcome = {
+    variableName: plan.variableName,
+    configTagName: plan.configTagName,
+    reference: plan.reference,
+    variable: plan.createVariable ? 'created' : 'reused',
+    configTag: plan.createConfigTag ? 'created' : 'reused',
+    ...(plan.existingConfigTag ? { existingConfigTag: plan.existingConfigTag } : {}),
+    ...(plan.warning ? { warning: plan.warning } : {}),
+  };
+
+  if (plan.createVariable) {
+    try {
+      await execute('create_gtm_variable_typed', {
+        ...ids,
+        name: plan.variableName,
+        kind: 'constant',
+        value: measurementId.trim(),
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      // A duplicate means it appeared between the snapshot and now, which is the outcome we wanted.
+      if (/duplicate name|already exists|duplicate entity/i.test(message)) out.variable = 'reused';
+      else {
+        out.variable = 'failed';
+        out.error = message;
+        return out;
+      }
+    }
+  }
+
+  if (plan.createConfigTag) {
+    try {
+      await execute('create_gtm_tracking_tag', {
+        ...ids,
+        platform: 'google_tag',
+        tagName: plan.configTagName,
+        tagId: plan.reference,
+        trigger: { name: 'All Pages', kind: 'pageview' },
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (/duplicate name|already exists|duplicate entity/i.test(message)) out.configTag = 'reused';
+      else {
+        out.configTag = 'failed';
+        out.error = message;
+      }
+    }
+  }
+  return out;
 }
 
 /**
@@ -800,8 +1023,10 @@ export interface CreateResult {
 export async function createSelected(
   rawExecute: ToolExecute,
   ids: { accountId: string; containerId: string; workspaceId: string },
-  tags: SuggestedTagView[],
+  requested: SuggestedTagView[],
   onProgress?: (done: number, total: number) => void,
+  /** The GA4 configuration to stand up first. Omitted means the id goes on each tag as before. */
+  ga4?: { plan: Ga4ConfigPlan; measurementId: string },
 ): Promise<CreateResult> {
   /**
    * Every guarded write in the MCP requires `confirm: true`, and nothing on this path was sending
@@ -817,6 +1042,37 @@ export async function createSelected(
    * still enforces GTM_MCP_ENABLE_WRITES on its own side.
    */
   const execute: ToolExecute = (name, args) => rawExecute(name, { ...args, confirm: true });
+
+  /**
+   * The GA4 configuration goes up FIRST, and its failure stops the GA4 tags.
+   *
+   * Falling back to hardcoding the id into each tag would quietly build a different container from
+   * the one that was asked for: forty copies of an id instead of one Constant, and no way to see
+   * that it happened except by opening the tags.
+   */
+  let ga4Config: Ga4ConfigOutcome | undefined;
+  let tags = requested;
+  if (ga4) {
+    ga4Config = await setUpGa4Config(execute, ids, ga4.plan, ga4.measurementId);
+    if (ga4Config.variable === 'failed' || ga4Config.configTag === 'failed') {
+      const why =
+        `The GA4 configuration could not be set up (${ga4Config.error ?? 'unknown error'}), so no GA4 ` +
+        'tag was created. Nothing here would have reported correctly without it.';
+      const skipped = requested.filter((t) => t.platform === 'ga4_event');
+      const rest = requested.filter((t) => t.platform !== 'ga4_event');
+      const result = rest.length
+        ? await createSelected(rawExecute, ids, rest, onProgress)
+        : { outcomes: [], created: 0, existing: 0, failed: 0, listeners: [] };
+      return {
+        ...result,
+        outcomes: [...result.outcomes, ...skipped.map((t) => ({ id: t.id, ok: false, error: why }))],
+        failed: result.failed + skipped.length,
+        ga4Config,
+      };
+    }
+    // Every GA4 tag now names the Constant rather than carrying its own copy of the id.
+    tags = useGa4Variable(requested, ga4.plan.reference);
+  }
 
   const listeners: CreateResult['listeners'] = [];
   for (const listener of listenerTagsFor(tags)) {
@@ -848,5 +1104,6 @@ export async function createSelected(
     existing: outcomes.filter((o) => !o.ok && o.existing).length,
     failed: outcomes.filter((o) => !o.ok && !o.existing).length,
     listeners,
+    ...(ga4Config ? { ga4Config } : {}),
   };
 }

@@ -32,6 +32,7 @@ import { jsonResult, textResult, errorResult } from '../utils/toolResponse.js';
 import { paginate } from '../utils/pagination.js';
 import {
   buildGa4EventTag,
+  buildGoogleTag,
   buildTrigger,
   buildVariable,
   triggerBuiltInVars,
@@ -207,7 +208,9 @@ export function registerTypedBuilderTools(server: McpServer, getClient: () => Gt
           .optional()
           .describe(
             'What KIND of tag to build. "ga4_event" (the default) builds a GA4 event tag from ' +
-              'measurementId + eventName. "custom_html" builds a Custom HTML tag from `html`, which is ' +
+              'measurementId + eventName. "google_tag" builds the BASE Google tag (googtag) from ' +
+              '`tagId`, the one that loads gtag.js and configures GA4 - a container needs exactly one, ' +
+              'firing on All Pages. "custom_html" builds a Custom HTML tag from `html`, which is ' +
               'how a dataLayer LISTENER is installed for forms GTM cannot see natively (an AJAX or ' +
               'cross-origin embed). Any OTHER value is REFUSED rather than quietly built as GA4: a Meta ' +
               'or Ads tag asked for here would otherwise come out as a GA4 tag pointing at that ' +
@@ -217,6 +220,19 @@ export function registerTypedBuilderTools(server: McpServer, getClient: () => Gt
           .string()
           .optional()
           .describe('For platform "custom_html": the complete tag body, a single self-contained <script>.'),
+        tagId: z
+          .string()
+          .optional()
+          .describe(
+            'For platform "google_tag": the id this base tag configures, e.g. "G-ABC123XYZ", or a ' +
+              '{{Variable}} holding it. Referencing a Constant is the recommended setup: one variable ' +
+              'holds the Measurement ID and every GA4 tag points at it, so changing containers or ' +
+              'properties is one edit rather than one per tag.',
+          ),
+        configSettings: z
+          .array(z.object({ name: z.string(), value: z.string() }))
+          .optional()
+          .describe('For platform "google_tag": config settings, e.g. [{"name":"send_page_view","value":"false"}].'),
         measurementId: z
           .string()
           .optional()
@@ -256,7 +272,7 @@ export function registerTypedBuilderTools(server: McpServer, getClient: () => Gt
     },
     async ({
       accountId, containerId, workspaceId,
-      tagName, platform, html, measurementId, eventName, eventParameters, trigger, builtInVariables, allowPlaceholderId, confirm,
+      tagName, platform, html, tagId, configSettings, measurementId, eventName, eventParameters, trigger, builtInVariables, allowPlaceholderId, confirm,
     }) => {
       try {
         const config = getGuardrailConfig();
@@ -272,9 +288,9 @@ export function registerTypedBuilderTools(server: McpServer, getClient: () => Gt
          * not, and now says so.
          */
         const kindOfTag = (platform ?? 'ga4_event').trim() || 'ga4_event';
-        if (kindOfTag !== 'ga4_event' && kindOfTag !== 'custom_html') {
+        if (kindOfTag !== 'ga4_event' && kindOfTag !== 'custom_html' && kindOfTag !== 'google_tag') {
           return textResult(
-            `Not creating "${tagName}": this tool builds "ga4_event" and "custom_html" tags, not ` +
+            `Not creating "${tagName}": this tool builds "ga4_event", "google_tag" and "custom_html" tags, not ` +
               `"${kindOfTag}". Building it as GA4 anyway would produce a tag pointing at another ` +
               "platform's id, which looks created and reports nowhere.",
           );
@@ -285,6 +301,12 @@ export function registerTypedBuilderTools(server: McpServer, getClient: () => Gt
         if (kindOfTag === 'ga4_event' && (!String(measurementId ?? '').trim() || !String(eventName ?? '').trim())) {
           return textResult(
             `Not creating "${tagName}": a GA4 event tag needs both measurementId and eventName.`,
+          );
+        }
+        if (kindOfTag === 'google_tag' && !String(tagId ?? '').trim()) {
+          return textResult(
+            `Not creating "${tagName}": platform "google_tag" needs \`tagId\` - the G-/AW-/GT- id it ` +
+              'configures, or a {{Variable}} holding one.',
           );
         }
 
@@ -313,8 +335,8 @@ export function registerTypedBuilderTools(server: McpServer, getClient: () => Gt
 
         if (dryRun) {
           return textResult(
-            `[DRY RUN] Would create ${platform === 'custom_html' ? 'Custom HTML' : 'GA4 event'} tag ` +
-              `"${tagName}" (${eventName ?? 'no event'}) on trigger ` +
+            `[DRY RUN] Would create ${kindOfTag === 'custom_html' ? 'Custom HTML' : kindOfTag === 'google_tag' ? 'Google' : 'GA4 event'} tag ` +
+              `"${tagName}" (${kindOfTag === 'google_tag' ? String(tagId) : (eventName ?? 'no event')}) on trigger ` +
               `"${trigger.name}" (${trigger.kind}) in workspace ${workspaceId}` +
               (builtIns.length ? `, enabling built-in variables: ${builtIns.join(', ')}` : ''),
           );
@@ -381,13 +403,20 @@ export function registerTypedBuilderTools(server: McpServer, getClient: () => Gt
                 ],
                 ...(firingTriggerId ? { firingTriggerId } : {}),
               } as GtmTagResource)
-            : buildGa4EventTag({
-                name: tagName,
-                measurementId: effectiveMeasurementId,
-                eventName: String(eventName),
-                eventParameters,
-                firingTriggerId,
-              });
+            : kindOfTag === 'google_tag'
+              ? buildGoogleTag({
+                  name: tagName,
+                  tagId: String(tagId),
+                  ...(configSettings?.length ? { configSettings } : {}),
+                  ...(firingTriggerId ? { firingTriggerId } : {}),
+                })
+              : buildGa4EventTag({
+                  name: tagName,
+                  measurementId: effectiveMeasurementId,
+                  eventName: String(eventName),
+                  eventParameters,
+                  firingTriggerId,
+                });
         const created = await client.accounts.containers.workspaces.tags.create({
           parent,
           requestBody: tag as tagmanager_v2.Schema$Tag,
