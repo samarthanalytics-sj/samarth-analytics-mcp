@@ -12,7 +12,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { createSuggestedTags } from '../../desktop/src/main/suggestions/create-suggested-tags.js';
+import { createSuggestedTags, parseCreateResult } from '../../desktop/src/main/suggestions/create-suggested-tags.js';
 import type { CreateTagOutcome, SuggestedTagView } from '../../desktop/src/shared/ipc';
 import type { ScanResult } from './scan-client.js';
 
@@ -756,6 +756,26 @@ export function listenerTrigger(fires: string): { name: string; kind: string } {
   return { name: 'All Pages', kind: 'pageview' };
 }
 
+/**
+ * The MCP's refusals are addressed to a chat model. Say the same thing to a person on a web page.
+ *
+ * "Ask the user for their real G- id" and "call again with allowPlaceholderId: true" are correct
+ * instructions to a model holding the conversation. On this page there is nobody to ask and no way
+ * to pass a flag; there is a Measurement ID field, and that is the whole answer.
+ *
+ * The FACT is not changed, only who it is spoken to. Anything unrecognised passes through word for
+ * word rather than being softened into something vaguer.
+ */
+export function forThisSurface(error: string): string {
+  if (/looks like a placeholder Measurement ID/i.test(error)) {
+    return (
+      'This workspace has no Google tag to read the Measurement ID from, so the tag would be created ' +
+      'and report to nothing. Put your G- id in the Measurement ID field above and create again.'
+    );
+  }
+  return error;
+}
+
 export interface CreateResult {
   outcomes: CreateTagOutcome[];
   created: number;
@@ -808,7 +828,7 @@ export async function createSelected(
         html: listener.html,
         trigger: listenerTrigger(listener.fires),
       });
-      const out = JSON.parse(raw) as { alreadyExists?: boolean };
+      const out = parseCreateResult(raw);
       listeners.push({ tagName: listener.tagName, ok: out?.alreadyExists !== true, existing: out?.alreadyExists === true });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -820,7 +840,8 @@ export async function createSelected(
     }
   }
 
-  const outcomes = await createSuggestedTags(execute, ids, tags, onProgress ? { onProgress } : {});
+  const raw = await createSuggestedTags(execute, ids, tags, onProgress ? { onProgress } : {});
+  const outcomes = raw.map((o) => (o.error ? { ...o, error: forThisSurface(o.error) } : o));
   return {
     outcomes,
     created: outcomes.filter((o) => o.ok).length,
