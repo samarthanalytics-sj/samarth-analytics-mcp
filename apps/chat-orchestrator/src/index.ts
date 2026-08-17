@@ -38,8 +38,10 @@ import {
   imageForRow,
   splitCreatable,
   droppedConditions,
+  planGa4Config,
   type RowEdit,
 } from './suggestions.js';
+import { fetchWorkspaceSnapshot } from './workspace-snapshot.js';
 import {
   findGtmContainer,
   listGa4Properties,
@@ -1348,8 +1350,33 @@ async function main(): Promise<void> {
           return text;
         };
 
+        /**
+         * The GA4 configuration, when a Measurement ID was given.
+         *
+         * Gated on the field rather than always on. Without an id there is nothing to put in the
+         * Constant, and the tool's existing behaviour (read the id off the container's Google tag)
+         * is the right answer for a container that already has one.
+         *
+         * The snapshot is what makes this safe: it says whether the Constant and a base tag are
+         * already there, so a second run adds nothing, and it says when a list could not be read,
+         * so "absent" is never inferred from "unknown".
+         */
+        const givenId = String(req.body?.measurementId ?? '').trim();
+        let ga4: { plan: ReturnType<typeof planGa4Config>; measurementId: string } | undefined;
+        if (givenId) {
+          const snapshot = await fetchWorkspaceSnapshot(mcp, ws);
+          const plan = planGa4Config(snapshot, givenId);
+          if (plan.blocked) throw new ResourceError(plan.blocked, 'ga4_config_blocked');
+          ga4 = { plan, measurementId: givenId };
+          console.log(
+            `[suggestions] ga4 config user=${userTag(user)} variable=${plan.createVariable ? 'create' : 'reuse'} ` +
+              `configTag=${plan.createConfigTag ? 'create' : `reuse "${forLog(String(plan.existingConfigTag), 80)}"`} ` +
+              `reference=${plan.reference}${plan.warning ? ' WARNING' : ''}`,
+          );
+        }
+
         const createStartedAt = Date.now();
-        const result = await createSelected(execute, ws, tags);
+        const result = await createSelected(execute, ws, tags, undefined, ga4);
 
         console.log(
           `[suggestions] INJECT user=${userTag(user)} site=${forLog(scan.site, 120)} ` +
@@ -1375,6 +1402,14 @@ async function main(): Promise<void> {
           } else {
             console.error(`[suggestions] FAILED "${name}": ${forLog(String(o.error ?? 'unknown error'))}`);
           }
+        }
+        if (result.ga4Config) {
+          const g = result.ga4Config;
+          console.log(
+            `[suggestions] ga4 config result variable=${g.variable} configTag=${g.configTag} ` +
+              `reference=${g.reference}${g.error ? ` error=${forLog(g.error, 200)}` : ''}`,
+          );
+          if (g.warning) console.log(`[suggestions] ga4 config WARNING: ${forLog(g.warning, 240)}`);
         }
         for (const l of result.listeners) {
           if (l.ok) console.log(`[suggestions] listener created "${forLog(l.tagName, 120)}"`);

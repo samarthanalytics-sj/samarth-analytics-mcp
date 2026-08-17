@@ -139,6 +139,44 @@ export function isGa4EcommerceEvent(event: string): boolean {
 
 
 
+export interface GoogleTagInput {
+  name: string;
+  /** G-XXXX / AW-XXXX / GT-XXXX, or a {{Variable}} reference holding one. */
+  tagId: string;
+  /** Optional config settings (key/value), e.g. send_page_view=false. */
+  configSettings?: Array<{ name: string; value: string }>;
+  firingTriggerId?: string[];
+}
+
+/**
+ * The "Google tag" (googtag): the modern base tag that loads gtag.js and configures GA4 or Ads.
+ * Config settings use configSettingsTable with parameter/parameterValue maps.
+ *
+ * Moved here from the desktop's builders, which is where this file's own header says pure builders
+ * belong ("so the website chat can use the SAME code"). The website needs it to stand up a GA4
+ * configuration, and a second copy of a resource shape is how the two surfaces drift into creating
+ * subtly different tags from the same request.
+ */
+export function buildGoogleTag(o: GoogleTagInput): GtmTagResource {
+  const parameter: Param[] = [tpl('tagId', o.tagId)];
+  if (o.configSettings?.length) {
+    parameter.push({
+      type: 'list',
+      key: 'configSettingsTable',
+      list: o.configSettings.map((p) => ({
+        type: 'map',
+        map: [tpl('parameter', p.name), tpl('parameterValue', p.value)],
+      })),
+    });
+  }
+  return {
+    name: sanitizeName(o.name),
+    type: 'googtag',
+    parameter,
+    ...(o.firingTriggerId ? { firingTriggerId: o.firingTriggerId } : {}),
+  };
+}
+
 export function buildGa4EventTag(o: Ga4EventInput): GtmTagResource {
   // GTM requires an (empty) measurementId tagReference plus measurementIdOverride
   // holding the actual G-XXXX / {{variable}}. Verified against a reference GTM

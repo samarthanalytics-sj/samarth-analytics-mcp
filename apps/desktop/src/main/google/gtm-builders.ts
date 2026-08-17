@@ -24,6 +24,8 @@ import {
   GA4_ECOMMERCE_EVENTS,
   isGa4EcommerceEvent,
   buildGa4EventTag,
+  buildGoogleTag,
+  type GoogleTagInput,
   FILTER_OPS,
   OP_TO_CONDITION,
   condition,
@@ -59,6 +61,8 @@ export {
   GA4_ECOMMERCE_EVENTS,
   isGa4EcommerceEvent,
   buildGa4EventTag,
+  buildGoogleTag,
+  type GoogleTagInput,
   FILTER_OPS,
   OP_TO_CONDITION,
   condition,
@@ -123,30 +127,9 @@ export function buildEnvironmentSnippet(
   return { head, body };
 }
 
-export interface GoogleTagInput {
-  name: string;
-  tagId: string; // G-XXXX / AW-XXXX / GT-XXXX (or {{Variable}})
-  /** Optional config settings (key/value), e.g. send_page_view=false. */
-  configSettings?: Array<{ name: string; value: string }>;
-  firingTriggerId?: string[];
-}
-// The "Google tag" (googtag) — the modern base tag that loads gtag.js and
-// configures GA4/Ads. 4th-most-common tag type in the corpus (826). Config
-// settings use configSettingsTable with parameter/parameterValue maps.
-export function buildGoogleTag(o: GoogleTagInput): GtmTagResource {
-  const parameter: Param[] = [tpl('tagId', o.tagId)];
-  if (o.configSettings?.length) {
-    parameter.push({
-      type: 'list',
-      key: 'configSettingsTable',
-      list: o.configSettings.map((p) => ({
-        type: 'map',
-        map: [tpl('parameter', p.name), tpl('parameterValue', p.value)],
-      })),
-    });
-  }
-  return { name: sanitizeName(o.name), type: 'googtag', parameter, ...(o.firingTriggerId ? { firingTriggerId: o.firingTriggerId } : {}) };
-}
+// GoogleTagInput / buildGoogleTag moved to src/shared/gtm-builders.ts (imported above and
+// re-exported below) so the MCP can build the same tag. The website needs one to stand up a GA4
+// configuration, and a second copy of the resource shape is how the two surfaces drift.
 
 /** Upsert a Google-tag config setting (e.g. server_container_url for server-side tagging)
  *  in the tag's configSettingsTable, preserving every other setting. Returns a NEW
