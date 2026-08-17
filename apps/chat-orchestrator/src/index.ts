@@ -1014,6 +1014,63 @@ async function main(): Promise<void> {
    * No MCP child of the user's is involved: the scan reads public pages and touches nothing in their
    * account, so it authenticates the caller and then uses the shared, credential-free scanner.
    */
+  /**
+   * List a site's pages so the user can choose what to scan.
+   *
+   * A separate step from the scan on purpose. The scan opens a real browser per page and the budget
+   * is 25; which 25 used to be the crawler's guess, and on a content site that guess spends the whole
+   * budget on posts before reaching /contact. This costs a few HTTP GETs and replaces the guess with
+   * a choice.
+   */
+  app.post('/v1/suggestions/discover', async (req, res) => {
+    let user: AuthedUser;
+    try {
+      user = await authenticate(req.headers.authorization);
+    } catch (err) {
+      return sendAuthError(res, err);
+    }
+    // Cheaper than a scan and expected to run before every one of them, so it gets the looser
+    // allowance rather than the scan's.
+    if (!limiter.allow(`discover:${user.id}`, cfg.limits.turnsPerMinutePerUser * 2)) {
+      res.setHeader('Retry-After', '60');
+      return res.status(429).json({ code: 'rate_limited', message: 'Too many lookups. Try again shortly.' });
+    }
+    const url = String(req.body?.url ?? '').trim();
+    if (!url) return res.status(400).json({ code: 'bad_request', message: 'A site URL is required.' });
+
+    const sitemaps = Array.isArray(req.body?.sitemaps)
+      ? (req.body.sitemaps as unknown[]).map(String).map((s) => s.trim()).filter(Boolean).slice(0, 20)
+      : [];
+
+    const startedAt = Date.now();
+    try {
+      const result = await scanner.discover(url, {
+        ...(sitemaps.length ? { sitemaps } : {}),
+        ...(req.body?.crawlOnly === true ? { crawlOnly: true } : {}),
+      });
+      console.log(
+        `[scan] DISCOVER user=${userTag(user)} url=${forLog(url, 120)} ` +
+          `pages=${result.pages.length} total=${result.total} sitemap=${result.sitemapStatus} ` +
+          `sitemaps=${result.sitemapsRead.length} viaCrawl=${result.viaCrawl} ` +
+          `given=${sitemaps.length} rejected=${result.rejected.length} in ${Date.now() - startedAt}ms`,
+      );
+      // Each sitemap that failed, by name. "Only 12 pages" is almost always one of these, and the
+      // count alone cannot say which file did not answer.
+      for (const s of result.sitemapsRead.filter((r) => !r.ok)) {
+        console.log(`[scan] sitemap unread: ${forLog(s.url, 160)} - ${forLog(String(s.error), 80)}`);
+      }
+      res.json(result);
+    } catch (err) {
+      const code = err instanceof ScanError ? err.code : 'discover_failed';
+      const message = err instanceof Error ? err.message : 'Listing the pages failed.';
+      console.error(
+        `[scan] DISCOVER FAILED user=${userTag(user)} url=${forLog(url, 120)} ` +
+          `after ${Date.now() - startedAt}ms code=${code}: ${forLog(message)}`,
+      );
+      res.status(502).json({ code, message });
+    }
+  });
+
   app.post('/v1/suggestions/scan', async (req, res) => {
     let user: AuthedUser;
     try {
@@ -1030,6 +1087,12 @@ async function main(): Promise<void> {
     const url = String(req.body?.url ?? '').trim();
     if (!url) return res.status(400).json({ code: 'bad_request', message: 'A site URL is required.' });
 
+    // Chosen pages, capped here as well as in the scanner. The scanner reports what it cut, but a
+    // request carrying ten thousand URLs should not travel that far to be trimmed.
+    const chosenPages = Array.isArray(req.body?.pages)
+      ? (req.body.pages as unknown[]).map(String).map((p) => p.trim()).filter(Boolean).slice(0, MAX_SCAN_PAGES * 4)
+      : [];
+
     const startedAt = Date.now();
     try {
       const platforms = validPlatforms(req.body?.platforms);
@@ -1040,6 +1103,7 @@ async function main(): Promise<void> {
         // This caller can display an image, which is the whole condition for asking for one.
         captureImages: req.body?.captureImages !== false,
         ...(req.body?.skipBlog === true ? { skipBlog: true } : {}),
+        ...(chosenPages.length ? { pages: chosenPages } : {}),
       });
       const scan = scanStore.put(user.id, result);
       // The whole shape of the scan on one line: who ran it, what was asked for, what was read, and
@@ -1049,6 +1113,7 @@ async function main(): Promise<void> {
       console.log(
         `[scan] OK user=${userTag(user)} url=${forLog(url, 120)} ` +
           `platforms=${platforms.length ? platforms.join('+') : 'ga4'} ` +
+          `mode=${chosenPages.length ? `chosen(${chosenPages.length})` : 'crawl'} ` +
           `budget=${Number(req.body?.maxPages) || 'default'} scanned=${pages.length} ` +
           `skipped=${result.notScanned?.length ?? 0} excluded=${result.excluded ?? 0} ` +
           `suggestions=${scan.suggestions.length} images=${scan.images.size} ` +
