@@ -14,7 +14,15 @@ import { CMP_VENDORS, ACCEPT_TEXT_RE, REJECT_TEXT_RE } from '../agent/cmp.js';
 import { analyzeForms, classifyFieldPii, type RawForm, type RawFormField } from '../agent/forms.js';
 import { buildFillPlan, classifyFieldRole, selectorFor, localeById, US_LOCALE } from '../agent/form-fill.js';
 import { sameSite, normalizeUrl, urlPriority } from '../agent/crawler.js';
-import { buildExclude, attachRects } from '../agent/tag-suggest/scan.js';
+import { buildExclude, attachRects, resolvePageList } from '../agent/tag-suggest/scan.js';
+import {
+  parseSitemapLocs,
+  extractLinks,
+  sitemapsInRobots,
+  prioritize,
+  pathOf,
+} from '../agent/tag-suggest/discover.js';
+import { isBlogLike } from '../agent/tag-suggest/blog-paths.js';
 import type { PageScan } from '../agent/tag-suggest/collect.js';
 import { extractConsentEvents, extractEventNames, type ScenarioCapture } from '../agent/capture.js';
 import {
@@ -719,6 +727,117 @@ check('embed: HubSpot embed surfaces beside an unrelated search form', buildSugg
     [page({ elements: [{ page: '/contact', kind: 'email', text: 'hi', href: 'mailto:a@b.com' }] as never })],
   );
   check('rect: an unmeasured element yields no rectangle', noRect[0].rect === undefined);
+}
+
+// Page discovery: reading a site's own list of pages, and scanning only the chosen ones.
+{
+  const SITEMAP = `<?xml version="1.0"?><urlset>
+    <url><loc>https://example.com/</loc></url>
+    <url><loc>https://example.com/contact</loc></url>
+    <url><loc> https://example.com/pricing </loc></url>
+  </urlset>`;
+  const INDEX = `<?xml version="1.0"?><sitemapindex>
+    <sitemap><loc>https://example.com/sitemap-pages.xml</loc></sitemap>
+    <sitemap><loc>https://evil.test/sitemap.xml</loc></sitemap>
+  </sitemapindex>`;
+
+  const flat = parseSitemapLocs(SITEMAP);
+  check('sitemap: urls are read and trimmed', flat.locs.length === 3 && flat.locs[2] === 'https://example.com/pricing');
+  check('sitemap: a urlset is not an index', flat.isIndex === false);
+
+  const index = parseSitemapLocs(INDEX);
+  check('sitemap: an index is recognised as one', index.isIndex === true && index.locs.length === 2);
+  // The follow is same-site filtered in collectSitemap; the parser reports what it saw.
+  check('sitemap: an off-site child is still parsed, to be refused later', index.locs[1].includes('evil.test'));
+
+  check('sitemap: an empty body yields nothing rather than throwing', parseSitemapLocs('').locs.length === 0);
+
+  const robots = sitemapsInRobots(
+    'User-agent: *\nDisallow: /admin\nSitemap: https://example.com/sm1.xml\n sitemap:https://example.com/sm2.xml\n',
+  );
+  check('robots: every Sitemap line is read, case and spacing insensitive', robots.length === 2);
+  check('robots: a Disallow line is not mistaken for a sitemap', !robots.some((r) => r.includes('admin')));
+
+  const links = extractLinks(
+    '<a href="/contact">c</a><a href="https://example.com/pricing">p</a><a href="https://other.test/x">o</a><a href="/logo.png">i</a>',
+    'https://example.com/',
+    'https://example.com/',
+  );
+  check('links: same-site hrefs are kept, absolute and relative', links.length === 2);
+  check('links: an off-site link is dropped', !links.some((l) => l.includes('other.test')));
+  check('links: an asset is dropped', !links.some((l) => l.includes('logo.png')));
+
+  const ordered = prioritize([
+    'https://example.com/blog/a',
+    'https://example.com/about',
+    'https://example.com/contact',
+  ]);
+  check('order: a form-likely page leads', ordered[0].endsWith('/contact'));
+  check('order: everything else keeps its original order', ordered[1].endsWith('/blog/a') && ordered[2].endsWith('/about'));
+
+  // The entry page scores zero on the form heuristic, so without pinning it sinks below every
+  // /services page. On a real 226-page site it landed past the 25 that get pre-ticked, which would
+  // have dropped the footer email and phone links the homepage is scanned for.
+  const withEntry = prioritize(
+    ['https://example.com/services', 'https://example.com/', 'https://example.com/contact'],
+    'https://example.com/',
+  );
+  check('order: the entry page is pinned first', withEntry[0] === 'https://example.com/');
+  check('order: pinning does not duplicate it', withEntry.length === 3);
+  check('order: form-likely pages still lead the rest', withEntry[1].endsWith('/services') || withEntry[1].endsWith('/contact'));
+  check(
+    'order: an entry not in the list is not invented',
+    prioritize(['https://example.com/a'], 'https://example.com/').length === 1,
+  );
+
+  check('path: the root reads as "/"', pathOf('https://example.com/') === '/');
+  check('path: a trailing slash is dropped', pathOf('https://example.com/contact/') === '/contact');
+
+  // resolvePageList is the check that stops the scanner being a general URL fetcher.
+  const START = 'https://example.com/';
+  const list = resolvePageList(
+    START,
+    ['/contact', 'https://example.com/pricing', 'https://other.test/steal', 'mailto:a@b.com', '/contact'],
+    25,
+  );
+  check('pages: a relative and an absolute same-site page are both accepted', list.targets.length === 2);
+  check('pages: the order given is kept', list.targets[0].url.endsWith('/contact'));
+  check('pages: a duplicate is collapsed silently', !list.rejected.some((r) => r.url.endsWith('/contact')));
+  check(
+    'pages: an off-site URL is refused and SAID so',
+    list.rejected.some((r) => r.url.includes('other.test') && /same site/i.test(r.reason)),
+  );
+  check('pages: a non-page URL is refused', list.rejected.some((r) => r.url.startsWith('mailto:')));
+
+  const overBudget = resolvePageList(START, ['/a', '/b', '/c'], 2);
+  check('pages: the budget is applied', overBudget.targets.length === 2);
+  check(
+    'pages: what the budget cut is named rather than silently trimmed',
+    overBudget.rejected.length === 1 && /budget/i.test(overBudget.rejected[0].reason),
+  );
+
+  const privateHost = resolvePageList('http://localhost/', ['http://localhost/admin'], 25);
+  check('pages: the URL guard still applies to a chosen page', privateHost.targets.length === 0);
+
+  check('pages: an empty entry is ignored, not reported as an error', resolvePageList(START, ['', '  '], 25).rejected.length === 0);
+
+  // The blog pattern is shared between the crawl's exclude and the page list's marker. One pattern,
+  // or the "skip blogs" button hides a different set than the crawl would have.
+  check('blog: a post path is editorial', isBlogLike('https://example.com/blog/why-tags'));
+  check('blog: a dated path is editorial', isBlogLike('https://example.com/2026/08/launch'));
+  check('blog: a category path is editorial', isBlogLike('https://example.com/category/seo'));
+  check('blog: a contact page is not', !isBlogLike('https://example.com/contact'));
+  check(
+    'blog: a query string cannot smuggle the word in',
+    !isBlogLike('https://example.com/pricing?ref=blog'),
+  );
+  const exclude = buildExclude({ skipBlog: true });
+  check(
+    'blog: the crawl filter and the list marker agree',
+    ['https://example.com/blog/a', 'https://example.com/contact', 'https://example.com/2026/01/x'].every(
+      (u) => Boolean(exclude?.(u)) === isBlogLike(u),
+    ),
+  );
 }
 
 console.log(`web-audit tests: ${passed} passed, ${failed} failed`);

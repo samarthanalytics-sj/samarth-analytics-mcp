@@ -18,7 +18,7 @@
 // glue, mirroring compliance.ts (crawl, then re-open a ranked page subset).
 
 import { loadPlaywright, PlaywrightMissingError, openInstrumentedPage } from '../browser.js';
-import { crawlSite } from '../crawler.js';
+import { crawlSite, normalizeUrl, sameSite, type CrawledPage } from '../crawler.js';
 import { scanForms } from '../forms.js';
 import { loadConfig, clampOpt } from '../../utils/config.js';
 import { urlAllowed } from '../../utils/urlGuard.js';
@@ -30,6 +30,7 @@ import {
   type PageScanRaw,
 } from './collect.js';
 import { buildSuggestions } from './suggest.js';
+import { BLOG_RE } from './blog-paths.js';
 import { detectExistingTracking, type ExistingTracking } from './existing-tracking.js';
 import type { SuggestedTag, FormPurpose, SuggestPlatform } from './types.js';
 
@@ -320,19 +321,81 @@ export interface TagSuggestOptions {
   skipBlog?: boolean;
   /** Extra path fragments to skip, matched case-insensitively against the URL. */
   skipPatterns?: string[];
+  /**
+   * Scan exactly these pages, and do not crawl.
+   *
+   * The crawl picks pages by its own ranking, which is a guess: on a content site the budget goes to
+   * whatever it reached first, and the pages worth tagging can be the ones it never opened. Given a
+   * list, the caller has already chosen (normally from discoverSitePages), so crawling again to
+   * re-derive a worse answer would be pure cost.
+   *
+   * Every entry must be same-site with the start URL and pass the URL guard. Anything else is
+   * dropped and reported, because a scanner that fetches whatever URL it is handed is a different
+   * and much less safe tool than this one.
+   */
+  pages?: string[];
+}
+
+export interface PageListResult {
+  /** Pages to open, in the order the caller gave them, capped at the scan budget. */
+  targets: Array<{ url: string }>;
+  /** Pages that were named and will not be scanned, each with the reason to show. */
+  rejected: NotScanned[];
 }
 
 /**
- * Paths that are almost always editorial rather than something to tag.
+ * Turn a caller-supplied page list into scan targets.
  *
- * Date segments are included because "/2026/08/" is the most reliable blog marker there is: a site
- * can call its section /insights or /resources, but a dated path is a post.
+ * PURE, and separate from the scan for exactly that reason: this is the check that stops the
+ * scanner from being a general-purpose URL fetcher, and it should be provable without a browser.
  *
- * Matched on the PATH only, so a query string cannot smuggle one of these words in and knock out a
- * page the user needs.
+ * Three refusals, all reported rather than silently dropped:
+ *   - not a URL this can open (a mailto:, a fragment, an asset)
+ *   - not on the same site as the URL being scanned
+ *   - blocked by the URL guard (a private address, a metadata endpoint)
+ *
+ * The order given is kept. The caller ticked these in a list they were looking at, and the pages
+ * beyond the budget are the ones at the bottom of that list, which is the only cut that matches
+ * what they saw.
  */
-const BLOG_RE =
-  /(^|\/)(blog|blogs|news|newsroom|article|articles|post|posts|story|stories|press|category|categories|tag|tags|author|authors|archive|archives)(\/|$)|\/(19|20)\d{2}\/\d{1,2}(\/|$)/i;
+export function resolvePageList(
+  startUrl: string,
+  pages: string[],
+  cap: number,
+  allowlist: string[] = [],
+): PageListResult {
+  const targets: Array<{ url: string }> = [];
+  const rejected: NotScanned[] = [];
+  const seen = new Set<string>();
+
+  for (const raw of pages) {
+    const trimmed = String(raw ?? '').trim();
+    if (!trimmed) continue;
+    const normalized = normalizeUrl(trimmed, startUrl);
+    if (!normalized) {
+      rejected.push({ url: trimmed, reason: 'not a page URL this can open' });
+      continue;
+    }
+    if (!sameSite(normalized, startUrl)) {
+      rejected.push({ url: trimmed, reason: 'not on the same site as the URL being scanned' });
+      continue;
+    }
+    const verdict = urlAllowed(normalized, allowlist);
+    if (!verdict.ok) {
+      rejected.push({ url: trimmed, reason: verdict.reason });
+      continue;
+    }
+    if (seen.has(normalized)) continue;
+    seen.add(normalized);
+    if (targets.length >= cap) {
+      // Named, not silently trimmed. "I ticked 40 and got 25" is only answerable if the 15 say so.
+      rejected.push({ url: normalized, reason: `over the ${cap}-page scan budget` });
+      continue;
+    }
+    targets.push({ url: normalized });
+  }
+  return { targets, rejected };
+}
 
 /** Build the crawl's exclude predicate. Returns undefined when nothing is being excluded, so the
  *  crawler keeps its original behaviour rather than calling a filter that always says no. */
@@ -396,16 +459,30 @@ export async function scanSiteForTagSuggestions(
   }
 
   const collectFailures: NotScanned[] = [];
+  // Chosen pages skip the crawl entirely. Resolved BEFORE the browser launches so a list that is
+  // entirely off-site fails in milliseconds instead of after a Chromium start.
+  const chosen = options.pages?.length
+    ? resolvePageList(startUrl, options.pages, scanPages, config.allowlist)
+    : null;
+  if (chosen && chosen.targets.length === 0) {
+    throw new Error(
+      `none of the ${options.pages?.length ?? 0} page(s) given could be scanned: ` +
+        `${chosen.rejected.map((r) => `${r.url} (${r.reason})`).join('; ')}`,
+    );
+  }
+
   const browser = await pw.chromium.launch({ headless: config.headless });
   try {
     const exclude = buildExclude(options);
-    const crawl = await crawlSite(browser, startUrl, {
-      maxPages,
-      maxDepth,
-      navTimeoutMs: config.navTimeoutMs,
-      allowlist: config.allowlist,
-      ...(exclude ? { exclude } : {}),
-    });
+    const crawl = chosen
+      ? { startUrl, pages: [] as CrawledPage[], skipped: [] as NotScanned[], discovered: [] as string[] }
+      : await crawlSite(browser, startUrl, {
+          maxPages,
+          maxDepth,
+          navTimeoutMs: config.navTimeoutMs,
+          allowlist: config.allowlist,
+          ...(exclude ? { exclude } : {}),
+        });
     try {
       siteHost = new URL(crawl.startUrl).hostname;
     } catch {
@@ -414,17 +491,21 @@ export async function scanSiteForTagSuggestions(
 
     // Always scan the entry page (footer mailto/tel/CTAs live there), then the
     // most form-heavy pages first so a small scan budget still hits the rich ones.
+    //
+    // Neither applies to a chosen list: the caller already decided which pages and in what order,
+    // and re-ranking their choice would quietly scan a different set than the one they ticked.
     const okPages = crawl.pages.filter((p) => !p.note && p.httpStatus !== null && p.httpStatus < 400);
     const ranked = [...okPages].sort((a, b) => b.formsCount - a.formsCount || a.depth - b.depth);
     const ordered = okPages[0] ? [okPages[0], ...ranked] : ranked;
     const seenUrls = new Set<string>();
-    const targets: typeof okPages = [];
+    const crawled: typeof okPages = [];
     for (const p of ordered) {
       if (seenUrls.has(p.url)) continue;
       seenUrls.add(p.url);
-      targets.push(p);
-      if (targets.length >= scanPages) break;
+      crawled.push(p);
+      if (crawled.length >= scanPages) break;
     }
+    const targets: Array<{ url: string }> = chosen ? chosen.targets : crawled;
 
     const pageScans: PageScan[] = [];
     const pageImages: PageImage[] = [];
@@ -485,13 +566,22 @@ export async function scanSiteForTagSuggestions(
     }
 
     const scannedTargetUrls = new Set(targets.map((t) => t.url));
-    const notScanned = accountNotScanned(crawl.pages, crawl.skipped, scannedTargetUrls, collectFailures);
+    const notScanned = accountNotScanned(
+      crawl.pages,
+      // A page the caller named and this refused belongs in the same list as one the crawl skipped:
+      // it is a page that was expected in the result and is not there.
+      [...crawl.skipped, ...(chosen?.rejected ?? [])],
+      scannedTargetUrls,
+      collectFailures,
+    );
 
     return assembleTagReport({
       site: crawl.startUrl || startUrl,
       siteHost,
       scannedAt: new Date().toISOString(),
-      pagesCrawled: crawl.pages.length,
+      // With a chosen list there is no crawl, so this is the number of pages asked for rather than
+      // zero. Reporting zero would make a working scan look like it opened nothing.
+      pagesCrawled: chosen ? targets.length : crawl.pages.length,
       pageScans,
       notScanned,
       notes: [CREATE_NOTE],

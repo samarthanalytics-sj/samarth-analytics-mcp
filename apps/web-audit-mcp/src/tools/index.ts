@@ -263,17 +263,70 @@ export function registerAllTools(server: McpServer): void {
           .array(z.string())
           .optional()
           .describe('Extra URL path fragments to skip, matched case-insensitively (e.g. ["/careers", "/legal"]).'),
+        pages: z
+          .array(z.string())
+          .optional()
+          .describe(
+            'Scan EXACTLY these pages and do not crawl. Normally the output of site_pages_discover ' +
+              'after a person has chosen from it. Every entry must be same-site with `url` and pass the ' +
+              'URL guard; anything else is dropped and reported in `notScanned` rather than fetched. ' +
+              'When set, maxPages/maxDepth/skipBlog/skipPatterns do nothing, because there is no crawl ' +
+              'for them to shape.',
+          ),
       }),
     },
-    async ({ url, maxPages, maxDepth, scanPages, debug, platforms, captureImages, skipBlog, skipPatterns }) => {
+    async ({ url, maxPages, maxDepth, scanPages, debug, platforms, captureImages, skipBlog, skipPatterns, pages }) => {
       const rejected = admit(url);
       if (rejected) return rejected;
       try {
         const { scanSiteForTagSuggestions } = await import('../agent/tag-suggest/scan.js');
-        const report = await scanSiteForTagSuggestions(url, { maxPages, maxDepth, scanPages, debug, platforms, captureImages, skipBlog, skipPatterns });
+        const report = await scanSiteForTagSuggestions(url, { maxPages, maxDepth, scanPages, debug, platforms, captureImages, skipBlog, skipPatterns, pages });
         return jsonResult(report);
       } catch (err) {
         return errorResult('gtm_tag_suggestions', err);
+      }
+    },
+  );
+
+  // ── site_pages_discover ───────────────────────────────────────────────────
+  server.registerTool(
+    'site_pages_discover',
+    {
+      description:
+        'List a site\'s pages WITHOUT opening a browser, so a person (or you) can choose what to deep-scan ' +
+        'before paying for it. Reads the sitemap first (robots.txt, /sitemap.xml, /sitemap_index.xml, and ' +
+        'nested sitemap indexes), falling back to a fast link-crawl over server-rendered <a href> when no ' +
+        'sitemap answers. Same-site throughout: a sitemap entry or sub-sitemap pointing at another host is ' +
+        'dropped. Cheap enough to run before every scan: a few HTTP GETs against public URLs, no Playwright. ' +
+        'Pair with gtm_tag_suggestions `pages` to scan exactly the chosen subset. ' +
+        'READ `sitemapStatus` BEFORE SAYING ANYTHING ABOUT A SITEMAP: "none" means the site genuinely ' +
+        'published nothing, "unreachable" means it refused or timed out and absence is NOT established, ' +
+        '"partial" means the file budget ran out so the count is a floor rather than a total.',
+      inputSchema: z.object({
+        url: urlField,
+        sitemaps: z
+          .array(z.string())
+          .optional()
+          .describe(
+            'Read exactly these sitemap URLs instead of looking for them. For a site whose sitemap is ' +
+              'somewhere robots.txt does not name, or whose index is too large to walk inside the file ' +
+              'budget: naming the sub-sitemaps that matter gets a complete list where auto-discovery gets ' +
+              'a truncated one. Must be same-site with `url`.',
+          ),
+        crawlOnly: z
+          .boolean()
+          .optional()
+          .describe('Skip sitemaps and link-crawl instead. For a site whose sitemap is stale or wrong.'),
+      }),
+    },
+    async ({ url, sitemaps, crawlOnly }) => {
+      const rejected = admit(url);
+      if (rejected) return rejected;
+      try {
+        const { discoverSitePages } = await import('../agent/tag-suggest/discover.js');
+        return jsonResult(await discoverSitePages(url, { sitemaps, crawlOnly }));
+      } catch (err) {
+        return errorResult('site_pages_discover', err);
       }
     },
   );

@@ -70,6 +70,39 @@ export interface ScanOptions {
   captureImages?: boolean;
   /** Do not follow blog, news and article paths. */
   skipBlog?: boolean;
+  /**
+   * Scan exactly these pages and do not crawl.
+   *
+   * Set when the user picked from a discovery. The crawl's own ranking is a guess about which pages
+   * are worth the budget; once someone has looked at the list and chosen, re-deriving a worse answer
+   * would be pure cost.
+   */
+  pages?: string[];
+}
+
+/** One page a discovery found. */
+export interface DiscoveredPage {
+  url: string;
+  path: string;
+  source: 'sitemap' | 'crawl' | 'given';
+}
+
+/**
+ * What a discovery found, and how confident it is about what it did not find.
+ *
+ * `sitemapStatus` is carried through verbatim rather than reduced to a boolean, because "this site
+ * has no sitemap" and "this site would not answer" are opposite facts that a boolean makes
+ * identical, and only the first is safe to tell a user.
+ */
+export interface DiscoverResult {
+  site: string;
+  pages: DiscoveredPage[];
+  total: number;
+  sitemapStatus: 'found' | 'partial' | 'none' | 'unreachable' | 'skipped';
+  sitemapsRead: { url: string; ok: boolean; urls: number; error?: string }[];
+  viaCrawl: boolean;
+  rejected: { url: string; reason: string }[];
+  note?: string;
 }
 
 /** The hard ceiling the scanner applies to the page budget, mirrored here so the browser can show
@@ -174,6 +207,45 @@ export class SiteScanner {
   }
 
   /**
+   * List a site's pages, without opening a browser.
+   *
+   * Its own timeout, an order of magnitude below the scan's: this is a handful of HTTP GETs against
+   * public URLs, and a discovery still running after a minute is a hung fetch rather than a big
+   * site. Sharing the scan's four-minute ceiling would leave someone watching a spinner for four
+   * minutes before being told to try again.
+   */
+  async discover(url: string, opts: { sitemaps?: string[]; crawlOnly?: boolean } = {}): Promise<DiscoverResult> {
+    const conn = await this.connect();
+    const { ok, text } = await deadline(
+      conn.callTool('site_pages_discover', {
+        url,
+        ...(opts.sitemaps?.length ? { sitemaps: opts.sitemaps } : {}),
+        ...(opts.crawlOnly ? { crawlOnly: true } : {}),
+      }),
+      DISCOVER_TIMEOUT_MS,
+      'Listing the pages took too long and was stopped. The site may be slow to answer.',
+    );
+    if (!ok) throw new ScanError(text, 'discover_failed');
+
+    let body: DiscoverResult;
+    try {
+      body = JSON.parse(text) as DiscoverResult;
+    } catch {
+      throw new ScanError('The scanner returned a result that was not JSON.', 'bad_result');
+    }
+    return {
+      site: typeof body.site === 'string' ? body.site : url,
+      pages: Array.isArray(body.pages) ? body.pages : [],
+      total: typeof body.total === 'number' ? body.total : 0,
+      sitemapStatus: body.sitemapStatus ?? 'none',
+      sitemapsRead: Array.isArray(body.sitemapsRead) ? body.sitemapsRead : [],
+      viaCrawl: body.viaCrawl === true,
+      rejected: Array.isArray(body.rejected) ? body.rejected : [],
+      ...(body.note ? { note: body.note } : {}),
+    };
+  }
+
+  /**
    * Scan a site and return the suggested tags.
    *
    * The URL is not validated here. The web-audit MCP applies its own SSRF guard on every tool call,
@@ -190,6 +262,7 @@ export class SiteScanner {
         ...(opts.platforms?.length ? { platforms: opts.platforms } : {}),
         ...(opts.captureImages ? { captureImages: true } : {}),
         ...(opts.skipBlog ? { skipBlog: true } : {}),
+        ...(opts.pages?.length ? { pages: opts.pages } : {}),
       }),
       SCAN_TIMEOUT_MS,
       'The scan took too long and was stopped. Try fewer pages.',
@@ -230,3 +303,6 @@ export class SiteScanner {
  * forever, not to bound a healthy scan.
  */
 export const SCAN_TIMEOUT_MS = 240_000;
+
+/** A discovery is HTTP GETs against public URLs, so a minute is already generous. */
+export const DISCOVER_TIMEOUT_MS = 60_000;
