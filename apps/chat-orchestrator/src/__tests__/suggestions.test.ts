@@ -267,6 +267,33 @@ test('another user cannot reach the pictures of a scan', () => {
 // The table printed the trigger's NAME and nothing else. A form trigger scoped to one form id and
 // one scoped to a page path have the same kind of name and completely different behaviour.
 
+/** Conditions without the operator menu, which is asserted on its own below. */
+const shape = (list: unknown): unknown =>
+  (list as Array<Record<string, unknown>> | undefined)?.map(({ operators: _drop, ...rest }) => rest);
+
+test('an editable condition carries the operators GTM offers for it', () => {
+  // Sent with the condition rather than hardcoded in the page. A dropdown offering an operator the
+  // server refuses is a change that reports saved and is not.
+  const rows = toRows([
+    {
+      id: 'a',
+      tagName: 'CTA',
+      platform: 'ga4_event',
+      trigger: { name: 'T', kind: 'all_clicks', clickElementValue: '.cta', clickTextValue: 'Buy' },
+    },
+  ] as unknown as SuggestedTagView[]);
+  const byVar = new Map((rows[0].conditions ?? []).map((c) => [c.variable, c]));
+  assert.ok(
+    byVar.get('Click Element')?.operators?.some((o) => o.key === 'cssSelector'),
+    'an element condition can match a selector',
+  );
+  assert.ok(
+    !byVar.get('Click Text')?.operators?.some((o) => o.key === 'cssSelector'),
+    'a text condition cannot',
+  );
+  assert.deepEqual(byVar.get('Click Text')?.operators?.[0], { key: 'equals', label: 'equals' });
+});
+
 test('a click trigger reports the variable, operator and value it filters on', () => {
   const rows = toRows([
     {
@@ -278,7 +305,9 @@ test('a click trigger reports the variable, operator and value it filters on', (
   ] as unknown as SuggestedTagView[]);
   assert.equal(rows[0].triggerName, 'Email Click Trigger');
   assert.equal(rows[0].triggerType, 'Click - Just Links', "GTM's own wording, not the internal kind");
-  assert.deepEqual(rows[0].conditions, [{ variable: 'Click URL', operator: 'starts with', value: 'mailto:' }]);
+  assert.deepEqual(shape(rows[0].conditions), [
+    { variable: 'Click URL', operator: 'starts with', value: 'mailto:', editable: true, carried: true },
+  ]);
 });
 
 test('a custom event leads with the event name, then its scope', () => {
@@ -297,10 +326,12 @@ test('a custom event leads with the event name, then its scope', () => {
       },
     },
   ] as unknown as SuggestedTagView[]);
-  assert.deepEqual(rows[0].conditions, [
-    { variable: 'Event name', operator: 'equals', value: 'form_submit' },
-    { variable: 'Page Path', operator: 'contains', value: '/contact' },
-    { variable: 'dlv - form_id', operator: 'equals', value: 'wpcf7-f12' },
+  assert.deepEqual(shape(rows[0].conditions), [
+    // Carried but not editable: the listener tag pushes this exact string.
+    { variable: 'Event name', operator: 'equals', value: 'form_submit', carried: true },
+    { variable: 'Page Path', operator: 'contains', value: '/contact', editable: true, carried: true },
+    // Not carried: it needs a `dlv - form_id` variable that this create path does not provision.
+    { variable: 'dlv - form_id', operator: 'equals', value: 'wpcf7-f12', carried: false },
   ]);
 });
 
@@ -316,7 +347,7 @@ test('a lookup table names the texts behind it, not just the variable', () => {
     },
   ] as unknown as SuggestedTagView[]);
   assert.deepEqual(rows[0].conditions, [
-    { variable: 'lt - CTA', operator: 'equals', value: 'true (for: Book a demo, Get started)' },
+    { variable: 'lt - CTA', operator: 'equals', value: 'true (for: Book a demo, Get started)', carried: false },
   ]);
 });
 
@@ -513,4 +544,204 @@ test('a row with a picture but no rect keeps the picture', () => {
   const rows = toRows(scan.suggestions, scan.images);
   assert.equal(rows[0].hasImage, true);
   assert.equal(rows[0].rect, undefined);
+});
+
+// Editing a scanned row.
+//
+// The rule these hold: an edit changes NAMED fields of the server's own copy of a scan. It is not a
+// second way to hand this endpoint a tag payload, and it must never produce a row that reports
+// success and creates something wrong.
+
+const editable = (over: Record<string, unknown> = {}): SuggestedTagView =>
+  ({
+    id: 'r1',
+    tagName: 'GA4 Event - Contact Form',
+    platform: 'ga4_event',
+    eventName: 'form_submit',
+    trigger: {
+      name: 'Contact Form Trigger',
+      kind: 'all_clicks',
+      clickTextValue: 'Get in touch',
+      clickTextOperator: 'equals',
+    },
+    ...over,
+  }) as unknown as SuggestedTagView;
+
+test('renaming a tag, its event and its trigger changes all three', async () => {
+  const { applyRowEdit } = await import('../suggestions.js');
+  const { row, changed, rejected } = applyRowEdit(editable(), {
+    tagName: 'GA4 - Contact - Submit',
+    eventName: 'generate_lead',
+    triggerName: 'Form - Contact - Submit',
+  });
+  assert.equal(row.tagName, 'GA4 - Contact - Submit');
+  assert.equal(row.eventName, 'generate_lead');
+  assert.equal(row.trigger.name, 'Form - Contact - Submit');
+  assert.equal(changed.length, 3);
+  assert.deepEqual(rejected, []);
+});
+
+test('an edit does not mutate the row it was given', async () => {
+  const { applyRowEdit } = await import('../suggestions.js');
+  const original = editable();
+  applyRowEdit(original, {
+    tagName: 'Something else',
+    conditions: [{ variable: 'Click Text', value: 'Contact us' }],
+  });
+  assert.equal(original.tagName, 'GA4 Event - Contact Form', 'the caller keeps its own copy');
+  assert.equal((original.trigger as unknown as Record<string, unknown>).clickTextValue, 'Get in touch');
+});
+
+test('a GA4 event name GA4 would discard is refused, not saved', async () => {
+  // GTM creates a tag with any event name at all. GA4 drops what it cannot parse on receipt, so the
+  // tag fires, the container looks right, and the report stays empty. This is the only layer that
+  // can say no.
+  const { applyRowEdit } = await import('../suggestions.js');
+  for (const bad of ['generate lead', '2_leads', 'lead!', 'x'.repeat(41)]) {
+    const { row, changed, rejected } = applyRowEdit(editable(), { eventName: bad });
+    assert.equal(row.eventName, 'form_submit', `"${bad}" must not be saved`);
+    assert.deepEqual(changed, []);
+    assert.equal(rejected.length, 1, `"${bad}" must say why`);
+  }
+});
+
+test('a GA4 reserved prefix is refused', async () => {
+  const { applyRowEdit } = await import('../suggestions.js');
+  const { changed, rejected } = applyRowEdit(editable(), { eventName: 'google_signup' });
+  assert.deepEqual(changed, []);
+  assert.match(rejected[0], /reserves/);
+});
+
+test("a pixel platform keeps its own event naming, not GA4's", async () => {
+  // "Lead" and "AddToCart" are the correct Meta event names. Running GA4's rules over every platform
+  // would refuse the only names Meta accepts.
+  const { applyRowEdit } = await import('../suggestions.js');
+  const { row, rejected } = applyRowEdit(editable({ platform: 'meta_pixel', eventName: 'Contact' }), {
+    eventName: 'Lead',
+  });
+  assert.equal(row.eventName, 'Lead');
+  assert.deepEqual(rejected, []);
+});
+
+test('an empty name is refused rather than saved as a blank tag', async () => {
+  const { applyRowEdit } = await import('../suggestions.js');
+  for (const field of ['tagName', 'triggerName'] as const) {
+    const { changed, rejected } = applyRowEdit(editable(), { [field]: '   ' });
+    assert.deepEqual(changed, []);
+    assert.equal(rejected.length, 1);
+  }
+});
+
+test('a condition value and operator can both be changed', async () => {
+  const { applyRowEdit } = await import('../suggestions.js');
+  const { row, changed } = applyRowEdit(editable(), {
+    conditions: [{ variable: 'Click Text', operator: 'contains', value: 'Get in touch' }],
+  });
+  const t = row.trigger as unknown as Record<string, unknown>;
+  assert.equal(t.clickTextOperator, 'contains');
+  assert.equal(t.clickTextValue, 'Get in touch');
+  assert.equal(changed.length, 1, 'the value was unchanged, so only the operator is reported');
+});
+
+test('clearing a condition is reported as a removal, because that is what it does', async () => {
+  // A click trigger with its Click Text scope cleared does not fire less. It fires on every click in
+  // the container, and "Click Text -> empty" would not tell anyone that.
+  const { applyRowEdit } = await import('../suggestions.js');
+  const { row, changed } = applyRowEdit(editable(), { conditions: [{ variable: 'Click Text', value: '' }] });
+  assert.equal((row.trigger as unknown as Record<string, unknown>).clickTextValue, '');
+  assert.match(changed[0], /removed/);
+});
+
+test('a condition the scan never put on the trigger cannot be added', async () => {
+  // Adding one would mean the row fires on something no page was checked against, which is a
+  // suggestion the scan did not make.
+  const { applyRowEdit } = await import('../suggestions.js');
+  const { row, changed, rejected } = applyRowEdit(editable(), {
+    conditions: [{ variable: 'Page Path', value: '/pricing' }],
+  });
+  assert.equal((row.trigger as unknown as Record<string, unknown>).pagePathValue, undefined);
+  assert.deepEqual(changed, []);
+  assert.equal(rejected.length, 1);
+});
+
+test('an unknown field and a bogus operator are refused and named', async () => {
+  const { applyRowEdit } = await import('../suggestions.js');
+  const { changed, rejected } = applyRowEdit(editable(), {
+    conditions: [
+      { variable: 'dlv - form_id', value: 'x' },
+      { variable: 'Click Text', operator: 'sortOf' },
+    ],
+  });
+  assert.deepEqual(changed, []);
+  assert.equal(rejected.length, 2, 'both are reported, neither is silently dropped');
+});
+
+test('cssSelector is offered on Click Element and refused on a text condition', async () => {
+  const { applyRowEdit } = await import('../suggestions.js');
+  const onText = applyRowEdit(editable(), { conditions: [{ variable: 'Click Text', operator: 'cssSelector' }] });
+  assert.equal(onText.changed.length, 0);
+  assert.equal(onText.rejected.length, 1);
+
+  const onElement = applyRowEdit(
+    editable({
+      trigger: { name: 'T', kind: 'all_clicks', clickElementValue: '.cta', clickElementOperator: 'equals' },
+    }),
+    { conditions: [{ variable: 'Click Element', operator: 'cssSelector' }] },
+  );
+  assert.equal(onElement.changed.length, 1);
+});
+
+test('an edited row is marked, and an edit that changed nothing is not', async () => {
+  const { applyRowEdit } = await import('../suggestions.js');
+  const real = applyRowEdit(editable(), { tagName: 'Renamed' });
+  assert.equal(toRows([real.row])[0].edited, true);
+
+  const noop = applyRowEdit(editable(), { tagName: 'GA4 Event - Contact Form' });
+  assert.deepEqual(noop.changed, []);
+  assert.equal(toRows([noop.row])[0].edited, undefined);
+});
+
+test('an edit is written into the store, so the create path sees it without being told', () => {
+  const store = new ScanStore();
+  const scan = store.put('u1', scanResult(2));
+  const id = scan.suggestions[0].id;
+
+  const result = store.editRow('u1', scan.id, id, { tagName: 'Renamed by hand' });
+  assert.equal(result?.changed.length, 1);
+  assert.equal(store.get('u1', scan.id)?.suggestions[0].tagName, 'Renamed by hand');
+  assert.equal(store.get('u1', scan.id)?.suggestions[1].tagName, 'GA4 Event - Tag 2', 'only that row');
+});
+
+test('a scan cannot be edited by anyone but the user who ran it', () => {
+  const store = new ScanStore();
+  const scan = store.put('owner', scanResult(1));
+  assert.equal(store.editRow('someone-else', scan.id, scan.suggestions[0].id, { tagName: 'x' }), null);
+  assert.equal(store.get('owner', scan.id)?.suggestions[0].tagName, 'GA4 Event - Tag 1', 'untouched');
+});
+
+test('editing an unknown row reports nothing found rather than creating one', () => {
+  const store = new ScanStore();
+  const scan = store.put('u1', scanResult(1));
+  assert.equal(store.editRow('u1', scan.id, 'not-a-row', { tagName: 'x' }), null);
+  assert.equal(store.get('u1', scan.id)?.suggestions.length, 1);
+});
+
+test('conditions the create path cannot carry are named before anything is written', async () => {
+  const { droppedConditions } = await import('../suggestions.js');
+  const dropped = droppedConditions([
+    editable({
+      id: 'a',
+      tagName: 'Contact',
+      trigger: {
+        name: 'T',
+        kind: 'custom_event',
+        eventName: 'form_submission',
+        dataLayerConditions: [{ key: 'form_id', value: 'wpcf7-f12', operator: 'equals' }],
+      },
+    }),
+    editable({ id: 'b', tagName: 'Email' }),
+  ]);
+  assert.equal(dropped.length, 1, 'only the row that loses something');
+  assert.equal(dropped[0].id, 'a');
+  assert.match(dropped[0].conditions[0], /dlv - form_id/);
 });

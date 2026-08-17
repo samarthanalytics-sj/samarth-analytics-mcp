@@ -116,12 +116,33 @@ const triggerSchema = z
       ),
     clickUrlValue: z.string().optional().describe('Scope a click trigger by {{Click URL}}, e.g. "mailto:" or "tel:".'),
     clickUrlOperator: z.string().optional().describe('equals | contains | startsWith | endsWith | matchRegex. Default contains.'),
+    clickUrlIgnoreCase: z.boolean().optional().describe('For a matchRegex {{Click URL}} condition: match case-insensitively.'),
     clickTextValue: z.string().optional().describe('Scope a click trigger by {{Click Text}}, e.g. an exact CTA label.'),
     clickTextOperator: z.string().optional().describe('equals | contains | startsWith | endsWith | matchRegex. Default equals.'),
+    clickTextIgnoreCase: z.boolean().optional().describe('For a matchRegex {{Click Text}} condition: match case-insensitively.'),
+    // The conditions below are what scope a click trigger to ONE element. Without them a
+    // link_click/all_clicks trigger fires on every link or every click on the site, so a schema that
+    // omits them does not merely lose precision, it changes what the tag does.
+    //
+    // They were missing here while buildTrigger and triggerBuiltInVars supported all of them, and
+    // zod strips what it does not declare. Anything sending these - the tag scanner does, for every
+    // CTA it pins to a selector or an id - had them silently dropped and got the unscoped trigger.
+    // Same failure as the missing `platform` field: the call reports success and the tag is wrong.
+    clickElementValue: z.string().optional().describe('Scope a click trigger by {{Click Element}}, normally a CSS selector.'),
+    clickElementOperator: z.string().optional().describe('cssSelector | equals | contains | matchRegex. Default cssSelector.'),
+    clickIdValue: z.string().optional().describe('Scope a click trigger by {{Click ID}}, the element\'s id attribute.'),
+    clickIdOperator: z.string().optional().describe('equals | contains | startsWith | endsWith | matchRegex. Default equals.'),
+    clickClassesValue: z.string().optional().describe('Scope a click trigger by {{Click Classes}}.'),
+    clickClassesOperator: z.string().optional().describe('equals | contains | matchRegex. Default contains.'),
     pagePathValue: z.string().optional().describe('Scope to a page by {{Page Path}}.'),
     pagePathOperator: z.string().optional().describe('equals | contains | startsWith | endsWith | matchRegex.'),
+    pageUrlValue: z.string().optional().describe('Scope by {{Page URL}}, e.g. a "?thanks=1" success page.'),
+    pageUrlOperator: z.string().optional().describe('equals | contains | startsWith | endsWith | matchRegex. Default contains.'),
     eventName: z.string().optional().describe('For kind "custom_event": the dataLayer event name, e.g. "generate_lead".'),
     formIdValue: z.string().optional().describe('For kind "form_submit": scope to one form by {{Form ID}}.'),
+    formIdOperator: z.string().optional().describe('equals | contains | startsWith | endsWith | matchRegex. Default equals.'),
+    formClassesValue: z.string().optional().describe('For kind "form_submit": scope by {{Form Classes}}.'),
+    formClassesOperator: z.string().optional().describe('equals | contains | matchRegex. Default contains.'),
     intervalMs: z.string().optional().describe('For kind "timer": firing interval in milliseconds. REQUIRED for timer.'),
     limit: z.string().optional().describe('For kind "timer": how many times it may fire.'),
   })
