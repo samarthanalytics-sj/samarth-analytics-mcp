@@ -28,7 +28,7 @@ import { checkAllowlistAgainstServer } from './integrations.js';
 import { extractAll, type ExtractedAttachment } from './attachments.js';
 import { MemoryStore } from './memory.js';
 import { isSuperAdmin, tailLog, MAX_LINES } from './logs.js';
-import { SiteScanner, ScanError, validPlatforms, MAX_SCAN_PAGES } from './scan-client.js';
+import { SiteScanner, ScanError, validPlatforms, MAX_SCAN_PAGES, MAX_SELECTED_PAGES } from './scan-client.js';
 import {
   ScanStore,
   toRows,
@@ -1061,7 +1061,7 @@ async function main(): Promise<void> {
       for (const s of result.sitemapsRead.filter((r) => !r.ok)) {
         console.log(`[scan] sitemap unread: ${forLog(s.url, 160)} - ${forLog(String(s.error), 80)}`);
       }
-      res.json(result);
+      res.json({ ...result, maxSelectedPages: MAX_SELECTED_PAGES });
     } catch (err) {
       const code = err instanceof ScanError ? err.code : 'discover_failed';
       const message = err instanceof Error ? err.message : 'Listing the pages failed.';
@@ -1092,7 +1092,7 @@ async function main(): Promise<void> {
     // Chosen pages, capped here as well as in the scanner. The scanner reports what it cut, but a
     // request carrying ten thousand URLs should not travel that far to be trimmed.
     const chosenPages = Array.isArray(req.body?.pages)
-      ? (req.body.pages as unknown[]).map(String).map((p) => p.trim()).filter(Boolean).slice(0, MAX_SCAN_PAGES * 4)
+      ? (req.body.pages as unknown[]).map(String).map((p) => p.trim()).filter(Boolean).slice(0, MAX_SELECTED_PAGES)
       : [];
 
     const startedAt = Date.now();
@@ -1139,7 +1139,11 @@ async function main(): Promise<void> {
         ...(result.pages ? { pages: result.pages } : {}),
         ...(result.notScanned?.length ? { notScanned: result.notScanned } : {}),
         ...(result.excluded ? { excluded: result.excluded } : {}),
+        // Two ceilings, because they bound different things: how far a CRAWL goes, and how many
+        // pages a chosen list may hold. Sent so the page shows the server's real numbers rather
+        // than a copy that can drift.
         maxPages: MAX_SCAN_PAGES,
+        maxSelectedPages: MAX_SELECTED_PAGES,
       });
     } catch (err) {
       const code = err instanceof ScanError ? err.code : 'scan_failed';

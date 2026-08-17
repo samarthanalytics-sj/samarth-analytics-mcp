@@ -462,7 +462,17 @@ export async function scanSiteForTagSuggestions(
 
   const maxPages = clampOpt(options.maxPages, config.maxPages, config.maxPagesCap);
   const maxDepth = clampOpt(options.maxDepth, config.maxDepth, config.maxDepthCap);
-  const scanPages = clampOpt(options.scanPages, maxPages, config.maxPagesCap);
+  /**
+   * How many pages get deep-scanned.
+   *
+   * A CHOSEN list defaults to its own length, not to the crawl budget. It used to fall back to
+   * maxPages, whose default is 10, so ticking 25 pages in the picker scanned 10 of them and
+   * reported the other 15 as "over the 10-page scan budget" - a budget the user never set and could
+   * not see. The crawl still uses maxPages, because there the budget IS the instruction.
+   */
+  const scanPages = options.pages?.length
+    ? clampOpt(options.scanPages, Math.min(options.pages.length, config.maxSelectedCap), config.maxSelectedCap)
+    : clampOpt(options.scanPages, maxPages, config.maxPagesCap);
   // Element presence only needs the DOM rendered; the operator's settle time is
   // tuned for tags firing (longer), so cap it here to keep per-page cost bounded.
   const settleMs = Math.min(config.settleMs, 3_000);

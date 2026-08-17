@@ -840,6 +840,20 @@ check('embed: HubSpot embed surfaces beside an unrelated search form', buildSugg
   );
 }
 
+// A chosen list is not a crawl budget.
+{
+  // The bug: scanPages fell back to maxPages, whose default is 10, so ticking 25 pages in the
+  // picker scanned 10 and reported the other 15 as over a budget the user never set.
+  const chosen = Array.from({ length: 40 }, (_, i) => `https://example.com/p${i}`);
+  const wide = resolvePageList('https://example.com/', chosen, 300);
+  check('chosen: a list of 40 is not clamped to a crawl budget', wide.targets.length === 40);
+  check('chosen: nothing is reported over budget', wide.rejected.length === 0);
+
+  const capped = resolvePageList('https://example.com/', chosen, 25);
+  check('chosen: a real ceiling still applies', capped.targets.length === 25);
+  check('chosen: and the pages it cut are named', capped.rejected.length === 15);
+}
+
 console.log(`web-audit tests: ${passed} passed, ${failed} failed`);
 if (failed > 0) {
   for (const f of failures) console.error(f);

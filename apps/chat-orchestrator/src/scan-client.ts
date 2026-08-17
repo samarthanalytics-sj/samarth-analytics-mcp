@@ -109,6 +109,16 @@ export interface DiscoverResult {
  *  the real number instead of accepting one that will be silently clamped. */
 export const MAX_SCAN_PAGES = 200;
 
+/**
+ * Ceiling on an explicitly chosen list of pages.
+ *
+ * Separate from the crawl budget, and larger, because they answer different questions. The crawl
+ * budget is "how far should the crawler go"; a chosen list is "these, please", and clamping it to
+ * the crawl number scanned a fraction of what someone ticked. The only real bound is the scan
+ * timeout: about three seconds a page puts 300 at fifteen minutes against a twenty-minute limit.
+ */
+export const MAX_SELECTED_PAGES = 300;
+
 /** A page the crawl opened and read. */
 export interface ScannedPage {
   page: string;

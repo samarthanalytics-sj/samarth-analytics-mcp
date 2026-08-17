@@ -10,6 +10,8 @@ export interface WebAuditConfig {
   /** Default / hard-cap page budget for crawls and full audits. */
   maxPages: number;
   maxPagesCap: number;
+  /** Ceiling on an explicitly chosen page list, which is not bounded by the crawl budget. */
+  maxSelectedCap: number;
   /** Maximum crawl depth from the start URL. */
   maxDepth: number;
   maxDepthCap: number;
@@ -50,6 +52,10 @@ export function loadConfig(): WebAuditConfig {
     // the ceiling is patience rather than a timeout. The default stays 10: a big scan should be a
     // choice someone makes, not one they get by accident.
     maxPagesCap: 200,
+    // A CHOSEN list is not a crawl budget. Someone who ticked 226 pages meant 226, so the only
+    // ceiling that applies is the one that keeps a scan inside its timeout: at about three seconds
+    // a page, 300 is fifteen minutes against a twenty-minute limit.
+    maxSelectedCap: 300,
     maxDepth: intEnv('WEB_AUDIT_MAX_DEPTH', 2, 4),
     maxDepthCap: 4,
     navTimeoutMs: intEnv('WEB_AUDIT_NAV_TIMEOUT', 30_000, 60_000),
