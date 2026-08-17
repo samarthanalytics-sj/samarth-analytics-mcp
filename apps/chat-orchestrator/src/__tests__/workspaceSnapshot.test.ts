@@ -109,3 +109,52 @@ void test('malformed JSON degrades that kind only', async () => {
   assert.deepEqual(s.incomplete, ['variables']);
   assert.equal(s.tags.length, 2, 'the kinds that parsed are still usable');
 });
+
+// Reading the container's own Measurement ID off its base tag.
+//
+// Why it is here rather than asked for: the container knows it, and making someone retype something
+// we can read is a worse product. The old behaviour refused the whole create instead.
+
+test('the Google tag and its Measurement ID are found in a raw tags list', async () => {
+  const { findGa4BaseTag } = await import('../workspace-snapshot.js');
+  const found = findGa4BaseTag([
+    { name: 'Some HTML', type: 'html', parameter: [{ key: 'html', value: '<script></script>' }] },
+    { name: 'Google Tag', type: 'googtag', parameter: [{ key: 'tagId', value: 'G-REAL12345' }] },
+  ]);
+  assert.equal(found?.name, 'Google Tag');
+  assert.equal(found?.measurementId, 'G-REAL12345');
+});
+
+test('the legacy GA4 Configuration keeps its id under a different key', async () => {
+  const { findGa4BaseTag } = await import('../workspace-snapshot.js');
+  const found = findGa4BaseTag([
+    { name: 'Old Config', type: 'gaawc', parameter: [{ key: 'measurementId', value: 'G-LEGACY99' }] },
+  ]);
+  assert.equal(found?.type, 'gaawc');
+  assert.equal(found?.measurementId, 'G-LEGACY99');
+});
+
+test('a base tag referencing a variable is found, but yields no id', async () => {
+  // It IS the base tag, so a second must not be created. But "{{GA4 Variable}}" is not an id, and
+  // copying it into a Constant would produce a variable that resolves to nothing.
+  const { findGa4BaseTag } = await import('../workspace-snapshot.js');
+  const found = findGa4BaseTag([
+    { name: 'GT', type: 'googtag', parameter: [{ key: 'tagId', value: '{{GA4 Variable}}' }] },
+  ]);
+  assert.equal(found?.name, 'GT');
+  assert.equal(found?.measurementId, undefined);
+});
+
+test('an AW- Google tag is Ads, not a GA4 Measurement ID', async () => {
+  const { findGa4BaseTag } = await import('../workspace-snapshot.js');
+  const found = findGa4BaseTag([
+    { name: 'Ads', type: 'googtag', parameter: [{ key: 'tagId', value: 'AW-123456789' }] },
+  ]);
+  assert.equal(found?.measurementId, undefined, 'an Ads id must not end up in the GA4 Constant');
+});
+
+test('a container with no base tag reports none', async () => {
+  const { findGa4BaseTag } = await import('../workspace-snapshot.js');
+  assert.equal(findGa4BaseTag([{ name: 'X', type: 'gaawe' }]), undefined);
+  assert.equal(findGa4BaseTag([]), undefined);
+});

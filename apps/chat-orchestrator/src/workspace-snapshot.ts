@@ -31,11 +31,27 @@ export interface SnapshotEntity {
   type?: string;
 }
 
+/**
+ * The GA4 base tag already in the workspace, and the id it is configured with.
+ *
+ * The one field worth keeping beyond names: it is the answer to "what Measurement ID does this
+ * container use", the container already knows it, and asking a person for something we can read is
+ * a worse product. Read from the tags list this already fetches, so it costs no extra round trip.
+ */
+export interface Ga4BaseTag {
+  name: string;
+  type: string;
+  /** Absent when the tag carries a {{variable}} or a placeholder rather than a literal G- id. */
+  measurementId?: string;
+}
+
 export interface WorkspaceSnapshot {
   accountId: string;
   containerId: string;
   workspaceId: string;
   tags: SnapshotEntity[];
+  /** Present when the workspace already has a Google tag or a legacy GA4 Configuration. */
+  ga4BaseTag?: Ga4BaseTag;
   triggers: SnapshotEntity[];
   variables: SnapshotEntity[];
   /** Built-in variable types already enabled, e.g. clickUrl, pageUrl. */
@@ -58,9 +74,9 @@ async function listKind(
   tool: string,
   args: Record<string, unknown>,
   key: string,
-): Promise<{ items: SnapshotEntity[]; ok: boolean; truncated: boolean }> {
+): Promise<{ items: SnapshotEntity[]; ok: boolean; truncated: boolean; raw: unknown[] }> {
   const { ok, text } = await mcp.callTool(tool, args);
-  if (!ok) return { items: [], ok: false, truncated: false };
+  if (!ok) return { items: [], ok: false, truncated: false, raw: [] };
   try {
     const body = JSON.parse(text) as Record<string, unknown>;
     const raw = body[key];
@@ -76,10 +92,44 @@ async function listKind(
           return name ? [{ name, type }] : [];
         })
       : [];
-    return { items, ok: true, truncated: body.truncated === true };
+    return {
+      items,
+      ok: true,
+      truncated: body.truncated === true,
+      raw: Array.isArray(raw) ? raw : [],
+    };
   } catch {
-    return { items: [], ok: false, truncated: false };
+    return { items: [], ok: false, truncated: false, raw: [] };
   }
+}
+
+/** Tag types that ARE a GA4 base tag: the modern Google tag and the legacy GA4 Configuration. */
+const GA4_BASE_TYPES = new Set(['googtag', 'gaawc']);
+/** Where each type keeps the id it configures. */
+const ID_PARAM: Record<string, string> = { googtag: 'tagId', gaawc: 'measurementId' };
+
+/**
+ * PURE: the GA4 base tag in a raw tags list, with the literal id it configures.
+ *
+ * A tag whose id is a {{variable}} is still returned, without an id: it IS the base tag (so a
+ * second one must not be created) but it does not answer "what is the Measurement ID". Reporting a
+ * "{{...}}" string as the id would put a reference inside a Constant, which resolves to nothing.
+ */
+export function findGa4BaseTag(raw: unknown[]): Ga4BaseTag | undefined {
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue;
+    const tag = entry as { name?: unknown; type?: unknown; parameter?: unknown };
+    const type = str(tag.type);
+    if (!type || !GA4_BASE_TYPES.has(type)) continue;
+    const params = Array.isArray(tag.parameter) ? (tag.parameter as Record<string, unknown>[]) : [];
+    const value = str(params.find((p) => p.key === ID_PARAM[type])?.value as string | undefined);
+    return {
+      name: str(tag.name) ?? type,
+      type,
+      ...(value && /^G-[A-Z0-9]+$/i.test(value) ? { measurementId: value } : {}),
+    };
+  }
+  return undefined;
 }
 
 /**
@@ -110,9 +160,12 @@ export async function fetchWorkspaceSnapshot(
     if (!r.ok || r.truncated) incomplete.push(label);
   }
 
+  const ga4BaseTag = findGa4BaseTag(tags.raw);
+
   return {
     ...ws,
     tags: tags.items,
+    ...(ga4BaseTag ? { ga4BaseTag } : {}),
     triggers: triggers.items,
     variables: variables.items,
     builtIns: builtIns.items.map((b) => b.type ?? b.name).filter(Boolean),

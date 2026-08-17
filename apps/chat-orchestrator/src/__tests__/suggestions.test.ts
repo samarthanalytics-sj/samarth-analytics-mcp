@@ -526,7 +526,14 @@ test('an empty reply is reported as empty rather than as a parse error', async (
 // The GA4 configuration: one Constant holding the Measurement ID, one Google tag referencing it,
 // and every GA4 event tag referencing the same Constant rather than carrying its own copy.
 
-const snap = (over: Partial<{ tags: { name: string; type?: string }[]; variables: { name: string; type?: string }[]; incomplete: string[] }> = {}) => ({
+const snap = (
+  over: Partial<{
+    tags: { name: string; type?: string }[];
+    variables: { name: string; type?: string }[];
+    ga4BaseTag: { name: string; type: string; measurementId?: string };
+    incomplete: string[];
+  }> = {},
+) => ({
   tags: [],
   variables: [],
   incomplete: [],
@@ -586,20 +593,73 @@ test('an unreadable container list blocks rather than assuming absence', async (
   }
 });
 
-test('an id that is not a Measurement ID is refused before anything is built', async () => {
+test('an id that was TYPED and is not a Measurement ID is refused', async () => {
+  // Typed and wrong is different from not typed. They meant something by it, so say what.
   const { planGa4Config } = await import('../suggestions.js');
-  for (const bad of ['', 'not-an-id', 'G-', 'UA-12345-1', 'G-XXXXXXXXXX']) {
+  for (const bad of ['not-an-id', 'G-', 'UA-12345-1', 'G-XXXXXXXXXX']) {
     assert.match(String(planGa4Config(snap(), bad).blocked), /Measurement ID/, `"${bad}"`);
   }
 });
 
-test('a sample-looking id is allowed but never silently', async () => {
-  // G-123456789 is what everyone types when describing this setup. It builds a container that looks
-  // completely correct and reports to nothing, and this is the only moment anyone can be told.
+test('no id at all falls back to a placeholder rather than refusing', async () => {
+  // Refusing left the user with no container and a message asking for something they may not have
+  // to hand. The Constant is what makes the placeholder safe: correcting it later is ONE edit.
+  const { planGa4Config, PLACEHOLDER_MEASUREMENT_ID } = await import('../suggestions.js');
+  for (const none of [undefined, '', '   ']) {
+    const plan = planGa4Config(snap(), none);
+    assert.equal(plan.blocked, undefined, JSON.stringify(none));
+    assert.equal(plan.measurementId, PLACEHOLDER_MEASUREMENT_ID);
+    assert.equal(plan.source, 'placeholder');
+    assert.equal(plan.createVariable, true, 'the setup is still built');
+    assert.equal(plan.createConfigTag, true);
+  }
+});
+
+test("an existing Google tag's id is read rather than asked for", async () => {
+  // The container already knows it. Making someone retype something we can read is a worse product,
+  // and it is exactly what the old refusal did.
   const { planGa4Config } = await import('../suggestions.js');
-  const plan = planGa4Config(snap(), 'G-123456789');
-  assert.equal(plan.blocked, undefined, 'a deliberate template setup is not refused');
-  assert.match(String(plan.warning), /report to nothing/);
+  const plan = planGa4Config(
+    snap({ ga4BaseTag: { name: 'Google Tag', type: 'googtag', measurementId: 'G-REAL12345' } }),
+    '',
+  );
+  assert.equal(plan.measurementId, 'G-REAL12345');
+  assert.equal(plan.source, 'container');
+  assert.equal(plan.createConfigTag, false, 'and its own tag is reused');
+  assert.equal(plan.warning, undefined);
+});
+
+test('a typed id wins over the one already on the container', async () => {
+  const { planGa4Config } = await import('../suggestions.js');
+  const plan = planGa4Config(
+    snap({ ga4BaseTag: { name: 'GT', type: 'googtag', measurementId: 'G-OLD12345' } }),
+    'G-NEW12345',
+  );
+  assert.equal(plan.measurementId, 'G-NEW12345');
+  assert.equal(plan.source, 'entered');
+});
+
+test('a base tag that already references a variable yields no id to copy', async () => {
+  // It IS the base tag, so a second must not be created, but "{{GA4 Variable}}" is not an id and
+  // putting it inside a Constant would resolve to nothing.
+  const { planGa4Config, PLACEHOLDER_MEASUREMENT_ID } = await import('../suggestions.js');
+  const plan = planGa4Config(snap({ ga4BaseTag: { name: 'GT', type: 'googtag' } }), '');
+  assert.equal(plan.createConfigTag, false);
+  assert.equal(plan.measurementId, PLACEHOLDER_MEASUREMENT_ID);
+});
+
+test('a placeholder id is built with, and always said out loud', async () => {
+  // It builds a container that looks completely correct and reports to nothing. The warning is what
+  // separates "wired up, one value to set" from a silent failure.
+  const { planGa4Config } = await import('../suggestions.js');
+  const typed = planGa4Config(snap(), 'G-123456789');
+  assert.equal(typed.blocked, undefined, 'a deliberate template setup is not refused');
+  assert.match(String(typed.warning), /ONE variable/);
+  assert.match(String(typed.warning), /looks like a sample id/);
+
+  const fallback = planGa4Config(snap(), '');
+  assert.match(String(fallback.warning), /no Google tag to read one from/);
+
   assert.equal(planGa4Config(snap(), 'G-ABC1234567').warning, undefined, 'a real id gets no warning');
 });
 
@@ -627,10 +687,7 @@ test('the setup creates the constant first, then the Google tag on All Pages', a
   ] as unknown as SuggestedTagView[];
 
   const plan = planGa4Config(snap(), 'G-ABC1234567');
-  const result = await createSelected(execute, { accountId: '1', containerId: '2', workspaceId: '3' }, rows, undefined, {
-    plan,
-    measurementId: 'G-ABC1234567',
-  });
+  const result = await createSelected(execute, { accountId: '1', containerId: '2', workspaceId: '3' }, rows, undefined, plan);
 
   assert.deepEqual(
     calls.map((c) => c.tool),
@@ -661,10 +718,7 @@ test('a reused setup writes neither the variable nor the base tag', async () => 
     snap({ variables: [{ name: 'GA4 Variable', type: 'c' }], tags: [{ name: 'GT', type: 'googtag' }] }),
     'G-ABC1234567',
   );
-  const result = await createSelected(execute, { accountId: '1', containerId: '2', workspaceId: '3' }, rows, undefined, {
-    plan,
-    measurementId: 'G-ABC1234567',
-  });
+  const result = await createSelected(execute, { accountId: '1', containerId: '2', workspaceId: '3' }, rows, undefined, plan);
   assert.deepEqual(calls, ['Email'], 'only the event tag is written');
   assert.equal(result.ga4Config?.variable, 'reused');
   assert.equal(result.ga4Config?.configTag, 'reused');
@@ -685,10 +739,7 @@ test('a failed configuration stops the GA4 tags instead of hardcoding the id', a
     { id: 's2', platform: 'custom_html', tagName: 'Listener', html: '<script></script>', trigger: { name: 'AP', kind: 'pageview' } },
   ] as unknown as SuggestedTagView[];
 
-  const result = await createSelected(execute, { accountId: '1', containerId: '2', workspaceId: '3' }, rows, undefined, {
-    plan: planGa4Config(snap(), 'G-ABC1234567'),
-    measurementId: 'G-ABC1234567',
-  });
+  const result = await createSelected(execute, { accountId: '1', containerId: '2', workspaceId: '3' }, rows, undefined, planGa4Config(snap(), 'G-ABC1234567'));
   assert.equal(result.ga4Config?.variable, 'failed');
   assert.ok(!attempted.includes('Email'), 'the GA4 tag is not created with a hardcoded id');
   const ga4Row = result.outcomes.find((o) => o.id === 's1');
@@ -707,10 +758,7 @@ test('a variable that appeared since the snapshot is reused, not a failure', asy
   const rows = [
     { id: 's1', platform: 'ga4_event', tagName: 'Email', eventName: 'email_click', trigger: { name: 'T', kind: 'link_click' } },
   ] as unknown as SuggestedTagView[];
-  const result = await createSelected(execute, { accountId: '1', containerId: '2', workspaceId: '3' }, rows, undefined, {
-    plan: planGa4Config(snap(), 'G-ABC1234567'),
-    measurementId: 'G-ABC1234567',
-  });
+  const result = await createSelected(execute, { accountId: '1', containerId: '2', workspaceId: '3' }, rows, undefined, planGa4Config(snap(), 'G-ABC1234567'));
   assert.equal(result.ga4Config?.variable, 'reused');
   assert.equal(result.created, 1);
 });
