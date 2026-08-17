@@ -481,6 +481,48 @@ test('every write carries confirm, or the MCP refuses it before GTM is reached',
   }
 });
 
+test('a plain-English refusal is reported as itself, not as a JSON parse error', async () => {
+  // What a live create actually produced:
+  //   FAILED "GA4 - Event - Email Click Tag": Unexpected token 'N', "Not creati"... is not valid JSON
+  // create_gtm_tracking_tag refuses some requests in a sentence rather than failing, and that
+  // sentence is the most useful thing it produces. JSON.parse turned it into a parser complaining
+  // about the shape of an explanation nobody got to read.
+  const refusal =
+    'Not creating "GA4 - Event - Email Click Tag": "G-XXXXXXXXXX" looks like a placeholder ' +
+    'Measurement ID, and this workspace has no Google tag to read the real one from.';
+  const execute = async (): Promise<string> => refusal;
+  const rows = [
+    { id: 's1', platform: 'ga4_event', tagName: 'GA4 - Event - Email Click Tag', trigger: { name: 'T', kind: 'link_click' } },
+  ] as unknown as SuggestedTagView[];
+
+  const result = await createSelected(execute, { accountId: '1', containerId: '2', workspaceId: '3' }, rows);
+  assert.equal(result.created, 0);
+  assert.equal(result.failed, 1);
+  assert.ok(!/is not valid JSON/.test(String(result.outcomes[0].error)), 'the parser must not be the message');
+  assert.match(String(result.outcomes[0].error), /Measurement ID field/, 'and it is worded for this page');
+});
+
+test('a refusal written for a chat model is reworded for a web page', async () => {
+  const { forThisSurface } = await import('../suggestions.js');
+  const mcpWording =
+    'Not creating "X": "G-XXXXXXXXXX" looks like a placeholder Measurement ID, and this workspace ' +
+    'has no Google tag to read the real one from. Ask the user for their real G- id. If they ' +
+    'confirm they DO want this exact id anyway, call again with allowPlaceholderId: true.';
+  const reworded = forThisSurface(mcpWording);
+  assert.match(reworded, /Measurement ID field above/);
+  assert.ok(!/allowPlaceholderId/.test(reworded), 'a flag the page cannot pass is not an instruction');
+  assert.ok(!/Ask the user/.test(reworded), 'there is nobody for the page to ask');
+
+  // Anything else passes through word for word rather than being softened into something vaguer.
+  assert.equal(forThisSurface('Rate limit exceeded, try again.'), 'Rate limit exceeded, try again.');
+});
+
+test('an empty reply is reported as empty rather than as a parse error', async () => {
+  const { parseCreateResult } = await import('../../../desktop/src/main/suggestions/create-suggested-tags.js');
+  assert.throws(() => parseCreateResult(''), /empty response/);
+  assert.deepEqual(parseCreateResult('{"tag":{"tagId":"1"}}'), { tag: { tagId: '1' } });
+});
+
 test('the listener is created before the tag that depends on it', async () => {
   // A GA4 tag on a Custom Event trigger does nothing until something pushes that event. Creating the
   // listener afterwards leaves a window where the container looks complete and reports nothing.

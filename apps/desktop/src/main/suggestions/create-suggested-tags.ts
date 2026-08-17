@@ -28,6 +28,37 @@ export const DUPLICATE_RE = /duplicate name|already exists|entity with duplicate
 
 export const realSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
+export interface CreateToolResult {
+  declined?: boolean;
+  alreadyExists?: boolean;
+  tag?: { name?: string; tagId?: string };
+  trigger?: { reused?: boolean };
+}
+
+/**
+ * Read the create tool's reply, which is not always JSON.
+ *
+ * create_gtm_tracking_tag REFUSES some requests in plain English rather than failing: a placeholder
+ * Measurement ID it cannot resolve from the container, a platform it does not build, a Custom HTML
+ * tag with no body. Those replies are the most useful thing the tool produces, because each one
+ * says exactly what to change.
+ *
+ * JSON.parse threw on them, so the sentence was replaced by:
+ *
+ *   Unexpected token 'N', "Not creati"... is not valid JSON
+ *
+ * which is a parser complaining about the shape of an explanation nobody got to read. Throwing the
+ * TEXT means the loop's existing error handling reports the refusal itself.
+ */
+export function parseCreateResult(raw: string): CreateToolResult {
+  try {
+    return JSON.parse(raw) as CreateToolResult;
+  } catch {
+    const text = String(raw ?? '').trim();
+    throw new Error(text || 'The create tool returned an empty response.');
+  }
+}
+
 export interface CreateTagsOptions {
   /** Sleep impl - injectable so tests run instantly. */
   sleep?: (ms: number) => Promise<void>;
@@ -90,7 +121,7 @@ export async function createSuggestedTags(
                       // Companion Lookup Table variables an event param references (e.g. a per-page form_name).
                       ...(Array.isArray(t.eventParamLookups) && t.eventParamLookups.length ? { eventParamLookups: t.eventParamLookups } : {}),
                     };
-        const out = JSON.parse(
+        const out = parseCreateResult(
           await execute('create_gtm_tracking_tag', {
             accountId: ids.accountId,
             containerId: ids.containerId,
@@ -100,7 +131,7 @@ export async function createSuggestedTags(
             ...platformArgs,
             trigger: t.trigger,
           }),
-        ) as { declined?: boolean; alreadyExists?: boolean; tag?: { name?: string; tagId?: string }; trigger?: { reused?: boolean } };
+        );
         if (out?.declined) {
           outcomes.push({ id: t.id, ok: false, error: 'declined' });
         } else if (out?.alreadyExists) {
