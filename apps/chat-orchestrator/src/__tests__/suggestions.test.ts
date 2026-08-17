@@ -448,6 +448,39 @@ test('a row with nothing to install asks for no listener', async () => {
   assert.deepEqual(listenerTagsFor(rows), []);
 });
 
+test('every write carries confirm, or the MCP refuses it before GTM is reached', async () => {
+  // The bug this exists for: nothing on this path sent `confirm`, every guarded write in the MCP
+  // requires it, and so EVERY create from the website failed validation with "Required at confirm".
+  // The page ticked rows, reported a failure per row, and created nothing. A test on the pure
+  // function is the only thing that holds it, because the route that used to be responsible for
+  // adding it is not unit-tested.
+  const calls: Record<string, unknown>[] = [];
+  const execute = async (_n: string, args: Record<string, unknown>): Promise<string> => {
+    calls.push(args);
+    return JSON.stringify({ tag: { name: args.tagName, tagId: '1' }, trigger: { reused: false } });
+  };
+  const rows = [
+    {
+      id: 's1',
+      platform: 'ga4_event',
+      tagName: 'Contact Form',
+      trigger: { name: 'T', kind: 'custom_event', eventName: 'form_submit' },
+      install: {
+        requires: [
+          { kind: 'listener-tag', tag: { name: 'cHTML - listener', html: '<script></script>', fires: 'all_pages' } },
+        ],
+      },
+    },
+    { id: 's2', platform: 'ga4_event', tagName: 'Email', trigger: { name: 'E', kind: 'link_click' } },
+  ] as unknown as SuggestedTagView[];
+
+  await createSelected(execute, { accountId: '1', containerId: '2', workspaceId: '3' }, rows);
+  assert.equal(calls.length, 3, 'one listener and two tags');
+  for (const args of calls) {
+    assert.equal(args.confirm, true, `"${String(args.tagName)}" was sent without confirm`);
+  }
+});
+
 test('the listener is created before the tag that depends on it', async () => {
   // A GA4 tag on a Custom Event trigger does nothing until something pushes that event. Creating the
   // listener afterwards leaves a window where the container looks complete and reports nothing.
