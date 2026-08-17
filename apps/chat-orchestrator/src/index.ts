@@ -1339,7 +1339,10 @@ async function main(): Promise<void> {
             'unsupported_platform',
           );
         }
-        const tags = withMeasurementId(supported, String(req.body?.measurementId ?? ''));
+        // No withMeasurementId here any more. It used to stamp an id onto each row, and the GA4
+        // configuration below replaces that entirely: the id lives in one Constant and every tag
+        // references it. Leaving the call in would suggest the tags still carry an id of their own.
+        const tags = supported;
         // Plain: createSelected adds the confirm every guarded write needs, so that it can be
         // tested rather than depending on each caller remembering.
         const execute = async (name: string, args: Record<string, unknown>): Promise<string> => {
@@ -1362,18 +1365,15 @@ async function main(): Promise<void> {
          * so "absent" is never inferred from "unknown".
          */
         const givenId = String(req.body?.measurementId ?? '').trim();
-        let ga4: { plan: ReturnType<typeof planGa4Config>; measurementId: string } | undefined;
-        if (givenId) {
-          const snapshot = await fetchWorkspaceSnapshot(mcp, ws);
-          const plan = planGa4Config(snapshot, givenId);
-          if (plan.blocked) throw new ResourceError(plan.blocked, 'ga4_config_blocked');
-          ga4 = { plan, measurementId: givenId };
-          console.log(
-            `[suggestions] ga4 config user=${userTag(user)} variable=${plan.createVariable ? 'create' : 'reuse'} ` +
-              `configTag=${plan.createConfigTag ? 'create' : `reuse "${forLog(String(plan.existingConfigTag), 80)}"`} ` +
-              `reference=${plan.reference}${plan.warning ? ' WARNING' : ''}`,
-          );
-        }
+        const snapshot = await fetchWorkspaceSnapshot(mcp, ws);
+        const ga4 = planGa4Config(snapshot, givenId);
+        if (ga4.blocked) throw new ResourceError(ga4.blocked, 'ga4_config_blocked');
+        console.log(
+          `[suggestions] ga4 config user=${userTag(user)} id=${ga4.measurementId} source=${ga4.source} ` +
+            `variable=${ga4.createVariable ? 'create' : 'reuse'} ` +
+            `configTag=${ga4.createConfigTag ? 'create' : `reuse "${forLog(String(ga4.existingConfigTag), 80)}"`} ` +
+            `reference=${ga4.reference}${ga4.warning ? ' WARNING' : ''}`,
+        );
 
         const createStartedAt = Date.now();
         const result = await createSelected(execute, ws, tags, undefined, ga4);

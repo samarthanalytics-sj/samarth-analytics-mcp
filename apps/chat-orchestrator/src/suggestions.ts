@@ -680,10 +680,24 @@ export function looksLikePlaceholderId(v: string): boolean {
   return /^(X{3,}|0{4,}|1234567890?|0123456789|123456789)$/i.test(body);
 }
 
+/**
+ * The value a Constant falls back to when nothing better is known.
+ *
+ * A stand-in rather than a refusal, and the variable is precisely what makes that safe: the id
+ * lives in ONE place, so correcting it later is one edit in GTM instead of reopening every tag.
+ * Refusing here would have been the worse trade - it left the user with no container at all and a
+ * message asking for something they may not have to hand.
+ */
+export const PLACEHOLDER_MEASUREMENT_ID = 'G-123456789';
+
 export interface Ga4ConfigPlan {
   variableName: string;
   /** What every GA4 tag will carry as its Measurement ID. */
   reference: string;
+  /** The value the Constant holds. Typed in, read off the container, or the placeholder. */
+  measurementId: string;
+  /** Where that value came from, so the result can say it rather than imply it. */
+  source: 'entered' | 'container' | 'placeholder';
   /** A Constant of this name is not there yet and must be created. */
   createVariable: boolean;
   configTagName: string;
@@ -720,9 +734,10 @@ export function planGa4Config(
   snapshot: {
     tags: Array<{ name: string; type?: string }>;
     variables: Array<{ name: string; type?: string }>;
+    ga4BaseTag?: { name: string; type: string; measurementId?: string };
     incomplete: string[];
   },
-  measurementId: string,
+  measurementId?: string,
   names: { variableName?: string; configTagName?: string } = {},
 ): Ga4ConfigPlan {
   const variableName = names.variableName?.trim() || GA4_VARIABLE_NAME;
@@ -731,18 +746,29 @@ export function planGa4Config(
   const base: Ga4ConfigPlan = {
     variableName,
     reference,
+    measurementId: PLACEHOLDER_MEASUREMENT_ID,
+    source: 'placeholder',
     createVariable: false,
     configTagName,
     createConfigTag: false,
   };
 
-  const id = measurementId.trim();
-  if (!isRealMeasurementId(id)) {
+  /**
+   * Where the id comes from, best first.
+   *
+   * Typed in wins. Otherwise the container is asked, because it already knows and making someone
+   * retype something we can read is a worse product. Only when neither answers does the placeholder
+   * stand in, and the setup still gets built: one Constant to correct later beats no container and
+   * an error message.
+   */
+  const entered = (measurementId ?? '').trim();
+  if (entered && !isRealMeasurementId(entered)) {
+    // Typed and wrong is different from not typed. They meant something by it, so say what.
     return {
       ...base,
       blocked:
-        `"${id}" is not a Measurement ID. Enter the real one from your GA4 data stream ` +
-        '(it starts with G-) in the Measurement ID field.',
+        `"${entered}" is not a Measurement ID. It should look like G-ABC1234567, from your GA4 data ` +
+        'stream. Clear the field to set the configuration up with a placeholder instead.',
     };
   }
 
@@ -757,6 +783,13 @@ export function planGa4Config(
     };
   }
 
+  const fromContainer = snapshot.ga4BaseTag?.measurementId?.trim();
+  const [id, source]: [string, Ga4ConfigPlan['source']] = entered
+    ? [entered, 'entered']
+    : fromContainer && isRealMeasurementId(fromContainer)
+      ? [fromContainer, 'container']
+      : [PLACEHOLDER_MEASUREMENT_ID, 'placeholder'];
+
   const existingVar = snapshot.variables.find(
     (v) => v.name.trim().toLowerCase() === variableName.toLowerCase(),
   );
@@ -770,19 +803,26 @@ export function planGa4Config(
     };
   }
 
-  const existingConfig = snapshot.tags.find((t) => GA4_BASE_TYPES.has(String(t.type)));
+  const existingConfig =
+    snapshot.ga4BaseTag ?? snapshot.tags.find((t) => GA4_BASE_TYPES.has(String(t.type)));
 
   return {
     ...base,
+    measurementId: id,
+    source,
     createVariable: !existingVar,
     createConfigTag: !existingConfig,
     ...(existingConfig ? { existingConfigTag: existingConfig.name } : {}),
+    // Warned about whether the placeholder was chosen here or typed in. Either way the container
+    // will look completely correct and report to nothing, and this is the only moment to say so.
     ...(looksLikePlaceholderId(id)
       ? {
           warning:
-            `"${id}" looks like a sample id rather than a real one. The setup will be built, and ` +
-            `every GA4 tag will report to nothing until you change "${variableName}" in GTM to your ` +
-            'real Measurement ID.',
+            (source === 'placeholder'
+              ? `No Measurement ID was entered and this workspace has no Google tag to read one from, so "${variableName}" holds ${id}. `
+              : `"${id}" looks like a sample id rather than a real one, so "${variableName}" holds it as given. `) +
+            'Everything is wired up correctly and starts reporting the moment you set that ONE ' +
+            'variable in GTM to your real G- id. No tag needs touching.',
         }
       : {}),
   };
@@ -933,6 +973,10 @@ export interface Ga4ConfigOutcome {
   configTagName: string;
   /** What every created GA4 tag carries as its Measurement ID. */
   reference: string;
+  /** The value the Constant holds. */
+  measurementId: string;
+  /** Where that value came from: typed in, read off the container, or a placeholder. */
+  source: 'entered' | 'container' | 'placeholder';
   variable: 'created' | 'reused' | 'failed';
   configTag: 'created' | 'reused' | 'failed';
   /** Named when the base tag was already there, so "reused" is checkable. */
@@ -955,12 +999,13 @@ export async function setUpGa4Config(
   execute: ToolExecute,
   ids: { accountId: string; containerId: string; workspaceId: string },
   plan: Ga4ConfigPlan,
-  measurementId: string,
 ): Promise<Ga4ConfigOutcome> {
   const out: Ga4ConfigOutcome = {
     variableName: plan.variableName,
     configTagName: plan.configTagName,
     reference: plan.reference,
+    measurementId: plan.measurementId,
+    source: plan.source,
     variable: plan.createVariable ? 'created' : 'reused',
     configTag: plan.createConfigTag ? 'created' : 'reused',
     ...(plan.existingConfigTag ? { existingConfigTag: plan.existingConfigTag } : {}),
@@ -973,7 +1018,7 @@ export async function setUpGa4Config(
         ...ids,
         name: plan.variableName,
         kind: 'constant',
-        value: measurementId.trim(),
+        value: plan.measurementId,
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -1026,7 +1071,7 @@ export async function createSelected(
   requested: SuggestedTagView[],
   onProgress?: (done: number, total: number) => void,
   /** The GA4 configuration to stand up first. Omitted means the id goes on each tag as before. */
-  ga4?: { plan: Ga4ConfigPlan; measurementId: string },
+  ga4?: Ga4ConfigPlan,
 ): Promise<CreateResult> {
   /**
    * Every guarded write in the MCP requires `confirm: true`, and nothing on this path was sending
@@ -1053,7 +1098,7 @@ export async function createSelected(
   let ga4Config: Ga4ConfigOutcome | undefined;
   let tags = requested;
   if (ga4) {
-    ga4Config = await setUpGa4Config(execute, ids, ga4.plan, ga4.measurementId);
+    ga4Config = await setUpGa4Config(execute, ids, ga4);
     if (ga4Config.variable === 'failed' || ga4Config.configTag === 'failed') {
       const why =
         `The GA4 configuration could not be set up (${ga4Config.error ?? 'unknown error'}), so no GA4 ` +
@@ -1071,7 +1116,7 @@ export async function createSelected(
       };
     }
     // Every GA4 tag now names the Constant rather than carrying its own copy of the id.
-    tags = useGa4Variable(requested, ga4.plan.reference);
+    tags = useGa4Variable(requested, ga4.reference);
   }
 
   const listeners: CreateResult['listeners'] = [];
