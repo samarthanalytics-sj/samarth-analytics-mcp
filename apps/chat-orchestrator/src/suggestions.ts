@@ -778,11 +778,26 @@ export interface CreateResult {
  * reported, which it is.
  */
 export async function createSelected(
-  execute: ToolExecute,
+  rawExecute: ToolExecute,
   ids: { accountId: string; containerId: string; workspaceId: string },
   tags: SuggestedTagView[],
   onProgress?: (done: number, total: number) => void,
 ): Promise<CreateResult> {
+  /**
+   * Every guarded write in the MCP requires `confirm: true`, and nothing on this path was sending
+   * it. Each create failed validation before it reached GTM ("Required at confirm") and the row
+   * showed the raw MCP error, so the page could tick rows, report failure per row, and never create
+   * anything.
+   *
+   * Added HERE rather than in the route, so one test can hold it for both the listener tags and the
+   * tags themselves. A caller that has to remember is how it went missing.
+   *
+   * This confirms nothing on the user's behalf that they did not already do: they ticked specific
+   * rows and pressed Create. The route checks enableWriteTools before calling this, and the MCP
+   * still enforces GTM_MCP_ENABLE_WRITES on its own side.
+   */
+  const execute: ToolExecute = (name, args) => rawExecute(name, { ...args, confirm: true });
+
   const listeners: CreateResult['listeners'] = [];
   for (const listener of listenerTagsFor(tags)) {
     try {

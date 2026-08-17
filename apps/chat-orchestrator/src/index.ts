@@ -1273,6 +1273,8 @@ async function main(): Promise<void> {
           );
         }
         const tags = withMeasurementId(supported, String(req.body?.measurementId ?? ''));
+        // Plain: createSelected adds the confirm every guarded write needs, so that it can be
+        // tested rather than depending on each caller remembering.
         const execute = async (name: string, args: Record<string, unknown>): Promise<string> => {
           const { ok, text } = await mcp.callTool(name, args);
           // Thrown, not returned: createSuggestedTags reads failures off the exception, and that is
