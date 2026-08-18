@@ -11,6 +11,15 @@ import type { OpenAiTool } from './tools.js';
 export interface StreamCallbacks {
   onDelta(text: string): void;
   onUsage?(usage: { promptTokens: number; completionTokens: number; cachedTokens: number }): void;
+  /**
+   * Called before the client sleeps on a retry, so the surface can say what is happening.
+   *
+   * A turn that pauses 45 seconds in silence is indistinguishable from one that has hung, and the
+   * reasonable response to a hang is to reload the page - which throws away the turn that was about
+   * to succeed. Announcing the wait is what makes waiting a usable behaviour rather than a worse
+   * failure.
+   */
+  onWait?(info: { ms: number; reason: 'token_window' | 'transient'; attempt: number; of: number }): void;
 }
 
 export interface StreamResult {
@@ -156,11 +165,17 @@ export class OpenAiClient {
         const saturated = err.status === 429 && isTokenWindowSaturated(err.message);
         const delay = retryDelayMs(attempt, err.message.match(/retry-after:(\S+)/)?.[1] ?? null, saturated);
         if (saturated) {
-          // Said in the log, because from the outside a turn that pauses 20 seconds looks hung.
+          // Said in the log AND to the caller: from the outside a turn that pauses looks hung.
           console.warn(
             `[openai] per-minute token window is full; waiting ${Math.round(delay / 1000)}s before retry ${attempt + 1}/${MAX_RETRIES}`,
           );
         }
+        cbs.onWait?.({
+          ms: delay,
+          reason: saturated ? 'token_window' : 'transient',
+          attempt: attempt + 1,
+          of: MAX_RETRIES,
+        });
         await this.sleepImpl(delay);
       }
     }
