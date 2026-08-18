@@ -102,6 +102,15 @@ export type StreamEvent =
     }
   | { type: 'approval_resolved'; approvalId: string; approved: boolean }
   | { type: 'usage'; promptTokens: number; completionTokens: number; cachedTokens: number }
+  /**
+   * Something the turn is DOING that is neither text nor a tool call: currently, waiting out a
+   * rate limit before continuing.
+   *
+   * Its own event rather than a token, because a token is part of the answer and gets recorded in
+   * the conversation. "Waiting 45 seconds" is a status, true only while it is happening, and it
+   * must not end up in the transcript as though the assistant said it.
+   */
+  | { type: 'notice'; level: 'info' | 'warn'; message: string; /** ms, when the notice is a wait */ waitMs?: number }
   | { type: 'error'; code: string; message: string }
   | { type: 'done'; reason: 'complete' | 'tool_budget' | 'time_budget' | 'aborted' };
 

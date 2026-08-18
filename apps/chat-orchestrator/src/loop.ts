@@ -326,6 +326,23 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
       openAiTools,
       {
         onDelta: (text) => emit({ type: 'token', text }),
+        /**
+         * The turn is not stuck, it is waiting for the account's per-minute token budget to refill.
+         *
+         * Sent so the page can say so. Without it the only visible difference between "waiting 45
+         * seconds and about to succeed" and "hung" is patience, and the reasonable response to a
+         * hang is a reload, which throws the turn away.
+         */
+        onWait: ({ ms, reason, attempt, of }) =>
+          emit({
+            type: 'notice',
+            level: 'warn',
+            waitMs: ms,
+            message:
+              reason === 'token_window'
+                ? `Your OpenAI account's per-minute token limit is full. Waiting ${Math.round(ms / 1000)}s for it to refill, then continuing this answer (attempt ${attempt} of ${of}).`
+                : `The model call failed and is being retried in ${Math.round(ms / 1000)}s (attempt ${attempt} of ${of}).`,
+          }),
         onUsage: (u) => {
           spend.promptTokens += u.promptTokens;
           spend.completionTokens += u.completionTokens;

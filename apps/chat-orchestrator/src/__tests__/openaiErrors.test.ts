@@ -120,3 +120,21 @@ test('a spent TOKEN window is told apart from a request-rate limit', async () =>
   );
   assert.equal(isTokenWindowSaturated('OpenAI returned 500: server error'), false);
 });
+
+test('the caller is told it is waiting, and for how long', async () => {
+  // A turn that pauses in silence is indistinguishable from one that has hung, and the reasonable
+  // response to a hang is a reload - which throws away the turn that was about to succeed.
+  const { fetchImpl } = respondWith(TPM_LIMIT, { 'x-ratelimit-limit-tokens': '30000', 'retry-after': '2' });
+  const waits: Array<{ ms: number; reason: string; attempt: number; of: number }> = [];
+  const client = new OpenAiClient(cfg, fetchImpl, async () => {});
+
+  await assert.rejects(() =>
+    client.streamChat([], [], { onDelta() {}, onWait: (w) => waits.push(w) }, new AbortController().signal),
+  );
+
+  assert.ok(waits.length > 0, 'every sleep is announced before it happens');
+  assert.equal(waits[0].reason, 'token_window');
+  assert.ok(waits[0].ms >= 20_000, 'and reports the real wait, not the hint that was too short');
+  assert.equal(waits[0].of, 3);
+  assert.equal(waits[0].attempt, 1);
+});

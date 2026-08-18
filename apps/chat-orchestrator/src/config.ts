@@ -292,7 +292,11 @@ export function loadConfig(): OrchestratorConfig {
       lightModel: process.env.OPENAI_LIGHT_MODEL?.trim() || 'gpt-5.4-mini',
       baseUrl: process.env.OPENAI_BASE_URL?.trim() || 'https://api.openai.com/v1',
       maxOutputTokens: num('OPENAI_MAX_OUTPUT_TOKENS', 4096),
-      requestTimeoutMs: num('OPENAI_TIMEOUT_MS', 120_000),
+      // Three minutes, not two. The retry path can now sleep out a full rolling-minute token
+      // window; at two minutes the "do not start an attempt we cannot afford to finish" check fired
+      // straight after the wait and failed the turn anyway, which is the wait's cost without its
+      // benefit.
+      requestTimeoutMs: num('OPENAI_TIMEOUT_MS', 180_000),
     },
     mcp: {
       transport: (process.env.MCP_TRANSPORT as 'stdio' | 'http') ?? 'stdio',
@@ -329,7 +333,9 @@ export function loadConfig(): OrchestratorConfig {
     devNoAuth,
     limits: {
       maxToolCallsPerTurn: num('MAX_TOOL_CALLS_PER_TURN', 12),
-      maxTurnMs: num('MAX_TURN_MS', 120_000),
+      // Four minutes. A turn that has already spent time on tool calls and then waits out a token
+      // window needs room for both, or the turn budget cancels the recovery the retry just bought.
+      maxTurnMs: num('MAX_TURN_MS', 240_000),
       /*
        * Both lowered from 20 / 24,000 while looking at real usage: 71% of input tokens were cache
        * hits, so the cacheable prefix was already efficient and the remaining cost was the
