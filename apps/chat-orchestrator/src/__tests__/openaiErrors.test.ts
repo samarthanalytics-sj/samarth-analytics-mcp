@@ -66,7 +66,9 @@ void test('a spent balance is NOT retried', async () => {
 
 void test('a real per-minute limit IS retried, and carries the ceiling', async () => {
   const { fetchImpl, calls } = respondWith(TPM_LIMIT, { 'x-ratelimit-limit-tokens': '30000', 'retry-after': '1' });
-  const client = new OpenAiClient(cfg, fetchImpl);
+  // Sleep is injected: a spent token window now waits 20s+ before retrying, and a suite that
+  // actually served that wait would take minutes and time out its own request budget.
+  const client = new OpenAiClient(cfg, fetchImpl, async () => {});
   await assert.rejects(
     () => client.streamChat([], [], { onDelta() {} }, new AbortController().signal),
     (err: unknown) => {
@@ -77,4 +79,44 @@ void test('a real per-minute limit IS retried, and carries the ceiling', async (
     },
   );
   assert.ok(calls() > 1, 'a pace limit is worth retrying');
+});
+
+// Retrying into a token window that is already spent.
+//
+// From a real turn: five retries on Retry-After hints of 1.75 to 7.7 seconds, "Used 30000" every
+// time, and the turn failed after 38 seconds having never had room to run. OpenAI's hint says when
+// the next few tokens free up, not when there is space for the whole request.
+
+const TPM_429 =
+  'OpenAI returned 429: { "error": { "message": "Rate limit reached for gpt-4o in organization ' +
+  'org-x on tokens per min (TPM): Limit 30000, Used 30000, Requested 3884. Please try again in ' +
+  '7.768s.", "type": "tokens", "code": "rate_limit_exceeded" } } retry-after:2';
+
+const RPM_429 =
+  'OpenAI returned 429: { "error": { "message": "Rate limit reached for gpt-4o in organization ' +
+  'org-x on requests per min (RPM): Limit 500, Used 500. Please try again in 120ms.", ' +
+  '"code": "rate_limit_exceeded" } } retry-after:1';
+
+test('the backoff floor applies to a spent token window and not to a rate limit', async () => {
+  const { retryDelayMs } = await import('../openai.js');
+  // OpenAI's own hint, which is the number that failed: 2 seconds into a window with no room.
+  assert.equal(retryDelayMs(0, '2', false), 2_000, 'an ordinary 429 keeps the short hint');
+  assert.ok(
+    retryDelayMs(0, '2', true) >= 20_000,
+    'a spent window waits long enough for the rolling minute to drain',
+  );
+  // It escalates rather than repeating the same too-short wait five times.
+  assert.ok(retryDelayMs(2, '2', true) > retryDelayMs(0, '2', true));
+  assert.ok(retryDelayMs(9, '2', true) <= 60_000, 'and is still bounded');
+});
+
+test('a spent TOKEN window is told apart from a request-rate limit', async () => {
+  const { isTokenWindowSaturated } = await import('../openai.js');
+  assert.equal(isTokenWindowSaturated(TPM_429), true);
+  assert.equal(
+    isTokenWindowSaturated(RPM_429),
+    false,
+    'a request-rate 429 clears in a second and must keep the short backoff',
+  );
+  assert.equal(isTokenWindowSaturated('OpenAI returned 500: server error'), false);
 });
