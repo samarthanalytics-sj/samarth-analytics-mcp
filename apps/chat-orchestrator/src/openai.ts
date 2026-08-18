@@ -79,22 +79,57 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-/** Honors Retry-After when present, otherwise exponential backoff with full jitter. */
-function retryDelayMs(attempt: number, retryAfter: string | null): number {
+/**
+ * The floor for a retry into a SATURATED per-minute token window.
+ *
+ * OpenAI's Retry-After on a TPM 429 is optimistic: it says when the next few tokens free up, not
+ * when there is room for the whole request. Observed on this deployment, a turn retried five times
+ * on hints of 1.75 to 7.7 seconds, hit "Used 30000" every time, and failed after 38 seconds having
+ * never had a chance. The window refills over a rolling minute, so a request that needs several
+ * thousand tokens has to wait for a meaningful share of that minute to drain.
+ *
+ * Waiting 20 seconds and succeeding beats failing at 38.
+ */
+const SATURATED_WINDOW_FLOOR_MS = 20_000;
+
+/**
+ * Honors Retry-After when present, otherwise exponential backoff with full jitter.
+ *
+ * `saturated` raises the floor rather than replacing the hint: when the account has already spent
+ * its minute, the server's own suggestion is the one number we know to be too short.
+ */
+export function retryDelayMs(attempt: number, retryAfter: string | null, saturated = false): number {
+  const floor = saturated ? Math.min(SATURATED_WINDOW_FLOOR_MS * (attempt + 1), 60_000) : 0;
   if (retryAfter) {
     const seconds = Number(retryAfter);
-    if (Number.isFinite(seconds) && seconds > 0) return Math.min(seconds * 1000, 60_000);
+    if (Number.isFinite(seconds) && seconds > 0) {
+      return Math.min(Math.max(seconds * 1000, floor), 60_000);
+    }
     const asDate = Date.parse(retryAfter);
-    if (!Number.isNaN(asDate)) return Math.min(Math.max(asDate - Date.now(), 0), 60_000);
+    if (!Number.isNaN(asDate)) {
+      return Math.min(Math.max(asDate - Date.now(), floor, 0), 60_000);
+    }
   }
   const base = Math.min(1000 * 2 ** attempt, 30_000);
-  return Math.round(base * (0.5 + Math.random()));
+  return Math.min(Math.max(Math.round(base * (0.5 + Math.random())), floor), 60_000);
+}
+
+/**
+ * True when this 429 is the per-minute TOKEN window being full, rather than a request-rate limit.
+ *
+ * Read off the body rather than the status, because the two share a status code and need opposite
+ * responses: a request-rate 429 clears in a second, a spent token window does not.
+ */
+export function isTokenWindowSaturated(message: string): boolean {
+  return /tokens per min|TPM/i.test(message) && /rate limit reached/i.test(message);
 }
 
 export class OpenAiClient {
   constructor(
     private readonly cfg: OrchestratorConfig,
     private readonly fetchImpl: typeof fetch = fetch,
+    /** Injected so retry TIMING can be tested without a test that actually waits 20 seconds. */
+    private readonly sleepImpl: (ms: number) => Promise<void> = sleep,
   ) {}
 
   async streamChat(
@@ -118,7 +153,15 @@ export class OpenAiClient {
         if (NEVER_RETRY.has(err.code)) throw err;
         lastError = err;
         if (attempt === MAX_RETRIES) break;
-        await sleep(retryDelayMs(attempt, err.message.match(/retry-after:(\S+)/)?.[1] ?? null));
+        const saturated = err.status === 429 && isTokenWindowSaturated(err.message);
+        const delay = retryDelayMs(attempt, err.message.match(/retry-after:(\S+)/)?.[1] ?? null, saturated);
+        if (saturated) {
+          // Said in the log, because from the outside a turn that pauses 20 seconds looks hung.
+          console.warn(
+            `[openai] per-minute token window is full; waiting ${Math.round(delay / 1000)}s before retry ${attempt + 1}/${MAX_RETRIES}`,
+          );
+        }
+        await this.sleepImpl(delay);
       }
     }
     throw lastError ?? new OpenAiError('Request failed', 500, 'unknown');
