@@ -18,6 +18,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { forLog, redactSecrets } from './redact.js';
+import { explainError } from './explain.js';
 
 /* ────────────────────────────── The catalog ──────────────────────────────── */
 
@@ -718,12 +719,16 @@ export class EventRecorder {
     this.track(
       slack.post(e).then((r) => {
         if (r.throttled) return;
+        // Slack answers a bad webhook with a bare token like "no_service", which means nothing to
+        // the person reading the dashboard.
+        const why = r.ok ? null : explainError(r.error ?? '', { kind: 'slack' });
         this.record({
           type: r.ok ? 'slack.sent' : 'slack.failed',
           status: r.ok ? 'success' : 'failed',
           title: r.ok ? 'Slack Notification Sent' : 'Slack Notification Failed',
           details: `${e.title}${settings.channelLabel ? ` to ${settings.channelLabel}` : ''}`,
-          reason: r.ok ? undefined : r.error,
+          ...(why ? { reason: why.reason, error: r.error } : {}),
+          ...(why?.action ? { action: why.action } : {}),
           correlationId: e.id,
         });
       }),

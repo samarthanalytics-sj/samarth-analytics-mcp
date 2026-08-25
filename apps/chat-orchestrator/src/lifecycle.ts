@@ -10,6 +10,7 @@ import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { forLog } from './redact.js';
+import { explainError } from './explain.js';
 import {
   DEFAULT_SLACK_SETTINGS,
   deriveHealth,
@@ -290,15 +291,21 @@ export function installCrashHandlers(
     // Before the record, not after: if writing the row hangs, the next run must still know this
     // stop was already accounted for.
     markSelfReported(logDir, kind);
+    // The reason people read is what the error MEANS - "port 8787 is already in use" rather than
+    // "uncaughtException". Which handler caught it is a detail, and lives in the details line.
+    const { reason, action } = explainError(message, {
+      kind: 'crash',
+      ...((err as { code?: string })?.code ? { code: String((err as { code?: string }).code) } : {}),
+    });
     recorder.record({
       type: 'orchestrator.unexpected_shutdown',
       status: 'stopped',
       severity: 'critical',
       title: 'Orchestrator Unexpected Shutdown',
-      reason: kind === 'uncaughtException' ? 'Unhandled error in the process' : 'Unhandled promise rejection',
-      details: forLog(message, 200),
+      reason,
+      details: `${kind === 'uncaughtException' ? 'Unhandled error' : 'Unhandled promise rejection'}: ${forLog(message, 160)}`,
       error: stack,
-      action: 'The supervisor will restart it',
+      action: action ?? 'The supervisor will restart it',
     });
     void recorder.flush(3_000).finally(() => exit(1));
   };

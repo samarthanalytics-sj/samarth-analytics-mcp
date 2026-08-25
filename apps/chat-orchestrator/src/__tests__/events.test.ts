@@ -236,7 +236,10 @@ test('a Slack failure is recorded and counted, and never throws', async () => {
   await rec.flush();
   const sent = rec.events.tail({ type: 'slack.failed' });
   assert.equal(sent.length, 1);
-  assert.match(sent[0].reason ?? '', /404 no_service/);
+  // The reason is what the token MEANS; "no_service" is a Slack code, not an explanation. The raw
+  // text is kept beside it for whoever needs it.
+  assert.match(sent[0].reason ?? '', /no longer recognises this webhook/);
+  assert.match(sent[0].error ?? '', /404 no_service/);
   assert.equal(slack.stats().failures, 1);
 });
 
