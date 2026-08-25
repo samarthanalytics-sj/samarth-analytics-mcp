@@ -15,6 +15,7 @@ not a lost laptop). Anything genuinely off-machine should go in a password manag
 | `OPENAI_API_KEY` | platform.openai.com → API keys. Cannot be re-read after creation; mint a new one and delete the old. |
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase dashboard → Project Settings → API → `service_role`. Re-readable. **Bypasses RLS**; treat as root. |
 | `GOOGLE_OAUTH_CLIENT_SECRET` | Google Cloud Console → APIs & Services → Credentials, project `gtm-ai-agent-463411`. Not re-readable; use "Add secret" and remove the old one. |
+| `ORCHESTRATOR_SLACK_WEBHOOK_URL` | Slack → the app's Incoming Webhooks page. Re-readable there. Optional: without it lifecycle events are recorded but never posted. Which events post is set on the website, not here. |
 
 ## Public or re-derivable: no recovery needed
 
@@ -37,6 +38,7 @@ the assistant is allowed to do rather than whether it starts.
 | `GOOGLE_IDENTITY_MODE` | `supabase` = each user's own Google token. Any other value makes every user share one Google account. |
 | `ALLOWED_ORIGINS` | CORS allowlist. A missing origin here is why a deployed frontend gets a CORS failure. |
 | `ORCHESTRATOR_DEV_NO_AUTH` | Local only. Must never be true anywhere reachable. |
+| `ORCHESTRATOR_NAME`, `ORCHESTRATOR_TIMEZONE` | How events and Slack messages name this process and which zone they write times in (default `Asia/Kolkata`, always named in the message). |
 
 ## Budgets and tuning
 

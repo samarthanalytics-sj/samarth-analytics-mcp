@@ -149,6 +149,20 @@ export interface OrchestratorConfig {
    * reach them.
    */
   approveLiveWrites: boolean;
+  /**
+   * Lifecycle events and Slack notifications. See events.ts.
+   *
+   * The webhook is the only secret; the switches an admin flips live in system_settings so they
+   * can be changed from the website without touching this host.
+   */
+  events: {
+    /** How this orchestrator names itself in every event and Slack message. */
+    orchestratorName: string;
+    /** IANA zone the times in messages are written in. Named in the message, never assumed. */
+    timezone: string;
+    /** Slack incoming webhook. Empty means notifications are off whatever the switches say. */
+    slackWebhookUrl: string;
+  };
 }
 
 function req(name: string): string {
@@ -277,7 +291,25 @@ export function loadConfig(): OrchestratorConfig {
     throw new Error('GOOGLE_IDENTITY_MODE=static requires GOOGLE_ACCESS_TOKEN.');
   }
 
+  // Slack webhooks live on one host. A URL anywhere else is either a typo or a place this process
+  // would post its activity to, and neither should get as far as the first event.
+  const slackWebhookUrl = process.env.ORCHESTRATOR_SLACK_WEBHOOK_URL?.trim() ?? '';
+  if (slackWebhookUrl && !/^https:\/\/hooks\.slack\.com\/services\/[A-Za-z0-9/_-]+$/.test(slackWebhookUrl)) {
+    throw new Error('ORCHESTRATOR_SLACK_WEBHOOK_URL must be a https://hooks.slack.com/services/... URL.');
+  }
+  const timezone = process.env.ORCHESTRATOR_TIMEZONE?.trim() || 'Asia/Kolkata';
+  try {
+    new Intl.DateTimeFormat('en-IN', { timeZone: timezone });
+  } catch {
+    throw new Error(`ORCHESTRATOR_TIMEZONE "${timezone}" is not a known IANA time zone (try Asia/Kolkata).`);
+  }
+
   return {
+    events: {
+      orchestratorName: process.env.ORCHESTRATOR_NAME?.trim() || 'AI Tag Manager Chat Orchestrator',
+      timezone,
+      slackWebhookUrl,
+    },
     port: num('PORT', 8787),
     host: process.env.ORCHESTRATOR_HOST ?? '127.0.0.1',
     allowedOrigins: list('ALLOWED_ORIGINS', [

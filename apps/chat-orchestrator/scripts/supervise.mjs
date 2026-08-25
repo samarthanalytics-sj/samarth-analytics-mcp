@@ -56,6 +56,23 @@ const logFile = join(logDir, 'orchestrator.log');
  */
 const pidFile = join(logDir, 'orchestrator.pid');
 const restartFlag = join(logDir, 'restart-requested');
+/**
+ * What the last stop was, for the next run to report.
+ *
+ * The orchestrator cannot record its own stop on this host (see above), so the supervisor writes
+ * one note here and the next run turns it into an "Orchestrator Stopped" or "Unexpected Shutdown"
+ * event, with the time, the duration and whether it was planned. Read once and deleted by
+ * src/lifecycle.ts.
+ */
+const lastExitFile = join(logDir, 'last-exit.json');
+
+function writeLastExit(record) {
+  try {
+    writeFileSync(lastExitFile, JSON.stringify(record), 'utf8');
+  } catch (err) {
+    note(`could not write ${lastExitFile}: ${err.message}. The next run will not report this stop.`);
+  }
+}
 
 /**
  * How long a restart request stays believable.
@@ -180,6 +197,16 @@ function start() {
     const seconds = Math.round(ranFor / 1000);
     const planned = consumeRestartRequest();
 
+    writeLastExit({
+      at: new Date().toISOString(),
+      code: typeof code === 'number' ? code : null,
+      signal: signal ?? null,
+      planned: Boolean(planned),
+      reason: planned ? planned.reason : '',
+      ranForMs: ranFor,
+      fastExits: planned ? 0 : ranFor < HEALTHY_RUN_MS ? consecutiveFastExits + 1 : 0,
+    });
+
     let delay;
     if (planned) {
       // Said plainly, because the whole point is that this line is not an incident.
@@ -234,6 +261,19 @@ function shutdown(signal) {
   if (stopping) return;
   stopping = true;
   note(`supervisor received ${signal}, stopping orchestrator`);
+  // A stop the operator asked for. Recorded here because the child's exit handler above returns
+  // early while `stopping` is set, and the next run should still say this was deliberate.
+  if (child) {
+    writeLastExit({
+      at: new Date().toISOString(),
+      code: null,
+      signal,
+      planned: true,
+      reason: `supervisor stopped by ${signal}`,
+      ranForMs: 0,
+      fastExits: 0,
+    });
+  }
   child?.kill();
   clearPidFile();
   // Give it a moment to close listeners, then leave regardless.
