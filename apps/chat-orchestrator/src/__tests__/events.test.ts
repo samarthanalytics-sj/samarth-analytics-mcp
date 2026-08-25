@@ -248,19 +248,56 @@ test('a webhook anywhere but hooks.slack.com is not configured', async () => {
   assert.equal(calls.calls.length, 0, 'nothing was sent anywhere');
 });
 
-test('a flood is held after the burst limit, with one line saying so; critical still goes', async () => {
+test('a flood of DIFFERENT events is held after the burst limit, with one line saying so; critical still goes', async () => {
+  // Distinct reasons throughout, so this exercises the overall budget rather than the per-event
+  // repeat cap above. Twenty different things going wrong is still twenty messages too many.
   const calls = fakeFetch();
   let now = 0;
   const s = new SlackNotifier('https://hooks.slack.com/services/T1/B1/x', calls.impl, () => now);
-  for (let i = 0; i < SLACK_BURST_LIMIT; i++) assert.equal((await s.post(ev())).ok, true);
-  const held = await s.post(ev());
+  const distinct = (i: number) => ev({ type: 'task.failed', severity: 'error', title: 'Task Failed', reason: `failure ${i}` });
+
+  for (let i = 0; i < SLACK_BURST_LIMIT; i++) assert.equal((await s.post(distinct(i))).ok, true);
+  const held = await s.post(distinct(100));
   assert.equal(held.throttled, true);
   assert.equal(calls.calls.length, SLACK_BURST_LIMIT + 1, 'one "being held" notice');
-  await s.post(ev());
+  await s.post(distinct(101));
   assert.equal(calls.calls.length, SLACK_BURST_LIMIT + 1, 'and only one');
-  assert.equal((await s.post(ev({ severity: 'critical' }))).ok, true, 'critical is never held');
+  assert.equal(
+    (await s.post(ev({ type: 'critical', severity: 'critical', title: 'Critical', reason: 'the roof is off' }))).ok,
+    true,
+    'critical is never held by the volume budget',
+  );
   now = 11 * 60_000;
-  assert.equal((await s.post(ev())).ok, true, 'the window moved on');
+  assert.equal((await s.post(distinct(102))).ok, true, 'the window moved on');
+});
+
+test('a crash loop does not become a pager storm, but a new critical event still gets through', async () => {
+  // Measured against a real incident on 2026-08-25: a port clash produced eight critical events in
+  // five minutes, one per supervisor restart. Critical is exempt from the burst budget, so without
+  // a repeat cap that is eight identical pages.
+  const calls = fakeFetch();
+  let now = 0;
+  const s = new SlackNotifier('https://hooks.slack.com/services/T1/B1/x', calls.impl, () => now);
+  const crash = () => ev({ type: 'orchestrator.unexpected_shutdown', severity: 'critical', title: 'Orchestrator Unexpected Shutdown', reason: 'Unhandled error in the process' });
+
+  for (let i = 0; i < 3; i++) {
+    now += 60_000;
+    assert.equal((await s.post(crash())).ok, true, `crash ${i + 1} is news`);
+  }
+  now += 60_000;
+  assert.equal((await s.post(crash())).throttled, true, 'the fourth is the same news');
+  assert.equal(calls.calls.length, 4, 'and it says so, once');
+  assert.match(String((calls.calls[3].body as { text: string }).text), /has now happened 4 times/);
+  now += 60_000;
+  assert.equal((await s.post(crash())).throttled, true);
+  assert.equal(calls.calls.length, 4, 'and then stays quiet about it');
+
+  // A DIFFERENT critical event is not what was throttled.
+  const other = ev({ type: 'orchestrator.startup_failed', severity: 'critical', title: 'Orchestrator Failed To Start', reason: 'The MCP server could not be reached' });
+  assert.equal((await s.post(other)).ok, true);
+
+  now += 11 * 60_000;
+  assert.equal((await s.post(crash())).ok, true, 'the window moved on');
 });
 
 test('secrets in a reason or detail are redacted before anything sees them', async () => {

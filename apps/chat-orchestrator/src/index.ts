@@ -195,7 +195,9 @@ async function main(): Promise<void> {
   // What the previous run left behind. On this host the stop cannot be recorded by the process
   // that stopped, so the next one reports it, from the supervisor's note. See lifecycle.ts.
   const lastExit = readLastExit(packageLogDir());
-  if (lastExit) {
+  // A stop the dying process already recorded, with its stack trace, is not reported again here:
+  // one crash, one critical event. The recovery below still fires, because that is news.
+  if (lastExit && !(lastExit.selfReported && !lastExit.planned)) {
     events.record({
       type: lastExit.planned ? 'orchestrator.stopped' : 'orchestrator.unexpected_shutdown',
       status: 'stopped',

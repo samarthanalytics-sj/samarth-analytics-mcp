@@ -110,11 +110,18 @@ on the website under **Admin > Orchestrator > Slack notifications**, stored in `
 (`orchestrator.slack`) and re-read every minute. Critical events (an unexpected shutdown, a failed
 start) post whenever notifications are on at all; per-tool-call detail posts only under "detailed".
 
+Two rate limits, because they catch different floods. More than 20 messages in 10 minutes are held
+with one line saying so, and critical events are exempt from that budget. But the *same* critical
+event posts at most 3 times in that window before it too is held with a "has now happened N times"
+line: a crash loop restarts every 60 seconds and each attempt is critical, so without that cap one
+outage becomes forty pages. A different critical event is never held by either rule.
+
 On this Windows host an external stop is `TerminateProcess`, so the process cannot record its own
 stop. The supervisor writes `logs/last-exit.json` and the next run reports it as
 *Orchestrator Stopped* (planned, via `npm run restart`) or *Unexpected Shutdown*, followed by
 *Orchestrator Recovered*. Uncaught errors are recorded and flushed before the exit that the
-supervisor then restarts.
+supervisor then restarts; the dying process leaves a marker so the next run does not report the
+same stop a second time.
 
 `POST /v1/chat` request body:
 

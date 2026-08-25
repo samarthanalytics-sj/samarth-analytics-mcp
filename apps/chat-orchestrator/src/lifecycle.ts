@@ -6,7 +6,7 @@
  * Kept out of events.ts so that file stays pure. Everything here touches a clock, a file or the
  * network, and each piece takes its dependency as an argument so the tests can hand it a fake.
  */
-import { existsSync, readFileSync, unlinkSync } from 'node:fs';
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { forLog } from './redact.js';
@@ -115,9 +115,19 @@ export interface LastExit {
   reason: string;
   ranForMs: number;
   fastExits: number;
+  /** True when the dying process already recorded this stop, so reporting it again would double up. */
+  selfReported?: boolean;
 }
 
 export const LAST_EXIT_FILE = 'last-exit.json';
+/**
+ * Written by the crash handler when the process managed to record its own death.
+ *
+ * Without it a single crash is reported twice: once by the dying process, which has the stack
+ * trace, and again by the next run reading the supervisor's note, which has the duration. Both are
+ * true and the second is redundant, and with Slack on it is two pages for one stop.
+ */
+export const SELF_REPORTED_FILE = 'last-crash-reported.json';
 
 /**
  * Reads and clears the note the supervisor writes when the previous run ended.
@@ -141,7 +151,46 @@ export function readLastExit(logDir: string): LastExit | null {
       // Losing this race means a duplicate line at worst.
     }
   }
-  return parseLastExit(raw);
+  const exit = parseLastExit(raw);
+  if (!exit) return null;
+  return { ...exit, selfReported: consumeSelfReported(logDir, exit.at) };
+}
+
+/**
+ * Whether the process that just died already said so itself, within a minute of the supervisor
+ * noticing. The marker is always cleared, including when it is too old to believe: one left behind
+ * would suppress the report of a later crash, which is the one failure mode worse than a duplicate.
+ */
+export function consumeSelfReported(logDir: string, exitAt: string): boolean {
+  const path = join(logDir, SELF_REPORTED_FILE);
+  if (!existsSync(path)) return false;
+  let raw = '';
+  try {
+    raw = readFileSync(path, 'utf8');
+  } catch {
+    return false;
+  } finally {
+    try {
+      unlinkSync(path);
+    } catch {
+      // As above: a duplicate at worst.
+    }
+  }
+  try {
+    const at = Date.parse((JSON.parse(raw) as { at?: string }).at ?? '');
+    if (Number.isNaN(at)) return false;
+    return Math.abs(Date.parse(exitAt) - at) <= 60_000;
+  } catch {
+    return false;
+  }
+}
+
+export function markSelfReported(logDir: string, reason: string): void {
+  try {
+    writeFileSync(join(logDir, SELF_REPORTED_FILE), JSON.stringify({ at: new Date().toISOString(), reason }), 'utf8');
+  } catch {
+    // The cost of failing here is one duplicate message, so it must not get in the way of dying.
+  }
 }
 
 export function parseLastExit(raw: string): LastExit | null {
@@ -195,11 +244,15 @@ export function packageLogDir(): string {
 export function installCrashHandlers(
   recorder: EventRecorder,
   exit: (code: number) => void = (code) => process.exit(code),
+  logDir: string = packageLogDir(),
 ): void {
   const die = (kind: string, err: unknown): void => {
     const message = err instanceof Error ? err.message : String(err);
     const stack = err instanceof Error && err.stack ? err.stack : message;
     console.error(`[orchestrator] ${kind}:`, stack);
+    // Before the record, not after: if writing the row hangs, the next run must still know this
+    // stop was already accounted for.
+    markSelfReported(logDir, kind);
     recorder.record({
       type: 'orchestrator.unexpected_shutdown',
       status: 'stopped',

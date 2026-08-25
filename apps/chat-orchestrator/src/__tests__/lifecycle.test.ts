@@ -7,7 +7,10 @@ import { mkdtempSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventRecorder, DEFAULT_SLACK_SETTINGS } from '../events.js';
-import { HealthMonitor, SettingsPoller, parseLastExit, readLastExit, LAST_EXIT_FILE } from '../lifecycle.js';
+import {
+  HealthMonitor, SettingsPoller, consumeSelfReported, markSelfReported,
+  parseLastExit, readLastExit, LAST_EXIT_FILE, SELF_REPORTED_FILE,
+} from '../lifecycle.js';
 
 function fetchAnswering(rows: unknown, status = 200) {
   const calls: string[] = [];
@@ -78,6 +81,38 @@ test('the note is read once and then gone', () => {
   assert.equal(first.ranForMs, 2_470_000);
   assert.equal(existsSync(join(dir, LAST_EXIT_FILE)), false, 'deleted on read');
   assert.equal(readLastExit(dir), null, 'so it cannot be reported twice');
+});
+
+test('a crash the process already reported is not reported twice', () => {
+  // One crash produced two critical rows before this: the dying process wrote one with the stack
+  // trace, and the next run wrote another from the supervisor's note. Both true, and with Slack on
+  // that is two pages for one stop.
+  const dir = mkdtempSync(join(tmpdir(), 'orch-self-'));
+  const at = new Date().toISOString();
+  markSelfReported(dir, 'uncaughtException');
+  assert.equal(existsSync(join(dir, SELF_REPORTED_FILE)), true);
+  writeFileSync(join(dir, LAST_EXIT_FILE), JSON.stringify({ at, code: 1, planned: false, ranForMs: 3000 }));
+  const exit = readLastExit(dir);
+  assert.equal(exit?.selfReported, true);
+  assert.equal(existsSync(join(dir, SELF_REPORTED_FILE)), false, 'the marker is cleared with the note');
+});
+
+test('a marker from an older crash never silences a newer one', () => {
+  // The one failure mode worse than a duplicate: a stale marker suppressing a real crash report.
+  const dir = mkdtempSync(join(tmpdir(), 'orch-stale-'));
+  writeFileSync(join(dir, SELF_REPORTED_FILE), JSON.stringify({ at: '2026-08-01T00:00:00.000Z' }));
+  assert.equal(consumeSelfReported(dir, new Date().toISOString()), false);
+  assert.equal(existsSync(join(dir, SELF_REPORTED_FILE)), false, 'and it is cleared anyway');
+
+  const dir2 = mkdtempSync(join(tmpdir(), 'orch-junk-'));
+  writeFileSync(join(dir2, SELF_REPORTED_FILE), 'not json');
+  assert.equal(consumeSelfReported(dir2, new Date().toISOString()), false);
+});
+
+test('a stop nobody reported is still reported', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'orch-plain-'));
+  writeFileSync(join(dir, LAST_EXIT_FILE), JSON.stringify({ at: new Date().toISOString(), code: 4294967295, planned: false, ranForMs: 900_000 }));
+  assert.equal(readLastExit(dir)?.selfReported, false);
 });
 
 test('a note without a usable time is ignored rather than reported at "now"', () => {

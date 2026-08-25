@@ -521,11 +521,26 @@ export const SLACK_WEBHOOK_RE = /^https:\/\/hooks\.slack\.com\/services\/[A-Za-z
 /** No more than this many posts in a rolling window, then one line saying the rest were held. */
 export const SLACK_BURST_LIMIT = 20;
 export const SLACK_BURST_WINDOW_MS = 10 * 60_000;
+/**
+ * How many times the SAME critical event may post in that window.
+ *
+ * Critical events are exempt from the burst budget, because an operator who missed a crash because
+ * twenty routine messages came first would be right to be angry. But a crash loop is a critical
+ * event repeating every sixty seconds, and with no cap at all this feature turns one outage into a
+ * pager storm. Three is enough to be unmissable; the fourth says it is still happening and stops.
+ */
+export const SLACK_REPEAT_LIMIT = 3;
+
+/** What makes two events "the same" for the repeat cap: the kind of thing and why. */
+export function signatureOf(e: OrchestratorEvent): string {
+  return `${e.type}::${e.reason ?? ''}`;
+}
 
 export class SlackNotifier {
   private sent = 0;
   private failures = 0;
   private recent: number[] = [];
+  private repeats = new Map<string, number[]>();
   private throttledNotice = false;
   readonly configured: boolean;
 
@@ -555,6 +570,24 @@ export class SlackNotifier {
   async post(e: OrchestratorEvent): Promise<{ ok: boolean; error?: string; throttled?: boolean }> {
     if (!this.configured) return { ok: false, error: 'No Slack webhook is configured.' };
 
+    // The same thing, again. A crash loop restarts every sixty seconds and each attempt is
+    // critical; saying so three times is a warning, saying so forty times is a channel nobody
+    // reads. A DIFFERENT critical event is never held by this.
+    const signature = signatureOf(e);
+    const cutoff = this.now() - SLACK_BURST_WINDOW_MS;
+    const seen = (this.repeats.get(signature) ?? []).filter((t) => t > cutoff);
+    if (seen.length >= SLACK_REPEAT_LIMIT) {
+      this.repeats.set(signature, seen);
+      if (seen.length === SLACK_REPEAT_LIMIT) {
+        seen.push(this.now());
+        this.repeats.set(signature, seen);
+        await this.send({
+          text: `:hourglass: *${e.title}* has now happened ${SLACK_REPEAT_LIMIT + 1} times in ${SLACK_BURST_WINDOW_MS / 60_000} minutes${e.reason ? ` (${e.reason})` : ''}. Further messages about this one are held; the full record is in the dashboard.`,
+        }).catch(() => undefined);
+      }
+      return { ok: false, throttled: true };
+    }
+
     // A crash loop or a flood of failed turns must not become a flood of Slack messages. Critical
     // events always go through; everything else is held once the window fills.
     if (e.severity !== 'critical' && this.overBurst()) {
@@ -572,6 +605,7 @@ export class SlackNotifier {
       await this.send(slackPayload(e));
       this.sent++;
       this.recent.push(this.now());
+      this.repeats.set(signature, [...seen, this.now()]);
       return { ok: true };
     } catch (err) {
       this.failures++;
