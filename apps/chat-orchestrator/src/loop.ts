@@ -35,6 +35,7 @@ import {
 import type { ToolDef } from './types.js';
 import type { ChatContext, ChatMessage, StreamEvent } from './types.js';
 import type { EventInput } from './events.js';
+import { explainError } from './explain.js';
 
 export interface RunTurnArgs {
   cfg: OrchestratorConfig;
@@ -538,13 +539,17 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
 
       /** One audit row per tool call, whatever became of it, and one event for the operator's record. */
       const record = (ok: boolean, summary: string): void => {
+        // A failed tool returns whatever the upstream said, which is often a JSON body. The reason
+        // is what that MEANS; the body itself stays in `error` for whoever needs it.
+        const why = ok ? null : explainError(summary, { kind: 'tool' });
         args.onEvent?.({
           type: ok ? 'api.request.completed' : 'api.request.failed',
           status: ok ? 'success' : 'failed',
           title: ok ? 'Tool Call Completed' : 'Tool Call Failed',
           taskId: args.taskId,
           details: `${call.function.name}${tool?.isWrite ? ' (write)' : ''}${approval !== 'not_required' ? `, approval ${approval}` : ''}`,
-          reason: ok ? undefined : forLog(summary, 160),
+          ...(why ? { reason: why.reason, error: forLog(summary, 600) } : {}),
+          ...(why?.action ? { action: why.action } : {}),
           durationMs: Date.now() - callStartedAt,
         });
         args.audit?.recordToolEvent(args.conversationId ?? null, user.id, {

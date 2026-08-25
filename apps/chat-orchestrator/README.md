@@ -119,6 +119,12 @@ event posts at most 3 times in that window before it too is held with a "has now
 line: a crash loop restarts every 60 seconds and each attempt is critical, so without that cap one
 outage becomes forty pages. A different critical event is never held by either rule.
 
+Failures are classified into a reason someone can act on (`src/explain.ts`) rather than recorded as
+"Unexpected error" or a raw upstream body: a port clash reads as "Port 8787 is already in use, so
+another orchestrator is probably still running", an OpenAI 429 says whether it is a spent balance or
+a full per-minute window, and an unmatched error keeps its own first sentence. The full text always
+stays in the event's `error` field.
+
 On this Windows host an external stop is `TerminateProcess`, so the process cannot record its own
 stop. The supervisor writes `logs/last-exit.json` and the next run reports it as
 *Orchestrator Stopped* (planned, via `npm run restart`) or *Unexpected Shutdown*, followed by

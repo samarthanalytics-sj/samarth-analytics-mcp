@@ -42,6 +42,7 @@ import {
   packageLogDir,
   readLastExit,
 } from './lifecycle.js';
+import { explainError, explainExit } from './explain.js';
 import { SiteScanner, ScanError, validPlatforms, MAX_SCAN_PAGES, MAX_SELECTED_PAGES } from './scan-client.js';
 import {
   ScanStore,
@@ -223,22 +224,23 @@ async function main(): Promise<void> {
   // A stop the dying process already recorded, with its stack trace, is not reported again here:
   // one crash, one critical event. The recovery below still fires, because that is news.
   if (lastExit && !(lastExit.selfReported && !lastExit.planned)) {
+    // An exit code is not a reason. explainExit says what that number means on this host, where
+    // every external stop arrives as the same unsigned -1.
+    const why = lastExit.planned
+      ? { reason: /supervisor stopped/i.test(lastExit.reason) ? 'Manual stop' : 'Planned restart', action: undefined }
+      : explainExit(lastExit.code, lastExit.signal, lastExit.fastExits);
     events.record({
       type: lastExit.planned ? 'orchestrator.stopped' : 'orchestrator.unexpected_shutdown',
       status: 'stopped',
       at: lastExit.at,
       title: lastExit.planned ? 'Orchestrator Stopped' : 'Orchestrator Unexpected Shutdown',
-      reason: lastExit.planned
-        ? /supervisor stopped/i.test(lastExit.reason) ? 'Manual stop' : 'Planned restart'
-        : lastExit.fastExits >= 3
-          ? 'Repeated fast exits, usually configuration'
-          : 'The process exited without being asked to',
+      reason: why.reason,
       details: lastExit.planned
         ? lastExit.reason
         : `Exit code ${lastExit.code ?? 'none'}${lastExit.signal ? `, signal ${lastExit.signal}` : ''}.`,
       ...(lastExit.ranForMs > 0 ? { durationMs: lastExit.ranForMs } : {}),
       trigger: lastExit.planned ? 'Operator' : 'Unexpected',
-      action: 'Restarted by the supervisor',
+      action: why.action ?? 'Restarted by the supervisor',
     });
   }
 
@@ -1441,15 +1443,17 @@ async function main(): Promise<void> {
         `[scan] FAILED user=${userTag(user)} url=${forLog(url, 120)} ` +
           `after ${Date.now() - startedAt}ms code=${code}: ${forLog(message)}`,
       );
+      const why = explainError(message, { kind: 'scan', code });
       events.record({
         type: 'task.failed',
         status: 'failed',
         title: 'Site Scan Failed',
         taskId: scanTask,
-        reason: forLog(message, 160),
+        reason: why.reason,
+        details: `${forLog(url, 100)}.`,
         error: `${code}: ${message}`,
         durationMs: Date.now() - startedAt,
-        action: 'The user was shown the reason',
+        action: why.action ?? 'The user was shown the reason',
       });
       // 502 rather than 500: the failure is in the thing being scanned or in the scanner, and the
       // page shows this sentence to the user, so it has to be the sentence they can act on.
@@ -1832,13 +1836,17 @@ async function main(): Promise<void> {
     } catch (err) {
       if (err instanceof GoogleIdentityError) {
         console.error(`[identity] ${err.code} for user ${userRef(user.id)}: ${forLog(err.message)}`);
+        const why = err.code === 'not_connected'
+          ? { reason: 'The user has not connected a Google account', action: 'They connect it from Settings' }
+          : explainError(err.message, { kind: 'identity', code: err.code });
         events.record({
           type: 'service.connection',
           status: 'failed',
           severity: err.code === 'not_connected' ? 'info' : 'error',
           title: 'Google Connection Failed',
-          reason: err.code === 'not_connected' ? 'The user has not connected a Google account' : 'Google identity could not be resolved',
+          reason: why.reason,
           details: `User ${userRef(user.id)}.`,
+          ...(why.action ? { action: why.action } : {}),
           error: err.message,
         });
         return res.status(err.code === 'not_connected' ? 428 : 502).json({
@@ -1846,13 +1854,15 @@ async function main(): Promise<void> {
           message: err.message,
         });
       }
+      const mcpWhy = explainError(err instanceof Error ? err.message : String(err), { kind: 'startup' });
       events.record({
         type: 'service.connection',
         status: 'failed',
         severity: 'error',
         title: 'MCP Session Failed',
-        reason: 'Could not start a tool session',
-        details: `User ${userRef(user.id)}.`,
+        reason: mcpWhy.reason,
+        details: `A tool session could not be started for user ${userRef(user.id)}.`,
+        ...(mcpWhy.action ? { action: mcpWhy.action } : {}),
         error: err instanceof Error ? err.message : String(err),
       });
       return res.status(503).json({
@@ -1986,22 +1996,22 @@ async function main(): Promise<void> {
         `[chat] turn FAILED user=${userTag(user)} after ${Date.now() - turnStartedAt}ms ` +
           `code=${code}: ${forLog(detail)}`,
       );
+      const why = explainError(detail, {
+        kind: 'turn',
+        code,
+        ...(err instanceof OpenAiError ? { status: err.status } : {}),
+      });
       events.record({
         type: 'task.failed',
         status: 'failed',
         title: 'Chat Turn Failed',
         taskId,
         correlationId: conversationId ?? undefined,
-        reason:
-          err instanceof OpenAiError
-            ? err.status === 429
-              ? isBillingFailure(err.code) ? 'OpenAI account has no credit' : 'OpenAI rate limit'
-              : `Model provider error (${err.status})`
-            : 'Unexpected error',
+        reason: why.reason,
         details: forLog(friendlyError(err), 200),
         error: `${code}: ${detail}`,
         durationMs: Date.now() - turnStartedAt,
-        action: 'The user was shown the reason',
+        action: why.action ?? 'The user was shown the reason',
       });
       stream.send({
         type: 'error',
@@ -2098,12 +2108,22 @@ function sendAuthError(res: express.Response, err: unknown): void {
   // Only a token that was presented and rejected is worth a record. A request with no token at all
   // is a scanner or a signed-out tab, and the [req] line already counts those.
   if (res.req?.headers.authorization) {
+    const message = err instanceof Error ? err.message : 'Authentication failed';
     recorder?.record({
       type: 'auth.failed',
       status: 'failed',
       title: 'Authentication Failed',
-      reason: code === 'misconfigured' ? 'Token verification is not configured' : 'Token rejected',
-      details: forLog(err instanceof Error ? err.message : 'Authentication failed', 120),
+      reason: code === 'misconfigured'
+        ? 'This deployment cannot verify tokens at all, so every signed-in request is refused'
+        : /expired/i.test(message)
+          ? "The caller's session had expired"
+          : /audience|issuer/i.test(message)
+            ? 'The token was issued for a different project'
+            : /missing bearer/i.test(message)
+              ? 'The request carried no token'
+              : 'The token was rejected as invalid',
+      details: forLog(message, 120),
+      ...(code === 'misconfigured' ? { action: 'Set SUPABASE_JWKS_URL on the orchestrator host' } : {}),
     });
   }
   res.status(status).json({
@@ -2143,15 +2163,19 @@ main().catch((err) => {
   // The recorder exists once main() has built it, which is before anything that can fail here. A
   // failure earlier than that (loadConfig throwing) never reaches this handler at all: it is a
   // module-level throw, printed by Node, and reported by the supervisor's next-run note instead.
+  const why = explainError(message, {
+    kind: 'startup',
+    ...((err as { code?: string })?.code ? { code: String((err as { code?: string }).code) } : {}),
+  });
   recorder?.record({
     type: 'orchestrator.startup_failed',
     status: 'failed',
     severity: 'critical',
     title: 'Orchestrator Failed To Start',
-    reason: /MCP|connect|spawn/i.test(message) ? 'The MCP server could not be reached' : 'Startup error',
+    reason: why.reason,
     details: forLog(message, 200),
     error: err instanceof Error && err.stack ? err.stack : message,
-    action: 'The supervisor will retry with backoff',
+    action: why.action ?? 'The supervisor will retry with backoff',
   });
   void (recorder ? recorder.flush(3_000) : Promise.resolve()).finally(() => process.exit(1));
 });
