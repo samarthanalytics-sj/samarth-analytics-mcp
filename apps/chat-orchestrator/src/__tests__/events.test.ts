@@ -248,6 +248,42 @@ test('a webhook anywhere but hooks.slack.com is not configured', async () => {
   assert.equal(calls.calls.length, 0, 'nothing was sent anywhere');
 });
 
+test('a webhook stored later takes effect without a restart, and a bad one is refused not stored', async () => {
+  // The whole point of keeping it in Vault: an admin saves it on the website and delivery starts on
+  // the next poll, on a machine they have no shell on.
+  const calls = fakeFetch();
+  const s = new SlackNotifier('', calls.impl);
+  assert.equal(s.configured, false);
+  assert.equal(s.stats().source, 'none');
+
+  assert.deepEqual(s.setWebhook('https://evil.example.com/hook', 'vault'), { changed: false, valid: false });
+  assert.equal(s.configured, false, 'a refused URL is not stored, so posts do not start failing instead');
+
+  assert.deepEqual(s.setWebhook('https://hooks.slack.com/services/T1/B1/x', 'vault'), { changed: true, valid: true });
+  assert.equal(s.configured, true);
+  assert.equal(s.stats().source, 'vault');
+  assert.equal((await s.post(ev())).ok, true);
+
+  assert.equal(s.setWebhook('https://hooks.slack.com/services/T1/B1/x', 'vault').changed, false, 'the same URL is not a change');
+  assert.deepEqual(s.setWebhook('', 'vault'), { changed: true, valid: true }, 'clearing it is allowed');
+  assert.equal(s.configured, false);
+  assert.equal(s.stats().source, 'none');
+});
+
+test('a new destination starts with a clean rate-limit slate', async () => {
+  // What was held back was held back for the people watching the OLD channel. A new one has heard
+  // none of it.
+  const calls = fakeFetch();
+  let now = 0;
+  const s = new SlackNotifier('https://hooks.slack.com/services/T1/B1/old', calls.impl, () => now);
+  const crash = () => ev({ type: 'orchestrator.unexpected_shutdown', severity: 'critical', title: 'Crash', reason: 'same' });
+  for (let i = 0; i < 3; i++) await s.post(crash());
+  assert.equal((await s.post(crash())).throttled, true);
+
+  s.setWebhook('https://hooks.slack.com/services/T2/B2/new', 'vault');
+  assert.equal((await s.post(crash())).ok, true, 'the new channel has not been told yet');
+});
+
 test('a flood of DIFFERENT events is held after the burst limit, with one line saying so; critical still goes', async () => {
   // Distinct reasons throughout, so this exercises the overall budget rather than the per-event
   // repeat cap above. Twenty different things going wrong is still twenty messages too many.

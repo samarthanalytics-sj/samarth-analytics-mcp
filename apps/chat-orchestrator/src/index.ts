@@ -179,6 +179,31 @@ async function main(): Promise<void> {
         trigger: 'Admin dashboard',
       });
     },
+    undefined,
+    /**
+     * The webhook from Vault, so it can be set and rotated from the admin screen without a shell on
+     * this machine or a restart.
+     *
+     * An explicit ORCHESTRATOR_SLACK_WEBHOOK_URL wins and is never overwritten: someone who set it
+     * in this host's environment meant it, and a stored value silently replacing it would be a
+     * surprise at the worst moment. Everyone else gets the stored one.
+     */
+    (url, first) => {
+      if (cfg.events.slackWebhookUrl) return;
+      const { changed, valid } = slack.setWebhook(url, 'vault');
+      if (!valid) {
+        console.warn('[events] the stored Slack webhook is not a hooks.slack.com URL; ignoring it');
+        return;
+      }
+      if (!changed || first) return;
+      events.record({
+        type: 'config.changed',
+        status: 'info',
+        title: 'Configuration Changed',
+        details: url ? 'A Slack webhook was stored; notifications can now be delivered.' : 'The Slack webhook was removed; nothing will be delivered.',
+        trigger: 'Admin dashboard',
+      });
+    },
   );
   const events = new EventRecorder({
     orchestrator: cfg.events.orchestratorName,
@@ -219,8 +244,11 @@ async function main(): Promise<void> {
 
   console.log(
     `[orchestrator] lifecycle events ${eventSink.isEnabled() ? 'ON (orchestrator_events)' : 'log only: no Supabase credentials'}; ` +
-      `Slack ${slack.configured ? (settings.current().enabled ? 'ON' : 'configured, switched off in admin') : 'not configured'}; ` +
-      `times in ${cfg.events.timezone}`,
+      `Slack ${
+        slack.configured
+          ? `${settings.current().enabled ? 'ON' : 'configured, switched off in admin'} (webhook from ${slack.stats().source === 'vault' ? 'Vault' : 'this host\'s .env'})`
+          : 'no webhook: set one under Admin > Orchestrator, or ORCHESTRATOR_SLACK_WEBHOOK_URL here'
+      }; times in ${cfg.events.timezone}`,
   );
 
   const tokenProvider = createTokenProvider(cfg);
@@ -422,6 +450,8 @@ async function main(): Promise<void> {
         ...health.current(),
       },
       events: { ...eventSink.stats(), buffered: events.events.size(), max: MAX_STORED_EVENTS },
+      // `source` says where the webhook came from, so the admin screen can explain why a webhook
+      // saved there is or is not the one in force. Never the URL itself.
       slack: { ...slack.stats(), enabled: settings.current().enabled, channel: settings.current().channelLabel },
     });
   });
@@ -478,7 +508,7 @@ async function main(): Promise<void> {
     if (!slack.configured) {
       return res.status(409).json({
         code: 'slack_not_configured',
-        message: 'ORCHESTRATOR_SLACK_WEBHOOK_URL is not set on the orchestrator host. Set it and restart.',
+        message: 'No Slack webhook is stored. Paste one into the Webhook field above and save it, then test again.',
       });
     }
     const test = events.record({

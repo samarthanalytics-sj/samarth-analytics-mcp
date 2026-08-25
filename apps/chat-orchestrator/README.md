@@ -105,8 +105,11 @@ Details: Received SIGINT
 Duration: 45 minutes
 ```
 
-The webhook is `ORCHESTRATOR_SLACK_WEBHOOK_URL` in this host's `.env`. Which events post is decided
-on the website under **Admin > Orchestrator > Slack notifications**, stored in `system_settings`
+The webhook is stored in **Supabase Vault** and set from the website under **Admin > Orchestrator >
+Slack notifications**; this process reads it through an RPC only the service role may call and picks
+up a change within a minute, so rotating it needs no shell here and no restart.
+`ORCHESTRATOR_SLACK_WEBHOOK_URL` in this host's `.env` still works and takes precedence over the
+stored one. Which events post is decided on the same screen, stored in `system_settings`
 (`orchestrator.slack`) and re-read every minute. Critical events (an unexpected shutdown, a failed
 start) post whenever notifications are on at all; per-tool-call detail posts only under "detailed".
 

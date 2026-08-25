@@ -15,7 +15,7 @@ not a lost laptop). Anything genuinely off-machine should go in a password manag
 | `OPENAI_API_KEY` | platform.openai.com → API keys. Cannot be re-read after creation; mint a new one and delete the old. |
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase dashboard → Project Settings → API → `service_role`. Re-readable. **Bypasses RLS**; treat as root. |
 | `GOOGLE_OAUTH_CLIENT_SECRET` | Google Cloud Console → APIs & Services → Credentials, project `gtm-ai-agent-463411`. Not re-readable; use "Add secret" and remove the old one. |
-| `ORCHESTRATOR_SLACK_WEBHOOK_URL` | Slack → the app's Incoming Webhooks page. Re-readable there. Optional: without it lifecycle events are recorded but never posted. Which events post is set on the website, not here. |
+| `ORCHESTRATOR_SLACK_WEBHOOK_URL` | Slack → the app's Incoming Webhooks page. Re-readable there. **Optional and normally unset**: the webhook lives in Supabase Vault and is managed from Admin > Orchestrator. Setting it here overrides the stored one. |
 
 ## Public or re-derivable: no recovery needed
 
