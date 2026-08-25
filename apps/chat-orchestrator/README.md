@@ -83,6 +83,38 @@ npm --prefix apps/chat-orchestrator run smoke -- "list my GTM accounts"
 | POST | `/v1/chat` | One chat turn. Responds with an SSE stream |
 | GET | `/v1/commands` | The MCP server's registered prompts, for slash commands in the UI |
 | POST | `/v1/commands/:name` | Expands a prompt into the message text that starts a turn |
+| GET | `/v1/logs` | Tail of the process log. Super admin only |
+| GET | `/v1/events` | The lifecycle record (starts, stops, task outcomes, health). Super admin only |
+| POST | `/v1/events/test-slack` | Sends one test message down the real notification path. Super admin only |
+| POST | `/v1/orchestrator/pause`, `/resume` | Refuse chat turns (503 `paused`) without stopping the process. Super admin only |
+
+## Lifecycle events and Slack
+
+Every start, stop, pause, resume, failure, recovery, health change and task outcome is recorded
+three ways (`src/events.ts`): a `[event]` line in the log, a row in `orchestrator_events` (written
+with the service role key, readable by admins on the website), and, when switched on, a Slack
+message in the shape:
+
+```
+Orchestrator Stopped
+Orchestrator: AI Tag Manager Chat Orchestrator
+Time: 25 Aug 2026, 02:15 PM IST
+Status: Stopped
+Reason: Manual stop
+Details: Received SIGINT
+Duration: 45 minutes
+```
+
+The webhook is `ORCHESTRATOR_SLACK_WEBHOOK_URL` in this host's `.env`. Which events post is decided
+on the website under **Admin > Orchestrator > Slack notifications**, stored in `system_settings`
+(`orchestrator.slack`) and re-read every minute. Critical events (an unexpected shutdown, a failed
+start) post whenever notifications are on at all; per-tool-call detail posts only under "detailed".
+
+On this Windows host an external stop is `TerminateProcess`, so the process cannot record its own
+stop. The supervisor writes `logs/last-exit.json` and the next run reports it as
+*Orchestrator Stopped* (planned, via `npm run restart`) or *Unexpected Shutdown*, followed by
+*Orchestrator Recovered*. Uncaught errors are recorded and flushed before the exit that the
+supervisor then restarts.
 
 `POST /v1/chat` request body:
 

@@ -28,6 +28,20 @@ import { checkAllowlistAgainstServer } from './integrations.js';
 import { extractAll, type ExtractedAttachment } from './attachments.js';
 import { MemoryStore } from './memory.js';
 import { isSuperAdmin, tailLog, MAX_LINES } from './logs.js';
+import {
+  EventRecorder,
+  SlackNotifier,
+  SupabaseEventSink,
+  formatDuration,
+  MAX_STORED_EVENTS,
+} from './events.js';
+import {
+  HealthMonitor,
+  SettingsPoller,
+  installCrashHandlers,
+  packageLogDir,
+  readLastExit,
+} from './lifecycle.js';
 import { SiteScanner, ScanError, validPlatforms, MAX_SCAN_PAGES, MAX_SELECTED_PAGES } from './scan-client.js';
 import {
   ScanStore,
@@ -54,6 +68,12 @@ import {
 import type { AuthedUser, ChatRequestBody } from './types.js';
 
 const cfg: OrchestratorConfig = loadConfig();
+
+/**
+ * The lifecycle record. Module-level so the two functions outside main() that have something to
+ * report (a rejected token, a failed start) can reach it; null until main() has built it.
+ */
+let recorder: EventRecorder | null = null;
 
 /**
  * Failures that describe the REQUEST rather than an upstream fault, so they answer 400.
@@ -137,6 +157,69 @@ class RateLimiter {
 async function main(): Promise<void> {
   // First, so every line below is dated. See log-time.ts for why the log needed this.
   installTimestampedLogging();
+  const bootStartedAt = Date.now();
+
+  // The lifecycle record, built before anything that can fail so a failed start is itself recorded.
+  // Settings are read once here, before the first event, so the startup message honours the
+  // switches rather than posting under the defaults and then learning better a minute later.
+  const slack = new SlackNotifier(cfg.events.slackWebhookUrl);
+  const eventSink = new SupabaseEventSink(cfg.supabase.url ?? '', cfg.supabase.serviceRoleKey ?? '');
+  const settings = new SettingsPoller(
+    cfg.supabase.url ?? '',
+    cfg.supabase.serviceRoleKey ?? '',
+    (next, first) => {
+      if (first) return;
+      events.record({
+        type: 'config.changed',
+        status: 'info',
+        title: 'Configuration Changed',
+        details: `Slack notifications ${next.enabled ? 'enabled' : 'disabled'}` +
+          (next.channelLabel ? ` for ${next.channelLabel}` : '') +
+          `; on: ${Object.entries(next.groups).filter(([, on]) => on).map(([k]) => k).join(', ') || 'none'}.`,
+        trigger: 'Admin dashboard',
+      });
+    },
+  );
+  const events = new EventRecorder({
+    orchestrator: cfg.events.orchestratorName,
+    timezone: cfg.events.timezone,
+    sink: eventSink,
+    slack,
+    slackSettings: () => settings.current(),
+  });
+  recorder = events;
+  await settings.refresh();
+  settings.start();
+  installCrashHandlers(events);
+
+  // What the previous run left behind. On this host the stop cannot be recorded by the process
+  // that stopped, so the next one reports it, from the supervisor's note. See lifecycle.ts.
+  const lastExit = readLastExit(packageLogDir());
+  if (lastExit) {
+    events.record({
+      type: lastExit.planned ? 'orchestrator.stopped' : 'orchestrator.unexpected_shutdown',
+      status: 'stopped',
+      at: lastExit.at,
+      title: lastExit.planned ? 'Orchestrator Stopped' : 'Orchestrator Unexpected Shutdown',
+      reason: lastExit.planned
+        ? /supervisor stopped/i.test(lastExit.reason) ? 'Manual stop' : 'Planned restart'
+        : lastExit.fastExits >= 3
+          ? 'Repeated fast exits, usually configuration'
+          : 'The process exited without being asked to',
+      details: lastExit.planned
+        ? lastExit.reason
+        : `Exit code ${lastExit.code ?? 'none'}${lastExit.signal ? `, signal ${lastExit.signal}` : ''}.`,
+      ...(lastExit.ranForMs > 0 ? { durationMs: lastExit.ranForMs } : {}),
+      trigger: lastExit.planned ? 'Operator' : 'Unexpected',
+      action: 'Restarted by the supervisor',
+    });
+  }
+
+  console.log(
+    `[orchestrator] lifecycle events ${eventSink.isEnabled() ? 'ON (orchestrator_events)' : 'log only: no Supabase credentials'}; ` +
+      `Slack ${slack.configured ? (settings.current().enabled ? 'ON' : 'configured, switched off in admin') : 'not configured'}; ` +
+      `times in ${cfg.events.timezone}`,
+  );
 
   const tokenProvider = createTokenProvider(cfg);
   const pool = new McpPool(cfg, tokenProvider);
@@ -219,6 +302,25 @@ async function main(): Promise<void> {
 
   const llm = new OpenAiClient(cfg);
   const limiter = new RateLimiter();
+
+  /**
+   * Paused means /v1/chat answers 503 and nothing else changes: sessions stay open, the log
+   * endpoints keep working, and resuming is instant. For when a bad model rollout or a runaway
+   * bill should stop taking turns without stopping the process an operator may be inspecting.
+   */
+  let paused: { since: string; by: string; reason: string } | null = null;
+  const startedAtIso = new Date().toISOString();
+
+  const health = new HealthMonitor(
+    {
+      paused: () => paused !== null,
+      supabaseReachable: () => !settings.enabled || settings.reachable(),
+      sinkFailures: () => eventSink.stats().failures,
+      slackFailures: () => slack.stats().failures,
+      mcpSessions: () => pool.stats().sessions,
+    },
+    events,
+  );
   // The scanner starts no child until a scan is asked for, so a deployment without a browser costs
   // nothing here and fails only on the page that needs it.
   const scanner = new SiteScanner(cfg);
@@ -306,8 +408,146 @@ async function main(): Promise<void> {
       audit: audit.stats(),
       usage: usage.stats(),
       pendingApprovals: approvals?.stats().pending ?? 0,
+      // The lifecycle, in the words the dashboard uses. No secrets: the webhook is reported as
+      // configured or not, never as a value.
+      lifecycle: {
+        name: cfg.events.orchestratorName,
+        timezone: cfg.events.timezone,
+        startedAt: startedAtIso,
+        uptimeMs: Date.now() - new Date(startedAtIso).getTime(),
+        paused: paused !== null,
+        pausedSince: paused?.since ?? null,
+        ...health.current(),
+      },
+      events: { ...eventSink.stats(), buffered: events.events.size(), max: MAX_STORED_EVENTS },
+      slack: { ...slack.stats(), enabled: settings.current().enabled, channel: settings.current().channelLabel },
     });
   });
+
+  /**
+   * The lifecycle record, for the dashboard's activity view.
+   *
+   * Super admin only, like /v1/logs, and for the same reason: an event names the task it belongs to,
+   * and the tasks are other tenants' turns. The database copy of the same events is readable by any
+   * admin; it carries no user identifiers.
+   */
+  app.get('/v1/events', async (req, res) => {
+    let user: AuthedUser;
+    try {
+      user = await authenticate(req.headers.authorization);
+    } catch (err) {
+      return sendAuthError(res, err);
+    }
+    if (!(await isSuperAdmin(user.id, cfg.supabase))) {
+      return res.status(404).json({ code: 'not_found', message: 'No such endpoint.' });
+    }
+    const q = (name: string): string | undefined =>
+      typeof req.query[name] === 'string' ? (req.query[name] as string) : undefined;
+    const list = events.events.tail({
+      limit: Number(req.query.limit) || undefined,
+      type: q('type'),
+      status: q('status'),
+      severity: q('severity'),
+      taskId: q('task'),
+      since: q('since'),
+      search: q('search'),
+    });
+    res.json({ events: list, buffered: events.events.size(), max: MAX_STORED_EVENTS, lifecycle: health.current() });
+  });
+
+  /**
+   * Sends one test message down the exact path a real notification takes.
+   *
+   * Settings are re-read first so a switch flipped seconds ago is what gets tested. The filter is
+   * the one thing bypassed: the admin asked for a message, so the message is sent whatever the
+   * switches say, and the result names what would have stopped a real one.
+   */
+  app.post('/v1/events/test-slack', async (req, res) => {
+    let user: AuthedUser;
+    try {
+      user = await authenticate(req.headers.authorization);
+    } catch (err) {
+      return sendAuthError(res, err);
+    }
+    if (!(await isSuperAdmin(user.id, cfg.supabase))) {
+      return res.status(404).json({ code: 'not_found', message: 'No such endpoint.' });
+    }
+    await settings.refresh();
+    if (!slack.configured) {
+      return res.status(409).json({
+        code: 'slack_not_configured',
+        message: 'ORCHESTRATOR_SLACK_WEBHOOK_URL is not set on the orchestrator host. Set it and restart.',
+      });
+    }
+    const test = events.record({
+      type: 'config.changed',
+      status: 'info',
+      title: 'Orchestrator Test Notification',
+      details: 'Sent from the admin dashboard. If you can read this, orchestrator alerts reach this channel.',
+      trigger: 'Admin dashboard',
+    });
+    const result = await slack.post(test);
+    events.record({
+      type: result.ok ? 'slack.sent' : 'slack.failed',
+      status: result.ok ? 'success' : 'failed',
+      title: result.ok ? 'Slack Test Sent' : 'Slack Test Failed',
+      reason: result.ok ? undefined : result.error ?? (result.throttled ? 'Held by the burst limit' : 'Unknown'),
+      correlationId: test.id,
+    });
+    const current = settings.current();
+    res.status(result.ok ? 200 : 502).json({
+      ok: result.ok,
+      error: result.error,
+      throttled: result.throttled === true,
+      enabled: current.enabled,
+      channel: current.channelLabel,
+      note: current.enabled
+        ? undefined
+        : 'Sent, but notifications are switched off, so real events will not post until they are enabled.',
+    });
+  });
+
+  /** Pause and resume taking chat turns. Super admin, and recorded either way. */
+  for (const verb of ['pause', 'resume'] as const) {
+    app.post(`/v1/orchestrator/${verb}`, async (req, res) => {
+      let user: AuthedUser;
+      try {
+        user = await authenticate(req.headers.authorization);
+      } catch (err) {
+        return sendAuthError(res, err);
+      }
+      if (!(await isSuperAdmin(user.id, cfg.supabase))) {
+        return res.status(404).json({ code: 'not_found', message: 'No such endpoint.' });
+      }
+      const reason = forLog(String(req.body?.reason ?? ''), 200) || 'No reason given';
+      if (verb === 'pause') {
+        if (!paused) {
+          paused = { since: new Date().toISOString(), by: user.id, reason };
+          events.record({
+            type: 'orchestrator.paused',
+            status: 'paused',
+            title: 'Orchestrator Paused',
+            reason,
+            details: 'Chat turns are refused until resumed. Nothing else changes.',
+            trigger: `Admin ${userRef(user.id)}`,
+          });
+        }
+      } else if (paused) {
+        const pausedFor = Date.now() - new Date(paused.since).getTime();
+        paused = null;
+        events.record({
+          type: 'orchestrator.resumed',
+          status: 'resumed',
+          title: 'Orchestrator Resumed',
+          reason,
+          durationMs: pausedFor,
+          trigger: `Admin ${userRef(user.id)}`,
+        });
+      }
+      health.tick();
+      res.json({ paused: paused !== null, since: paused?.since ?? null, ...health.current() });
+    });
+  }
 
   /** Slash commands for the UI, sourced from the MCP's own registered prompts. */
   app.get('/v1/commands', async (req, res) => {
@@ -1096,6 +1336,15 @@ async function main(): Promise<void> {
       : [];
 
     const startedAt = Date.now();
+    const scanTask = `scan-${startedAt.toString(36)}`;
+    events.record({
+      type: 'task.started',
+      status: 'started',
+      title: 'Site Scan Started',
+      taskId: scanTask,
+      details: `${chosenPages.length ? `${chosenPages.length} chosen page(s)` : 'Crawl'} of ${forLog(url, 120)}.`,
+      trigger: 'User request',
+    });
     try {
       const platforms = validPlatforms(req.body?.platforms);
       const result = await scanner.scan(url, {
@@ -1122,6 +1371,14 @@ async function main(): Promise<void> {
           `in ${Date.now() - startedAt}ms`,
       );
       if (pages.length) console.log(`[scan] pages read: ${forLog(pages.join(' '), 600)}`);
+      events.record({
+        type: 'task.completed',
+        status: 'success',
+        title: 'Site Scan Completed',
+        taskId: scanTask,
+        details: `${pages.length} page(s) read, ${scan.suggestions.length} suggestion(s).`,
+        durationMs: Date.now() - startedAt,
+      });
       // Named individually: a page that was found and not read is the usual reason a tag someone
       // expected is missing, and the reason differs per page.
       for (const miss of (result.notScanned ?? []).slice(0, 20)) {
@@ -1152,6 +1409,16 @@ async function main(): Promise<void> {
         `[scan] FAILED user=${userTag(user)} url=${forLog(url, 120)} ` +
           `after ${Date.now() - startedAt}ms code=${code}: ${forLog(message)}`,
       );
+      events.record({
+        type: 'task.failed',
+        status: 'failed',
+        title: 'Site Scan Failed',
+        taskId: scanTask,
+        reason: forLog(message, 160),
+        error: `${code}: ${message}`,
+        durationMs: Date.now() - startedAt,
+        action: 'The user was shown the reason',
+      });
       // 502 rather than 500: the failure is in the thing being scanned or in the scanner, and the
       // page shows this sentence to the user, so it has to be the sentence they can act on.
       res.status(502).json({ code, message });
@@ -1176,6 +1443,13 @@ async function main(): Promise<void> {
     if (!(await isSuperAdmin(user.id, cfg.supabase))) {
       // 404, not 403: that this endpoint exists is not worth confirming to someone who may not read
       // it. An admin of the product is not enough; only a super admin is.
+      events.record({
+        type: 'auth.failed',
+        status: 'failed',
+        title: 'Authorization Failed',
+        reason: 'Not a super admin',
+        details: `A signed-in user asked for the orchestrator log.`,
+      });
       return res.status(404).json({ code: 'not_found', message: 'No such endpoint.' });
     }
     const category = typeof req.query.category === 'string' ? req.query.category : '';
@@ -1461,8 +1735,23 @@ async function main(): Promise<void> {
       return sendAuthError(res, err);
     }
 
+    if (paused) {
+      res.setHeader('Retry-After', '120');
+      return res.status(503).json({
+        code: 'paused',
+        message: 'The assistant is paused for maintenance. Try again in a few minutes.',
+      });
+    }
+
     if (!limiter.allow(user.id, cfg.limits.turnsPerMinutePerUser)) {
       res.setHeader('Retry-After', '60');
+      events.record({
+        type: 'task.skipped',
+        status: 'skipped',
+        title: 'Chat Turn Refused',
+        reason: `Rate limit: ${cfg.limits.turnsPerMinutePerUser} messages per minute`,
+        details: `User ${userRef(user.id)}.`,
+      });
       return res.status(429).json({
         code: 'rate_limited',
         message: `You can send ${cfg.limits.turnsPerMinutePerUser} messages per minute. Try again shortly.`,
@@ -1474,6 +1763,13 @@ async function main(): Promise<void> {
     const quota = await usage.check(user.id);
     if (quota && !quota.allowed) {
       console.log(`[usage] ${userRef(user.id)} is over their ${quota.reason} limit; turn refused`);
+      events.record({
+        type: 'task.skipped',
+        status: 'skipped',
+        title: 'Chat Turn Refused',
+        reason: `Plan ${quota.reason} limit reached`,
+        details: `User ${userRef(user.id)}, plan ${quota.planType ?? 'unknown'}.`,
+      });
       return res.status(429).json({
         code: 'quota_exceeded',
         message: quotaMessage(quota),
@@ -1504,11 +1800,29 @@ async function main(): Promise<void> {
     } catch (err) {
       if (err instanceof GoogleIdentityError) {
         console.error(`[identity] ${err.code} for user ${userRef(user.id)}: ${forLog(err.message)}`);
+        events.record({
+          type: 'service.connection',
+          status: 'failed',
+          severity: err.code === 'not_connected' ? 'info' : 'error',
+          title: 'Google Connection Failed',
+          reason: err.code === 'not_connected' ? 'The user has not connected a Google account' : 'Google identity could not be resolved',
+          details: `User ${userRef(user.id)}.`,
+          error: err.message,
+        });
         return res.status(err.code === 'not_connected' ? 428 : 502).json({
           code: err.code,
           message: err.message,
         });
       }
+      events.record({
+        type: 'service.connection',
+        status: 'failed',
+        severity: 'error',
+        title: 'MCP Session Failed',
+        reason: 'Could not start a tool session',
+        details: `User ${userRef(user.id)}.`,
+        error: err instanceof Error ? err.message : String(err),
+      });
       return res.status(503).json({
         code: 'mcp_unavailable',
         message: err instanceof Error ? err.message : 'Could not start a tool session.',
@@ -1582,6 +1896,17 @@ async function main(): Promise<void> {
         (body.context?.propertyId ? ` property=${body.context.propertyId}` : '') +
         ` messages=${body.messages?.length ?? 0}`,
     );
+    // The task id is the conversation where there is one, so every turn of a thread files together.
+    const taskId = conversationId ? `chat-${conversationId.slice(0, 8)}` : `chat-${turnStartedAt.toString(36)}`;
+    events.record({
+      type: 'task.started',
+      status: 'started',
+      title: 'Chat Turn Started',
+      taskId,
+      correlationId: conversationId ?? undefined,
+      details: `${product.toUpperCase()} chat, ${body.messages?.length ?? 0} message(s) of history.`,
+      trigger: 'User request',
+    });
 
     try {
       await runTurn({
@@ -1606,10 +1931,20 @@ async function main(): Promise<void> {
         audit,
         conversationId,
         usage,
+        onEvent: (e) => events.record({ ...e, correlationId: conversationId ?? undefined }),
+        taskId,
       });
       console.log(
         `[chat] turn OK user=${userTag(user)} in ${Date.now() - turnStartedAt}ms`,
       );
+      events.record({
+        type: 'task.completed',
+        status: 'success',
+        title: 'Chat Turn Completed',
+        taskId,
+        correlationId: conversationId ?? undefined,
+        durationMs: Date.now() - turnStartedAt,
+      });
     } catch (err) {
       // The reason, not just that it failed. friendlyError() is written for the person in the chat
       // window; the operator reading this needs the code and the upstream text behind it.
@@ -1619,6 +1954,23 @@ async function main(): Promise<void> {
         `[chat] turn FAILED user=${userTag(user)} after ${Date.now() - turnStartedAt}ms ` +
           `code=${code}: ${forLog(detail)}`,
       );
+      events.record({
+        type: 'task.failed',
+        status: 'failed',
+        title: 'Chat Turn Failed',
+        taskId,
+        correlationId: conversationId ?? undefined,
+        reason:
+          err instanceof OpenAiError
+            ? err.status === 429
+              ? isBillingFailure(err.code) ? 'OpenAI account has no credit' : 'OpenAI rate limit'
+              : `Model provider error (${err.status})`
+            : 'Unexpected error',
+        details: forLog(friendlyError(err), 200),
+        error: `${code}: ${detail}`,
+        durationMs: Date.now() - turnStartedAt,
+        action: 'The user was shown the reason',
+      });
       stream.send({
         type: 'error',
         code,
@@ -1636,17 +1988,59 @@ async function main(): Promise<void> {
     if (cfg.devNoAuth) {
       console.warn('[orchestrator] WARNING: auth is disabled (ORCHESTRATOR_DEV_NO_AUTH=true).');
     }
+    // Started means serving, not booting: this is the first moment a request would succeed.
+    events.record({
+      type: 'orchestrator.started',
+      status: 'started',
+      title: 'Orchestrator Started',
+      trigger: lastExit
+        ? lastExit.planned ? 'Supervisor restart' : 'Supervisor restart after an unexpected stop'
+        : 'Process start',
+      details:
+        `Model ${cfg.openai.model}, ${all.length} MCP tools, ` +
+        (cfg.enableWriteTools ? (cfg.enableDeleteTools ? 'writes and deletes enabled' : 'writes enabled') : 'read-only') +
+        `, listening on ${cfg.host}:${cfg.port}.`,
+      durationMs: Date.now() - bootStartedAt,
+    });
+    if (lastExit && !lastExit.planned) {
+      events.record({
+        type: 'orchestrator.recovered',
+        status: 'recovered',
+        title: 'Orchestrator Recovered',
+        reason: 'Restarted by the supervisor after an unexpected stop',
+        details: `Down for about ${formatDuration(Date.now() - new Date(lastExit.at).getTime())}.`,
+      });
+    }
+    health.tick();
+    health.start();
   });
 
-  const shutdown = async (): Promise<void> => {
+  // Reached on SIGINT/SIGTERM only, which on the Windows host means Ctrl-C in a terminal; external
+  // stops there are TerminateProcess and are reported by the next run instead (see lastExit).
+  let shuttingDown = false;
+  const shutdown = async (signal: string): Promise<void> => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     console.log('[orchestrator] shutting down...');
+    events.record({
+      type: 'orchestrator.stopped',
+      status: 'stopped',
+      title: 'Orchestrator Stopped',
+      reason: 'Manual stop',
+      details: `Received ${signal}.`,
+      durationMs: Date.now() - new Date(startedAtIso).getTime(),
+      trigger: 'Operator',
+    });
     server.close();
+    health.stop();
+    settings.stop();
     await pool.shutdown();
     await probe.close();
+    await events.flush(3_000);
     process.exit(0);
   };
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', () => void shutdown('SIGINT'));
+  process.on('SIGTERM', () => void shutdown('SIGTERM'));
 }
 
 function extractBearer(header: string | undefined): string {
@@ -1669,6 +2063,17 @@ function idParam(value: unknown): string | null {
 function sendAuthError(res: express.Response, err: unknown): void {
   const code = err instanceof AuthError ? err.code : 'unauthorized';
   const status = code === 'misconfigured' ? 500 : 401;
+  // Only a token that was presented and rejected is worth a record. A request with no token at all
+  // is a scanner or a signed-out tab, and the [req] line already counts those.
+  if (res.req?.headers.authorization) {
+    recorder?.record({
+      type: 'auth.failed',
+      status: 'failed',
+      title: 'Authentication Failed',
+      reason: code === 'misconfigured' ? 'Token verification is not configured' : 'Token rejected',
+      details: forLog(err instanceof Error ? err.message : 'Authentication failed', 120),
+    });
+  }
   res.status(status).json({
     code,
     message: err instanceof Error ? err.message : 'Authentication failed',
@@ -1702,5 +2107,19 @@ function friendlyError(err: unknown): string {
 
 main().catch((err) => {
   console.error('[orchestrator] failed to start:', err instanceof Error ? err.message : err);
-  process.exit(1);
+  const message = err instanceof Error ? err.message : String(err);
+  // The recorder exists once main() has built it, which is before anything that can fail here. A
+  // failure earlier than that (loadConfig throwing) never reaches this handler at all: it is a
+  // module-level throw, printed by Node, and reported by the supervisor's next-run note instead.
+  recorder?.record({
+    type: 'orchestrator.startup_failed',
+    status: 'failed',
+    severity: 'critical',
+    title: 'Orchestrator Failed To Start',
+    reason: /MCP|connect|spawn/i.test(message) ? 'The MCP server could not be reached' : 'Startup error',
+    details: forLog(message, 200),
+    error: err instanceof Error && err.stack ? err.stack : message,
+    action: 'The supervisor will retry with backoff',
+  });
+  void (recorder ? recorder.flush(3_000) : Promise.resolve()).finally(() => process.exit(1));
 });

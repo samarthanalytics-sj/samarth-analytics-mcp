@@ -191,6 +191,7 @@ docker compose logs orchestrator | head -30
 Expected on a correctly configured host:
 
 ```
+[orchestrator] lifecycle events ON (orchestrator_events); Slack ON; times in Asia/Kolkata
 [orchestrator] Google identity mode: supabase
 [orchestrator] MCP connected: 179 tools (53 read, 126 write-gated), 7 prompts
 [orchestrator] visible to model: GTM 94, GA4 84 (writes ENABLED, deletes ENABLED)

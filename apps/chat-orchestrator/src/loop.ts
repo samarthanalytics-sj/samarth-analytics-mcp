@@ -34,6 +34,7 @@ import {
 } from './tool-groups.js';
 import type { ToolDef } from './types.js';
 import type { ChatContext, ChatMessage, StreamEvent } from './types.js';
+import type { EventInput } from './events.js';
 
 export interface RunTurnArgs {
   cfg: OrchestratorConfig;
@@ -68,6 +69,13 @@ export interface RunTurnArgs {
   groupId?: string | null;
   /** Counts this turn against the user's plan. Never allowed to fail a turn; see usage.ts. */
   usage?: UsageMeter;
+  /**
+   * Lifecycle events for the operator's record: tool outcomes, approvals, waits, budget stops. The
+   * turn's own start and end are recorded by the caller, which knows the whole duration.
+   */
+  onEvent?: (event: EventInput) => void;
+  /** The id the caller recorded the turn under, so every event in it can be found together. */
+  taskId?: string;
 }
 
 export async function runTurn(args: RunTurnArgs): Promise<void> {
@@ -310,6 +318,16 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
       return;
     }
     if (Date.now() - startedAt > cfg.limits.maxTurnMs) {
+      args.onEvent?.({
+        type: 'timeout',
+        status: 'timeout',
+        title: 'Task Timed Out',
+        taskId: args.taskId,
+        reason: `The turn exceeded its ${Math.round(cfg.limits.maxTurnMs / 1000)}s time budget`,
+        details: `${toolCallsUsed} tool call(s) had run.`,
+        action: 'The user was told and can ask to continue',
+        durationMs: Date.now() - startedAt,
+      });
       emit({
         type: 'token',
         text: '\n\n[Stopped: this turn exceeded its time budget. Ask a narrower question, or ask me to continue.]',
@@ -333,7 +351,16 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
          * seconds and about to succeed" and "hung" is patience, and the reasonable response to a
          * hang is a reload, which throws the turn away.
          */
-        onWait: ({ ms, reason, attempt, of }) =>
+        onWait: ({ ms, reason, attempt, of }) => {
+          args.onEvent?.({
+            type: 'task.retried',
+            status: 'retried',
+            title: 'Task Retried',
+            taskId: args.taskId,
+            reason: reason === 'token_window' ? 'OpenAI per-minute token limit is full' : 'The model call failed',
+            details: `Waiting ${Math.round(ms / 1000)}s, attempt ${attempt} of ${of}.`,
+            action: 'Retry scheduled',
+          });
           emit({
             type: 'notice',
             level: 'warn',
@@ -342,7 +369,8 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
               reason === 'token_window'
                 ? `Your OpenAI account's per-minute token limit is full. Waiting ${Math.round(ms / 1000)}s for it to refill, then continuing this answer (attempt ${attempt} of ${of}).`
                 : `The model call failed and is being retried in ${Math.round(ms / 1000)}s (attempt ${attempt} of ${of}).`,
-          }),
+          });
+        },
         onUsage: (u) => {
           spend.promptTokens += u.promptTokens;
           spend.completionTokens += u.completionTokens;
@@ -508,8 +536,17 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
       const callStartedAt = Date.now();
       let approval: 'not_required' | 'approved' | 'declined' | 'timeout' | 'aborted' = 'not_required';
 
-      /** One audit row per tool call, whatever became of it. */
-      const record = (ok: boolean, summary: string): void =>
+      /** One audit row per tool call, whatever became of it, and one event for the operator's record. */
+      const record = (ok: boolean, summary: string): void => {
+        args.onEvent?.({
+          type: ok ? 'api.request.completed' : 'api.request.failed',
+          status: ok ? 'success' : 'failed',
+          title: ok ? 'Tool Call Completed' : 'Tool Call Failed',
+          taskId: args.taskId,
+          details: `${call.function.name}${tool?.isWrite ? ' (write)' : ''}${approval !== 'not_required' ? `, approval ${approval}` : ''}`,
+          reason: ok ? undefined : forLog(summary, 160),
+          durationMs: Date.now() - callStartedAt,
+        });
         args.audit?.recordToolEvent(args.conversationId ?? null, user.id, {
           ...target,
           toolName: call.function.name,
@@ -523,6 +560,7 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
           resultSummary: summary,
           durationMs: Date.now() - callStartedAt,
         });
+      };
 
       if (tool?.isWrite) {
         if (!args.approvals) {

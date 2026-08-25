@@ -139,6 +139,11 @@ test('the other shapes in this file are classified too', async () => {
   assert.equal(classifyLine('[supervisor 2026-08-13T12:35:10.443Z] started orchestrator (pid 18360)'), 'system');
   assert.equal(classifyLine('[samarth-gtm-mcp] Server ready on stdio transport'), 'system');
   assert.equal(classifyLine('[auth] Using OAuth2 user credentials'), 'system');
+  assert.equal(
+    classifyLine('[2026-08-25 13:30:00] [event] orchestrator.started started: Orchestrator Started'),
+    'system',
+    'a lifecycle event is filed under system, whatever task it names',
+  );
   assert.equal(classifyLine('[req] GET /.aws/credentials -> 404 1ms origin=-'), 'system', 'a probe is not chat');
   assert.equal(classifyLine('[req] GET /v1/resources/gtm/accounts -> 200 2630ms'), 'chat');
 });

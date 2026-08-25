@@ -130,7 +130,9 @@ const CHAT_TAGS = new Set([
   'resources', 'conversations', 'groups',
 ]);
 const SUGGESTION_TAGS = new Set(['scan', 'suggestions']);
-const SYSTEM_TAGS = new Set(['orchestrator', 'deploy', 'pool', 'identity', 'logs', 'supervisor', 'auth']);
+// 'event' is the lifecycle record (events.ts): starts, stops, health, task outcomes. Filed under
+// system because that is the story it tells, even when the task it names was a chat turn.
+const SYSTEM_TAGS = new Set(['orchestrator', 'deploy', 'pool', 'identity', 'logs', 'supervisor', 'auth', 'event', 'events']);
 /**
  * A write belongs to whatever asked for it, and the line does not say which.
  *
