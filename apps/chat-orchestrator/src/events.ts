@@ -536,24 +536,56 @@ export function signatureOf(e: OrchestratorEvent): string {
   return `${e.type}::${e.reason ?? ''}`;
 }
 
+/** Where the webhook came from, so the operator screen can say. */
+export type WebhookSource = 'env' | 'vault' | 'none';
+
 export class SlackNotifier {
   private sent = 0;
   private failures = 0;
   private recent: number[] = [];
   private repeats = new Map<string, number[]>();
   private throttledNotice = false;
-  readonly configured: boolean;
+  private webhookUrl: string;
+  private source: WebhookSource;
 
   constructor(
-    private readonly webhookUrl: string,
+    webhookUrl: string,
     private readonly fetchImpl: typeof fetch = fetch,
     private readonly now: () => number = Date.now,
+    source: WebhookSource = 'env',
   ) {
-    this.configured = SLACK_WEBHOOK_RE.test(webhookUrl);
+    this.webhookUrl = SLACK_WEBHOOK_RE.test(webhookUrl) ? webhookUrl : '';
+    this.source = this.webhookUrl ? source : 'none';
   }
 
-  stats(): { configured: boolean; sent: number; failures: number } {
-    return { configured: this.configured, sent: this.sent, failures: this.failures };
+  get configured(): boolean {
+    return this.webhookUrl.length > 0;
+  }
+
+  /**
+   * Replaces the webhook while running, so one stored in Vault and changed from the admin screen
+   * takes effect on the next poll rather than on the next restart.
+   *
+   * Returns whether this changed anything, so the caller can record a config event without one
+   * firing every minute. A URL that is not a Slack webhook is refused rather than stored and then
+   * failing on every post; the caller reports that as a rejected setting.
+   */
+  setWebhook(url: string, source: WebhookSource): { changed: boolean; valid: boolean } {
+    const next = (url ?? '').trim();
+    if (next && !SLACK_WEBHOOK_RE.test(next)) return { changed: false, valid: false };
+    if (next === this.webhookUrl) return { changed: false, valid: true };
+    this.webhookUrl = next;
+    this.source = next ? source : 'none';
+    // A new destination is a fresh audience: what was held back for the old channel was held for
+    // people who are no longer the ones being told.
+    this.recent = [];
+    this.repeats.clear();
+    this.throttledNotice = false;
+    return { changed: true, valid: true };
+  }
+
+  stats(): { configured: boolean; sent: number; failures: number; source: WebhookSource } {
+    return { configured: this.configured, sent: this.sent, failures: this.failures, source: this.source };
   }
 
   /** True when a post would be held back by the burst limit. Resets itself as the window moves. */

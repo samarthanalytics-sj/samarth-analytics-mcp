@@ -21,6 +21,20 @@ function fetchAnswering(rows: unknown, status = 200) {
   return { impl, calls };
 }
 
+/** Answers the settings read and the webhook RPC differently, the way the database does. */
+function fetchRouting(settings: unknown, webhook: unknown, webhookStatus = 200) {
+  const calls: string[] = [];
+  const impl = (async (url: string) => {
+    const u = String(url);
+    calls.push(u);
+    if (u.includes('/rpc/orchestrator_slack_webhook')) {
+      return { ok: webhookStatus < 300, status: webhookStatus, json: async () => webhook, text: async () => '' } as Response;
+    }
+    return { ok: true, status: 200, json: async () => settings, text: async () => '' } as Response;
+  }) as unknown as typeof fetch;
+  return { impl, calls };
+}
+
 // ── Settings poll ───────────────────────────────────────────────────────────
 
 test('the poll reads the one key and reports a change once', async () => {
@@ -67,6 +81,33 @@ test('no credentials means no poll and no claim of reachability', async () => {
   const p = new SettingsPoller('', '', () => undefined, fetchAnswering([]).impl);
   assert.equal(p.enabled, false);
   assert.equal((await p.refresh()).ok, false);
+});
+
+test('the poll reads the stored webhook alongside the switches', async () => {
+  const seen: string[] = [];
+  const { impl, calls } = fetchRouting([{ value: { enabled: true } }], 'https://hooks.slack.com/services/T1/B1/x');
+  const p = new SettingsPoller('https://db.example.co', 'k', () => undefined, impl, (url) => seen.push(url));
+  await p.refresh();
+  assert.ok(calls.some(c => c.includes('/rpc/orchestrator_slack_webhook')), 'it asks for the webhook');
+  assert.deepEqual(seen, ['https://hooks.slack.com/services/T1/B1/x']);
+});
+
+test('a webhook that cannot be read is not reported as one being removed', async () => {
+  // The distinction that matters: '' means an admin cleared it, null means the database did not
+  // answer. Treating the second as the first would silently switch off notifications on a blip.
+  const seen: string[] = [];
+  const { impl } = fetchRouting([{ value: {} }], null, 500);
+  const p = new SettingsPoller('https://db.example.co', 'k', () => undefined, impl, (url) => seen.push(url));
+  await p.refresh();
+  assert.deepEqual(seen, [], 'nothing was reported');
+  assert.equal(await p.fetchWebhook(), null);
+});
+
+test('a missing webhook function reads as "none stored", not as an error every minute', async () => {
+  // 404 is the migration not being applied yet: a deployment state, not a fault.
+  const { impl } = fetchRouting([{ value: {} }], null, 404);
+  const p = new SettingsPoller('https://db.example.co', 'k', () => undefined, impl);
+  assert.equal(await p.fetchWebhook(), '');
 });
 
 // ── The supervisor's note ───────────────────────────────────────────────────

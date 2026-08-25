@@ -44,8 +44,41 @@ export class SettingsPoller {
     private readonly serviceRoleKey: string,
     private readonly onChange: (next: SlackSettings, first: boolean) => void = () => undefined,
     private readonly fetchImpl: typeof fetch = fetch,
+    /** Called with the webhook stored in Vault, or '' when there is none. */
+    private readonly onWebhook: (url: string, first: boolean) => void = () => undefined,
   ) {
     this.enabled = Boolean(baseUrl && serviceRoleKey);
+  }
+
+  /**
+   * The webhook from Vault, through a function only the service role may call.
+   *
+   * Returns null when it cannot be read at all, which is different from '' meaning "none is set":
+   * a database blip must not look like an admin clearing the webhook.
+   */
+  async fetchWebhook(): Promise<string | null> {
+    if (!this.enabled) return null;
+    try {
+      const res = await this.fetchImpl(`${this.baseUrl}/rest/v1/rpc/orchestrator_slack_webhook`, {
+        method: 'POST',
+        headers: {
+          apikey: this.serviceRoleKey,
+          Authorization: `Bearer ${this.serviceRoleKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: '{}',
+        signal: AbortSignal.timeout(8_000),
+      });
+      // 404 is the migration not being applied yet, which is a deployment state rather than an
+      // error worth logging every minute.
+      if (res.status === 404) return '';
+      if (!res.ok) throw new Error(`${res.status} ${forLog(await res.text().catch(() => ''), 160)}`);
+      const value = (await res.json()) as unknown;
+      return typeof value === 'string' ? value : '';
+    } catch (err) {
+      this.lastError = err instanceof Error ? err.message : String(err);
+      return null;
+    }
   }
 
   current(): SlackSettings {
@@ -84,6 +117,10 @@ export class SettingsPoller {
         this.settings = parseSlackSettings(value);
         this.onChange(this.settings, first);
       }
+      // Read in the same pass so a webhook saved from the admin screen and the switch that turns it
+      // on arrive together, rather than a minute apart.
+      const webhook = await this.fetchWebhook();
+      if (webhook !== null) this.onWebhook(webhook, first);
       return { ok: true, changed };
     } catch (err) {
       this.lastOk = false;
