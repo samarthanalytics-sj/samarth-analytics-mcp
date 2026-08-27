@@ -285,6 +285,24 @@ export const NATIVE_VENDORS: string[] = [
 const ALL_TAG_ENTRIES = [...TAG_TYPES.web, ...TAG_TYPES.server, ...TAG_TYPES.legacy];
 
 /**
+ * Tells a gallery-installed template apart from one authored in the container, from the code alone.
+ *
+ * The two shapes are genuinely different, so no lookup is needed to distinguish them:
+ *
+ *   cvt_MRQN8        gallery: the gallery's own id, which is short and alphanumeric
+ *   cvt_1234567_12   local:   containerId + templateId, both numeric
+ *
+ * Only the numeric pair is treated as local. A gallery id could in principle contain an underscore,
+ * and misreading a vendor template as home-grown would send someone hunting for source code that
+ * does not exist, so anything that is not clearly the numeric pair falls back to gallery.
+ */
+export function customTemplateOrigin(code: string): 'gallery' | 'local' {
+  const parts = (code ?? '').split('_');
+  if (parts.length === 3 && /^\d+$/.test(parts[1]) && /^\d+$/.test(parts[2])) return 'local';
+  return 'gallery';
+}
+
+/**
  * Names a tag type seen in a container.
  *
  * Three outcomes, and keeping them distinct is the whole point: a known built-in code is named
@@ -297,6 +315,7 @@ export function identifyTagType(type: string): {
   name: string;
   known: boolean;
   scope?: 'web' | 'server' | 'legacy';
+  origin?: 'gallery' | 'local';
   howToResolve?: string;
 } {
   const code = (type ?? '').trim();
@@ -308,14 +327,33 @@ export function identifyTagType(type: string): {
   }
 
   if (code.startsWith('cvt_')) {
+    const origin = customTemplateOrigin(code);
+    const resolve =
+      'Call templates_list for this workspace and match this exact string against each entry\'s ' +
+      'tagType; that template\'s name is the real answer, and it comes from the container itself so ' +
+      'it works for every custom template, published or not.';
+    if (origin === 'local') {
+      return {
+        code,
+        name: 'Custom template authored in this container',
+        known: true,
+        origin,
+        // Worth separating: an in-house template is a maintenance question (who owns this code,
+        // is it still correct) rather than a vendor question.
+        howToResolve:
+          `${resolve} This one was written in this container rather than installed from the ` +
+          'gallery, so it has no publisher to look up and no upstream version to compare against.',
+      };
+    }
     return {
       code,
-      name: 'Custom or Community Gallery template',
+      name: 'Community Gallery template',
       known: true,
+      origin,
       howToResolve:
-        'Call templates_list for this workspace and match this exact string against each entry\'s ' +
-        'tagType; that template\'s name is the real answer. Then search that name with ' +
-        'gtm_type_reference to find its publisher.',
+        `${resolve} Then search that name with gtm_type_reference to find its publisher. If the ` +
+        'search misses, the template is simply newer than the index snapshot; say so rather than ' +
+        'calling it unknown.',
     };
   }
 
