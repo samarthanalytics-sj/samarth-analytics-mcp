@@ -31,6 +31,7 @@ import { registerGa4AdminTools } from './ga4Admin.js';
 import { registerGa4AdminWriteTools } from './ga4AdminWrite.js';
 import { registerGa4DataTools } from './ga4Data.js';
 import { registerReferenceTools } from './reference.js';
+import { registerTemplateFieldTools } from './templateFields.js';
 
 export function registerAllTools(
   server: McpServer,
@@ -61,4 +62,5 @@ export function registerAllTools(
   registerGa4AdminWriteTools(server, getGa4Client, getGa4AlphaClient);
   registerGa4DataTools(server, getGa4DataClient);
   registerReferenceTools(server);
+  registerTemplateFieldTools(server, getClient);
 }
