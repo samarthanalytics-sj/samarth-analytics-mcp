@@ -100,7 +100,12 @@ export function registerTagTools(server: McpServer, getClient: () => GtmClient):
               'GA4 event: "gaawe". Google tag / GA4 configuration: "googtag" (legacy GA4 config: "gaawc"). ' +
               'Custom HTML: "html". Custom Image: "img". Universal Analytics (legacy): "ua". ' +
               'Google Ads conversion: "awct". Google Ads remarketing: "sp". Floodlight counter: "flc". ' +
-              'A gallery/community template tag uses "cvt_<templateId>" — read the id from templates_list.',
+              'A tag built on a CUSTOM or community-gallery template uses a "cvt_..." type: call ' +
+              'templates_list and pass its `tagType` field through verbatim. Do not assemble that ' +
+              'string yourself — a gallery template\'s type is built from the gallery id, not the ' +
+              'workspace templateId, and a wrong guess is accepted by the API and then renders in ' +
+              'GTM as an unrecognised tag type. templates_import_from_gallery returns `tagType` too, ' +
+              'so an install and its first tag need no lookup in between.',
           ),
         parameter: parameterSchema.describe(GAAWE_PARAM_HINT),
         firingTriggerId: z.array(z.string()).optional().describe('IDs of firing triggers.'),

@@ -45,6 +45,49 @@ interface ResourceSpec {
   hasRevert: boolean;
   /** Selects the API collection off the GTM client for a workspace. */
   select: (client: GtmClient) => WorkspaceResourceApi;
+  /**
+   * Optional enrichment applied to every item returned by list and get.
+   *
+   * Exists for templates, whose single most useful fact — the tag `type` string you need to
+   * build a tag on the template — is not a field on the resource at all. It has to be derived,
+   * and the derivation is unobvious enough that leaving it to the caller produced tags GTM
+   * rejects. Deriving it here means the answer arrives with the question.
+   */
+  decorate?: (item: Record<string, unknown>, containerId: string) => Record<string, unknown>;
+}
+
+/**
+ * The tag `type` string for a custom template, which is what `tags_create` needs and what no
+ * field on the template resource contains.
+ *
+ * There are two shapes, and the difference matters because guessing wrong is not a validation
+ * error — GTM accepts the tag and the UI renders it as an unrecognised type:
+ *
+ *   gallery-installed   cvt_<galleryTemplateId>              e.g. cvt_MRQN8
+ *   locally authored    cvt_<containerId>_<templateId>       e.g. cvt_1234567_12
+ *
+ * Note that a gallery template's type uses the GALLERY's id, NOT the workspace `templateId` it
+ * was given on import. Those are different numbers, and the workspace one looks like the
+ * plausible answer, which is exactly why it gets used by mistake.
+ */
+export function customTemplateType(
+  template: Record<string, unknown>,
+  fallbackContainerId: string
+): string {
+  const gallery = template['galleryReference'] as { galleryTemplateId?: string | null } | undefined;
+  const galleryId = gallery?.galleryTemplateId;
+  if (galleryId) return `cvt_${galleryId}`;
+  const containerId = (template['containerId'] as string | undefined) || fallbackContainerId;
+  const templateId = (template['templateId'] as string | undefined) ?? '';
+  return `cvt_${containerId}_${templateId}`;
+}
+
+/** Adds the derived `tagType` to a template without disturbing the resource's own fields. */
+function decorateTemplate(
+  item: Record<string, unknown>,
+  containerId: string
+): Record<string, unknown> {
+  return { ...item, tagType: customTemplateType(item, containerId) };
 }
 
 const wsBase = z.object({
@@ -82,12 +125,14 @@ function registerResource(server: McpServer, getClient: () => GtmClient, spec: R
       try {
         const api = spec.select(getClient());
         const parent = wsPath(accountId, containerId, workspaceId);
-        const result = await paginate<Record<string, unknown>, unknown>(
+        const result = await paginate<Record<string, unknown>, Record<string, unknown>>(
           (token) => api.list({ parent, pageToken: token }).then((r) => r.data),
-          (data) => data[spec.listKey] as unknown[] | undefined,
+          (data) => data[spec.listKey] as Record<string, unknown>[] | undefined,
           { pageToken, maxPages }
         );
-        return jsonResult(buildListResult(spec.toolPrefix, result));
+        const decorate = spec.decorate;
+        const items = decorate ? result.items.map((i) => decorate(i, containerId)) : result.items;
+        return jsonResult(buildListResult(spec.toolPrefix, { ...result, items }));
       } catch (err) {
         return errorResult(`${spec.toolPrefix}_list`, err);
       }
@@ -107,7 +152,12 @@ function registerResource(server: McpServer, getClient: () => GtmClient, spec: R
       try {
         const api = spec.select(getClient());
         const res = await api.get({ path: itemPath(accountId, containerId, workspaceId, id) });
-        return jsonResult(res.data);
+        const decorate = spec.decorate;
+        const body =
+          decorate && res.data && typeof res.data === 'object'
+            ? decorate(res.data as Record<string, unknown>, containerId)
+            : res.data;
+        return jsonResult(body);
       } catch (err) {
         return errorResult(`${spec.toolPrefix}_get`, err);
       }
@@ -282,6 +332,7 @@ export function registerServerSideTools(server: McpServer, getClient: () => GtmC
       toolPrefix: 'templates', pathSegment: 'templates', idArg: 'templateId', listKey: 'template',
       label: 'templates', hasRevert: true,
       select: (c) => c.accounts.containers.workspaces.templates as unknown as WorkspaceResourceApi,
+      decorate: decorateTemplate,
     },
     {
       toolPrefix: 'gtag_config', pathSegment: 'gtag_config', idArg: 'gtagConfigId', listKey: 'gtagConfig',
@@ -376,6 +427,7 @@ function registerGalleryImport(server: McpServer, getClient: () => GtmClient): v
             imported: false,
             reason: 'This gallery template is already installed in the workspace; returning the existing one.',
             template: existing,
+            tagType: customTemplateType(existing, containerId),
             tagTypeNote: TAG_TYPE_GUIDANCE,
           });
         }
@@ -385,6 +437,10 @@ function registerGalleryImport(server: McpServer, getClient: () => GtmClient): v
         return jsonResult({
           imported: true,
           template: imported,
+          tagType: customTemplateType(
+            (imported ?? {}) as Record<string, unknown>,
+            containerId,
+          ),
           tagTypeNote: TAG_TYPE_GUIDANCE,
         });
       } catch (err) {
@@ -470,6 +526,8 @@ async function importFromGallery(
  * the tool's response tells the caller where to get it.
  */
 const TAG_TYPE_GUIDANCE =
-  'Do not construct the tag type from the templateId; the format is not what it looks like. Read it ' +
-  'from the container: the installed template appears in the tag-type list (and in an existing ' +
-  'tag built on it) as cvt_..., and that exact string is what tags_create needs.';
+  'Use the `tagType` field returned alongside this template as the `type` for tags_create. Do NOT ' +
+  'build it yourself from templateId: a gallery template\'s type uses the GALLERY id ' +
+  '(cvt_<galleryTemplateId>), not the workspace templateId it was assigned on import, and the two ' +
+  'are different numbers. templates_list returns `tagType` for every installed template if you ' +
+  'need to look one up later.';
