@@ -9,7 +9,7 @@
 
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
-import { TAG_TYPES, TRIGGER_TYPES, VARIABLE_TYPES, GALLERY_CATEGORIES, searchGallery, identifyTagType, identifyGalleryTemplate, NATIVE_VENDORS } from '../tools/reference.js';
+import { TAG_TYPES, TRIGGER_TYPES, VARIABLE_TYPES, GALLERY_CATEGORIES, searchGallery, identifyTagType, identifyGalleryTemplate, NATIVE_VENDORS, customTemplateOrigin } from '../tools/reference.js';
 import { GALLERY_TEMPLATES } from '../tools/galleryCatalog.js';
 
 const allTags = [...TAG_TYPES.web, ...TAG_TYPES.server, ...TAG_TYPES.legacy];
@@ -160,5 +160,38 @@ test('native vendors are names only, carrying no invented codes', () => {
   for (const v of NATIVE_VENDORS) {
     // A vendor name, not a code masquerading as one.
     assert.ok(/[A-Z]/.test(v), `"${v}" looks like a code, not a vendor name`);
+  }
+});
+
+// ── gallery vs home-grown custom templates ─────────────────────────────────
+
+test('a gallery code and a container-authored code are told apart by shape alone', () => {
+  // cvt_<galleryTemplateId> vs cvt_<containerId>_<templateId>. No lookup needed.
+  assert.equal(customTemplateOrigin('cvt_MRQN8'), 'gallery');
+  assert.equal(customTemplateOrigin('cvt_1234567_12'), 'local');
+
+  const gallery = identifyTagType('cvt_MRQN8');
+  assert.equal(gallery.origin, 'gallery');
+  assert.equal(gallery.name, 'Community Gallery template');
+
+  const local = identifyTagType('cvt_1234567_12');
+  assert.equal(local.origin, 'local');
+  assert.match(local.name, /authored in this container/i);
+  // An in-house template has no publisher, and saying so prevents a pointless hunt.
+  assert.match(local.howToResolve ?? '', /no publisher/i);
+});
+
+test('an ambiguous cvt_ code falls back to gallery, never to home-grown', () => {
+  // Misreading a vendor template as home-grown sends someone looking for source that does not
+  // exist, so the non-numeric shapes must not be claimed as local.
+  assert.equal(customTemplateOrigin('cvt_ABC_DEF'), 'gallery');
+  assert.equal(customTemplateOrigin('cvt_5RM3Q'), 'gallery');
+  assert.equal(customTemplateOrigin('cvt_1234567_12_3'), 'gallery');
+});
+
+test('both kinds still resolve through the container, not the snapshot', () => {
+  for (const c of ['cvt_MRQN8', 'cvt_1234567_12']) {
+    assert.match(identifyTagType(c).howToResolve ?? '', /templates_list/);
+    assert.equal(identifyTagType(c).known, true);
   }
 });
