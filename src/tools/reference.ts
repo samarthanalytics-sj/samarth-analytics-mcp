@@ -271,16 +271,99 @@ export const GALLERY_CATEGORIES: { category: string; examples: string[]; known?:
  * The useful thing to say is therefore "GTM has this built in, read the exact code off the
  * container", which is what identifyTagType does.
  */
-export const NATIVE_VENDORS: string[] = [
-  'AB Tasty', 'AdRoll', 'AdAdvisor (Neustar)', 'Awin', 'Bizrate Insights', 'ClickTale',
-  'Conversant', 'Crazy Egg', 'Criteo', 'DistroScale', 'Dstillery', 'Eulerian Technologies',
-  'FoxMetrics', 'Hotjar', 'Infinity Call Tracking', 'K50', 'LeadLab by wiredminds', 'LinkedIn',
-  'Lytics', 'Marin Software', 'Microsoft Advertising (Bing)', 'Mouseflow', 'Nielsen', 'Nudge',
-  'Oktopost', 'Optimise Media', 'OwnerListens', 'Perfect Audience (SharpSpring Ads)',
-  'Personali (Namogoo)', 'Pinterest', 'Placed', 'Pulse Insights', 'Quantcast', 'Quora',
-  'Rawsoft', 'SaleCycle', 'Shareaholic', 'Survicate', 'TradeDoubler', 'Turn (Amobee)',
-  'Twitter', 'UpSellIt', 'Ve Interactive', 'VisualDNA', 'Xtremepush', 'Yieldify',
+export const NATIVE_TEMPLATES: { name: string; code?: string }[] = [
+  // `code` is present ONLY where the pairing was confirmed against a real container's parameter
+  // keys. The rest are name-only on purpose: GTM's tag picker shows these names, but Google never
+  // publishes the string each one writes to Tag.type, so a code here would be a guess wearing the
+  // costume of a fact. Absence of a code is the honest answer, and identifyTagType says so.
+  { name: 'AB TASTY Generic Tag' },
+  { name: 'Adometry' },
+  { name: 'AdRoll Smart Pixel', code: 'asp' },
+  { name: 'Audience Center 360' },
+  { name: 'AWIN Conversion' },
+  { name: 'AWIN Journey' },
+  { name: 'Bizrate Insights Buyer Survey Solution' },
+  { name: 'Bizrate Insights Site Abandonment Survey Solution' },
+  { name: 'ClickTale Standard Tracking (OBSOLETE)' },
+  { name: 'comScore Unified Digital Measurement' },
+  { name: 'Crazy Egg', code: 'cegg' },
+  { name: 'Criteo OneTag' },
+  { name: 'DistroScale Tag' },
+  { name: 'Dstillery Universal Pixel' },
+  { name: 'Eulerian Analytics' },
+  { name: 'FoxMetrics' },
+  { name: 'Cloud Retail (Google Cloud)' },
+  { name: 'Recommendations AI (Google Cloud)' },
+  { name: 'Google Flights Conversion Tracking' },
+  { name: 'Google Flights Price Accuracy' },
+  { name: 'Google Inventory Collector' },
+  { name: 'Google Surveys Website Satisfaction' },
+  { name: 'Google Trusted Stores' },
+  { name: 'Hotjar Tracking Code', code: 'hjtc' },
+  { name: 'Infinity Call Tracking Tag' },
+  { name: 'K50 tracking tag' },
+  { name: 'LeadLab (by wiredminds)' },
+  { name: 'LinkedIn Insight', code: 'bzi' },
+  { name: 'Lytics JS Tag' },
+  { name: 'Marin Software' },
+  { name: 'Mediaplex - IFRAME MCT Tag' },
+  { name: 'Mediaplex - Standard IMG ROI Tag' },
+  { name: 'Microsoft Advertising Universal Event Tracking', code: 'baut' },
+  { name: 'Mouseflow' },
+  { name: 'AdAdvisor (Neustar)' },
+  { name: 'DCR Static (Nielsen)' },
+  { name: 'Nudge Content Analytics' },
+  { name: 'Oktopost Tracking Code' },
+  { name: 'Optimise Conversion Tag' },
+  { name: 'Message Mate (OwnerListens)' },
+  { name: 'Perfect Audience Pixel' },
+  { name: 'Personali Canvas' },
+  { name: 'Pinterest Tag' },
+  { name: 'Placed (Placed Inc.)' },
+  { name: 'Pulse Insights Voice of Customer Platform' },
+  { name: 'Quantcast Advertise', code: 'qcm' },
+  { name: 'Quantcast Measure' },
+  { name: 'Quora Pixel' },
+  { name: 'SaleCycle JavaScript Tag' },
+  { name: 'SaleCycle Pixel Tag' },
+  { name: 'SearchForce JavaScript Tracking for Conversion Page' },
+  { name: 'SearchForce JavaScript Tracking for Landing Page' },
+  { name: 'SearchForce Redirection Tracking' },
+  { name: 'Shareaholic' },
+  { name: 'Survicate Widget' },
+  { name: 'Tapad Conversion Pixel' },
+  { name: 'Tradedoubler Lead Conversion' },
+  { name: 'Tradedoubler Sale Conversion' },
+  { name: 'Turn Conversion Tracking' },
+  { name: 'Turn Data Collection' },
+  { name: 'Twitter Universal Website Tag' },
+  { name: 'Upsellit Confirmation Tag' },
+  { name: 'Upsellit Global Footer Tag' },
+  { name: 'Ve Interactive JavaScript' },
+  { name: 'Ve Interactive Pixel' },
+  { name: 'VisualDNA Conversion Tag' },
+  { name: 'Xtremepush - Web Push & Onsite Engagement' },
+  { name: 'Yieldify' },
 ];
+
+/** Kept for callers that only want the names. */
+export const NATIVE_VENDORS: string[] = NATIVE_TEMPLATES.map((t) => t.name);
+
+/**
+ * Looks a native template up by the name GTM shows in its tag picker.
+ *
+ * Returns the code when one is confirmed and `null` for it otherwise, which is the point: the
+ * caller learns that GTM does have this template AND that its code has to come from the container
+ * rather than from here.
+ */
+export function findNativeTemplate(name: string): { name: string; code: string | null } | null {
+  const q = (name ?? '').trim().toLowerCase();
+  if (!q) return null;
+  const hit =
+    NATIVE_TEMPLATES.find((t) => t.name.toLowerCase() === q) ??
+    NATIVE_TEMPLATES.find((t) => t.name.toLowerCase().includes(q));
+  return hit ? { name: hit.name, code: hit.code ?? null } : null;
+}
 
 const ALL_TAG_ENTRIES = [...TAG_TYPES.web, ...TAG_TYPES.server, ...TAG_TYPES.legacy];
 
@@ -451,12 +534,16 @@ export function registerReferenceTools(server: McpServer): void {
 
         if (want === 'all' || want === 'tag') {
           body['tagTypes'] = TAG_TYPES;
-          body['nativeVendorsWithoutPublishedCodes'] = NATIVE_VENDORS;
-          body['nativeVendorNote'] =
-            'GTM ships a native template for each of these vendors, but Google does not publish the ' +
-            'type code for them and no reliable third-party list exists. So if you meet an ' +
-            'unrecognised code it is probably one of these. Pass it to this tool as `identify`, and ' +
-            'never guess the vendor from the letters in the code.';
+          body['nativeTemplates'] = NATIVE_TEMPLATES;
+          body['nativeTemplateNote'] =
+            `${NATIVE_TEMPLATES.length} templates GTM ships natively, named exactly as its tag ` +
+            `picker names them. Only ${NATIVE_TEMPLATES.filter((t) => t.code).length} carry a code, ` +
+            'because Google publishes these names but not the string each one writes to Tag.type. ' +
+            'An entry with no code still means GTM HAS that template: it can be built with ' +
+            'tags_create once the code is read from an existing tag in the container. Never infer a ' +
+            'code from the letters, and never tell a user a template is unavailable just because ' +
+            'its code is absent here. These are also the likeliest explanation for an unrecognised ' +
+            'code seen in a container.';
           body['tagTypeNote'] =
             'Tag.type is a FREE STRING in the API, so this list is the well-known set rather than a ' +
             'closed enum: any type GTM accepts works, including every gallery template as cvt_<id>. ' +
