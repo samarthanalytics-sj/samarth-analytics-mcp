@@ -9,7 +9,7 @@
 
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
-import { TAG_TYPES, TRIGGER_TYPES, VARIABLE_TYPES, GALLERY_CATEGORIES, searchGallery, identifyTagType, identifyGalleryTemplate, NATIVE_VENDORS, customTemplateOrigin } from '../tools/reference.js';
+import { TAG_TYPES, TRIGGER_TYPES, VARIABLE_TYPES, GALLERY_CATEGORIES, searchGallery, identifyTagType, identifyGalleryTemplate, NATIVE_VENDORS, NATIVE_TEMPLATES, findNativeTemplate, customTemplateOrigin } from '../tools/reference.js';
 import { GALLERY_TEMPLATES } from '../tools/galleryCatalog.js';
 
 const allTags = [...TAG_TYPES.web, ...TAG_TYPES.server, ...TAG_TYPES.legacy];
@@ -155,12 +155,38 @@ test('a gallery template name resolves to its publisher', () => {
   assert.equal(identifyGalleryTemplate('no such template at all'), null);
 });
 
-test('native vendors are names only, carrying no invented codes', () => {
-  assert.ok(NATIVE_VENDORS.length > 40);
-  for (const v of NATIVE_VENDORS) {
-    // A vendor name, not a code masquerading as one.
-    assert.ok(/[A-Z]/.test(v), `"${v}" looks like a code, not a vendor name`);
+test('native templates use the wording GTM itself uses, with codes only where confirmed', () => {
+  assert.ok(NATIVE_TEMPLATES.length > 60, `only ${NATIVE_TEMPLATES.length} native templates`);
+  for (const t of NATIVE_TEMPLATES) {
+    assert.ok(/[A-Z]/.test(t.name), `"${t.name}" looks like a code, not a template name`);
   }
+  // Every code present must be one this server can already name, so the two lists cannot drift.
+  const named = new Set(allTags.map(e => e.code));
+  for (const t of NATIVE_TEMPLATES.filter(x => x.code)) {
+    assert.ok(named.has(t.code!), `${t.name} claims code ${t.code} which TAG_TYPES does not name`);
+  }
+  assert.equal(NATIVE_VENDORS.length, NATIVE_TEMPLATES.length);
+});
+
+test('the confirmed native codes are the ones decoded from real containers', () => {
+  const withCode = Object.fromEntries(
+    NATIVE_TEMPLATES.filter(t => t.code).map(t => [t.code, t.name]));
+  assert.equal(withCode['baut'], 'Microsoft Advertising Universal Event Tracking');
+  assert.equal(withCode['hjtc'], 'Hotjar Tracking Code');
+  assert.equal(withCode['asp'], 'AdRoll Smart Pixel');
+  assert.equal(withCode['cegg'], 'Crazy Egg');
+  assert.equal(withCode['bzi'], 'LinkedIn Insight');
+});
+
+test('a native template with no confirmed code reports null, not a guess', () => {
+  const criteo = findNativeTemplate('Criteo OneTag');
+  assert.equal(criteo?.name, 'Criteo OneTag');
+  // GTM HAS it; we simply do not know the wire string. Those are different facts.
+  assert.equal(criteo?.code, null);
+
+  assert.equal(findNativeTemplate('Twitter Universal Website Tag')?.code, null);
+  assert.equal(findNativeTemplate('hotjar tracking code')?.code, 'hjtc');
+  assert.equal(findNativeTemplate('not a real template'), null);
 });
 
 // ── gallery vs home-grown custom templates ─────────────────────────────────
