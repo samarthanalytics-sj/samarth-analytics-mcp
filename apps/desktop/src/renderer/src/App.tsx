@@ -657,10 +657,13 @@ function ConfirmCard({
     if (!typeOk) return;
     onApprove(editedDetails());
   }
-  // Eligibility mirrors the auto-approve gate in the chat handler: GTM drafts only, never
-  // destructive or type-to-confirm actions.
+  // Eligibility mirrors the auto-approve gate in the chat handler: a KNOWN platform (an older main
+  // process sending none gets no always-allow), never destructive or type-to-confirm actions.
   const canAlwaysAllow =
-    onAlwaysAllow !== undefined && proposal.platform === 'gtm' && !proposal.destructive && !proposal.requireTextConfirm;
+    onAlwaysAllow !== undefined &&
+    (proposal.platform === 'gtm' || proposal.platform === 'ga4' || proposal.platform === 'ads') &&
+    !proposal.destructive &&
+    !proposal.requireTextConfirm;
 
   const rows = summarizeProposal(proposal.tool, proposal.details);
 
@@ -734,7 +737,11 @@ function ConfirmCard({
           <button
             style={styles.ghostBtn}
             onClick={() => onAlwaysAllow?.(editedDetails())}
-            title={`Also auto-approve future ${proposal.tool} writes for the rest of this chat. Draft workspace only - deletes and live GA4/Ads writes always ask.`}
+            title={`Also auto-approve future ${proposal.tool} writes for the rest of this chat. Deletes always ask.${
+              proposal.platform === 'gtm'
+                ? ' GTM writes land in a draft workspace.'
+                : ` These apply immediately to the live ${proposal.platform === 'ga4' ? 'GA4 property' : 'Google Ads account'} with no undo here.`
+            }`}
           >
             Always allow for this chat
           </button>
@@ -1317,8 +1324,8 @@ function ChatView({
   }, [messages]);
   const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null);
   // Tools the user marked "Always allow" IN THIS CHAT. Session-scoped on purpose (a ref, gone on
-  // unmount): never persisted, and only non-destructive GTM draft-workspace writes are eligible -
-  // deletes, type-to-confirm actions and live GA4/Ads writes always prompt.
+  // unmount): never persisted. Non-destructive GTM, GA4 and Ads writes are eligible (user-widened
+  // to the live surfaces 2026-08-29); deletes and type-to-confirm actions always prompt.
   const autoAllowTools = useRef<Set<string>>(new Set());
   // What the previous query changed in GTM (for the Revert button).
   const [revertable, setRevertable] = useState<{ count: number; labels: string[] } | null>(null);
@@ -1490,7 +1497,10 @@ function ChatView({
           return copy;
         });
         if (ev.type === 'confirm') {
-          const alwaysAllowable = ev.platform === 'gtm' && !ev.destructive && !ev.requireTextConfirm;
+          const alwaysAllowable =
+            (ev.platform === 'gtm' || ev.platform === 'ga4' || ev.platform === 'ads') &&
+            !ev.destructive &&
+            !ev.requireTextConfirm;
           if (alwaysAllowable && autoAllowTools.current.has(ev.tool)) {
             // Approved by the user's earlier "Always allow" - answer immediately, but keep the
             // approval visible in the transcript instead of silent.
