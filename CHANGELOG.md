@@ -1,3 +1,9 @@
+## [1.474.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.474.0...v1.474.1) (2026-08-29)
+
+### Bug Fixes
+
+* **desktop:** mark type-only imports from shared gtm-builders as type ([#921](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/921)) ([63165f7](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/63165f756a0809df99d60d29c051912914d356d3))
+
 ## [1.474.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.473.4...v1.474.0) (2026-08-29)
 
 ### Features
