@@ -11433,8 +11433,7 @@ const SETTINGS_SECTIONS: Array<{ id: string; title: string; sub: string; keyword
   { id: 'google', title: 'Google Sign-In', sub: 'OAuth & scopes', keywords: 'google oauth client id secret scopes sign in authentication' },
   { id: 'accounts', title: 'Accounts', sub: 'Manage accounts', keywords: 'account switch rename remove disconnect connect active google email' },
   { id: 'memory', title: 'Memory', sub: 'What the assistant remembers', keywords: 'memory remember notes facts preferences rules pinned' },
-  { id: 'llm', title: 'Language Model', sub: 'AI provider & model', keywords: 'llm model ai provider anthropic openai gemini claude gpt chat' },
-  { id: 'providers', title: 'Providers', sub: 'API credentials', keywords: 'api key credential anthropic openai google gemini token semantic embedding embeddings corpus vector search' },
+  { id: 'llm', title: 'Language Model', sub: 'Provider, API keys & model', keywords: 'llm model ai provider anthropic openai gemini claude gpt chat api key credential token semantic embedding embeddings corpus vector search' },
   { id: 'network', title: 'Network & Location', sub: 'VPN & proxy', keywords: 'network location vpn proxy ip egress country city adapter' },
   { id: 'diagnostics', title: 'Diagnostics', sub: 'System info', keywords: 'diagnostics dpapi secret store runtime electron chrome node' },
   { id: 'about', title: 'About', sub: 'Version & updates', keywords: 'about version app info platform update' },
@@ -11446,7 +11445,6 @@ const SETTINGS_ICON: Record<string, JSX.Element> = {
   google: <path d="M12 2l8 3v6c0 5-3.4 8-8 10-4.6-2-8-5-8-10V5z" />,
   accounts: <><circle cx="9" cy="8" r="3.5" /><path d="M2.5 19a6.5 6.5 0 0 1 13 0" /><path d="M16 4.6a3.5 3.5 0 0 1 0 6.8" /><path d="M17.5 13.4a6.5 6.5 0 0 1 4 5.6" /></>,
   llm: <><path d="M12 3l1.8 4.7 4.7 1.8-4.7 1.8L12 16l-1.8-4.7-4.7-1.8 4.7-1.8z" /><path d="M19 15l.8 2.2 2.2.8-2.2.8L19 21l-.8-2.2-2.2-.8 2.2-.8z" /></>,
-  providers: <><circle cx="7.5" cy="15.5" r="4.5" /><path d="M10.7 12.3L20 3" /><path d="M16 7l3 3" /></>,
   memory: <><path d="M17 3H7a2 2 0 0 0-2 2v16l7-4 7 4V5a2 2 0 0 0-2-2z" /></>,
   network: <><circle cx="12" cy="12" r="9" /><path d="M3 12h18" /><path d="M12 3a14.5 14.5 0 0 1 0 18" /><path d="M12 3a14.5 14.5 0 0 0 0 18" /></>,
   diagnostics: <path d="M3 12h4l3 8 4-16 3 8h4" />,
@@ -11828,6 +11826,11 @@ function SettingsView({
   // Single source of truth for app-level provider keys so the Language-model hint and the Providers editor
   // never disagree - a key change in one updates the other immediately, and a probe failure surfaces.
   const [provStatus, setProvStatus] = useState<ProviderStatus | null>(null);
+  // Any saved provider key at all - the gate for showing the model picker in the merged
+  // Language Model section. null (still loading) counts as none; the card also shows for an
+  // account that already has a model configured, so this only hides the true empty state.
+  const hasAnyProviderKey =
+    provStatus !== null && (['openai', 'anthropic', 'gemini'] as const).some((p) => provStatus[p]);
   // Inline rename of the active account's display name (null = viewing; a string = editing that draft).
   // Reuses the same accounts.rename IPC as the sidebar pencil; an empty name restores the Google name/email.
   const [nameDraft, setNameDraft] = useState<string | null>(null);
@@ -12046,30 +12049,44 @@ function SettingsView({
       )}
       </>)}
 
-      {sec === 'llm' && (active ? (
+      {/* Provider and model are one decision, so they share a section: add a key, and the model
+          picker for the active account appears right below it. */}
+      {sec === 'llm' && (<>
+      <section style={styles.card}>
+        <h2 style={styles.h2}>Provider API keys</h2>
+        <p style={styles.settingsSub}>App-level API keys, shared by every account that picks the provider.</p>
+        <ProviderCapabilityMatrix activeProvider={active?.llm?.provider} />
+        <div style={{ height: 1, background: 'var(--border-2)', margin: '18px 0' }} />
+        <ProvidersEditor status={provStatus} onStatus={setProvStatus} onChange={refresh} onError={onError} />
+      </section>
+
+      {/* The model card gates on a saved key (or an already-configured account, so clearing keys
+          never hides existing config): no provider yet, nothing to pick a model FOR. */}
+      {!hasAnyProviderKey && !active?.llm ? (
         <section style={styles.card}>
+          <h2 style={styles.h2}>Model</h2>
+          <p style={styles.muted}>Add a provider API key above, and the model picker appears here.</p>
+        </section>
+      ) : active ? (
+        <section style={styles.card}>
+          <h2 style={styles.h2}>Model</h2>
           <p style={styles.settingsSub}>The model this account uses for chat. Pick a preset or choose Custom to enter any model id.</p>
           {/* key by account id so switching accounts re-reads the newly active account's saved config. */}
           <LlmEditor key={active.id} account={active} provStatus={provStatus} onChange={refresh} onError={onError} />
         </section>
       ) : (
         <section style={styles.card}>
+          <h2 style={styles.h2}>Model</h2>
           <p style={styles.muted}>Connect a Google account first (Accounts section) to configure its model.</p>
         </section>
-      ))}
+      )}
 
-      {sec === 'providers' && (
       <section style={styles.card}>
-        <p style={styles.settingsSub}>App-level API keys, shared by every account that picks the provider.</p>
-        <ProviderCapabilityMatrix activeProvider={active?.llm?.provider} />
-        <div style={{ height: 1, background: 'var(--border-2)', margin: '18px 0' }} />
-        <ProvidersEditor status={provStatus} onStatus={setProvStatus} onChange={refresh} onError={onError} />
-        <div style={{ height: 1, background: 'var(--border-2)', margin: '18px 0' }} />
         <SemanticCorpusCard onError={onError} />
         <div style={{ height: 1, background: 'var(--border-2)', margin: '18px 0' }} />
         <GoogleAdsCard onError={onError} active={active} />
       </section>
-      )}
+      </>)}
 
       {sec === 'diagnostics' && (
       <section style={styles.card}>
@@ -12201,7 +12218,7 @@ function LlmEditor({
         </div>
       )}
       <div style={styles.muted}>
-        API key: {hasKey ? `✓ using the app-level ${provider} key` : `not set (add the ${provider} key under Providers below)`}
+        API key: {hasKey ? `✓ using the app-level ${provider} key` : `not set (add the ${provider} key in the card above)`}
         {saved && <span style={{ color: 'var(--c-green)' }}> · {saved}</span>}
       </div>
     </div>
