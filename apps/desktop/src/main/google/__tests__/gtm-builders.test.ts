@@ -71,6 +71,7 @@ import {
   buildAdsRemarketingServerTag,
   buildAllowParamsTransformation,
   auditServerContainer,
+  taggingUrlFirstPartyIssue,
   upsertGoogleTagConfig,
   consentTypesFor,
   evaluateConsentGate,
@@ -1628,6 +1629,33 @@ test('buildAllowParamsTransformation → tf_allow_params keeping only the listed
   const table = t.parameter.find((x) => x.key === 'allowedParamsTable');
   const kept = (table?.list ?? []).map((m) => m.map.find((x) => x.key === 'allowedParams')!.value);
   assert.deepEqual(kept, ['transaction_id', 'currency', 'value']);
+});
+
+
+test('taggingUrlFirstPartyIssue: flags shared hosts, passes custom subdomains, ignores junk', () => {
+  assert.ok(taggingUrlFirstPartyIssue('https://sgtm-abc123.run.app')?.includes('run.app'), 'Cloud Run default flagged');
+  assert.ok(taggingUrlFirstPartyIssue('https://gtm-xyz.stape.io'), 'Stape shared domain flagged');
+  assert.equal(taggingUrlFirstPartyIssue('https://sgtm.example.com'), null, 'custom subdomain passes');
+  assert.equal(taggingUrlFirstPartyIssue('https://myrun.appx.example.com'), null, 'suffix must match on a dot boundary');
+  assert.equal(taggingUrlFirstPartyIssue('not a url'), null, 'unparseable input is not this check\'s problem');
+});
+
+test('auditServerContainer: shared-host tagging URL raises a first-party cookie finding; custom domain does not', () => {
+  const base = {
+    clients: [{ clientId: '1', name: 'GA4', type: 'gaaw_client', parameter: [] }],
+    transformations: [],
+    tags: [],
+  };
+  const flagged = auditServerContainer({ ...base, taggingServerUrls: ['https://sgtm-abc.run.app'] });
+  assert.ok(
+    flagged.findings.some((f) => f.severity === 'medium' && f.message.includes('THIRD-party')),
+    'run.app URL → medium finding'
+  );
+  const clean = auditServerContainer({ ...base, taggingServerUrls: ['https://sgtm.example.com'] });
+  assert.ok(
+    !clean.findings.some((f) => f.message.includes('THIRD-party')),
+    'custom subdomain → no first-party finding'
+  );
 });
 
 test('auditServerContainer flags missing client, blank ids, no trigger, paused, no tagging URL', () => {

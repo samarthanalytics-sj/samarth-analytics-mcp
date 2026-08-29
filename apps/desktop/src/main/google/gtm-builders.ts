@@ -2323,6 +2323,44 @@ function looksUrlEncoded(value: string): boolean {
 /** Audit a SERVER container: a client must claim requests, server tags need their
  *  destination id + a firing trigger and shouldn't be paused, and the host should be
  *  provisioned. Returns the same AuditReport shape as the web audit. PURE. */
+
+/** Managed-host DEFAULT domains a tagging server commonly runs on before a custom domain is set
+ *  up (Cloud Run, App Engine, Stape's shared domain, workers, PaaS hosts). Cookies set from these
+ *  are THIRD-PARTY to the user's site: the FPID/_ga cookies the GA4 client sets ride the server's
+ *  domain, ITP caps them, and the first-party benefit of server-side tagging is lost - the exact
+ *  problem Stape's custom-subdomain step exists to prevent. */
+const SHARED_TAGGING_HOSTS = [
+  'run.app',
+  'appspot.com',
+  'cloudfunctions.net',
+  'stape.io',
+  'herokuapp.com',
+  'azurewebsites.net',
+  'vercel.app',
+  'netlify.app',
+  'workers.dev',
+] as const;
+
+/** Warn when a tagging-server URL is a shared managed host rather than a first-party subdomain
+ *  of the user's site. Returns the human-readable warning, or null when the URL looks fine (or
+ *  is unparseable - the caller's own URL validation should speak to that). PURE. */
+export function taggingUrlFirstPartyIssue(serverUrl: string): string | null {
+  let host = '';
+  try {
+    host = new URL(serverUrl).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+  const hit = SHARED_TAGGING_HOSTS.find((d) => host === d || host.endsWith(`.${d}`));
+  if (!hit) return null;
+  return (
+    `Tagging server URL host "${host}" is a shared ${hit} domain, not a subdomain of your site. ` +
+    'Cookies the server sets (FPID, _ga) will be THIRD-party there, so ITP caps them and the ' +
+    'first-party benefit of server-side tagging is lost. Point a custom subdomain of the site ' +
+    '(e.g. sgtm.yourdomain.com) at the server host and use that URL instead.'
+  );
+}
+
 export function auditServerContainer(s: ServerContainerSnapshot): AuditReport {
   const findings: AuditFinding[] = [];
   const push = (f: Omit<AuditFinding, 'confidence'> & { confidence?: AuditFinding['confidence'] }): void => {
@@ -2361,6 +2399,19 @@ export function auditServerContainer(s: ServerContainerSnapshot): AuditReport {
       recommendation: 'Record it with set_server_container_tagging_url once you have the server URL (the API CAN write taggingServerUrls), and deploy the host — then confirm it responds with verify_server_endpoint.',
       autoFixable: false,
     });
+  } else {
+    const fpIssue = s.taggingServerUrls.map(taggingUrlFirstPartyIssue).find((w) => w !== null);
+    if (fpIssue) {
+      push({
+        severity: 'medium',
+        confidence: 'likely',
+        category: 'ga4',
+        message: fpIssue,
+        recommendation:
+          'Set up a custom subdomain (CNAME to the tagging host), then update it with set_server_container_tagging_url and re-point the web Google tag with set_web_server_container_url.',
+        autoFixable: false,
+      });
+    }
   }
 
   for (const t of s.tags) {

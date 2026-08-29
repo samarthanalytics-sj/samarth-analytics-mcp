@@ -5,7 +5,7 @@ import type { OAuth2Client } from 'google-auth-library';
 import type { AccountClientManager } from './account-clients';
 import type { RegistryService } from '../services/registry-service';
 import type { ContainerSnapshot, ServerContainerSnapshot } from './gtm-builders';
-import { ga4TagFields, readGa4EventParameters, applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, normalizeTriggerType, setCustomEventName, customEventNameOf, buildGa4Client, buildGa4ServerTag, buildMetaCapiServerTag, buildTikTokCapiServerTag, buildStapeDataTag, buildServerAllEventsTrigger, buildServerEventTrigger, buildAdsConversionServerTag, buildMetaEmqVariables, buildTikTokEmqVariables, buildEcommerceDlvVariables, buildGa4EventTag, buildTrigger, planTriggerRetarget, type TriggerInput, buildGtmClient, buildVariable, sanitizeName, matchesServerContainer, customTemplateType, upsertGoogleTagConfig, triggerUsageBreakdown, detectMetaTags, evaluateTrackingSetup, GA4_ECOMMERCE_FUNNEL_EVENTS, type TrackingSetupReport, type TrackingSetupCheck } from './gtm-builders';
+import { ga4TagFields, readGa4EventParameters, applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, normalizeTriggerType, setCustomEventName, customEventNameOf, buildGa4Client, buildGa4ServerTag, buildMetaCapiServerTag, buildTikTokCapiServerTag, buildStapeDataTag, buildServerAllEventsTrigger, buildServerEventTrigger, buildAdsConversionServerTag, buildMetaEmqVariables, buildTikTokEmqVariables, buildEcommerceDlvVariables, buildGa4EventTag, buildTrigger, planTriggerRetarget, type TriggerInput, buildGtmClient, buildVariable, sanitizeName, matchesServerContainer, customTemplateType, upsertGoogleTagConfig, taggingUrlFirstPartyIssue, triggerUsageBreakdown, detectMetaTags, evaluateTrackingSetup, GA4_ECOMMERCE_FUNNEL_EVENTS, type TrackingSetupReport, type TrackingSetupCheck } from './gtm-builders';
 import { resolveGa4MeasurementIds } from './gtm-ga4-check';
 import { withQuotaRetry, withRetry, QUOTA_RE, TRANSIENT_5XX_RE, NOT_FOUND_OR_PERMISSION_RE } from './quota-retry';
 import { log } from '../logger';
@@ -2454,6 +2454,10 @@ export class GoogleDataService {
     webWired: { tagId: string; name: string } | null;
     webDedup: { uniqueEventIdVariable: string; eventIdWired: boolean } | null;
     webNonGa4: Array<{ kind: string; name: string; detail: string }>;
+    /** Problems worth surfacing to the user (non-first-party server URL, unwired web tag). */
+    warnings: string[];
+    /** What remains before tracking is live - the steps this tool deliberately does NOT do. */
+    nextSteps: string[];
   }> {
     // Read the WEB container once for its name (fallback container name) and its GTM-XXXX public id
     // (the GTM client's allowedContainerIds needs it).
@@ -2533,6 +2537,13 @@ export class GoogleDataService {
     let webDedup: { uniqueEventIdVariable: string; eventIdWired: boolean } | null = null;
     const webNonGa4: Array<{ kind: string; name: string; detail: string }> = [];
     const url = serverUrl?.trim();
+    const warnings: string[] = [];
+    // F1: a shared managed-host URL silently makes the FPID/_ga cookies third-party - warn now,
+    // while the user can still put a custom subdomain in front of the host.
+    if (url) {
+      const fpIssue = taggingUrlFirstPartyIssue(url);
+      if (fpIssue) warnings.push(fpIssue);
+    }
 
     // Record the server URL on the NEW server container — independent of the web-container scan below,
     // so a snapshot failure never drops a URL the user provided. Best-effort (the container is already
@@ -2566,6 +2577,11 @@ export class GoogleDataService {
       }
       if (url) {
         const googtag = snap.tags.find((t) => t.type === 'googtag');
+        if (!googtag) {
+          warnings.push(
+            `No Google tag (type googtag) found in web container ${webContainerId}'s default workspace - the web side was NOT pointed at the server. If the site loads gtag.js directly or the Google tag lives in another workspace, wire it later with set_web_server_container_url.`
+          );
+        }
         if (googtag) {
           // Browser↔server dedup (reference pattern): a Unique Event ID variable on the web side,
           // sent as event_id on every GA4 hit; the server reads it back (ed - event_id) into CAPI
@@ -2592,6 +2608,25 @@ export class GoogleDataService {
       /* non-fatal: the server container (and its URL) are done; the scan/web-wire is a convenience */
     }
 
+    // The steps this tool deliberately does NOT do (Stape's guide ends with them; without this
+    // list users think "created" means "live"). Ordered: provision -> wire -> loader -> publish.
+    const nextSteps: string[] = [];
+    if (!url) {
+      nextSteps.push(
+        'Provision the tagging-server host (Cloud Run / App Engine / Stape). For Stape or manual provisioning you need the Container Config string - the GTM API cannot read it; copy it from the GTM UI (server container -> Admin -> Container Settings). Then record the URL with set_server_container_tagging_url and point the web Google tag at it with set_web_server_container_url.'
+      );
+    } else if (!webWired) {
+      nextSteps.push('Point the web Google tag at the server with set_web_server_container_url (it was not wired in this run).');
+    }
+    if (gtmClient) {
+      nextSteps.push(
+        `First-party serving of gtm.js is provisioned SERVER-side (client "${gtmClient}"), but the SITE still loads gtm.js from googletagmanager.com until its snippet is switched to load from the tagging server domain (Stape: the Custom Loader power-up generates this snippet). Until then that client is idle - tracking still works via the standard loader.`
+      );
+    }
+    nextSteps.push(
+      'BOTH containers are DRAFTS: nothing changes live traffic until the server container AND the web container are published. Run verify_tracking_setup (with the server ids) first, then publish both.'
+    );
+
     return {
       serverContainer: boot.container,
       workspaceId: boot.workspaceId,
@@ -2601,6 +2636,8 @@ export class GoogleDataService {
       webWired,
       webDedup,
       webNonGa4,
+      warnings,
+      nextSteps,
     };
   }
 
@@ -2788,7 +2825,7 @@ export class GoogleDataService {
     tagId: string,
     serverUrl: string,
     extraConfig?: Array<{ key: string; value: string }>
-  ): Promise<{ tagId: string; name: string; serverContainerUrl: string }> {
+  ): Promise<{ tagId: string; name: string; serverContainerUrl: string; warning?: string }> {
     const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
     const gtm = tagmanager({ version: 'v2', auth });
     const path = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/tags/${tagId}`;
@@ -2805,7 +2842,8 @@ export class GoogleDataService {
     }
     const res = await gtm.accounts.containers.workspaces.tags.update({ path, requestBody: working });
     this.journal('tag', accountId, containerId, workspaceId, tagId, `${res.data.name ?? 'tag'} (#${tagId})`);
-    return { tagId: res.data.tagId ?? tagId, name: res.data.name ?? '', serverContainerUrl: serverUrl };
+    const warning = taggingUrlFirstPartyIssue(serverUrl) ?? undefined;
+    return { tagId: res.data.tagId ?? tagId, name: res.data.name ?? '', serverContainerUrl: serverUrl, ...(warning ? { warning } : {}) };
   }
 
   /** Set the SERVER container's own Tagging Server URL(s) — the container-level
@@ -2817,7 +2855,7 @@ export class GoogleDataService {
     accountId: string,
     containerId: string,
     serverUrls: string[]
-  ): Promise<{ containerId: string; name: string; taggingServerUrls: string[] }> {
+  ): Promise<{ containerId: string; name: string; taggingServerUrls: string[]; warning?: string }> {
     const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
     const gtm = tagmanager({ version: 'v2', auth });
     const path = `accounts/${accountId}/containers/${containerId}`;
@@ -2826,7 +2864,8 @@ export class GoogleDataService {
       throw new Error(`Container ${containerId} is not a SERVER container (usageContext ${JSON.stringify(current.usageContext ?? [])}) — taggingServerUrls only applies to server containers.`);
     }
     const res = await gtm.accounts.containers.update({ path, requestBody: { ...current, taggingServerUrls: serverUrls } });
-    return { containerId: res.data.containerId ?? containerId, name: res.data.name ?? '', taggingServerUrls: res.data.taggingServerUrls ?? [] };
+    const warning = serverUrls.map(taggingUrlFirstPartyIssue).find((w) => w !== null) ?? undefined;
+    return { containerId: res.data.containerId ?? containerId, name: res.data.name ?? '', taggingServerUrls: res.data.taggingServerUrls ?? [], ...(warning ? { warning } : {}) };
   }
 
   /** Enable built-in variables (e.g. "clickUrl") in a workspace. Idempotent-ish:
