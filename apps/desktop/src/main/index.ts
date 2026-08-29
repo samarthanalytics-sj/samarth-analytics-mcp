@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process';
 import { installConsoleBridge, installHttpLogging, installIpcLogging, setDevLogSink } from './devtools/dev-logger';
 import { installReactDevtools } from './devtools/react-devtools';
 import { detectBrowsers, openInBrowser } from './services/browser-launch';
+import { loadEnvFiles } from './google/oauth-config';
 import { AccountRepository } from './storage/account-repository';
 import { SecretStore } from './storage/secret-store';
 import { SafeStorageCryptor } from './storage/safe-storage-cryptor';
@@ -230,6 +231,15 @@ app.whenReady().then(() => {
   // Local data layer: account registry (metadata) + secret store (encrypted via
   // safeStorage/DPAPI). Dev uses the repo-root data/ dir; packaged uses AppData.
   const dataDir = resolveDataDir();
+  // Optional .env files for the Google OAuth client (GOOGLE_DESKTOP_CLIENT_ID /
+  // GOOGLE_OAUTH_CLIENT_ID + secret). Real shell env always wins; first file
+  // listed wins over later ones. Dev also reads apps/desktop/.env and the
+  // repo-root .env so a client configured for the MCP server is picked up.
+  loadEnvFiles(
+    app.isPackaged
+      ? [join(dataDir, '.env')]
+      : [join(dataDir, '.env'), join(app.getAppPath(), '.env'), join(app.getAppPath(), '..', '..', '.env')]
+  );
   log.banner('Samarth Analytics MCP Desktop', [
     ['Version', appVersion()],
     ['Environment', app.isPackaged ? 'Production' : 'Development'],
