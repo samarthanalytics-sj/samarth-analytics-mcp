@@ -1,3 +1,9 @@
+## [1.480.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.480.0...v1.480.1) (2026-08-29)
+
+### Bug Fixes
+
+* **desktop:** teach the smoke harness the template-discovery tools ([#929](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/929)) ([6454b80](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/6454b807486135d7be9a8f8cfd40223ae048d907)), closes [#928](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/928)
+
 ## [1.480.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.479.0...v1.480.0) (2026-08-29)
 
 ### Features
