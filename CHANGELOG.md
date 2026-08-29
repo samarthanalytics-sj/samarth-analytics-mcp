@@ -1,3 +1,9 @@
+## [1.476.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.475.0...v1.476.0) (2026-08-29)
+
+### Features
+
+* **desktop:** merge Providers into the Language Model settings section ([#924](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/924)) ([07e7cc8](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/07e7cc884ed1968f67cf53993397628ad7f30add))
+
 ## [1.475.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.474.1...v1.475.0) (2026-08-29)
 
 ### Features
