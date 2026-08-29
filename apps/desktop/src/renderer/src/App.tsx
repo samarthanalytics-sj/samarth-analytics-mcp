@@ -630,10 +630,14 @@ interface PendingConfirm {
 function ConfirmCard({
   proposal,
   onApprove,
+  onAlwaysAllow,
   onReject,
 }: {
   proposal: PendingConfirm;
   onApprove: (details: Record<string, unknown>) => void;
+  /** Approve AND auto-approve future writes by this tool for the rest of this chat.
+   *  Only offered for non-destructive GTM draft-workspace writes. */
+  onAlwaysAllow?: (details: Record<string, unknown>) => void;
   onReject: () => void;
 }): JSX.Element {
   const fields = useMemo(() => buildEditFields(proposal.tool, proposal.details), [proposal]);
@@ -644,12 +648,19 @@ function ConfirmCard({
   const needType = proposal.requireTextConfirm;
   const typeOk = !needType || typed.trim().toLowerCase() === needType.toLowerCase();
 
-  function approve(): void {
-    if (!typeOk) return;
+  function editedDetails(): Record<string, unknown> {
     const edited = structuredClone(proposal.details);
     for (const f of fields) f.apply(edited, vals[f.key] ?? f.initial);
-    onApprove(edited);
+    return edited;
   }
+  function approve(): void {
+    if (!typeOk) return;
+    onApprove(editedDetails());
+  }
+  // Eligibility mirrors the auto-approve gate in the chat handler: GTM drafts only, never
+  // destructive or type-to-confirm actions.
+  const canAlwaysAllow =
+    onAlwaysAllow !== undefined && proposal.platform === 'gtm' && !proposal.destructive && !proposal.requireTextConfirm;
 
   const rows = summarizeProposal(proposal.tool, proposal.details);
 
@@ -708,7 +719,7 @@ function ConfirmCard({
         </div>
       )}
 
-      <div style={{ display: 'flex', gap: 8 }}>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         <button
           style={{
             ...(proposal.destructive ? styles.dangerSolid : styles.primaryBtn),
@@ -717,10 +728,19 @@ function ConfirmCard({
           onClick={approve}
           disabled={!typeOk}
         >
-          {proposal.destructive ? 'Yes, delete' : 'Approve & apply'}
+          {proposal.destructive ? 'Yes, delete' : 'Allow'}
         </button>
+        {canAlwaysAllow && (
+          <button
+            style={styles.ghostBtn}
+            onClick={() => onAlwaysAllow?.(editedDetails())}
+            title={`Also auto-approve future ${proposal.tool} writes for the rest of this chat. Draft workspace only - deletes and live GA4/Ads writes always ask.`}
+          >
+            Always allow for this chat
+          </button>
+        )}
         <button style={styles.ghostBtn} onClick={onReject}>
-          Cancel
+          {proposal.destructive ? 'Cancel' : 'Deny'}
         </button>
       </div>
       <div style={styles.confirmNote}>
@@ -986,6 +1006,8 @@ interface ChatMessage {
   role: 'user' | 'assistant';
   text: string;
   tools?: string[];
+  /** Tools whose writes were auto-approved via "Always allow" - shown so approvals stay visible. */
+  autoApproved?: string[];
   /** Tool failures surfaced in the UI even if the model doesn't mention them. */
   toolErrors?: Array<{ name: string; error: string }>;
   /** Epoch ms when the message was created (a query's send time / a reply's start time).
@@ -1294,6 +1316,10 @@ function ChatView({
     return () => clearTimeout(id);
   }, [messages]);
   const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null);
+  // Tools the user marked "Always allow" IN THIS CHAT. Session-scoped on purpose (a ref, gone on
+  // unmount): never persisted, and only non-destructive GTM draft-workspace writes are eligible -
+  // deletes, type-to-confirm actions and live GA4/Ads writes always prompt.
+  const autoAllowTools = useRef<Set<string>>(new Set());
   // What the previous query changed in GTM (for the Revert button).
   const [revertable, setRevertable] = useState<{ count: number; labels: string[] } | null>(null);
   const [reverting, setReverting] = useState(false);
@@ -1464,15 +1490,29 @@ function ChatView({
           return copy;
         });
         if (ev.type === 'confirm') {
-          setPendingConfirm({
-            confirmId: ev.confirmId,
-            tool: ev.tool,
-            summary: ev.summary,
-            details: ev.details,
-            destructive: ev.destructive,
-            requireTextConfirm: ev.requireTextConfirm,
-            platform: ev.platform,
-          });
+          const alwaysAllowable = ev.platform === 'gtm' && !ev.destructive && !ev.requireTextConfirm;
+          if (alwaysAllowable && autoAllowTools.current.has(ev.tool)) {
+            // Approved by the user's earlier "Always allow" - answer immediately, but keep the
+            // approval visible in the transcript instead of silent.
+            void window.desktop.llm.confirm(ev.confirmId, ev.details);
+            setMessages((m) => {
+              const copy = [...m];
+              const last = copy[copy.length - 1];
+              if (last?.role === 'assistant')
+                copy[copy.length - 1] = { ...last, autoApproved: [...(last.autoApproved ?? []), ev.tool] };
+              return copy;
+            });
+          } else {
+            setPendingConfirm({
+              confirmId: ev.confirmId,
+              tool: ev.tool,
+              summary: ev.summary,
+              details: ev.details,
+              destructive: ev.destructive,
+              requireTextConfirm: ev.requireTextConfirm,
+              platform: ev.platform,
+            });
+          }
         }
       }, mediaParts, integrations);
     } catch (e) {
@@ -1608,6 +1648,14 @@ function ChatView({
                 alignItems: m.role === 'user' ? 'flex-end' : 'flex-start',
               }}
             >
+              {m.role === 'assistant' && m.autoApproved?.length ? (
+                <div style={styles.toolTrace}>
+                  <span style={styles.toolChip} title={m.autoApproved.join(', ')}>
+                    <span style={{ color: 'var(--c-amber)', fontWeight: 700 }} aria-hidden>⚡</span>
+                    {m.autoApproved.length} write{m.autoApproved.length === 1 ? '' : 's'} auto-approved (always allow)
+                  </span>
+                </div>
+              ) : null}
               {m.role === 'assistant' && m.tools?.length ? (
                 <div style={styles.toolTrace}>
                   {m.tools.map((name, j) => {
@@ -1717,6 +1765,12 @@ function ChatView({
           key={pendingConfirm.confirmId}
           proposal={pendingConfirm}
           onApprove={async (details) => {
+            const id = pendingConfirm.confirmId;
+            setPendingConfirm(null);
+            await window.desktop.llm.confirm(id, details);
+          }}
+          onAlwaysAllow={async (details) => {
+            autoAllowTools.current.add(pendingConfirm.tool);
             const id = pendingConfirm.confirmId;
             setPendingConfirm(null);
             await window.desktop.llm.confirm(id, details);
