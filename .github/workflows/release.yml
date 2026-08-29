@@ -25,9 +25,11 @@ jobs:
           persist-credentials: false
 
       - name: Set up Node.js
+        # semantic-release requires ^22.14.0 || >=24.10.0. Node 20 made every
+        # release since 2026-08-12 exit 1 before publishing anything.
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
 
       - name: Install dependencies

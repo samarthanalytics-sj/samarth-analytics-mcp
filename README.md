@@ -51,63 +51,72 @@ Gives Claude Desktop, Cursor, Claude Code, and any MCP-compatible client full, g
 
 ## Quick Start
 
-### Prerequisites
+**You need:** Node.js >= 18, and a Google Cloud OAuth client ID + secret with the **Tag Manager API** enabled ([2-minute setup](#google-cloud-oauth-setup)).
 
-- Node.js ≥ 18
-- A Google Cloud project with the **Tag Manager API** enabled
-- A Google account with access to your GTM containers
-
-### Run with npx (no clone needed)
-
-Once the package is on npm, the fastest path is:
+No clone and no build - the package is on npm. Pick a folder to hold your credentials and token file, and work from there:
 
 ```bash
-# One-time OAuth onboarding (opens your browser; writes a local token file)
-GOOGLE_OAUTH_CLIENT_ID=... GOOGLE_OAUTH_CLIENT_SECRET=... npx -y -p samarth-gtm-mcp samarth-gtm-auth
+mkdir samarth-gtm && cd samarth-gtm
+```
 
-# Run the server (stdio)
+**1. Add your OAuth client.** Create a file named `.env` in that folder:
+
+```ini
+GOOGLE_OAUTH_CLIENT_ID=your-client-id.apps.googleusercontent.com
+GOOGLE_OAUTH_CLIENT_SECRET=your-client-secret
+```
+
+**2. Authorize once.** Opens your browser, then writes `.gtm-mcp-tokens.json` (mode `0600`) into this folder:
+
+```bash
+npx -y -p samarth-gtm-mcp samarth-gtm-auth
+```
+
+**3. Add it to your MCP client.** Use the **absolute** path to the token file - your client sets its own working directory, so a relative path will not be found:
+
+```json
+{
+  "mcpServers": {
+    "samarth-gtm": {
+      "command": "npx",
+      "args": ["-y", "samarth-gtm-mcp"],
+      "env": {
+        "GOOGLE_OAUTH_CLIENT_ID": "your-client-id.apps.googleusercontent.com",
+        "GOOGLE_OAUTH_CLIENT_SECRET": "your-client-secret",
+        "GTM_MCP_TOKEN_FILE": "/absolute/path/to/samarth-gtm/.gtm-mcp-tokens.json"
+      }
+    }
+  }
+}
+```
+
+Restart the client and you are done. The server starts **read-only** - see [Guardrails](#guardrails) to enable writes.
+
+> The client id and secret are needed at runtime to refresh the access token, so they live in the client config. That file now holds a secret - keep it out of version control. If your MCP client lets you set a working directory, point it at the folder from step 1 and the server will read `.env` itself via `dotenv`.
+
+### Check it works
+
+```bash
 npx -y samarth-gtm-mcp
 ```
 
-In MCP client configs, use `"command": "npx", "args": ["-y", "samarth-gtm-mcp"]`.
+It should start and wait on stdio (Ctrl+C to exit). For an interactive tool browser, run `npx -y @modelcontextprotocol/inspector npx -y samarth-gtm-mcp`.
 
-### Install & Build (from source)
+### From source (contributors)
 
 ```bash
 git clone https://github.com/samarthanalytics-sj/samarth-analytics-mcp.git
 cd samarth-analytics-mcp
 npm install
-cp .env.example .env
-# Edit .env — at minimum add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET
+cp .env.example .env     # fill in GOOGLE_OAUTH_CLIENT_ID + GOOGLE_OAUTH_CLIENT_SECRET
 npm run build
+npm run auth:google      # same browser flow as step 2 above
+npm start                # or: npm run inspector
 ```
 
-### One-time OAuth Setup
-
-The fastest way is the new browser-based onboarding script:
-
-```bash
-npm run auth:google
-```
-
-This will:
-1. Start a tiny local callback server on `http://localhost:3001/oauth/callback`.
-2. Open the Google authorization URL in your default browser (or print it if no browser is available).
-3. Capture the redirect, exchange the code for tokens, and save them to `./.gtm-mcp-tokens.json` (mode `0600`, already in `.gitignore`).
-
-You do **not** need to paste tokens into `.env` afterwards — the server reads them from the token file automatically. If you prefer to manage tokens by hand, the legacy paste-the-code helper is still available as `npm run oauth:setup`.
+Prefer pasting the authorization code by hand? `npm run oauth:setup` still does that.
 
 See [Friendly Google Auth Options](#friendly-google-auth-options) for the three supported setup paths (hosted, local dev, advanced).
-
-### Verify it works
-
-```bash
-# Test stdio server starts (Ctrl+C to exit)
-npm start
-
-# Or use the MCP inspector
-npm run inspector
-```
 
 ---
 
@@ -584,22 +593,21 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) o
 {
   "mcpServers": {
     "samarth-gtm": {
-      "command": "node",
-      "args": ["/absolute/path/to/samarth-gtm-mcp/dist/index.js"],
+      "command": "npx",
+      "args": ["-y", "samarth-gtm-mcp"],
       "env": {
-        "GOOGLE_CLIENT_ID": "your-client-id.apps.googleusercontent.com",
-        "GOOGLE_CLIENT_SECRET": "your-client-secret",
-        "GOOGLE_REFRESH_TOKEN": "your-refresh-token",
-        "GTM_MCP_ENABLE_WRITES": "false",
-        "GTM_MCP_ENABLE_PUBLISH": "false",
-        "GTM_MCP_ENABLE_DELETES": "false"
+        "GOOGLE_OAUTH_CLIENT_ID": "your-client-id.apps.googleusercontent.com",
+        "GOOGLE_OAUTH_CLIENT_SECRET": "your-client-secret",
+        "GTM_MCP_TOKEN_FILE": "/absolute/path/to/samarth-gtm/.gtm-mcp-tokens.json"
       }
     }
   }
 }
 ```
 
-**Tip**: Set the env variables in `.env` and remove them from the config to keep credentials out of version control. The server loads `.env` automatically via `dotenv`.
+Running from a clone instead? Swap the first two lines for `"command": "node", "args": ["/absolute/path/to/samarth-analytics-mcp/dist/index.js"]` and keep the same `env`.
+
+`GTM_MCP_TOKEN_FILE` must be **absolute**. Claude Desktop launches the server with its own working directory, so a relative path - and any `.env` sitting next to your clone - will not be found.
 
 After editing, restart Claude Desktop.
 
@@ -607,40 +615,53 @@ After editing, restart Claude Desktop.
 
 ## Cursor Config
 
-In Cursor, go to **Settings → MCP** and add:
+In Cursor, go to **Settings -> MCP** and add:
 
 ```json
 {
   "mcpServers": {
     "samarth-gtm": {
-      "command": "node",
-      "args": ["/absolute/path/to/samarth-gtm-mcp/dist/index.js"]
-    }
-  }
-}
-```
-
-Make sure your `.env` file is present in the project root so `dotenv` picks it up.
-
----
-
-## Claude Code Config
-
-Add to `.claude/mcp_config.json` in your project root:
-
-```json
-{
-  "mcpServers": {
-    "samarth-gtm": {
-      "command": "node",
-      "args": ["/absolute/path/to/samarth-gtm-mcp/dist/index.js"],
+      "command": "npx",
+      "args": ["-y", "samarth-gtm-mcp"],
       "env": {
-        "GTM_MCP_ENABLE_WRITES": "true"
+        "GOOGLE_OAUTH_CLIENT_ID": "your-client-id.apps.googleusercontent.com",
+        "GOOGLE_OAUTH_CLIENT_SECRET": "your-client-secret",
+        "GTM_MCP_TOKEN_FILE": "/absolute/path/to/samarth-gtm/.gtm-mcp-tokens.json"
       }
     }
   }
 }
 ```
+
+---
+
+## Claude Code Config
+
+One command, from the folder you set up in the [Quick Start](#quick-start):
+
+```bash
+claude mcp add samarth-gtm --env GTM_MCP_TOKEN_FILE=$PWD/.gtm-mcp-tokens.json -- npx -y samarth-gtm-mcp
+```
+
+Or add it by hand to `.claude/mcp_config.json` in your project root:
+
+```json
+{
+  "mcpServers": {
+    "samarth-gtm": {
+      "command": "npx",
+      "args": ["-y", "samarth-gtm-mcp"],
+      "env": {
+        "GOOGLE_OAUTH_CLIENT_ID": "your-client-id.apps.googleusercontent.com",
+        "GOOGLE_OAUTH_CLIENT_SECRET": "your-client-secret",
+        "GTM_MCP_TOKEN_FILE": "/absolute/path/to/samarth-gtm/.gtm-mcp-tokens.json"
+      }
+    }
+  }
+}
+```
+
+The server is read-only until you add `"GTM_MCP_ENABLE_WRITES": "true"` - and every write still needs `confirm=true`. See [Guardrails](#guardrails) before turning it on.
 
 ---
 
@@ -918,8 +939,9 @@ To intentionally land a commit without triggering a release, use a non-releasing
 ### Claude Desktop: MCP server not appearing
 
 - Check `claude_desktop_config.json` for JSON syntax errors
-- Ensure the path in `args` is an absolute path to `dist/index.js`
-- Make sure `npm run build` has been run
+- With the npx config, make sure `npx` is on Claude Desktop's PATH (install Node.js system-wide, not only in a version manager shell)
+- Ensure `GTM_MCP_TOKEN_FILE` is an **absolute** path and the file exists (run the auth step again if not)
+- Running from a clone: the `args` path must be absolute to `dist/index.js`, and `npm run build` must have been run
 - Restart Claude Desktop completely (not just refresh)
 
 ### TypeScript errors on `googleapis` types
