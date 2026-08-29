@@ -161,7 +161,7 @@ Best for agencies and teams that want a hosted server with their own auth/IAM in
    SAMARTH_GOOGLE_OAUTH_CLIENT_SECRET=secret-injected-from-secret-manager
    ```
    The secret **must** come from your platform's secret manager (Render Secrets, Fly Secrets, Vault, etc.). It is never committed to this repo and never shipped to client machines.
-3. Front the `/mcp` endpoint with your own auth layer (API key header, IP allowlist, SSO proxy). The MCP server itself has no built-in user auth — see [Security Notes](#security-notes).
+3. Authenticate `/mcp`: set `GTM_MCP_HTTP_AUTH_TOKEN` for a shared bearer token, or `STYTCH_PROJECT_ID` for per-user OAuth (multi-user mode). The transport refuses to start with neither — see [Security Notes](#security-notes).
 4. Users connect with their MCP client and never see Google Cloud Console.
 
 Trade-off: you own the operational burden (Google API quota, OAuth app verification, secret rotation, user provisioning) in exchange for a friendly UX.
@@ -303,7 +303,13 @@ For Google Workspace organizations:
 | `GOOGLE_SERVICE_ACCOUNT_KEY_FILE` | — | Path to service account JSON key (see limitations above) |
 | `GTM_MCP_TRANSPORT` | `stdio` | Transport: `stdio` or `http` |
 | `GTM_MCP_HTTP_PORT` | `3001` | HTTP server port (http transport only; falls back to `PORT`) |
-| `GTM_MCP_HTTP_AUTH_TOKEN` | — | Bearer token gating `/mcp` (http transport). **Required before exposing the server beyond localhost**; unset = open + startup warning. |
+| `GTM_MCP_HTTP_AUTH_TOKEN` | — | Bearer token gating `/mcp` (http transport). With neither this nor `STYTCH_PROJECT_ID` set, the HTTP transport **refuses to start**. |
+| `GTM_MCP_HTTP_ALLOW_UNAUTHENTICATED` | `false` | Local-dev opt-in to start without auth. Binds loopback only unless `GTM_MCP_HTTP_HOST` overrides. |
+| `GTM_MCP_HTTP_HOST` | — | Bind host. Defaults to loopback when unauthenticated, all interfaces when authenticated. |
+| `STYTCH_PROJECT_ID` | — | Setting this switches the HTTP transport to **multi-user mode**: each `/mcp` request carries a Stytch JWT resolved to that user's own Google identity. Unset = single-identity mode. Pin `STYTCH_JWT_ISSUER` / `STYTCH_JWT_AUDIENCE` in production (see `.env.example`). |
+| `STYTCH_SECRET` | — | Stytch project secret (server-only). Required when `STYTCH_PROJECT_ID` is set — the server exits without it. |
+| `STYTCH_PUBLIC_TOKEN` | — | Publishable token powering the `/oauth/authorize` page. Not a secret. |
+| `GTM_MCP_PUBLIC_URL` | `http://localhost:<port>` | This server's public origin, advertised in the OAuth Protected Resource Metadata document. |
 | `GTM_MCP_ENABLE_WRITES` | `false` | Allow create/update operations |
 | `GTM_MCP_ENABLE_PUBLISH` | `false` | Allow publish operations |
 | `GTM_MCP_ENABLE_DELETES` | `false` | Allow delete operations |
@@ -311,9 +317,6 @@ For Google Workspace organizations:
 | `GTM_MCP_RETRY_MAX` | `3` | Retry attempts for transient read failures (408/429/5xx, network). `0` disables retries. Mutations are never auto-retried. |
 | `GTM_MCP_RETRY_MAX_DELAY_MS` | `30000` | Cap on a single backoff sleep (exponential backoff with jitter) |
 | `GTM_MCP_RETRY_TOTAL_TIMEOUT_MS` | `60000` | Cap on total wall time from first request to last retry |
-| `GTM_DEFAULT_ACCOUNT_ID` | — | Optional default accountId |
-| `GTM_DEFAULT_CONTAINER_ID` | — | Optional default containerId |
-| `GTM_DEFAULT_WORKSPACE_ID` | — | Optional default workspaceId |
 
 ---
 
@@ -728,7 +731,7 @@ CMD ["node", "dist/index.js"]
 
 4. **Cloud deployment**: Store secrets in your platform's secret manager (Render Secrets, Fly.io Secrets, Vercel Env Vars), never in code or Docker images.
 
-5. **HTTP transport**: If exposed publicly, add authentication middleware (API key header check, IP allowlist, or OAuth proxy). The current HTTP server has no built-in authentication beyond Google token validation for GTM calls.
+5. **HTTP transport**: `/mcp` has two built-in auth modes — `GTM_MCP_HTTP_AUTH_TOKEN` (one shared bearer token, identifies the deployment) and `STYTCH_PROJECT_ID` (per-user OAuth, each request resolved to that user's own Google grant). With neither set the transport refuses to start; `GTM_MCP_HTTP_ALLOW_UNAUTHENTICATED=true` overrides that for local development and binds loopback only.
 
 6. **Publish guard**: Keep `GTM_MCP_ENABLE_PUBLISH=false` unless you explicitly intend to publish from an AI client. Publishing incorrect tags to production is the highest-risk operation.
 
@@ -930,9 +933,9 @@ To intentionally land a commit without triggering a release, use a non-releasing
 
 - `workspace_resolve_conflict`: The GTM API's resolve_conflict endpoint accepts a full entity body — the exact request body schema is complex. The current implementation passes through the user-supplied JSON; validate it against the entity type before calling.
 - `containers_create`: The `usageContext` enum values may differ slightly by GTM region/version. Refer to the [GTM API docs](https://developers.google.com/tag-manager/api/v2/reference/accounts/containers/create) for the latest allowed values.
-- **HTTP transport has no built-in user auth**: the `/mcp` endpoint must be fronted by your own auth layer (API key, IP allowlist, SSO proxy) for team/cloud deployments — see [Security Notes](#security-notes).
+- **Single-identity HTTP auth is a shared secret**: `GTM_MCP_HTTP_AUTH_TOKEN` gates `/mcp` with one bearer token for every client, so it identifies the deployment, not the caller. For per-user identity, set `STYTCH_PROJECT_ID` to enable multi-user mode — see [Security Notes](#security-notes).
 - **HTTP sessions are in-memory**: sessions live in the server process, so horizontal scaling requires sticky sessions. Fine for a single team instance; not yet built for multi-instance load balancing.
-- **Single OAuth identity per deployment**: all requests share one Google identity and therefore one Google API quota pool. Heavy multi-user load through one deployment will exhaust it; retries with backoff soften this but don't remove the quota ceiling.
+- **Single OAuth identity per deployment — single-identity mode only**: without `STYTCH_PROJECT_ID`, all requests share one Google identity and therefore one Google API quota pool. Heavy multi-user load through one deployment will exhaust it; retries with backoff soften this but don't remove the quota ceiling. Multi-user mode sidesteps it — each member uses their own Google grant and quota.
 
 ---
 
