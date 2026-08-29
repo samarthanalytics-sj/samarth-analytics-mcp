@@ -1,3 +1,9 @@
+## [1.475.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.474.1...v1.475.0) (2026-08-29)
+
+### Features
+
+* **desktop:** read the Google OAuth client from optional .env files ([#923](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/923)) ([6889a7e](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/6889a7e60cda8a3cc636f143ce1a496de60b3632))
+
 ## [1.474.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.474.0...v1.474.1) (2026-08-29)
 
 ### Bug Fixes
