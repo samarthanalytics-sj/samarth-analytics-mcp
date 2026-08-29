@@ -1,3 +1,9 @@
+## [1.479.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.478.0...v1.479.0) (2026-08-29)
+
+### Features
+
+* **desktop:** close the sGTM setup gaps found in the Stape benchmark audit ([#927](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/927)) ([7699b37](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/7699b3790236bad6426c3d5b276ea391719b7089))
+
 ## [1.478.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.477.0...v1.478.0) (2026-08-29)
 
 ### Features
