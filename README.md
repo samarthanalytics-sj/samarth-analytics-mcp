@@ -4,7 +4,7 @@
 
 A production-ready [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server for the **Google Tag Manager API v2**, built for Samarth Analytics.
 
-Gives Claude Desktop, Cursor, Claude Code, and any MCP-compatible client full, guarded access to GTM — read workspace contents, create/update tags/triggers/variables, audit implementations, publish versions, and more.
+Use it through **Samarth Desktop** - the local Electron app with a chat UI that embeds this server ([Quick Start](#quick-start)). Full, guarded access to GTM: read workspace contents, create/update tags/triggers/variables, audit implementations, publish versions, and more.
 
 > **New: browser portal with live QC audit.** A white-label, browser-based customer experience lives in [`apps/portal/`](./apps/portal/README.md). Customers sign in with Google OAuth, pick a GTM account/container/workspace, and run a live, read-only QC audit. Publishes still require Samarth approval. See the portal README for OAuth setup; run with `npm run portal:dev`.
 
@@ -14,20 +14,16 @@ Gives Claude Desktop, Cursor, Claude Code, and any MCP-compatible client full, g
 
 1. [Features](#features)
 2. [Quick Start](#quick-start)
-3. [Friendly Google Auth Options](#friendly-google-auth-options)
-4. [Google Cloud OAuth Setup](#google-cloud-oauth-setup)
-5. [Service Account Limitations](#service-account-limitations)
-6. [Environment Variables Reference](#environment-variables-reference)
-7. [Guardrails](#guardrails)
-8. [Available Tools](#available-tools)
-9. [Claude Desktop Config](#claude-desktop-config)
-10. [Cursor Config](#cursor-config)
-11. [Claude Code Config](#claude-code-config)
-12. [Cloud Deployment](#cloud-deployment)
-13. [Security Notes](#security-notes)
-14. [Development](#development)
-15. [Releases](#releases)
-16. [Troubleshooting](#troubleshooting)
+3. [Google Cloud OAuth Setup](#google-cloud-oauth-setup)
+4. [Service Account Limitations](#service-account-limitations)
+5. [Environment Variables Reference](#environment-variables-reference)
+6. [Guardrails](#guardrails)
+7. [Available Tools](#available-tools)
+8. [Cloud Deployment](#cloud-deployment)
+9. [Security Notes](#security-notes)
+10. [Development](#development)
+11. [Releases](#releases)
+12. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -51,99 +47,15 @@ Gives Claude Desktop, Cursor, Claude Code, and any MCP-compatible client full, g
 
 ## Quick Start
 
-**You need:** Node.js >= 18, and a Google Cloud OAuth client ID + secret with the **Tag Manager API** enabled ([2-minute setup](#google-cloud-oauth-setup)).
+The way to run Samarth is the **desktop app** - a local Electron app with a chat
+UI that embeds the MCP server in-process. Multi-account Google sign-in,
+per-account LLM keys (OpenAI / Anthropic / Gemini), secrets in the OS keychain.
+Nothing to configure by hand: the Google OAuth client and your LLM key are
+entered in the app on first run.
 
-No clone and no build - the package is on npm. Pick a folder to hold your credentials and token file, and work from there:
-
-```bash
-mkdir samarth-gtm && cd samarth-gtm
-```
-
-**1. Add your OAuth client.** The server signs in to Google *as you*, and Google
-only allows that through an "OAuth client" - two values (a client ID and a client
-secret) that you create once, free, in your Google Cloud project
-([exact click-by-click steps](#google-cloud-oauth-setup)).
-
-Put those two values in a plain text file named `.env` (the name is exactly
-`.env` - nothing before the dot) inside the folder you just made. Easiest way is
-straight from the terminal - paste this with your real values:
-
-```bash
-# macOS / Linux
-cat > .env << 'EOT'
-GOOGLE_OAUTH_CLIENT_ID=your-client-id.apps.googleusercontent.com
-GOOGLE_OAUTH_CLIENT_SECRET=your-client-secret
-EOT
-```
-
-```powershell
-# Windows (PowerShell)
-@"
-GOOGLE_OAUTH_CLIENT_ID=your-client-id.apps.googleusercontent.com
-GOOGLE_OAUTH_CLIENT_SECRET=your-client-secret
-"@ | Out-File .env -Encoding utf8
-```
-
-(Or create it in any text editor - Notepad works; just make sure it isn't saved
-as `.env.txt`.) This file is a secret - never commit or share it.
-
-**2. Authorize once.** Opens your browser, then writes `.gtm-mcp-tokens.json` (mode `0600`) into this folder:
-
-```bash
-npx -y -p samarth-gtm-mcp samarth-gtm-auth
-```
-
-**3. Add it to your MCP client.** Use the **absolute** path to the token file - your client sets its own working directory, so a relative path will not be found:
-
-```json
-{
-  "mcpServers": {
-    "samarth-gtm": {
-      "command": "npx",
-      "args": ["-y", "samarth-gtm-mcp"],
-      "env": {
-        "GOOGLE_OAUTH_CLIENT_ID": "your-client-id.apps.googleusercontent.com",
-        "GOOGLE_OAUTH_CLIENT_SECRET": "your-client-secret",
-        "GTM_MCP_TOKEN_FILE": "/absolute/path/to/samarth-gtm/.gtm-mcp-tokens.json"
-      }
-    }
-  }
-}
-```
-
-Restart the client and you are done. The server starts **read-only** - see [Guardrails](#guardrails) to enable writes.
-
-> The client id and secret are needed at runtime to refresh the access token, so they live in the client config. That file now holds a secret - keep it out of version control. If your MCP client lets you set a working directory, point it at the folder from step 1 and the server will read `.env` itself via `dotenv`.
-
-### Check it works
-
-```bash
-npx -y samarth-gtm-mcp
-```
-
-It should start and wait on stdio (Ctrl+C to exit). For an interactive tool browser, run `npx -y @modelcontextprotocol/inspector npx -y samarth-gtm-mcp`.
-
-### From source (contributors)
-
-```bash
-git clone https://github.com/samarthanalytics-sj/samarth-analytics-mcp.git
-cd samarth-analytics-mcp
-npm install
-cp .env.example .env     # fill in GOOGLE_OAUTH_CLIENT_ID + GOOGLE_OAUTH_CLIENT_SECRET
-npm run build
-npm run auth:google      # same browser flow as step 2 above
-npm start                # or: npm run inspector
-```
-
-Prefer pasting the authorization code by hand? `npm run oauth:setup` still does that.
-
-### Desktop app (Electron)
-
-Prefer a chat UI over wiring up an MCP client? **Samarth Desktop** embeds this
-MCP server in-process - multi-account Google sign-in, per-account LLM keys
-(OpenAI / Anthropic / Gemini), secrets in the OS keychain. No `.env` and no
-`npm run auth:google`: the Google OAuth client and LLM key are entered in the
-app on first run.
+**You need:** [Node.js](https://nodejs.org) 18 or newer, [Git](https://git-scm.com),
+and a free Google "Desktop app" OAuth client - two values you create once in
+your Google Cloud project ([exact click-by-click steps](#google-cloud-oauth-setup)).
 
 ```bash
 git clone https://github.com/samarthanalytics-sj/samarth-analytics-mcp.git
@@ -152,91 +64,18 @@ npm install    # downloads the Electron binary (~100 MB first time)
 npm run dev
 ```
 
-Full guide - Windows/macOS specifics, first-run setup, building a real `.exe`/`.dmg`
-installer, and the `Error: Electron uninstall` fix: [apps/desktop/INSTALL.md](apps/desktop/INSTALL.md).
+The window opens; paste your OAuth client ID + secret and an LLM API key when
+asked, sign in to Google, and start chatting with your GTM / GA4 setup.
 
-See [Friendly Google Auth Options](#friendly-google-auth-options) for the three supported setup paths (hosted, local dev, advanced).
+Your **everyday launch** afterwards is just:
 
----
-
-## Friendly Google Auth Options
-
-Google's Tag Manager API requires an OAuth-enabled Google Cloud project — **somebody has to own one**. There is no anonymous, key-free way to call the GTM API. What this MCP can do is hide that complexity behind a hosted backend, while still giving developers and teams the option to run everything themselves.
-
-There are three supported paths. Pick the one that fits your situation.
-
-### 1. Easiest — Samarth-hosted MCP (recommended for non-developers)
-
-> Status: planned. This section documents the intended UX; the hosted endpoint is owned by Samarth Analytics and announced separately.
-
-If you don't want to manage a Google Cloud project at all:
-
-1. Point your MCP client at the Samarth-hosted endpoint (e.g. `https://mcp.samarthanalytics.com/mcp` via [`mcp-remote`](https://www.npmjs.com/package/mcp-remote)).
-2. Sign in with Google in the browser when prompted.
-3. Done — the hosted server uses the **Samarth-owned, Google-verified OAuth app**. The client secret lives only on the hosted backend; nothing sensitive ever ships to your machine.
-
-Trade-off: you trust the Samarth-hosted backend to broker your Google tokens. It only ever requests the GTM scopes listed below.
-
-### 2. Local developer — self-hosted with your own OAuth client
-
-Best if you're comfortable in Google Cloud Console and want full control.
-
-1. Create an **OAuth 2.0 Client ID** (type: **Desktop app** or **Web application**) in your own Google Cloud project. See [Google Cloud OAuth Setup](#google-cloud-oauth-setup) below for the exact steps.
-2. Copy the client ID and secret into `.env`:
-   ```env
-   GOOGLE_OAUTH_CLIENT_ID=your-client-id.apps.googleusercontent.com
-   GOOGLE_OAUTH_CLIENT_SECRET=your-client-secret
-   GOOGLE_OAUTH_REDIRECT_URI=http://localhost:3001/oauth/callback
-   ```
-   (The legacy `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` names still work.)
-3. Run the browser-based onboarding flow:
-   ```bash
-   npm run auth:google
-   ```
-   It boots a local callback server, opens the consent screen, and writes tokens to `./.gtm-mcp-tokens.json` (gitignored, `0600`). The token file path is configurable via `GTM_MCP_TOKEN_FILE`.
-4. Start the MCP server (`npm start` or via Claude Desktop / Cursor / Claude Code). Tokens are picked up from the file automatically — no need to paste anything into `.env`.
-
-Trade-off: you maintain your own Google Cloud project and re-authorise every 7 days while the OAuth app is in "Testing" mode (or publish + verify it for permanent tokens).
-
-### 3. Advanced / team — Samarth-owned OAuth on your own infra
-
-Best for agencies and teams that want a hosted server with their own auth/IAM in front of it.
-
-1. Deploy the MCP HTTP server (Render, Fly.io, Docker — see [Cloud Deployment](#cloud-deployment)).
-2. Set the Samarth-owned (or your team-owned) OAuth client on the **server only**:
-   ```env
-   SAMARTH_GOOGLE_OAUTH_CLIENT_ID=public-client-id
-   SAMARTH_GOOGLE_OAUTH_CLIENT_SECRET=secret-injected-from-secret-manager
-   ```
-   The secret **must** come from your platform's secret manager (Render Secrets, Fly Secrets, Vault, etc.). It is never committed to this repo and never shipped to client machines.
-3. Authenticate `/mcp`: set `GTM_MCP_HTTP_AUTH_TOKEN` for a shared bearer token, or `STYTCH_PROJECT_ID` for per-user OAuth (multi-user mode). The transport refuses to start with neither — see [Security Notes](#security-notes).
-4. Users connect with their MCP client and never see Google Cloud Console.
-
-Trade-off: you own the operational burden (Google API quota, OAuth app verification, secret rotation, user provisioning) in exchange for a friendly UX.
-
-### Why we can't ship a "no-setup" client secret
-
-Public OAuth clients distributed in source form (or pre-baked into an installer) are not secure: anyone can extract the secret and impersonate the app, leading to Google revoking it. This repo therefore:
-
-- **Never** hardcodes a client secret.
-- Treats `SAMARTH_GOOGLE_OAUTH_CLIENT_SECRET` as runtime-injected on the hosted backend only.
-- Defaults the local flow (option 2) to your own OAuth client, which keeps the secret on your machine.
-
-Scopes requested in every path:
-
-```
-https://www.googleapis.com/auth/tagmanager.readonly
-https://www.googleapis.com/auth/tagmanager.edit.containers
-https://www.googleapis.com/auth/tagmanager.edit.containerversions
-https://www.googleapis.com/auth/tagmanager.manage.accounts
-https://www.googleapis.com/auth/tagmanager.manage.users
-https://www.googleapis.com/auth/tagmanager.publish
-https://www.googleapis.com/auth/analytics.readonly
-https://www.googleapis.com/auth/analytics.edit
-https://www.googleapis.com/auth/analytics.manage.users
+```bash
+cd samarth-analytics-mcp/apps/desktop && npm run dev
 ```
 
-These are the least-privilege scopes needed to cover the server's full tool surface. `analytics.readonly` powers both the **read-only GA4 Admin tools** (`ga4_*_list` / `ga4_*_get`) and the **read-only GA4 Data API reporting tools** (`ga4_run_report`, `ga4_run_realtime_report`). `analytics.edit` powers the **GA4 Admin write tools** (`ga4_create_*` / `ga4_update_*` / `ga4_delete_*` / `ga4_archive_*`), and `analytics.manage.users` the **access-binding** (user-permission) write tools — but those tools do nothing until you also opt in via `GA4_MCP_ENABLE_WRITES` / `GA4_MCP_ENABLE_DELETES` (default off) and pass `confirm=true`; the GA4 Data API stays read-only. Read-only deployments can re-run `npm run auth:google` after removing the `edit.*`, `manage.*`, `publish`, `analytics.edit`, and `analytics.manage.users` scopes from your OAuth consent screen; keep `tagmanager.readonly` and `analytics.readonly` for full read coverage.
+Full guide - Windows/macOS specifics, first-run setup, building a real
+`.exe`/`.dmg` installer, and the `Error: Electron uninstall` fix:
+[apps/desktop/INSTALL.md](apps/desktop/INSTALL.md).
 
 ---
 
@@ -624,86 +463,6 @@ All ✏️ 🗑️ 🚀 tools also require `confirm: true` in the tool arguments
 
 ---
 
-## Claude Desktop Config
-
-Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
-
-```json
-{
-  "mcpServers": {
-    "samarth-gtm": {
-      "command": "npx",
-      "args": ["-y", "samarth-gtm-mcp"],
-      "env": {
-        "GOOGLE_OAUTH_CLIENT_ID": "your-client-id.apps.googleusercontent.com",
-        "GOOGLE_OAUTH_CLIENT_SECRET": "your-client-secret",
-        "GTM_MCP_TOKEN_FILE": "/absolute/path/to/samarth-gtm/.gtm-mcp-tokens.json"
-      }
-    }
-  }
-}
-```
-
-Running from a clone instead? Swap the first two lines for `"command": "node", "args": ["/absolute/path/to/samarth-analytics-mcp/dist/index.js"]` and keep the same `env`.
-
-`GTM_MCP_TOKEN_FILE` must be **absolute**. Claude Desktop launches the server with its own working directory, so a relative path - and any `.env` sitting next to your clone - will not be found.
-
-After editing, restart Claude Desktop.
-
----
-
-## Cursor Config
-
-In Cursor, go to **Settings -> MCP** and add:
-
-```json
-{
-  "mcpServers": {
-    "samarth-gtm": {
-      "command": "npx",
-      "args": ["-y", "samarth-gtm-mcp"],
-      "env": {
-        "GOOGLE_OAUTH_CLIENT_ID": "your-client-id.apps.googleusercontent.com",
-        "GOOGLE_OAUTH_CLIENT_SECRET": "your-client-secret",
-        "GTM_MCP_TOKEN_FILE": "/absolute/path/to/samarth-gtm/.gtm-mcp-tokens.json"
-      }
-    }
-  }
-}
-```
-
----
-
-## Claude Code Config
-
-One command, from the folder you set up in the [Quick Start](#quick-start):
-
-```bash
-claude mcp add samarth-gtm --env GTM_MCP_TOKEN_FILE=$PWD/.gtm-mcp-tokens.json -- npx -y samarth-gtm-mcp
-```
-
-Or add it by hand to `.claude/mcp_config.json` in your project root:
-
-```json
-{
-  "mcpServers": {
-    "samarth-gtm": {
-      "command": "npx",
-      "args": ["-y", "samarth-gtm-mcp"],
-      "env": {
-        "GOOGLE_OAUTH_CLIENT_ID": "your-client-id.apps.googleusercontent.com",
-        "GOOGLE_OAUTH_CLIENT_SECRET": "your-client-secret",
-        "GTM_MCP_TOKEN_FILE": "/absolute/path/to/samarth-gtm/.gtm-mcp-tokens.json"
-      }
-    }
-  }
-}
-```
-
-The server is read-only until you add `"GTM_MCP_ENABLE_WRITES": "true"` - and every write still needs `confirm=true`. See [Guardrails](#guardrails) before turning it on.
-
----
-
 ## Cloud Deployment
 
 ### Transport
@@ -968,20 +727,17 @@ To intentionally land a commit without triggering a release, use a non-releasing
 ### "Write operations are disabled"
 
 - Set `GTM_MCP_ENABLE_WRITES=true` in your `.env`
-- Restart the server / Claude Desktop
+- Restart the server / the desktop app
 
 ### Stdio server shows no output
 
 - The stdio server intentionally writes nothing to stdout (stdout is the JSON-RPC channel)
 - Diagnostic output goes to stderr — check your terminal or Claude Desktop logs
 
-### Claude Desktop: MCP server not appearing
+### Desktop app: `Error: Electron uninstall` on `npm run dev`
 
-- Check `claude_desktop_config.json` for JSON syntax errors
-- With the npx config, make sure `npx` is on Claude Desktop's PATH (install Node.js system-wide, not only in a version manager shell)
-- Ensure `GTM_MCP_TOKEN_FILE` is an **absolute** path and the file exists (run the auth step again if not)
-- Running from a clone: the `args` path must be absolute to `dist/index.js`, and `npm run build` must have been run
-- Restart Claude Desktop completely (not just refresh)
+- The Electron binary downloaded but never finished extracting - see the reliable
+  re-extract fix in [apps/desktop/INSTALL.md](apps/desktop/INSTALL.md)
 
 ### TypeScript errors on `googleapis` types
 
