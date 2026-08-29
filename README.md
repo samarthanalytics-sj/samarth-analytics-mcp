@@ -116,6 +116,24 @@ npm start                # or: npm run inspector
 
 Prefer pasting the authorization code by hand? `npm run oauth:setup` still does that.
 
+### Desktop app (Electron)
+
+Prefer a chat UI over wiring up an MCP client? **Samarth Desktop** embeds this
+MCP server in-process - multi-account Google sign-in, per-account LLM keys
+(OpenAI / Anthropic / Gemini), secrets in the OS keychain. No `.env` and no
+`npm run auth:google`: the Google OAuth client and LLM key are entered in the
+app on first run.
+
+```bash
+git clone https://github.com/samarthanalytics-sj/samarth-analytics-mcp.git
+cd samarth-analytics-mcp/apps/desktop
+npm install    # downloads the Electron binary (~100 MB first time)
+npm run dev
+```
+
+Full guide - Windows/macOS specifics, first-run setup, building a real `.exe`/`.dmg`
+installer, and the `Error: Electron uninstall` fix: [apps/desktop/INSTALL.md](apps/desktop/INSTALL.md).
+
 See [Friendly Google Auth Options](#friendly-google-auth-options) for the three supported setup paths (hosted, local dev, advanced).
 
 ---
