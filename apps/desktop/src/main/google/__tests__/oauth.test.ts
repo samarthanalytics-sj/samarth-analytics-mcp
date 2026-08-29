@@ -21,6 +21,8 @@ import {
   extractClient,
   loadGoogleOAuthClient,
   loadGoogleOAuthClientWithSource,
+  parseEnvFile,
+  loadEnvFiles,
 } from '../oauth-config';
 
 let passed = 0;
@@ -261,6 +263,51 @@ test('loadGoogleOAuthClientWithSource: trims whitespace + reports source', () =>
   assert.equal(none.source, 'none');
   assert.equal(none.client, null);
 });
+
+// ── .env file loading ────────────────────────────────────────────────────────
+
+test('parseEnvFile: KEY=VALUE, comments, blanks, export prefix, quotes, inline comment', () => {
+  const parsed = parseEnvFile(
+    '\uFEFF# comment\n\nexport A=1\nB = spaced \nC="qu#oted"\nD=\'single\'\nE=val # trailing\nnot a line\n'
+  );
+  assert.deepEqual(parsed, { A: '1', B: 'spaced', C: 'qu#oted', D: 'single', E: 'val' });
+});
+
+test('loadEnvFiles: sets unset vars, never overrides env or earlier files, skips missing', () => {
+  const f1 = join(dir, 'first.env');
+  const f2 = join(dir, 'second.env');
+  writeFileSync(f1, 'SAMARTH_TEST_A=from-first\nSAMARTH_TEST_B=from-first\n');
+  writeFileSync(f2, 'SAMARTH_TEST_B=from-second\nSAMARTH_TEST_C=from-second\n');
+  delete process.env.SAMARTH_TEST_A;
+  delete process.env.SAMARTH_TEST_C;
+  process.env.SAMARTH_TEST_B = 'from-shell';
+  try {
+    loadEnvFiles([join(dir, 'missing.env'), f1, f2]);
+    assert.equal(process.env.SAMARTH_TEST_A, 'from-first');
+    assert.equal(process.env.SAMARTH_TEST_B, 'from-shell'); // real env wins
+    assert.equal(process.env.SAMARTH_TEST_C, 'from-second');
+  } finally {
+    delete process.env.SAMARTH_TEST_A;
+    delete process.env.SAMARTH_TEST_B;
+    delete process.env.SAMARTH_TEST_C;
+  }
+});
+
+test('loadEnvFiles + resolver: .env client id/secret reach loadGoogleOAuthClientWithSource', () => {
+  const f = join(dir, 'client.env');
+  writeFileSync(f, 'GOOGLE_DESKTOP_CLIENT_ID=envfile-id.apps.googleusercontent.com\nGOOGLE_DESKTOP_CLIENT_SECRET=envfile-secret\n');
+  clearEnv();
+  try {
+    loadEnvFiles([f]);
+    const res = loadGoogleOAuthClientWithSource(join(dir, 'nope.json'));
+    assert.equal(res.source, 'env');
+    assert.equal(res.client?.clientId, 'envfile-id.apps.googleusercontent.com');
+    assert.equal(res.client?.clientSecret, 'envfile-secret');
+  } finally {
+    clearEnv();
+  }
+});
+
 
 // restore env + cleanup
 if (savedId === undefined) delete process.env.GOOGLE_DESKTOP_CLIENT_ID;

@@ -67,6 +67,21 @@ npm run dev
 The window opens; paste your OAuth client ID + secret and an LLM API key when
 asked, sign in to Google, and start chatting with your GTM / GA4 setup.
 
+**Prefer a config file over typing in the app?** Put the OAuth client in a
+`.env` file instead - the app reads it on launch (values typed in the app and
+real shell variables always take precedence):
+
+```ini
+GOOGLE_DESKTOP_CLIENT_ID=your-client-id.apps.googleusercontent.com
+GOOGLE_DESKTOP_CLIENT_SECRET=your-client-secret
+```
+
+Save it as `apps/desktop/.env` or at the repo root (already gitignored - never
+commit it). A repo-root `.env` using the server's `GOOGLE_OAUTH_CLIENT_ID` /
+`GOOGLE_OAUTH_CLIENT_SECRET` names works too, so one file can serve both the
+app and the MCP server. A packaged install reads `.env` from its data
+directory instead (`%APPDATA%` on Windows).
+
 Your **everyday launch** afterwards is just:
 
 ```bash

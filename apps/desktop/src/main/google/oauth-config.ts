@@ -63,6 +63,48 @@ export function loadGoogleOAuthClientWithSource(configPath: string): {
   return { client: null, source: 'none' };
 }
 
+
+/**
+ * Parse the KEY=VALUE lines of a .env file. Supports comments (#), blank
+ * lines, `export ` prefixes, and single/double quotes around the value -
+ * enough for the two OAuth client lines this app reads; not a full dotenv.
+ */
+export function parseEnvFile(raw: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const line of raw.replace(/^\uFEFF/, '').split(/\r?\n/)) {
+    const m = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(line);
+    if (!m || line.trimStart().startsWith('#')) continue;
+    let v = m[2].trim();
+    if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+      v = v.slice(1, -1);
+    } else {
+      const hash = v.indexOf(' #');
+      if (hash !== -1) v = v.slice(0, hash);
+    }
+    out[m[1]] = v.trim();
+  }
+  return out;
+}
+
+/**
+ * Load .env files into process.env WITHOUT overriding variables that are
+ * already set (a real shell export always wins). Later paths never override
+ * earlier ones either - pass the highest-priority file first. Missing or
+ * unreadable files are skipped silently: .env is an optional convenience.
+ */
+export function loadEnvFiles(paths: string[]): void {
+  for (const p of paths) {
+    try {
+      if (!existsSync(p)) continue;
+      for (const [k, v] of Object.entries(parseEnvFile(readFileSync(p, 'utf8')))) {
+        if (process.env[k] === undefined) process.env[k] = v;
+      }
+    } catch {
+      // optional file - ignore
+    }
+  }
+}
+
 export function loadGoogleOAuthClient(configPath: string): GoogleOAuthClient | null {
   return loadGoogleOAuthClientWithSource(configPath).client;
 }
