@@ -1,3 +1,9 @@
+## [1.478.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.477.0...v1.478.0) (2026-08-29)
+
+### Features
+
+* **desktop:** extend Always allow to GA4 and Google Ads writes ([#926](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/926)) ([d5e7981](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d5e79810ec1fbe9b6e9c8f7eb3ead4342ad16ba0))
+
 ## [1.477.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.476.0...v1.477.0) (2026-08-29)
 
 ### Features
