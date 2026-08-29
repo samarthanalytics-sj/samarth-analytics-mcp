@@ -135,6 +135,25 @@ function makeFakeData(): { data: GoogleDataService; calls: string[]; mutations: 
     ga4DeleteAccount: (name: string) => r('ga4DeleteAccount', { deleted: true, name }),
     listGtmTemplates: () => r('listGtmTemplates', [{ templateId: '261', name: 'Meta Pixel', type: 'cvt_5RM3Q', galleryOwner: 'facebook', galleryRepository: 'GoogleTagManager-WebTemplate-For-FacebookPixel' }]),
     importGalleryTemplate: () => r('importGalleryTemplate', { templateId: '261', name: 'Meta Pixel', type: 'cvt_5RM3Q', imported: true }),
+    describeTemplateFields: () =>
+      r('describeTemplateFields', {
+        templateId: '261',
+        name: 'Meta Pixel',
+        tagType: 'cvt_5RM3Q',
+        fieldCount: 2,
+        required: ['pixelId'],
+        fields: [
+          { name: 'pixelId', type: 'TEXT', displayName: 'Pixel ID', required: true },
+          { name: 'eventName', type: 'SELECT', options: ['PageView', 'Purchase'] },
+        ],
+        note: 'smoke fixture',
+      }),
+    profileTagTypes: () =>
+      r('profileTagTypes', {
+        tagsScanned: 2,
+        profiles: [{ type: 'gaawe', count: 2, parameterKeys: ['measurementIdOverride'], alwaysPresent: ['measurementIdOverride'], exampleTagName: 'GA4 - x' }],
+        note: 'smoke fixture',
+      }),
     getServerContainerSnapshot: () =>
       r('getServerContainerSnapshot', {
         taggingServerUrls: ['https://sgtm.example.com'],
@@ -319,7 +338,7 @@ async function main(): Promise<void> {
     // performance, change history, volume, UTM/health/GA4-link audits, audiences, structure,
     // upload diagnostics, budget pacing, recommendations), plus the two phone-conversion reads
     // (detect_page_phone_numbers, plan_phone_conversion_tracking).
-    record('read-only registry exposes the 75 read tools', readOnlyNames.size === 75, `${readOnlyNames.size} tools`);
+    record('read-only registry exposes the 77 read tools', readOnlyNames.size === 77, `${readOnlyNames.size} tools`);
   }
 
   // ── B. Approval is DELETE-ONLY: a declining confirm blocks every destructive
