@@ -1,3 +1,9 @@
+## [1.477.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.476.0...v1.477.0) (2026-08-29)
+
+### Features
+
+* **desktop:** Always allow / Allow / Deny on chat write approvals ([#925](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/925)) ([78bfe28](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/78bfe283efb8dec9cd0d54495ef31daf10aa1451))
+
 ## [1.476.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.475.0...v1.476.0) (2026-08-29)
 
 ### Features
