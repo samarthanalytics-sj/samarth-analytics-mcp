@@ -2361,6 +2361,122 @@ export function taggingUrlFirstPartyIssue(serverUrl: string): string | null {
   );
 }
 
+
+/* ── Template field discovery (ported from the MCP server's templateFields.ts) ──
+ * Creating a vendor tag needs two undocumented things: the string that goes in `type`, and the
+ * parameter keys that tag expects. Google publishes neither for its ~68 native vendor templates,
+ * and every gallery template invents its own field names. GTM accepts a tag with wrong keys and
+ * then renders it blank - so these discover both instead of guessing. */
+
+export interface TemplateField {
+  /** The key to use in a tag's `parameter` array. */
+  name: string;
+  /** GTM's field widget type, e.g. TEXT, SELECT, CHECKBOX, SIMPLE_TABLE. */
+  type: string;
+  /** The label shown in the GTM interface, when the template gives one. */
+  displayName?: string;
+  /** True when the field must be filled for the tag to validate. */
+  required?: boolean;
+  /** Allowed values, for SELECT fields. */
+  options?: string[];
+  /** Column keys, for table fields, since those nest their own parameters. */
+  subFields?: string[];
+}
+
+/** Pulls the field declarations out of a template's own source: the ___TEMPLATE_PARAMETERS___
+ *  block of a .tpl file is the authoritative schema and ships with the template itself. The parse
+ *  is deliberately forgiving (trailing commas are common in the wild); an unreadable schema
+ *  degrades to null rather than throwing. PURE. */
+export function parseTemplateParameters(templateData: string): TemplateField[] | null {
+  const src = templateData ?? '';
+  const start = src.indexOf('___TEMPLATE_PARAMETERS___');
+  if (start < 0) return null;
+  const after = src.slice(start + '___TEMPLATE_PARAMETERS___'.length);
+  const end = after.search(/\n___[A-Z0-9_]+___/);
+  const block = (end >= 0 ? after.slice(0, end) : after).trim();
+  if (!block) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(block);
+  } catch {
+    try {
+      parsed = JSON.parse(block.replace(/,\s*([\]}])/g, '$1'));
+    } catch {
+      return null;
+    }
+  }
+  if (!Array.isArray(parsed)) return null;
+  const fields: TemplateField[] = [];
+  for (const raw of parsed) {
+    if (!raw || typeof raw !== 'object') continue;
+    const p = raw as Record<string, unknown>;
+    const name = typeof p['name'] === 'string' ? p['name'] : '';
+    if (!name) continue;
+    const validators = Array.isArray(p['valueValidators']) ? (p['valueValidators'] as Record<string, unknown>[]) : [];
+    const required = validators.some((v) => v && v['type'] === 'NON_EMPTY');
+    const selectItems = Array.isArray(p['selectItems']) ? (p['selectItems'] as Record<string, unknown>[]) : [];
+    const options = selectItems
+      .map((sel) => (typeof sel?.['value'] === 'string' ? (sel['value'] as string) : null))
+      .filter((v): v is string => Boolean(v));
+    const subParams = Array.isArray(p['subParams']) ? (p['subParams'] as Record<string, unknown>[]) : [];
+    const subFields = subParams
+      .map((sub) => (typeof sub?.['name'] === 'string' ? (sub['name'] as string) : null))
+      .filter((v): v is string => Boolean(v));
+    fields.push({
+      name,
+      type: typeof p['type'] === 'string' ? (p['type'] as string) : 'UNKNOWN',
+      ...(typeof p['displayName'] === 'string' ? { displayName: p['displayName'] as string } : {}),
+      ...(required ? { required: true } : {}),
+      ...(options.length ? { options } : {}),
+      ...(subFields.length ? { subFields } : {}),
+    });
+  }
+  return fields;
+}
+
+export interface TagTypeProfile {
+  type: string;
+  count: number;
+  /** Parameter keys seen on tags of this type, most common first. */
+  parameterKeys: string[];
+  /** Keys present on EVERY tag of this type, so almost certainly required. */
+  alwaysPresent: string[];
+  /** A real tag name using this type, to look at in the interface. */
+  exampleTagName: string;
+}
+
+/** Groups a workspace's tags by type and reports the parameter keys each type actually uses.
+ *  A key on EVERY tag of a type (`alwaysPresent`) is as close to a required-field list as an
+ *  undocumented native template gets. PURE. */
+export function summariseTagTypes(
+  tags: { type?: string | null; name?: string | null; parameter?: unknown }[]
+): TagTypeProfile[] {
+  const byType = new Map<string, { count: number; keys: Map<string, number>; example: string }>();
+  for (const tag of tags) {
+    const type = (tag?.type ?? '').trim();
+    if (!type) continue;
+    if (!byType.has(type)) byType.set(type, { count: 0, keys: new Map(), example: tag?.name || '(unnamed)' });
+    const entry = byType.get(type)!;
+    entry.count++;
+    const params = Array.isArray(tag.parameter) ? tag.parameter : tag.parameter ? [tag.parameter] : [];
+    const seen = new Set<string>();
+    for (const p of params as Record<string, unknown>[]) {
+      const key = typeof p?.['key'] === 'string' ? (p['key'] as string) : '';
+      if (key) seen.add(key);
+    }
+    for (const key of seen) entry.keys.set(key, (entry.keys.get(key) ?? 0) + 1);
+  }
+  return [...byType.entries()]
+    .map(([type, e]) => ({
+      type,
+      count: e.count,
+      parameterKeys: [...e.keys.entries()].sort((a, b) => b[1] - a[1]).map(([k]) => k),
+      alwaysPresent: [...e.keys.entries()].filter(([, n]) => n === e.count).map(([k]) => k).sort(),
+      exampleTagName: e.example,
+    }))
+    .sort((a, b) => b.count - a.count);
+}
+
 export function auditServerContainer(s: ServerContainerSnapshot): AuditReport {
   const findings: AuditFinding[] = [];
   const push = (f: Omit<AuditFinding, 'confidence'> & { confidence?: AuditFinding['confidence'] }): void => {

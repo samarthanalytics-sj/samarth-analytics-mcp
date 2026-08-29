@@ -547,6 +547,7 @@ async function main(): Promise<void> {
       'audit_tracking_status',
       'check_ga4_compatibility',
       'check_gtm_measurement_ids',
+      'describe_template_fields',
       'detect_meta_web_tags',
       'detect_page_phone_numbers',
       'diff_gtm_versions',
@@ -588,6 +589,7 @@ async function main(): Promise<void> {
       'lookup_corpus_patterns',
       'monitor_ga4_property',
       'plan_phone_conversion_tracking',
+      'profile_tag_types',
       'rank_ga4_campaigns',
       'run_ga4_realtime_report',
       'run_ga4_report',
@@ -636,7 +638,7 @@ async function main(): Promise<void> {
 
   await test('write tools appear ONLY when a confirm function is provided', async () => {
     const readOnly = buildToolRegistry(fakeData().data);
-    assert.equal(readOnly.list().length, 60, 'read-only registry has 60 tools');
+    assert.equal(readOnly.list().length, 62, 'read-only registry has 62 tools');
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
@@ -656,8 +658,9 @@ async function main(): Promise<void> {
     // plus the read-only check_ga4_compatibility = 111, plus spy_gtag_config = 112, plus the two
     // phone-conversion reads (detect_page_phone_numbers, plan_phone_conversion_tracking) = 114,
     // plus the GTM write batch_delete_gtm_entities = 115, plus the GTM write update_gtm_variable = 116,
-    // plus the three in-place update tools update_gtm_environment / update_gtm_client / update_gtm_transformation = 119.
-    assert.equal(withWrites.list().length, 119 + 64, 'read + write registry has 119 GTM/GA4-read/context/write + 64 GA4-write tools');
+    // plus the three in-place update tools update_gtm_environment / update_gtm_client / update_gtm_transformation = 119,
+    // plus the two read-only template-discovery tools describe_template_fields / profile_tag_types = 121.
+    assert.equal(withWrites.list().length, 121 + 64, 'read + write registry has 121 GTM/GA4-read/context/write + 64 GA4-write tools');
     for (const n of ['update_gtm_environment', 'update_gtm_client', 'update_gtm_transformation']) {
       assert.equal(withWrites.list().some((t) => t.name === n), true, `${n} present`);
       assert.equal(withWrites.isWrite?.(n), true, `${n} is a write`);

@@ -2609,6 +2609,40 @@ export function buildToolRegistry(
       handler: (a) => data.listGtmTemplates(s(a.accountId), s(a.containerId), s(a.workspaceId)),
     },
     {
+      name: 'describe_template_fields',
+      description:
+        'Read the FIELDS a custom or Community Gallery template accepts, straight from the template\'s own source (___TEMPLATE_PARAMETERS___). Call this after import_gallery_template and BEFORE create_gtm_tag for any template whose field keys you do not already know verified, so the tag is built with the template\'s REAL parameter keys instead of guessed ones - GTM accepts wrong keys and renders the tag blank. Returns each field\'s name (the `parameter` key), widget type, label, required flag and fixed options, plus the template\'s tagType (cvt_...) - one call gives everything create_gtm_tag needs. Only custom/gallery templates carry source; for a NATIVE built-in vendor type use profile_tag_types on a container that already has one.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          templateId: { type: 'string', description: 'From list_gtm_templates or import_gallery_template.' },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'templateId'],
+        additionalProperties: false,
+      },
+      handler: (a) => data.describeTemplateFields(s(a.accountId), s(a.containerId), s(a.workspaceId), s(a.templateId)),
+    },
+    {
+      name: 'profile_tag_types',
+      description:
+        'Group a workspace\'s existing tags by TYPE and report the parameter keys those tags actually use. This is how to learn an UNDOCUMENTED tag type: Google publishes neither the type codes nor the field names for GTM\'s ~68 built-in vendor templates (Criteo, Twitter, Quora, ...), but a container that already uses one contains the answer - that tag\'s own type and keys are definitionally correct. `alwaysPresent` lists keys found on every tag of a type (the closest thing to a required-field list). Pass `type` to profile just one unfamiliar code. Read-only. For cvt_ types prefer describe_template_fields (declared schema beats observed keys).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          type: { type: 'string', description: 'Only profile this one tag type, e.g. "cvt_MRQN8" or an unfamiliar native code.' },
+        },
+        required: ['accountId', 'containerId', 'workspaceId'],
+        additionalProperties: false,
+      },
+      handler: (a) => data.profileTagTypes(s(a.accountId), s(a.containerId), s(a.workspaceId), a.type != null ? s(a.type) : undefined),
+    },
+    {
       name: 'list_gtm_transformations',
       description: 'List the TRANSFORMATIONS in a SERVER container workspace; they enrich or redact event data before tags run.',
       inputSchema: {
@@ -5166,7 +5200,7 @@ export function buildToolRegistry(
     {
       name: 'import_gallery_template',
       description:
-        'Import a Community Template Gallery template into a workspace by GitHub owner + repository. The GTM API DOES support this (templates.import_from_gallery); do NOT tell the user it is UI-only. Works for ANY gallery template. Common owner/repository pairs: facebook / GoogleTagManager-WebTemplate-For-FacebookPixel; tiktok / gtm-template-pixel; linkedin / linkedin-gtm-community-template; Snapchat / snapchat-google-tag-manager; pinterest / ws-gtm-template (server: ss-gtm-template); stape-io / facebook-tag; stape-io / tiktok-tag. Idempotent. Returns the template and its tag TYPE code (cvt_), which you pass as `type` to create_gtm_tag along with the template\'s own field keys (template-specific, e.g. Meta Pixel uses pixelId, eventName, standardEventName).',
+        'Import a Community Template Gallery template into a workspace by GitHub owner + repository. The GTM API DOES support this (templates.import_from_gallery); do NOT tell the user it is UI-only. Works for ANY gallery template. Common owner/repository pairs: facebook / GoogleTagManager-WebTemplate-For-FacebookPixel; tiktok / gtm-template-pixel; linkedin / linkedin-gtm-community-template; Snapchat / snapchat-google-tag-manager; pinterest / ws-gtm-template (server: ss-gtm-template); stape-io / facebook-tag; stape-io / tiktok-tag. Idempotent. Returns the template and its tag TYPE code (cvt_), which you pass as `type` to create_gtm_tag along with the template\'s own field keys . Field keys are TEMPLATE-SPECIFIC: unless verified elsewhere in your instructions, call describe_template_fields next - it reads the real keys from the template source instead of guessing.',
       inputSchema: {
         type: 'object',
         properties: {

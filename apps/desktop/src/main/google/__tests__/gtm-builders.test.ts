@@ -72,6 +72,8 @@ import {
   buildAllowParamsTransformation,
   auditServerContainer,
   taggingUrlFirstPartyIssue,
+  parseTemplateParameters,
+  summariseTagTypes,
   upsertGoogleTagConfig,
   consentTypesFor,
   evaluateConsentGate,
@@ -1631,6 +1633,44 @@ test('buildAllowParamsTransformation → tf_allow_params keeping only the listed
   assert.deepEqual(kept, ['transaction_id', 'currency', 'value']);
 });
 
+
+test('parseTemplateParameters: names, required, options, subFields; tolerates trailing commas; null without a block', () => {
+  const tpl = [
+    '___INFO___',
+    '{}',
+    '___TEMPLATE_PARAMETERS___',
+    JSON.stringify([
+      { name: 'pixelId', type: 'TEXT', displayName: 'Pixel ID', valueValidators: [{ type: 'NON_EMPTY' }] },
+      { name: 'event', type: 'SELECT', selectItems: [{ value: 'PageView' }, { value: 'Purchase' }] },
+      { name: 'props', type: 'SIMPLE_TABLE', subParams: [{ name: 'key' }, { name: 'value' }] },
+      { notAName: true },
+    ]).replace(']', ',]'),
+    '___SANDBOXED_JS___',
+    'code',
+  ].join('\n');
+  const fields = parseTemplateParameters(tpl);
+  assert.ok(fields, 'block parsed');
+  assert.deepEqual(fields!.map((f) => f.name), ['pixelId', 'event', 'props']);
+  assert.equal(fields![0].required, true, 'NON_EMPTY validator → required');
+  assert.deepEqual(fields![1].options, ['PageView', 'Purchase']);
+  assert.deepEqual(fields![2].subFields, ['key', 'value']);
+  assert.equal(parseTemplateParameters('___SANDBOXED_JS___\ncode'), null, 'no parameters block → null');
+});
+
+test('summariseTagTypes: groups by type, alwaysPresent = keys on every tag of the type', () => {
+  const profiles = summariseTagTypes([
+    { name: 'A', type: 'cvt_X', parameter: [{ key: 'pixelId' }, { key: 'event' }] },
+    { name: 'B', type: 'cvt_X', parameter: [{ key: 'pixelId' }] },
+    { name: 'C', type: 'gaawe', parameter: [{ key: 'measurementIdOverride' }] },
+    { name: 'D', type: '', parameter: [] },
+  ]);
+  assert.deepEqual(profiles.map((p) => p.type), ['cvt_X', 'gaawe'], 'sorted by count, blank type dropped');
+  const cvt = profiles[0];
+  assert.equal(cvt.count, 2);
+  assert.deepEqual(cvt.alwaysPresent, ['pixelId'], 'event is on only one tag → not alwaysPresent');
+  assert.deepEqual(cvt.parameterKeys[0], 'pixelId', 'most common key first');
+  assert.equal(cvt.exampleTagName, 'A');
+});
 
 test('taggingUrlFirstPartyIssue: flags shared hosts, passes custom subdomains, ignores junk', () => {
   assert.ok(taggingUrlFirstPartyIssue('https://sgtm-abc123.run.app')?.includes('run.app'), 'Cloud Run default flagged');

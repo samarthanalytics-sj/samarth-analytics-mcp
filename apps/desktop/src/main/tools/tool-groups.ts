@@ -89,6 +89,8 @@ const GROUP_MEMBERS: Record<ToolGroup, readonly string[]> = {
     'list_gtm_versions',
     'list_gtm_environments',
     'list_gtm_templates',
+    'describe_template_fields',
+    'profile_tag_types',
     'list_gtm_clients',
     'list_gtm_transformations',
     'list_unused_gtm_triggers',

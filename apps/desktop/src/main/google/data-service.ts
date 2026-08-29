@@ -5,7 +5,7 @@ import type { OAuth2Client } from 'google-auth-library';
 import type { AccountClientManager } from './account-clients';
 import type { RegistryService } from '../services/registry-service';
 import type { ContainerSnapshot, ServerContainerSnapshot } from './gtm-builders';
-import { ga4TagFields, readGa4EventParameters, applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, normalizeTriggerType, setCustomEventName, customEventNameOf, buildGa4Client, buildGa4ServerTag, buildMetaCapiServerTag, buildTikTokCapiServerTag, buildStapeDataTag, buildServerAllEventsTrigger, buildServerEventTrigger, buildAdsConversionServerTag, buildMetaEmqVariables, buildTikTokEmqVariables, buildEcommerceDlvVariables, buildGa4EventTag, buildTrigger, planTriggerRetarget, type TriggerInput, buildGtmClient, buildVariable, sanitizeName, matchesServerContainer, customTemplateType, upsertGoogleTagConfig, taggingUrlFirstPartyIssue, triggerUsageBreakdown, detectMetaTags, evaluateTrackingSetup, GA4_ECOMMERCE_FUNNEL_EVENTS, type TrackingSetupReport, type TrackingSetupCheck } from './gtm-builders';
+import { ga4TagFields, readGa4EventParameters, applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, normalizeTriggerType, setCustomEventName, customEventNameOf, buildGa4Client, buildGa4ServerTag, buildMetaCapiServerTag, buildTikTokCapiServerTag, buildStapeDataTag, buildServerAllEventsTrigger, buildServerEventTrigger, buildAdsConversionServerTag, buildMetaEmqVariables, buildTikTokEmqVariables, buildEcommerceDlvVariables, buildGa4EventTag, buildTrigger, planTriggerRetarget, type TriggerInput, buildGtmClient, buildVariable, sanitizeName, matchesServerContainer, customTemplateType, upsertGoogleTagConfig, taggingUrlFirstPartyIssue, parseTemplateParameters, summariseTagTypes, type TemplateField, type TagTypeProfile, triggerUsageBreakdown, detectMetaTags, evaluateTrackingSetup, GA4_ECOMMERCE_FUNNEL_EVENTS, type TrackingSetupReport, type TrackingSetupCheck } from './gtm-builders';
 import { resolveGa4MeasurementIds } from './gtm-ga4-check';
 import { withQuotaRetry, withRetry, QUOTA_RE, TRANSIENT_5XX_RE, NOT_FOUND_OR_PERMISSION_RE } from './quota-retry';
 import { log } from '../logger';
@@ -3191,6 +3191,93 @@ export class GoogleDataService {
       galleryOwner: t.galleryReference?.owner ?? '',
       galleryRepository: t.galleryReference?.repository ?? '',
     }));
+  }
+
+
+  /** Read the FIELDS a custom/gallery template accepts, straight from its own
+   *  ___TEMPLATE_PARAMETERS___ source block (the authoritative schema). Native built-in vendor
+   *  templates carry no source - profileTagTypes covers those. */
+  async describeTemplateFields(
+    accountId: string,
+    containerId: string,
+    workspaceId: string,
+    templateId: string
+  ): Promise<{
+    templateId: string;
+    name: string;
+    tagType: string;
+    fieldCount: number | null;
+    required: string[];
+    fields: TemplateField[] | null;
+    note: string;
+  }> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const path = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/templates/${templateId}`;
+    const res = await gtm.accounts.containers.workspaces.templates.get({ path });
+    const tpl = res.data ?? {};
+    const tagType = customTemplateType(tpl, containerId);
+    const fields = parseTemplateParameters(typeof tpl.templateData === 'string' ? tpl.templateData : '');
+    if (fields === null) {
+      return {
+        templateId,
+        name: tpl.name ?? '(unnamed)',
+        tagType,
+        fieldCount: null,
+        required: [],
+        fields: null,
+        note:
+          'This template declares no readable ___TEMPLATE_PARAMETERS___ block. Copy the parameter keys from an existing tag built on it (profile_tag_types) instead of guessing: GTM accepts a tag with wrong keys and then renders it blank.',
+      };
+    }
+    return {
+      templateId,
+      name: tpl.name ?? '(unnamed)',
+      tagType,
+      fieldCount: fields.length,
+      required: fields.filter((f) => f.required).map((f) => f.name),
+      fields,
+      note: 'Use tagType as the tag\'s `type` and these field names as the keys in its `parameter` array. Every `required` field must be present or the tag will not validate.',
+    };
+  }
+
+  /** Group a workspace's tags by TYPE with the parameter keys each type actually uses - how to
+   *  learn an UNDOCUMENTED (native vendor) tag type from a container that already runs one. */
+  async profileTagTypes(
+    accountId: string,
+    containerId: string,
+    workspaceId: string,
+    type?: string
+  ): Promise<{
+    tagsScanned: number;
+    profiles: TagTypeProfile[];
+    typesPresent?: string[];
+    note: string;
+  }> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const parent = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`;
+    const tags = await collectPages(
+      (pageToken) => gtm.accounts.containers.workspaces.tags.list({ parent, pageToken }),
+      (r) => r.data.tag,
+      (r) => r.data.nextPageToken
+    );
+    const all = summariseTagTypes(tags as { type?: string | null; name?: string | null; parameter?: unknown }[]);
+    const wanted = type?.trim();
+    const profiles = wanted ? all.filter((pr) => pr.type === wanted) : all;
+    if (wanted && profiles.length === 0) {
+      return {
+        tagsScanned: tags.length,
+        profiles: [],
+        typesPresent: all.map((pr) => pr.type),
+        note: `No tag of type "${wanted}" in this workspace - this container does not use it; that does not mean the type is invalid.`,
+      };
+    }
+    return {
+      tagsScanned: tags.length,
+      profiles,
+      note: 'These keys are OBSERVED, not declared: correct for this container but not necessarily complete. A key in alwaysPresent is almost certainly required. For a cvt_ type, describe_template_fields returns the declared schema, which is better still.',
+    };
   }
 
   /** Import a community-gallery template into a workspace (e.g. the Meta Pixel template:
