@@ -1,3 +1,9 @@
+## [1.480.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.480.1...v1.480.2) (2026-08-29)
+
+### Bug Fixes
+
+* **desktop:** let server-container chats import gallery templates ([#930](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/930)) ([2c26df0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/2c26df0fb3e613aa7682cf1829a2fc1bf3dfecb9))
+
 ## [1.480.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.480.0...v1.480.1) (2026-08-29)
 
 ### Bug Fixes
