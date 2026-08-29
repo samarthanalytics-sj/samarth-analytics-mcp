@@ -4041,7 +4041,7 @@ export function buildToolRegistry(
     {
       name: 'create_server_container',
       description:
-        'Create a SERVER container (server-side GTM, usageContext "server"). This creates the CONTAINER only: the tagging-server HOST (Cloud Run / App Engine) must be provisioned separately (GTM UI "automatically provision tagging server", or gcloud), after which its URL appears as taggingServerUrls.',
+        'Create a SERVER container (server-side GTM, usageContext "server"). This creates the CONTAINER only: the tagging-server HOST (Cloud Run / App Engine / Stape) must be provisioned separately (GTM UI "automatically provision tagging server", or gcloud), after which its URL appears as taggingServerUrls. For Stape/manual provisioning the Container Config string is needed - the API cannot read it; the user copies it from the GTM UI (server container -> Admin -> Container Settings).',
       inputSchema: {
         type: 'object',
         properties: { accountId: { type: 'string' }, name: { type: 'string' } },
@@ -4192,7 +4192,7 @@ export function buildToolRegistry(
     {
       name: 'create_server_container_from_web',
       description:
-        "ONE STEP: create a complete, production-shaped server-side container FROM a web container. Derives its GA4 Measurement ID and builds the SERVER container, a GA4 client with server-managed first-party FPID cookies, an all-events firing trigger, a GA4 relay tag, a GTM client that first-party-serves the web container, and the standard Event Data variables (ed - event_id for browser/server dedup, ed - page_location for page-scoped triggers). With `serverUrl` it also records the URL, points the web Google tag at it, and wires web-side dedup (Unique Event ID sent as event_id on every GA4 hit). Returns the NON-GA4 conversion tags still in the web container that need a server tag built by hand. Does NOT deploy the host and does NOT publish.",
+        "ONE STEP: create a complete, production-shaped server-side container FROM a web container. Derives its GA4 Measurement ID and builds the SERVER container, a GA4 client with server-managed first-party FPID cookies, an all-events firing trigger, a GA4 relay tag, a GTM client that first-party-serves the web container, and the standard Event Data variables (ed - event_id for browser/server dedup, ed - page_location for page-scoped triggers). With `serverUrl` it also records the URL, points the web Google tag at it, and wires web-side dedup (Unique Event ID sent as event_id on every GA4 hit). Returns the NON-GA4 conversion tags still in the web container that need a server tag built by hand, plus `warnings` (e.g. a shared-host serverUrl that makes cookies third-party, an unwireable web container) and `nextSteps` (host provisioning, the site-loader switch that activates first-party serving, publishing BOTH containers) - RELAY both lists to the user. Does NOT deploy the host and does NOT publish.",
       inputSchema: {
         type: 'object',
         properties: {
