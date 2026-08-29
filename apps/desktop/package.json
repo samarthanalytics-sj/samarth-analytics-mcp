@@ -2,7 +2,7 @@
   "name": "samarth-desktop",
   "version": "1.1.0",
   "private": true,
-  "description": "Samarth Desktop \u2014 local multi-account Electron app wrapping the GTM/GA4 MCP server",
+  "description": "Samarth Desktop — local multi-account Electron app wrapping the GTM/GA4 MCP server",
   "author": "Samarth Analytics",
   "license": "MIT",
   "main": "./out/main/index.js",
@@ -30,7 +30,7 @@
     "cheerio": "^1.2.0",
     "exceljs": "^4.4.0",
     "google-auth-library": "10.5.0",
-    "mammoth": "^1.8.0",
+    "mammoth": "^1.12.2",
     "pdf-parse": "^1.1.1",
     "word-extractor": "^1.0.4"
   },
