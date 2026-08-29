@@ -1,3 +1,9 @@
+## [1.480.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.480.2...v1.480.3) (2026-08-29)
+
+### Bug Fixes
+
+* **deps:** patch production-reachable Dependabot alerts, update dev chains ([#931](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/931)) ([889fcdc](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/889fcdc83c24b901dd29edf0d2fb2c9c1e14bdc3))
+
 ## [1.480.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.480.1...v1.480.2) (2026-08-29)
 
 ### Bug Fixes
