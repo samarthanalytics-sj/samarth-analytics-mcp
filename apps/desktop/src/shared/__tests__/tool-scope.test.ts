@@ -39,8 +39,9 @@ check('web: server-side CAPI builders are withheld', !toolAllowedForContainer('c
 check('web: clients and transformations are withheld (a web container has neither)',
   !toolAllowedForContainer('create_gtm_client', 'web') && !toolAllowedForContainer('list_gtm_transformations', 'web'));
 check('server: web tag/pixel builders are withheld', !toolAllowedForContainer('create_gtm_tracking_tag', 'server')
-  && !toolAllowedForContainer('create_meta_pixel_tag', 'server')
-  && !toolAllowedForContainer('import_gallery_template', 'server'));
+  && !toolAllowedForContainer('create_meta_pixel_tag', 'server'));
+check('server: gallery import survives (the gallery holds server templates too, e.g. Stape CAPI)',
+  toolAllowedForContainer('import_gallery_template', 'server'));
 check('the two lists never overlap (a tool cannot be both)', [...SERVER_ONLY_TOOLS].every((n) => !WEB_ONLY_TOOLS.has(n)));
 
 // ── The routes INTO server-side tagging must survive in a web container ─────────

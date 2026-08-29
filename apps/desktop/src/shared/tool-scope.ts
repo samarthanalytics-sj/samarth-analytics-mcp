@@ -78,7 +78,10 @@ export const WEB_ONLY_TOOLS: ReadonlySet<string> = new Set([
   'create_snap_pixel_tag',
   'create_pinterest_tag',
   'create_hotjar_tag',
-  'import_gallery_template',
+  // import_gallery_template is deliberately absent: the gallery holds SERVER templates too
+  // (Stape's CAPI/data tags, vendor ss-gtm templates), so a server chat must be able to import
+  // one and then read its fields with describe_template_fields. The dedicated CAPI tools import
+  // their own templates, but arbitrary server gallery templates have no other route.
   // detect_meta_web_tags is deliberately absent: it READS a web container by explicit id, and the
   // Meta CAPI instructions tell a SERVER turn to run it first to see whether a pixel already exists.
   'setup_ecommerce_funnel',
