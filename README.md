@@ -59,12 +59,33 @@ No clone and no build - the package is on npm. Pick a folder to hold your creden
 mkdir samarth-gtm && cd samarth-gtm
 ```
 
-**1. Add your OAuth client.** Create a file named `.env` in that folder:
+**1. Add your OAuth client.** The server signs in to Google *as you*, and Google
+only allows that through an "OAuth client" - two values (a client ID and a client
+secret) that you create once, free, in your Google Cloud project
+([exact click-by-click steps](#google-cloud-oauth-setup)).
 
-```ini
+Put those two values in a plain text file named `.env` (the name is exactly
+`.env` - nothing before the dot) inside the folder you just made. Easiest way is
+straight from the terminal - paste this with your real values:
+
+```bash
+# macOS / Linux
+cat > .env << 'EOT'
 GOOGLE_OAUTH_CLIENT_ID=your-client-id.apps.googleusercontent.com
 GOOGLE_OAUTH_CLIENT_SECRET=your-client-secret
+EOT
 ```
+
+```powershell
+# Windows (PowerShell)
+@"
+GOOGLE_OAUTH_CLIENT_ID=your-client-id.apps.googleusercontent.com
+GOOGLE_OAUTH_CLIENT_SECRET=your-client-secret
+"@ | Out-File .env -Encoding utf8
+```
+
+(Or create it in any text editor - Notepad works; just make sure it isn't saved
+as `.env.txt`.) This file is a secret - never commit or share it.
 
 **2. Authorize once.** Opens your browser, then writes `.gtm-mcp-tokens.json` (mode `0600`) into this folder:
 
@@ -979,4 +1000,4 @@ To intentionally land a commit without triggering a release, use a non-releasing
 
 ---
 
-*Built for Samarth Analytics by TagDrishti — Swapnil Jaykar*
+*Built by Samarth Analytics — Swapnil Jaykar & Sarthak Mandage*
