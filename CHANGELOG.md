@@ -1,3 +1,9 @@
+## [1.480.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.479.0...v1.480.0) (2026-08-29)
+
+### Features
+
+* **desktop:** port template field discovery from the MCP server ([#928](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/928)) ([97841ac](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/97841ac16f7e3edf9a85563c60aac48975900406))
+
 ## [1.479.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.478.0...v1.479.0) (2026-08-29)
 
 ### Features
