@@ -623,7 +623,7 @@ async function main(): Promise<void> {
     const reg = buildToolRegistry(fd.data);
     const out = JSON.parse(await reg.execute('list_gtm_tags', { accountId: '1', containerId: '2', workspaceId: '3', resolveTriggers: true }));
     assert.equal(out[0].eventName, 'contact', 'the tag event name is preserved');
-    assert.deepEqual(out[0].firingTriggers, [{ triggerId: 'T5', name: 'Contact Form Trigger', customEventName: 'form_submission' }], 'trigger resolved to its REAL name + customEventName');
+    assert.deepEqual(out[0].firingTriggers, [{ triggerId: 'T5', name: 'Contact Form Trigger', customEventName: 'form_submission', conditions: [] }], 'trigger resolved to its REAL name + customEventName + conditions');
     assert.ok(fd.calls.some((c) => c.startsWith('listTriggers')), 'triggers were fetched to resolve');
   });
 

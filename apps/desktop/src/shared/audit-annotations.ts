@@ -52,6 +52,7 @@ const TOPIC_TERMS: Record<string, string[]> = {
   naming: ['naming', 'name convention', 'naming convention'],
   duplicate: ['duplicate', 'double firing', 'double-firing', 'double counting', 'double-counting'],
   deprecated: ['deprecated', 'universal analytics', 'legacy'],
+  sequencing: ['sequencing', 'sequence', 'setup tag', 'cleanup tag', 'teardown', 'fire a tag before', 'fire a tag after'],
 };
 
 /** Words too generic to prove a note is about a particular resource. */

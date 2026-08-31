@@ -19,6 +19,7 @@ import {
   applyTriggerWaitDefaults,
   normalizeTimerTrigger,
   customEventNameOf,
+  describeTriggerConditions,
   findExistingTrigger,
   buildEnvironmentSnippet,
   buildGa4Client,
@@ -859,6 +860,66 @@ test('audit flags no-trigger, paused, GA4-no-mid, unused trigger, custom HTML, d
   assert.ok(msgs.includes('Duplicate tag name "Dup"'));
 });
 
+test('audit: tag sequencing — dangling reference and paused dependency are flagged; a valid sequence is not', () => {
+  const r = auditContainer({
+    tags: [
+      // Pixel is the setup tag for the conversions. It is ACTIVE, so its dependents are fine.
+      { tagId: 'P', name: 'OpenAI - Pixel', type: 'html', firingTriggerId: ['T1'], paused: false, parameter: [] },
+      // Valid: sequences off a real, active setup tag -> NO sequencing finding.
+      {
+        tagId: 'C1', name: 'OpenAI - Purchase', type: 'html', firingTriggerId: ['T1'], paused: false, parameter: [],
+        setupTag: [{ tagName: 'OpenAI - Pixel', stopOnSetupFailure: true }],
+      },
+      // Dangling: the named setup tag does not exist in the container.
+      {
+        tagId: 'C2', name: 'OpenAI - Signup', type: 'html', firingTriggerId: ['T1'], paused: false, parameter: [],
+        setupTag: [{ tagName: 'OpenAI - Pixel TYPO', stopOnSetupFailure: true }],
+      },
+      // Paused dependency with stopOnSetupFailure -> high.
+      {
+        tagId: 'C3', name: 'OpenAI - Download', type: 'html', firingTriggerId: ['T1'], paused: false, parameter: [],
+        setupTag: [{ tagName: 'Legacy Pixel', stopOnSetupFailure: true }],
+      },
+      { tagId: 'LP', name: 'Legacy Pixel', type: 'html', firingTriggerId: ['T1'], paused: true, parameter: [] },
+    ],
+    triggers: [{ triggerId: 'T1', name: 'All Pages', type: 'pageview' }],
+    variables: [],
+  });
+
+  const seq = r.findings.filter((f) => f.category === 'sequencing');
+  // The valid sequence (C1) produces nothing; only C2 (dangling) and C3 (paused dep) do.
+  assert.equal(seq.length, 2, 'only the two broken sequences are flagged, not the valid one');
+
+  const dangling = r.findings.find((f) => f.checkId === 'SEQ-DANGLING');
+  assert.equal(dangling?.resource?.id, 'C2');
+  assert.equal(dangling?.severity, 'high');
+  assert.equal(dangling?.autoFixable, false);
+  assert.ok(/OpenAI - Pixel TYPO/.test(dangling?.message ?? ''), 'names the missing tag');
+
+  const pausedDep = r.findings.find((f) => f.checkId === 'SEQ-PAUSED-DEP');
+  assert.equal(pausedDep?.resource?.id, 'C3');
+  assert.equal(pausedDep?.severity, 'high', 'stopOnSetupFailure on a paused setup is high');
+
+  assert.equal(r.findings.some((f) => f.category === 'sequencing' && f.resource?.id === 'C1'), false, 'the valid sequence is silent');
+});
+
+test('audit: a paused teardown/cleanup dependency without stopOnSetupFailure is medium, not high', () => {
+  const r = auditContainer({
+    tags: [
+      {
+        tagId: 'A', name: 'Main', type: 'html', firingTriggerId: ['T1'], paused: false, parameter: [],
+        teardownTag: [{ tagName: 'Cleanup', stopTeardownOnFailure: false }],
+      },
+      { tagId: 'B', name: 'Cleanup', type: 'html', firingTriggerId: ['T1'], paused: true, parameter: [] },
+    ],
+    triggers: [{ triggerId: 'T1', name: 'All Pages', type: 'pageview' }],
+    variables: [],
+  });
+  const seq = r.findings.find((f) => f.checkId === 'SEQ-PAUSED-DEP');
+  assert.equal(seq?.severity, 'medium');
+  assert.ok(/cleanup/i.test(seq?.message ?? ''), 'describes it as a cleanup step');
+});
+
 test('audit: structured findings carry resource + recommendation + machine fix', () => {
   const r = auditContainer({
     tags: [
@@ -1423,6 +1484,57 @@ test('customEventNameOf extracts the dataLayer event from a customEvent trigger'
   const tr = buildTrigger({ name: 'CE - Product View', kind: 'custom_event', eventName: 'product_view' });
   assert.equal(customEventNameOf(tr as unknown as Record<string, unknown>), 'product_view');
   assert.equal(customEventNameOf({ type: 'pageview' }), '', 'non-custom-event → empty');
+});
+
+test('describeTriggerConditions decodes filter conditions to readable strings', () => {
+  const clickClasses = {
+    type: 'click',
+    filter: [
+      { type: 'contains', parameter: [{ key: 'arg0', value: '{{Click Classes}}' }, { key: 'arg1', value: 'res-brochure-download' }] },
+    ],
+  };
+  assert.deepEqual(describeTriggerConditions(clickClasses), ['{{Click Classes}} contains res-brochure-download']);
+
+  const linkClick = {
+    type: 'linkClick',
+    filter: [{ type: 'endsWith', parameter: [{ key: 'arg0', value: '{{Click URL}}' }, { key: 'arg1', value: '.pdf' }] }],
+  };
+  assert.deepEqual(describeTriggerConditions(linkClick), ['{{Click URL}} ends with .pdf']);
+
+  const formSubmit = {
+    type: 'formSubmission',
+    filter: [{ type: 'equals', parameter: [{ key: 'arg0', value: '{{Form ID}}' }, { key: 'arg1', value: 'farRetailerForm' }] }],
+  };
+  assert.deepEqual(describeTriggerConditions(formSubmit), ['{{Form ID}} equals farRetailerForm']);
+});
+
+test('describeTriggerConditions: autoEventFilter, negate, unmapped operator, and unconditional', () => {
+  // autoEventFilter conditions are read alongside filter
+  const auto = {
+    type: 'click',
+    autoEventFilter: [{ type: 'startsWith', parameter: [{ key: 'arg0', value: '{{Click URL}}' }, { key: 'arg1', value: 'tel:' }] }],
+  };
+  assert.deepEqual(describeTriggerConditions(auto), ['{{Click URL}} starts with tel:']);
+
+  // a negate:true parameter prefixes "NOT "
+  const negated = {
+    filter: [{ type: 'contains', parameter: [{ key: 'arg0', value: '{{Page Path}}' }, { key: 'arg1', value: '/au/' }, { key: 'negate', value: 'true' }] }],
+  };
+  assert.deepEqual(describeTriggerConditions(negated), ['NOT {{Page Path}} contains /au/']);
+
+  // an operator we do not have a word for falls through to the raw type
+  const raw = {
+    filter: [{ type: 'matchRegexIgnoreCase', parameter: [{ key: 'arg0', value: '{{Click Text}}' }, { key: 'arg1', value: 'buy' }] }],
+  };
+  assert.deepEqual(describeTriggerConditions(raw), ['{{Click Text}} matchRegexIgnoreCase buy']);
+
+  // All Pages / custom-event-only triggers report no conditions
+  assert.deepEqual(describeTriggerConditions({ type: 'pageview' }), [], 'pageview with no filter → []');
+  const customEventOnly = {
+    type: 'customEvent',
+    customEventFilter: [{ type: 'equals', parameter: [{ key: 'arg0', value: '{{_event}}' }, { key: 'arg1', value: 'purchase' }] }],
+  };
+  assert.deepEqual(describeTriggerConditions(customEventOnly), [], '{{_event}} match is surfaced as customEventName, not a condition');
 });
 
 test('findExistingTrigger: matches by name (ci) OR by same custom-event, else undefined', () => {

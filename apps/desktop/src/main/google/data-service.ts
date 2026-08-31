@@ -5,7 +5,7 @@ import type { OAuth2Client } from 'google-auth-library';
 import type { AccountClientManager } from './account-clients';
 import type { RegistryService } from '../services/registry-service';
 import type { ContainerSnapshot, ServerContainerSnapshot } from './gtm-builders';
-import { ga4TagFields, readGa4EventParameters, applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, normalizeTriggerType, setCustomEventName, customEventNameOf, buildGa4Client, buildGa4ServerTag, buildMetaCapiServerTag, buildTikTokCapiServerTag, buildStapeDataTag, buildServerAllEventsTrigger, buildServerEventTrigger, buildAdsConversionServerTag, buildMetaEmqVariables, buildTikTokEmqVariables, buildEcommerceDlvVariables, buildGa4EventTag, buildTrigger, planTriggerRetarget, type TriggerInput, buildGtmClient, buildVariable, sanitizeName, matchesServerContainer, customTemplateType, upsertGoogleTagConfig, taggingUrlFirstPartyIssue, parseTemplateParameters, summariseTagTypes, type TemplateField, type TagTypeProfile, triggerUsageBreakdown, detectMetaTags, evaluateTrackingSetup, GA4_ECOMMERCE_FUNNEL_EVENTS, type TrackingSetupReport, type TrackingSetupCheck } from './gtm-builders';
+import { ga4TagFields, readGa4EventParameters, applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, normalizeTriggerType, setCustomEventName, customEventNameOf, describeTriggerConditions, buildGa4Client, buildGa4ServerTag, buildMetaCapiServerTag, buildTikTokCapiServerTag, buildStapeDataTag, buildServerAllEventsTrigger, buildServerEventTrigger, buildAdsConversionServerTag, buildMetaEmqVariables, buildTikTokEmqVariables, buildEcommerceDlvVariables, buildGa4EventTag, buildTrigger, planTriggerRetarget, type TriggerInput, buildGtmClient, buildVariable, sanitizeName, matchesServerContainer, customTemplateType, upsertGoogleTagConfig, taggingUrlFirstPartyIssue, parseTemplateParameters, summariseTagTypes, type TemplateField, type TagTypeProfile, triggerUsageBreakdown, detectMetaTags, evaluateTrackingSetup, GA4_ECOMMERCE_FUNNEL_EVENTS, type TrackingSetupReport, type TrackingSetupCheck } from './gtm-builders';
 import { resolveGa4MeasurementIds } from './gtm-ga4-check';
 import { withQuotaRetry, withRetry, QUOTA_RE, TRANSIENT_5XX_RE, NOT_FOUND_OR_PERMISSION_RE } from './quota-retry';
 import { log } from '../logger';
@@ -40,6 +40,20 @@ async function collectPages<P, T>(
   return out;
 }
 
+/** Decode a GTM tag's setupTag/teardownTag sequencing array into {tagName, <stopFlag>}.
+ *  `stopKey` is 'stopOnSetupFailure' for setup tags, 'stopTeardownOnFailure' for teardown. PURE. */
+function readSequencingTags(raw: unknown, stopKey: string): Array<{ tagName: string; [k: string]: string | boolean }> {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((e) => {
+      const o = (e ?? {}) as Record<string, unknown>;
+      const tagName = String(o.tagName ?? '').trim();
+      if (!tagName) return null;
+      return { tagName, [stopKey]: o[stopKey] === true };
+    })
+    .filter((x): x is { tagName: string; [k: string]: string | boolean } => x !== null);
+}
+
 // Minimal structural shapes of the GTM v2 resource fields the snapshot reads.
 // Schema$Tag/Trigger/Variable are structural supertypes of these, so the raw
 // API arrays (from list pages OR a published version) assign here directly.
@@ -52,6 +66,8 @@ interface RawTag {
   paused?: boolean | null;
   parameter?: unknown;
   consentSettings?: unknown;
+  setupTag?: unknown;
+  teardownTag?: unknown;
   parentFolderId?: string | null;
 }
 interface RawTrigger {
@@ -96,6 +112,16 @@ function toSnapshot(tags: RawTag[], triggers: RawTrigger[], variables: RawVariab
       paused: t.paused ?? false,
       parameter: asList(t.parameter),
       consentSettings: (t.consentSettings ?? null) as { consentStatus?: string; consentType?: unknown } | null,
+      // Sequencing added ONLY when present so tags without it keep an identical fingerprint
+      // (no spurious drift for already-monitored containers), while the audit can now see it.
+      ...(() => {
+        const setup = readSequencingTags(t.setupTag, 'stopOnSetupFailure');
+        return setup.length ? { setupTag: setup as Array<{ tagName: string; stopOnSetupFailure: boolean }> } : {};
+      })(),
+      ...(() => {
+        const teardown = readSequencingTags(t.teardownTag, 'stopTeardownOnFailure');
+        return teardown.length ? { teardownTag: teardown as Array<{ tagName: string; stopTeardownOnFailure: boolean }> } : {};
+      })(),
       ...(t.parentFolderId ? { parentFolderId: t.parentFolderId } : {}),
     })),
     triggers: triggers.map((t) => ({
@@ -265,6 +291,12 @@ export interface GtmTagView {
   /** For a GA4 Event tag (gaawe): its ACTUAL event parameters (name -> value), read from the tag's
    *  eventSettingsTable - so a tag inventory shows what each tag really sends, not an assumed set. */
   eventParameters?: Array<{ name: string; value: string }>;
+  /** Tag Sequencing "Fire a tag BEFORE this tag fires" (setup tags). Each {tagName, stopOnSetupFailure}:
+   *  stopOnSetupFailure=true means "Don't fire this tag if the setup tag fails". Present only when the
+   *  tag has sequencing - so "audit the sequencing" is answered from data, never guessed. */
+  setupTag?: Array<{ tagName: string; stopOnSetupFailure: boolean }>;
+  /** Tag Sequencing "Fire a tag AFTER this tag fires" (cleanup tags). Each {tagName, stopTeardownOnFailure}. */
+  teardownTag?: Array<{ tagName: string; stopTeardownOnFailure: boolean }>;
 }
 
 export interface Ga4DataStreamView {
@@ -759,6 +791,12 @@ export class GoogleDataService {
         const eventParameters = readGa4EventParameters(rec);
         if (eventParameters.length) view.eventParameters = eventParameters;
       }
+      // Tag Sequencing (setup/cleanup tags) — surfaced so "audit the sequencing settings" is
+      // answered from the tag, not fabricated. Omitted when absent to keep unsequenced tags clean.
+      const setupTag = readSequencingTags(rec.setupTag, 'stopOnSetupFailure');
+      if (setupTag.length) view.setupTag = setupTag as Array<{ tagName: string; stopOnSetupFailure: boolean }>;
+      const teardownTag = readSequencingTags(rec.teardownTag, 'stopTeardownOnFailure');
+      if (teardownTag.length) view.teardownTag = teardownTag as Array<{ tagName: string; stopTeardownOnFailure: boolean }>;
       return view;
     });
   }
@@ -1592,7 +1630,7 @@ export class GoogleDataService {
     accountId: string,
     containerId: string,
     workspaceId: string
-  ): Promise<Array<{ triggerId: string; name: string; type: string; customEventName: string }>> {
+  ): Promise<Array<{ triggerId: string; name: string; type: string; customEventName: string; conditions: string[] }>> {
     const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
     const gtm = tagmanager({ version: 'v2', auth });
     const parent = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`;
@@ -1608,6 +1646,10 @@ export class GoogleDataService {
       // For Custom Event triggers, surface the dataLayer event so callers can detect a
       // duplicate that fires on the same event under a different name.
       customEventName: customEventNameOf(t as unknown as Record<string, unknown>),
+      // The REAL firing conditions decoded from filter/autoEventFilter (e.g.
+      // "{{Click Classes}} contains res-brochure-download"). Without this a caller
+      // answering "check trigger conditions" can only guess them from the name.
+      conditions: describeTriggerConditions(t as unknown as Record<string, unknown>),
     }));
   }
 

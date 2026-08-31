@@ -2270,7 +2270,8 @@ export function buildToolRegistry(
       description:
         'List the tags in a GTM workspace. Each tag returns tagId, name, type, `firingTriggerId`, and for a GA4 Event tag (type "gaawe") its `eventName` (the GA4 EVENT NAME the tag SENDS, its "Event Name" field), `measurementId` when set, and `eventParameters` (the tag\'s ACTUAL event parameters as {name,value} - e.g. form_id -> {{Form ID}} - read straight from the tag; use THESE, do not assume a standard set). ' +
         'A tag\'s `eventName` is NOT its firing trigger\'s custom event name (the dataLayer event like "form_submission" that FIRES the tag). ' +
-        'For any TRIGGER NAME or trigger customEventName column, pass resolveTriggers:true - each tag then also returns `firingTriggers` [{triggerId, name, customEventName}] resolved from the real triggers. NEVER derive a trigger name by editing the tag name, never leave customEventName blank, and never put the tag\'s eventName in a customEventName column - read them from `firingTriggers`.',
+        'For any TRIGGER NAME or trigger customEventName column, pass resolveTriggers:true - each tag then also returns `firingTriggers` [{triggerId, name, customEventName, conditions}] resolved from the real triggers (conditions are the trigger\'s readable firing conditions). NEVER derive a trigger name by editing the tag name, never leave customEventName blank, and never put the tag\'s eventName in a customEventName column - read them from `firingTriggers`. ' +
+        'Tag Sequencing: a tag with sequencing also returns `setupTag` [{tagName, stopOnSetupFailure}] ("fire a tag BEFORE this one") and/or `teardownTag` [{tagName, stopTeardownOnFailure}] ("fire a tag AFTER this one"); their ABSENCE means the tag has no sequencing. To audit sequencing, read these fields - do NOT conclude "no sequencing" from an audit that does not report it.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -2293,7 +2294,12 @@ export function buildToolRegistry(
           ...t,
           firingTriggers: (t.firingTriggerId ?? []).map((id) => {
             const tr = byId.get(id);
-            return { triggerId: id, name: tr?.name ?? '(trigger not found)', customEventName: tr?.customEventName ?? '' };
+            return {
+              triggerId: id,
+              name: tr?.name ?? '(trigger not found)',
+              customEventName: tr?.customEventName ?? '',
+              conditions: tr?.conditions ?? [],
+            };
           }),
         }));
       },
@@ -2519,7 +2525,8 @@ export function buildToolRegistry(
     },
     {
       name: 'list_gtm_triggers',
-      description: 'List the triggers in a GTM workspace.',
+      description:
+        'List the triggers in a GTM workspace. Each returns triggerId, name, type, `customEventName` (the dataLayer event a Custom Event trigger fires on), and `conditions`: the trigger\'s REAL firing conditions decoded from its filters, as readable strings like "{{Click Classes}} contains res-brochure-download" or "{{Form ID}} equals farRetailerForm". An empty `conditions` array means the trigger fires unconditionally (e.g. All Pages). To report or QC "trigger conditions", use THESE strings verbatim - never infer a condition from the trigger NAME.',
       inputSchema: {
         type: 'object',
         properties: {
