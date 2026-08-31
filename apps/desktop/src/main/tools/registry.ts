@@ -8,6 +8,7 @@ import type { AuditHistoryStore } from '../storage/audit-history';
 import { ManifestStore } from '../storage/manifest-store';
 import type { MemoryStore } from '../storage/memory-store';
 import { toolAllowedForContainer, type ContainerKind } from '../../shared/tool-scope';
+import { gtmTypeLabel } from '../../shared/tag-brand';
 import { connectedWriteAllowed } from '../../shared/chat-integrations';
 import { fuseRankings } from '../../shared/embeddings';
 import {
@@ -2271,20 +2272,45 @@ export function buildToolRegistry(
         'List the tags in a GTM workspace. Each tag returns tagId, name, type, `firingTriggerId`, and for a GA4 Event tag (type "gaawe") its `eventName` (the GA4 EVENT NAME the tag SENDS, its "Event Name" field), `measurementId` when set, and `eventParameters` (the tag\'s ACTUAL event parameters as {name,value} - e.g. form_id -> {{Form ID}} - read straight from the tag; use THESE, do not assume a standard set). ' +
         'A tag\'s `eventName` is NOT its firing trigger\'s custom event name (the dataLayer event like "form_submission" that FIRES the tag). ' +
         'For any TRIGGER NAME or trigger customEventName column, pass resolveTriggers:true - each tag then also returns `firingTriggers` [{triggerId, name, customEventName, conditions}] resolved from the real triggers (conditions are the trigger\'s readable firing conditions). NEVER derive a trigger name by editing the tag name, never leave customEventName blank, and never put the tag\'s eventName in a customEventName column - read them from `firingTriggers`. ' +
-        'Tag Sequencing: a tag with sequencing also returns `setupTag` [{tagName, stopOnSetupFailure}] ("fire a tag BEFORE this one") and/or `teardownTag` [{tagName, stopTeardownOnFailure}] ("fire a tag AFTER this one"); their ABSENCE means the tag has no sequencing. To audit sequencing, read these fields - do NOT conclude "no sequencing" from an audit that does not report it.',
+        'Tag Sequencing: a tag with sequencing also returns `setupTag` [{tagName, stopOnSetupFailure}] ("fire a tag BEFORE this one") and/or `teardownTag` [{tagName, stopTeardownOnFailure}] ("fire a tag AFTER this one"); their ABSENCE means the tag has no sequencing. To audit sequencing, read these fields - do NOT conclude "no sequencing" from an audit that does not report it. ' +
+        'For a LARGE container, the full tag list can be truncated for size before you see it, so to answer "what tag types are in the container" pass `groupByType:true`: it returns a COMPLETE, compact `{ totalTags, types: [{type, label, count}] }` aggregated over EVERY tag (never truncated; cvt_* codes are resolved to their template name). To then pull only one kind, pass `type` (an exact type code like "gaawe" or "cvt_NBJMP") to return just those tags.',
       inputSchema: {
         type: 'object',
         properties: {
           accountId: { type: 'string' },
           containerId: { type: 'string' },
           workspaceId: { type: 'string' },
-          resolveTriggers: { type: 'boolean', description: 'Also return each tag\'s firingTriggers [{triggerId,name,customEventName}], resolved from list_gtm_triggers. Use for any inventory that needs the trigger name or its customEventName.' },
+          resolveTriggers: { type: 'boolean', description: 'Also return each tag\'s firingTriggers [{triggerId,name,customEventName,conditions}], resolved from list_gtm_triggers. Use for any inventory that needs the trigger name or its customEventName.' },
+          groupByType: { type: 'boolean', description: 'Return a compact, COMPLETE count of tags per type ({ totalTags, types:[{type,label,count}] }) instead of the tag objects. Use this for "all tag types in the container" - it is aggregated over every tag and is never truncated.' },
+          type: { type: 'string', description: 'Return only tags whose type EXACTLY equals this code (e.g. "gaawe", "html", "cvt_NBJMP"). Narrows a large container so the result is not truncated.' },
         },
         required: ['accountId', 'containerId', 'workspaceId'],
         additionalProperties: false,
       },
       handler: async (a) => {
-        const tags = await data.listGtmTags(s(a.accountId), s(a.containerId), s(a.workspaceId));
+        const allTags = await data.listGtmTags(s(a.accountId), s(a.containerId), s(a.workspaceId));
+        // `groupByType` aggregates over the FULL list before any size cap, so "what tag types
+        // exist" is answerable on any container. cvt_* codes are opaque, so resolve them to the
+        // imported template's name via list_gtm_templates.
+        if (a.groupByType === true) {
+          let labelForCvt: (type: string) => string = (type) => type;
+          if (allTags.some((t) => (t.type ?? '').startsWith('cvt_'))) {
+            const tmpls = await data.listGtmTemplates(s(a.accountId), s(a.containerId), s(a.workspaceId));
+            const byType = new Map(tmpls.map((t) => [t.type, t]));
+            labelForCvt = (type) => {
+              const tm = byType.get(type);
+              return tm ? (tm.galleryOwner ? `${tm.name} (${tm.galleryOwner}/${tm.galleryRepository})` : tm.name) : `${type} (custom template)`;
+            };
+          }
+          const counts = new Map<string, number>();
+          for (const t of allTags) counts.set(t.type ?? '', (counts.get(t.type ?? '') ?? 0) + 1);
+          const types = [...counts.entries()]
+            .map(([type, count]) => ({ type, label: type.startsWith('cvt_') ? labelForCvt(type) : gtmTypeLabel(type), count }))
+            .sort((x, y) => y.count - x.count || x.type.localeCompare(y.type));
+          return { totalTags: allTags.length, types };
+        }
+        const wantType = s(a.type).trim();
+        const tags = wantType ? allTags.filter((t) => (t.type ?? '') === wantType) : allTags;
         if (a.resolveTriggers !== true) return tags;
         // Server-side join so the model gets the REAL firing trigger name + customEventName instead of
         // guessing (or leaving it blank): the tag->trigger link the model kept fabricating.
