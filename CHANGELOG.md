@@ -1,3 +1,9 @@
+## [1.482.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.481.0...v1.482.0) (2026-08-31)
+
+### Features
+
+* **desktop:** return real GTM trigger conditions and audit tag sequencing ([#933](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/933)) ([ae7b3cb](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/ae7b3cb0a6e6d6f15387e1190c60706f068674b3))
+
 ## [1.481.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.480.3...v1.481.0) (2026-08-31)
 
 ### Features
