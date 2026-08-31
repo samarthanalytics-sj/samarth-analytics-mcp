@@ -566,6 +566,63 @@ export function customEventNameOf(trigger: Record<string, unknown>): string {
   return '';
 }
 
+/** How a trigger CONDITION's operator prints in readable form. Keys are the GTM API
+ *  Condition.type enum; anything unmapped falls through to the raw type string. */
+const CONDITION_OPERATOR_WORD: Record<string, string> = {
+  equals: 'equals',
+  contains: 'contains',
+  startsWith: 'starts with',
+  endsWith: 'ends with',
+  matchRegex: 'matches regex',
+  cssSelector: 'matches CSS selector',
+  urlMatches: 'URL matches',
+  greater: '>',
+  greaterOrEquals: '>=',
+  less: '<',
+  lessOrEquals: '<=',
+};
+
+/**
+ * Render a trigger's firing CONDITIONS as readable strings, decoded from its
+ * `filter` and `autoEventFilter` arrays: each condition is `arg0 <operator> arg1`,
+ * e.g. "{{Click Classes}} contains res-brochure-download". A condition carrying a
+ * `negate:true` parameter is prefixed "NOT ". The `{{_event}}` custom-event
+ * condition is skipped here because it is surfaced separately as customEventName.
+ * Returns [] when the trigger fires unconditionally. PURE — this is the ground
+ * truth for "check trigger conditions"; without it a caller can only guess the
+ * conditions from the trigger NAME.
+ */
+export function describeTriggerConditions(trigger: Record<string, unknown>): string[] {
+  const out: string[] = [];
+  const render = (conds: unknown) => {
+    if (!Array.isArray(conds)) return;
+    for (const cond of conds) {
+      const type = String((cond as { type?: unknown }).type ?? '');
+      const params = (cond as { parameter?: unknown }).parameter;
+      let arg0 = '';
+      let arg1 = '';
+      let negate = false;
+      if (Array.isArray(params)) {
+        for (const p of params) {
+          const k = (p as { key?: unknown }).key;
+          const v = (p as { value?: unknown }).value;
+          if (k === 'arg0') arg0 = String(v ?? '');
+          else if (k === 'arg1') arg1 = String(v ?? '');
+          else if (k === 'negate' && String(v ?? '') === 'true') negate = true;
+        }
+      }
+      // The {{_event}} match is the custom-event name, surfaced via customEventNameOf — not a "condition".
+      if (arg0 === '{{_event}}') continue;
+      if (!arg0 && !type) continue;
+      const op = CONDITION_OPERATOR_WORD[type] ?? type;
+      out.push(`${negate ? 'NOT ' : ''}${arg0} ${op} ${arg1}`.trim());
+    }
+  };
+  render((trigger as { filter?: unknown }).filter);
+  render((trigger as { autoEventFilter?: unknown }).autoEventFilter);
+  return out;
+}
+
 /** Find an EXISTING trigger that the proposed one would duplicate — matched by name
  *  (case-insensitive) OR, for Custom Event triggers, by the SAME dataLayer event. Lets the
  *  create tools reuse it (and skip the approval) instead of making a duplicate. PURE. */
@@ -1192,6 +1249,12 @@ export interface AuditTag {
   /** Consent Mode v2 settings, when present on the tag. consentType is a
    *  parameter list that may itself reference {{variables}}. */
   consentSettings?: { consentStatus?: string; consentType?: unknown } | null;
+  /** Tag Sequencing "fire a tag BEFORE this one" (setup tags), by tag NAME. Present only
+   *  when the tag has sequencing, so its absence means none. stopOnSetupFailure = "don't
+   *  fire this tag if the setup tag fails". */
+  setupTag?: Array<{ tagName: string; stopOnSetupFailure: boolean }>;
+  /** Tag Sequencing "fire a tag AFTER this one" (cleanup tags), by tag NAME. */
+  teardownTag?: Array<{ tagName: string; stopTeardownOnFailure: boolean }>;
   /** The workspace folder this tag lives in (workspace-scoped id; resolve to a name to compare
    *  organization across workspaces). Optional/additive — read-path only, never written. */
   parentFolderId?: string;
@@ -1730,6 +1793,10 @@ export function auditContainer(s: ContainerSnapshot, opts?: { clientRegion?: str
     }
   }
 
+  // Tag Sequencing is matched by tag NAME in the GTM API, so resolve setup/teardown
+  // references (and their paused state) against the tags actually present.
+  const tagByName = new Map(s.tags.map((t) => [t.name, t]));
+
   for (const t of s.tags) {
     const resource = { kind: 'tag' as const, id: t.tagId, name: t.name };
 
@@ -1775,6 +1842,43 @@ export function auditContainer(s: ContainerSnapshot, opts?: { clientRegion?: str
         fix: { tool: 'set_gtm_tag_paused', args: { tagId: t.tagId, paused: false, name: t.name } },
       });
     }
+
+    // Tag Sequencing integrity. Only PROVABLE defects are flagged (no "this tag should be
+    // sequenced" guessing): a reference to a tag that does not exist, and a setup/cleanup
+    // dependency on a PAUSED tag (so the sequenced step silently does not run).
+    for (const seq of [
+      ...(t.setupTag ?? []).map((e) => ({ ...e, role: 'setup' as const })),
+      ...(t.teardownTag ?? []).map((e) => ({ ...e, role: 'teardown' as const })),
+    ]) {
+      const ref = tagByName.get(seq.tagName);
+      const before = seq.role === 'setup';
+      const phrase = before ? 'fires BEFORE it (setup)' : 'fires AFTER it (cleanup)';
+      if (!ref) {
+        findings.push({
+          severity: 'high',
+          category: 'sequencing',
+          checkId: 'SEQ-DANGLING',
+          resource,
+          message: `Tag "${t.name}" is sequenced so that "${seq.tagName}" ${phrase}, but no tag named "${seq.tagName}" exists in this workspace — the sequence is broken.`,
+          recommendation: `Point the sequence at a real tag (names must match EXACTLY, including spaces and case), or remove the sequencing from "${t.name}".`,
+          autoFixable: false,
+        });
+      } else if (ref.paused) {
+        const stopOnFail = before && (seq as { stopOnSetupFailure?: boolean }).stopOnSetupFailure === true;
+        findings.push({
+          severity: stopOnFail ? 'high' : 'medium',
+          category: 'sequencing',
+          checkId: 'SEQ-PAUSED-DEP',
+          resource,
+          message:
+            `Tag "${t.name}" sequences the ${before ? 'setup' : 'cleanup'} tag "${seq.tagName}", but that tag is PAUSED, so the ${before ? 'setup' : 'cleanup'} step will not run` +
+            (stopOnFail ? ` — and because "Don't fire if the setup tag fails" is on, "${t.name}" may not fire at all.` : '.'),
+          recommendation: `Unpause "${seq.tagName}" if the sequence should run, or remove the sequencing from "${t.name}" if the dependency is no longer needed.`,
+          autoFixable: false,
+        });
+      }
+    }
+
     if (t.type === 'gaawe') {
       const midParam = t.parameter.find(
         (p) => (p.key === 'measurementId' || p.key === 'measurementIdOverride') && p.value
