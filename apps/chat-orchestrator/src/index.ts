@@ -1970,6 +1970,9 @@ async function main(): Promise<void> {
           : undefined,
         approvals: approvals ?? undefined,
         memory,
+        // The same credential-free scanner the Tag suggestions page uses. Sharing the instance
+        // shares its one child process, so a chat scan and a page scan do not each start a browser.
+        scanner,
         audit,
         conversationId,
         usage,

@@ -32,6 +32,8 @@ import {
   selectToolGroups,
   type ToolGroup,
 } from './tool-groups.js';
+import { isSiteTool, runSiteTool, siteToolDefs } from './site-tools.js';
+import type { SiteScanner } from './scan-client.js';
 import type { ToolDef } from './types.js';
 import type { ChatContext, ChatMessage, StreamEvent } from './types.js';
 import type { EventInput } from './events.js';
@@ -59,6 +61,14 @@ export interface RunTurnArgs {
   audit?: AuditRecorder;
   /** Durable preferences from earlier conversations. Absent means memory is off. */
   memory?: MemoryStore;
+  /**
+   * Reads the user's own public website, so a click or form trigger is built from what is on the
+   * page instead of from a guess. Shared and credential-free; see scan-client.ts.
+   *
+   * Absent means the tools are not offered at all, which is the right answer for a deployment with
+   * no browser: advertising a scanner that cannot start buys a failed call and a confused answer.
+   */
+  scanner?: SiteScanner;
   /** Null when auditing is off or the conversation could not be opened; recording is then skipped. */
   conversationId?: string | null;
   /**
@@ -202,7 +212,20 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
       ]
     : [];
 
-  let openAiTools = toOpenAiTools([...visibleTools(), ...memoryTools]);
+  /**
+   * Site tools sit outside the group gate, like the memory tools above.
+   *
+   * Not hidden behind a keyword, deliberately. The request they matter most for is the one that
+   * never names a website: "make a trigger for the Book a Demo button" is answered from the page or
+   * it is answered from a guess, and a model that cannot see the scanner takes the guess. Two
+   * schemas on every turn is the price of that never happening.
+   *
+   * GTM only. A GA4 chat cannot build a trigger, so the pages would be read for nothing.
+   */
+  const siteTools: ToolDef[] =
+    args.scanner && context.product === 'gtm' ? siteToolDefs() : [];
+
+  let openAiTools = toOpenAiTools([...visibleTools(), ...memoryTools, ...siteTools]);
   console.log(
     `[tools] ${visibleTools().length - (gate ? 1 : 0)} of ${scoped.length} tools visible this turn` +
       (gate ? `, ${gateGroups.length} group(s) available on request` : ''),
@@ -241,6 +264,7 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
     // memories keeps the byte-identical cacheable prefix it always had.
     memoryNotice: buildMemoryPrompt(memories),
     canRemember: Boolean(args.memory?.isEnabled()),
+    canScanSite: siteTools.length > 0,
   });
 
   /**
@@ -467,7 +491,10 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
         enabledGroups.add(requested);
         const revealed = visibleTools().filter((t) => !before.has(t.name));
         // Recomputed now, so the tools are on the very next model call rather than the one after.
-        openAiTools = toOpenAiTools([...visibleTools(), ...memoryTools]);
+        // siteTools is re-appended rather than assumed: it lives outside the group filter, so
+        // rebuilding from visibleTools() alone would take the scanner away the moment any group was
+        // revealed, which is exactly when a tag-building turn needs it.
+        openAiTools = toOpenAiTools([...visibleTools(), ...memoryTools, ...siteTools]);
 
         // A keyword may have opened this group already, in which case nothing is newly revealed
         // even though the tools are right there. Those two cases need opposite answers.
@@ -529,6 +556,53 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
           ok,
           resultSummary: summary,
           durationMs: 0,
+        });
+        continue;
+      }
+
+      // Site tools, handled here for the same reason as the group gate and memory: they are the
+      // orchestrator's own and never reach the GTM MCP server. Nothing about them touches the
+      // user's Google account, so there is no write gate and no approval card; the browser they
+      // drive only ever reads public pages.
+      if (args.scanner && isSiteTool(call.function.name)) {
+        const siteStartedAt = Date.now();
+        // The cap is passed in rather than assumed, so the rows are dropped WHOLE here instead of
+        // the JSON being cut mid-object by capToolResult below.
+        const { ok, text } = await runSiteTool(
+          args.scanner,
+          call.function.name,
+          parsedArgs,
+          cfg.limits.maxToolResultChars,
+        );
+        if (!ok) {
+          console.error(
+            `[site] ${call.function.name} failed for user ${userRef(user.id)}: ${forLog(text)}`,
+          );
+        }
+        const capped = capToolResult(text, cfg.limits.maxToolResultChars);
+        messages.push({ role: 'tool', tool_call_id: call.id, name: call.function.name, content: capped });
+        const siteSummary = summarize(capped);
+        emit({ type: 'tool_result', id: call.id, name: call.function.name, ok, summary: siteSummary });
+        args.onEvent?.({
+          type: ok ? 'api.request.completed' : 'api.request.failed',
+          status: ok ? 'success' : 'failed',
+          title: ok ? 'Site Scan Completed' : 'Site Scan Failed',
+          taskId: args.taskId,
+          details: `${call.function.name} on ${String(parsedArgs.url ?? 'no url')}`,
+          ...(ok ? {} : { error: forLog(text, 600) }),
+          durationMs: Date.now() - siteStartedAt,
+        });
+        args.audit?.recordToolEvent(args.conversationId ?? null, user.id, {
+          ...target,
+          toolName: call.function.name,
+          product: context.product,
+          isWrite: false,
+          isDelete: false,
+          approval: 'not_required',
+          args: parsedArgs,
+          ok,
+          resultSummary: siteSummary,
+          durationMs: Date.now() - siteStartedAt,
         });
         continue;
       }

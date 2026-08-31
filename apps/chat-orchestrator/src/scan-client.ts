@@ -78,6 +78,16 @@ export interface ScanOptions {
    * would be pure cost.
    */
   pages?: string[];
+  /**
+   * Override the wait before the scan is abandoned.
+   *
+   * The default is sized for the Tag suggestions page, where a scan owns the whole request and 200
+   * pages is a legitimate ask. A chat turn is a different shape: it has its own budget, and the
+   * scan is only the first of several steps, so it needs to give up far sooner and say so. Passing
+   * the number here rather than reading a second constant keeps ONE place that decides how long a
+   * scan may run, with the caller deciding how much of that it can afford.
+   */
+  timeoutMs?: number;
 }
 
 /** One page a discovery found. */
@@ -224,7 +234,10 @@ export class SiteScanner {
    * site. Sharing the scan's four-minute ceiling would leave someone watching a spinner for four
    * minutes before being told to try again.
    */
-  async discover(url: string, opts: { sitemaps?: string[]; crawlOnly?: boolean } = {}): Promise<DiscoverResult> {
+  async discover(
+    url: string,
+    opts: { sitemaps?: string[]; crawlOnly?: boolean; timeoutMs?: number } = {},
+  ): Promise<DiscoverResult> {
     const conn = await this.connect();
     const { ok, text } = await deadline(
       conn.callTool('site_pages_discover', {
@@ -232,7 +245,7 @@ export class SiteScanner {
         ...(opts.sitemaps?.length ? { sitemaps: opts.sitemaps } : {}),
         ...(opts.crawlOnly ? { crawlOnly: true } : {}),
       }),
-      DISCOVER_TIMEOUT_MS,
+      opts.timeoutMs ?? DISCOVER_TIMEOUT_MS,
       'Listing the pages took too long and was stopped. The site may be slow to answer.',
     );
     if (!ok) throw new ScanError(text, 'discover_failed');
@@ -274,7 +287,7 @@ export class SiteScanner {
         ...(opts.skipBlog ? { skipBlog: true } : {}),
         ...(opts.pages?.length ? { pages: opts.pages } : {}),
       }),
-      SCAN_TIMEOUT_MS,
+      opts.timeoutMs ?? SCAN_TIMEOUT_MS,
       'The scan took too long and was stopped. Try fewer pages.',
     );
     if (!ok) throw new ScanError(text, 'scan_failed');

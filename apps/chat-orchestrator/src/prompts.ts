@@ -119,6 +119,34 @@ const WRITE_RULES =
   'Confirm the target first: a write goes to the account, container, and workspace in the session ' +
   'context, and if the user has not selected one, ask rather than picking for them.';
 
+/**
+ * Read the page before writing a trigger for it.
+ *
+ * Only added when the scanner is actually available, so it can never name a tool the model does not
+ * have. The specific failure it exists to stop: asked to track a button, the model writes a
+ * {{Click Classes}} contains "btn-primary" condition from the user's description. GTM accepts it,
+ * the tag looks configured, and it fires on every button on the site or on none of them. The site
+ * is right there and can be read in one call.
+ */
+const SITE_SCAN_RULES =
+  'YOU CAN READ THE USER\'S WEBSITE. site_scan_triggers opens their public pages in a real browser ' +
+  'and returns the forms, buttons, links and CTAs that are actually there, each with the exact GTM ' +
+  'trigger conditions to fire on and ready-made create_gtm_tracking_tag arguments. ' +
+  'BEFORE BUILDING A CLICK OR FORM TRIGGER FOR A SITE YOU HAVE NOT READ, SCAN IT. Never derive a ' +
+  'class, id, form id, CSS selector or button text from what the user typed, from a screenshot, or ' +
+  'from what a site of that kind usually has. GTM accepts a wrong selector without complaint, so a ' +
+  'guessed condition produces a tag that looks correct and collects nothing, and nobody finds out ' +
+  'until the data is audited. If you have no URL, ask for one; that is a better answer than a guess. ' +
+  'Use site_pages_list first when the user names a site but not which pages matter, and scan only ' +
+  'the pages they pick: each page opens a browser. ' +
+  'Pass the returned conditions through UNCHANGED. Their operators are deliberate, not stylistic: a ' +
+  'word-boundary matchRegex on {{Click Classes}} exists because that variable is the whole class ' +
+  'attribute and `contains "btn"` also matches "btn-primary"; a cssSelector on {{Click Element}} ' +
+  'exists because an All Elements trigger reports the exact node clicked, so a click on an inner ' +
+  'icon or span would never match the parent button. ' +
+  'When the scan finds no durable signal for something, say so and explain that a trigger built on ' +
+  'what is there would break at the next deploy. Do not invent one to fill the gap.';
+
 const STYLE_RULES =
   'STYLE. Answer the question that was actually asked, in plain prose with short paragraphs. Use a ' +
   'fenced code block for JSON or code. Do not use em dashes anywhere. Lead with the finding, then the ' +
@@ -175,6 +203,8 @@ export function buildStaticSystem(opts: {
   memoryNotice?: string;
   /** Whether the remember/forget tools are actually offered this turn. */
   canRemember?: boolean;
+  /** Whether the site scanner is offered this turn. Never names the tools when it is not. */
+  canScanSite?: boolean;
 }): string {
   const parts: string[] = [];
   parts.push(opts.product === 'ga4' ? ROLE_GA4 : ROLE_GTM);
@@ -208,6 +238,9 @@ export function buildStaticSystem(opts: {
     // Variable reading a key the site never pushes, so the tag reported a blank address.
     parts.push(retargetToolNames(GTM_TRIGGER_VARIABLE_REFERENCE));
     parts.push(GTM_DECISION_RULES);
+    // After the trigger reference, which teaches WHICH condition to reach for. This one says where
+    // the value in that condition has to come from, and the two are only useful together.
+    if (opts.canScanSite) parts.push(SITE_SCAN_RULES);
   } else {
     parts.push(GA4_EVENT_SELECTION);
     parts.push(
