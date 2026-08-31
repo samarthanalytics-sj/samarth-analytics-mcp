@@ -1,3 +1,9 @@
+## [1.481.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.480.3...v1.481.0) (2026-08-31)
+
+### Features
+
+* **chat:** read the page before writing a trigger for it ([#932](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/932)) ([a5efaec](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a5efaec451da7d9d60322dd7966214fee5166e5b))
+
 ## [1.480.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.480.2...v1.480.3) (2026-08-29)
 
 ### Bug Fixes
