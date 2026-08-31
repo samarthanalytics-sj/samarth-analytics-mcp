@@ -34,6 +34,10 @@ const NOT_TOOLS = new Set([
   'enable_tool_group',
   'remember_memory',
   'forget_memory',
+  // The site scanner. Orchestrator-owned like the three above: it drives the web-audit MCP, not the
+  // GTM one, so it is correctly absent from that server's inventory.
+  'site_scan_triggers',
+  'site_pages_list',
   // GA4 event names and dataLayer keys that appear in the guidance as examples.
   'add_to_cart', 'view_item', 'view_cart', 'begin_checkout', 'add_shipping_info', 'add_payment_info',
   'generate_lead', 'sign_up', 'select_item', 'select_promotion', 'view_promotion', 'view_item_list',
@@ -62,6 +66,9 @@ const SYSTEM = (product: 'gtm' | 'ga4') =>
     toolGroupNotice: '',
     memoryNotice: '',
     canRemember: true,
+    // On, so the scan guidance is actually inside the text this scan walks. Left off, the block
+    // would be exempt from the very check it most needs: it names tools by hand.
+    canScanSite: true,
   });
 
 void test('the GTM system prompt names no tool this server lacks', () => {
@@ -89,6 +96,25 @@ void test('the trigger and variable reference actually reaches the GTM prompt', 
 
 void test('it is NOT sent to a GA4 chat, which has no container to build in', () => {
   assert.equal(/Just Links \/ link_click/.test(SYSTEM('ga4')), false);
+});
+
+void test('the scan guidance is present when the scanner is, and absent when it is not', () => {
+  // Naming a tool the deployment does not have is the exact failure this whole file guards, and a
+  // deployment with no browser has no scanner. So the block is conditional, and both halves matter.
+  assert.match(SYSTEM('gtm'), /site_scan_triggers/);
+  const noScanner = buildStaticSystem({
+    product: 'gtm',
+    canWrite: true,
+    mcpInstructions: '',
+    canScanSite: false,
+  });
+  assert.equal(/site_scan_triggers/.test(noScanner), false);
+  assert.equal(/site_pages_list/.test(noScanner), false);
+});
+
+void test('a GA4 chat is not told to scan a website', () => {
+  // It has no container to build a trigger in, so the pages would be read for nothing.
+  assert.equal(/site_scan_triggers/.test(SYSTEM('ga4')), false);
 });
 
 void test('retargeting rewrites the desktop names and leaves the shared ones alone', () => {
