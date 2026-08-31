@@ -1,3 +1,9 @@
+## [1.483.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.482.0...v1.483.0) (2026-08-31)
+
+### Features
+
+* **desktop:** summarise GTM tag types so a big container is not truncated ([#935](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/935)) ([dfd6696](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/dfd669696d22c87cf2e3181fb79ce96d322e642e))
+
 ## [1.482.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.481.0...v1.482.0) (2026-08-31)
 
 ### Features
