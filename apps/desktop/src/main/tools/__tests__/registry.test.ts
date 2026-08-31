@@ -627,6 +627,42 @@ async function main(): Promise<void> {
     assert.ok(fd.calls.some((c) => c.startsWith('listTriggers')), 'triggers were fetched to resolve');
   });
 
+  await test('list_gtm_tags groupByType returns a complete, un-truncated type summary with cvt_* resolved to its template name', async () => {
+    const fd = fakeData();
+    fd.data.listGtmTags = async () => ([
+      { tagId: '1', name: 'Pixel', type: 'cvt_NBJMP', firingTriggerId: [] },
+      { tagId: '2', name: 'Purchase', type: 'cvt_NBJMP', firingTriggerId: [] },
+      { tagId: '3', name: 'GA4 Event', type: 'gaawe', firingTriggerId: [] },
+      { tagId: '4', name: 'HTML', type: 'html', firingTriggerId: [] },
+      { tagId: '5', name: 'HTML2', type: 'html', firingTriggerId: [] },
+      { tagId: '6', name: 'HTML3', type: 'html', firingTriggerId: [] },
+    ]) as never;
+    fd.data.listGtmTemplates = async () => ([
+      { templateId: 'T', name: 'OpenAI Ads Pixel by Stape', type: 'cvt_NBJMP', galleryOwner: 'stape-io', galleryRepository: 'openai-tag' },
+    ]) as never;
+    const reg = buildToolRegistry(fd.data);
+    const out = JSON.parse(await reg.execute('list_gtm_tags', { accountId: '1', containerId: '2', workspaceId: '3', groupByType: true }));
+    assert.equal(out.totalTags, 6, 'counts ALL tags, not a truncated subset');
+    assert.deepEqual(out.types.map((t: { type: string }) => t.type), ['html', 'cvt_NBJMP', 'gaawe'], 'sorted by count desc');
+    const cvt = out.types.find((t: { type: string }) => t.type === 'cvt_NBJMP');
+    assert.equal(cvt.count, 2);
+    assert.ok(/OpenAI Ads Pixel by Stape/.test(cvt.label), 'cvt_* resolved to the template name');
+    assert.ok(/stape-io\/openai-tag/.test(cvt.label), 'includes the gallery owner/repo');
+    assert.equal(out.types.find((t: { type: string }) => t.type === 'gaawe').label, 'GA4 Event', 'native type gets a friendly label');
+  });
+
+  await test('list_gtm_tags type filter returns only tags of that exact type', async () => {
+    const fd = fakeData();
+    fd.data.listGtmTags = async () => ([
+      { tagId: '1', name: 'Pixel', type: 'cvt_NBJMP', firingTriggerId: [] },
+      { tagId: '3', name: 'GA4 Event', type: 'gaawe', firingTriggerId: [] },
+    ]) as never;
+    const reg = buildToolRegistry(fd.data);
+    const out = JSON.parse(await reg.execute('list_gtm_tags', { accountId: '1', containerId: '2', workspaceId: '3', type: 'gaawe' }));
+    assert.equal(out.length, 1, 'only the matching type');
+    assert.equal(out[0].type, 'gaawe');
+  });
+
   await test('list_gtm_tags without resolveTriggers does NOT fetch triggers or add firingTriggers', async () => {
     const fd = fakeData();
     fd.data.listGtmTags = async () => [{ tagId: '9', name: 'X', type: 'gaawe', firingTriggerId: ['T5'] }] as never;
