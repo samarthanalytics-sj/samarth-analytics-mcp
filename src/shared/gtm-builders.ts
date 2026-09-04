@@ -243,7 +243,20 @@ export const OP_TO_CONDITION: Record<string, { type: string; negate?: boolean }>
 // matchRegex with the browser's JS RegExp, which CANNOT parse an inline (?i) flag (SyntaxError →
 // silent no-match), so an inline flag must never be baked into arg1.
 export function condition(variable: string, op: string, value: string, ignoreCase?: boolean): Param {
-  const m = OP_TO_CONDITION[op] ?? { type: FILTER_OPS.has(op) ? op : 'contains' };
+  // An unrecognised operator TOKEN must FAIL loudly. The old fallthrough rewrote it to `contains`,
+  // which silently changed the condition and could INVERT it: 'regex' matched a raw pattern as
+  // literal text (so the tag never fired) and 'doesNotContain' / 'notEqual' dropped the negation
+  // (so the tag fired on exactly what the user asked to exclude), with nothing reporting why. The
+  // FILTER_OPS half of that expression was dead code: every FILTER_OPS entry is already a key of
+  // OP_TO_CONDITION. A BLANK operator still means "not supplied" (the per-kind defaults live at the
+  // call sites) and keeps its long-standing `contains` behaviour.
+  const token = (op ?? '').trim();
+  const m = token === '' ? OP_TO_CONDITION.contains : OP_TO_CONDITION[token];
+  if (!m) {
+    throw new Error(
+      `Unknown condition operator "${String(op)}" - use one of: ${Object.keys(OP_TO_CONDITION).join(', ')}.`,
+    );
+  }
   return {
     type: m.type,
     parameter: [
@@ -434,6 +447,11 @@ export function buildTrigger(o: TriggerInput): GtmTriggerResource {
       // Page-scoped click trigger (e.g. an FAQ accordion tracked only on its page): a second ANDed
       // {{Page Path}} condition, as real containers do ("Click Text ends with ? AND Page Path contains /faq/").
       if (o.pagePathValue) filters.push(condition('{{Page Path}}', o.pagePathOperator ?? 'contains', o.pagePathValue));
+      // {{Page URL}} scopes a click trigger just as legitimately as {{Page Path}} does. It used to be
+      // read only by the pageview / page-load / visibility / scroll kinds, so a click trigger given
+      // pageUrlValue was created UNSCOPED: it fired site-wide while the tool reported the page scope
+      // the caller asked for.
+      if (o.pageUrlValue) filters.push(condition('{{Page URL}}', o.pageUrlOperator ?? 'contains', o.pageUrlValue));
       filters.push(...pageScopeConditions(o));
       if (filters.length) t.filter = filters;
       return t;
@@ -486,6 +504,9 @@ export function buildTrigger(o: TriggerInput): GtmTriggerResource {
       // scopes a shared-form-name tag to ONE page (not only when no id/class scope exists). GTM filters
       // are ANDed, so this narrows firing to the intended form+page.
       if (o.pagePathValue) filters.push(condition('{{Page Path}}', o.pagePathOperator ?? 'equals', o.pagePathValue));
+      // Same as the click kinds: pageUrlValue used to be dropped here, so a form trigger scoped to a
+      // page ("?thanks=1", a query-bearing URL) was created firing on that form site-wide instead.
+      if (o.pageUrlValue) filters.push(condition('{{Page URL}}', o.pageUrlOperator ?? 'contains', o.pageUrlValue));
       filters.push(...pageScopeConditions(o));
       if (filters.length) t.filter = filters;
       return t;
@@ -607,7 +628,15 @@ export function buildTrigger(o: TriggerInput): GtmTriggerResource {
       return t;
     }
     default:
-      return { name: sanitizeName(o.name), type: 'pageview' };
+      // An off-enum kind must FAIL loudly, exactly as buildVariable does. The old fallthrough
+      // returned an UNSCOPED All Pages pageview trigger, so a tag asked to fire on kind "click" or
+      // "form_submission" (real GTM type names, and both callers cast an unvalidated string into
+      // TriggerKind) was created firing on EVERY page view while the tool reported success.
+      throw new Error(
+        `Unknown trigger kind "${String(o.kind)}" - use one of: link_click, all_clicks, custom_event, pageview, ` +
+          'form_submit, youtube_video, timer, element_visibility, history_change, scroll_depth, dom_ready, ' +
+          'window_loaded, js_error.',
+      );
   }
 }
 
@@ -744,18 +773,26 @@ export function triggerBuiltInVars(o: TriggerInput): string[] {
     if (o.clickClassesValue) vars.push('clickClasses');
     if (o.clickIdValue) vars.push('clickId');
     if (o.pagePathValue) vars.push('pagePath');
+    if (o.pageUrlValue) vars.push('pageUrl'); // the click branch now ANDs a {{Page URL}} condition too
   }
   if (o.kind === 'form_submit') {
     if (o.formIdValue) vars.push('formId');
     if (o.formClassesValue) vars.push('formClasses');
     if (o.pagePathValue) vars.push('pagePath'); // ANDed alongside Form ID/Classes (page-scoped form tag)
+    if (o.pageUrlValue) vars.push('pageUrl');
   }
   if (o.kind === 'custom_event') {
     if (o.formIdValue) vars.push('formId');
     if (o.pagePathValue) vars.push('pagePath');
     if (o.pageUrlValue) vars.push('pageUrl');
   }
-  if (o.kind === 'pageview' && o.pageUrlValue) vars.push('pageUrl');
+  if (o.kind === 'pageview') {
+    if (o.pageUrlValue) vars.push('pageUrl');
+    // A pageview scoped by pagePathValue emits a {{Page Path}} condition (see the pageview branch of
+    // buildTrigger), but pagePath was never returned here, unlike every other kind that reads it. In a
+    // container where the built-in is off the condition read undefined and the trigger never fired.
+    if (o.pagePathValue) vars.push('pagePath');
+  }
   // The YouTube Video trigger surfaces the "Video" built-in variables — enable them
   // all so the tag's {{Video Title}}/{{Video Percent}}/… and event-name {{Video
   // Status}} resolve.

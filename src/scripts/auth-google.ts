@@ -25,6 +25,7 @@ import 'dotenv/config';
 import http from 'http';
 import { URL } from 'url';
 import { exec } from 'child_process';
+import { randomBytes } from 'crypto';
 import {
   DEFAULT_REDIRECT_URI,
   buildOAuth2ClientForFlow,
@@ -61,11 +62,15 @@ function parseRedirect(redirectUri: string): ParsedRedirect {
         `Set GOOGLE_OAUTH_REDIRECT_URI to e.g. ${DEFAULT_REDIRECT_URI}.`
     );
   }
-  const port = u.port ? parseInt(u.port, 10) : 3001;
+  // A portless redirect URI (e.g. http://localhost/oauth/callback) used to fall
+  // back to 3001 while Google sent the browser to the scheme's implicit port,
+  // so the code never reached the listener and the script hung forever. Derive
+  // the default from the scheme so we listen exactly where the browser lands.
+  const port = u.port ? parseInt(u.port, 10) : u.protocol === 'https:' ? 443 : 80;
   return { port, pathname: u.pathname || '/oauth/callback', origin: u.origin };
 }
 
-async function waitForCode(parsed: ParsedRedirect): Promise<string> {
+async function waitForCode(parsed: ParsedRedirect, expectedState: string): Promise<string> {
   return new Promise<string>((resolve, reject) => {
     const server = http.createServer((req, res) => {
       if (!req.url) {
@@ -77,6 +82,17 @@ async function waitForCode(parsed: ParsedRedirect): Promise<string> {
       if (reqUrl.pathname !== parsed.pathname) {
         res.statusCode = 404;
         res.end('Not found.');
+        return;
+      }
+      // This listener used to exchange the first `code` any caller handed it, and
+      // no state was sent at all. Any page open in the browser could drive a
+      // cross-origin GET here and get its own Google account persisted into the
+      // token file (login CSRF). Ignore anything that does not carry our state,
+      // and keep waiting rather than aborting so a stray request cannot end the
+      // onboarding run.
+      if (reqUrl.searchParams.get('state') !== expectedState) {
+        res.statusCode = 400;
+        res.end('Unexpected or missing state parameter, ignoring this callback.');
         return;
       }
       const code = reqUrl.searchParams.get('code');
@@ -151,11 +167,16 @@ async function main(): Promise<void> {
     return;
   }
 
+  // Unguessable per-run value so the callback listener can tell Google's redirect
+  // apart from any other request that reaches the loopback port.
+  const state = randomBytes(32).toString('hex');
+
   const oauth2Client = buildOAuth2ClientForFlow();
   const authUrl = oauth2Client.generateAuthUrl({
     access_type: 'offline',
     scope: ALL_SCOPES,
     prompt: 'consent',
+    state,
   });
 
   console.log('Opening the Google authorization URL in your browser…');
@@ -164,7 +185,7 @@ async function main(): Promise<void> {
   console.log(authUrl);
   console.log('');
 
-  const codePromise = waitForCode(parsed);
+  const codePromise = waitForCode(parsed, state);
   openInBrowser(authUrl);
 
   let code: string;
@@ -180,16 +201,24 @@ async function main(): Promise<void> {
   try {
     const tokens = await exchangeCodeForTokens(code, { persist: true });
     console.log('');
+    // exchangeCodeForTokens only writes the token file when a refresh_token came
+    // back. The "Saved ..." lines below used to print unconditionally, so a
+    // response without one told the user about a file that was never created and
+    // the next server start failed with no credentials. Report the real outcome.
+    if (!tokens.refresh_token) {
+      console.error('⚠ Google did not return a refresh_token, so nothing was saved to');
+      console.error(`  ${getTokenFilePath()}`);
+      console.error('');
+      console.error('Revoke prior access at https://myaccount.google.com/permissions and');
+      console.error('re-run `npm run auth:google`.');
+      process.exit(1);
+      return;
+    }
     console.log('Done. Saved refresh_token + access_token to:');
     console.log(`  ${getTokenFilePath()}`);
     console.log('');
     console.log('You can now start the MCP server without setting GOOGLE_ACCESS_TOKEN or');
     console.log('GOOGLE_REFRESH_TOKEN in .env — the server will read them from the token file.');
-    if (!tokens.refresh_token) {
-      console.log('');
-      console.log('⚠ Google did not return a refresh_token. Revoke prior access at');
-      console.log('  https://myaccount.google.com/permissions and re-run `npm run auth:google`.');
-    }
   } catch (err) {
     console.error('Token exchange failed:', String(err));
     process.exit(1);

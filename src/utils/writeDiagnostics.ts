@@ -164,6 +164,22 @@ export async function explainMissingEntity(
     return `${KIND_PLURAL[kind].slice(0, -1)}s_delete failed: ${formatGoogleError(originalError)}`;
   }
 
+  // The id exists under the very kind we were asked to delete, so "not found" was the
+  // OTHER half of GTM's "Not found or permission denied": the write was refused, not the
+  // lookup. This check used to be missing, and the caller was told there is no tag 3 and
+  // that this was not a permissions problem, in a sentence that then listed tag 3 among
+  // the tags that do exist. Keep this branch ahead of the cross-kind one.
+  const mine = own.find((e) => e.id === id);
+  if (mine) {
+    return (
+      `${KIND_PLURAL[kind]}_delete failed: ${kind} ${id} ("${mine.name}") does exist in workspace ` +
+      `${scope.workspaceId}, so the id was not the problem. GTM reports a refused write and a missing ` +
+      `entity with the same 404, so this is most likely a permissions problem: the credentials can read ` +
+      `this container but not write to it. It can also mean the ${kind} was changed or removed by ` +
+      `someone else between the list and the delete. Original error: ${formatGoogleError(originalError)}`
+    );
+  }
+
   // The id resolves under a different entity type — the actual cause, nearly always.
   const elsewhere = others
     .map(({ kind: k, entities }) => ({ kind: k, hit: entities.find((e) => e.id === id) }))

@@ -148,9 +148,12 @@ export function registerBuiltInVariableTools(server: McpServer, getClient: () =>
           return textResult(`[DRY RUN] Would revert built-in variable: ${type}`);
         }
         const client = getClient();
-        // Same collection path as delete: .../workspaces/{id}/built_in_variables (per the API docs).
+        // NOT the same path as delete. revert's URL template is `{+path}/built_in_variables:revert`,
+        // so the client appends the collection segment itself and `path` must stop at the WORKSPACE.
+        // This once carried delete's `/built_in_variables` suffix, which produced
+        // .../built_in_variables/built_in_variables:revert and a 404 on every call.
         const res = await client.accounts.containers.workspaces.built_in_variables.revert({
-          path: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/built_in_variables`,
+          path: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`,
           type,
         });
         return jsonResult(res.data);

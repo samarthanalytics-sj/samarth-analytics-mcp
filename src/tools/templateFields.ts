@@ -84,34 +84,49 @@ export function parseTemplateParameters(templateData: string): TemplateField[] |
   if (!Array.isArray(parsed)) return null;
 
   const fields: TemplateField[] = [];
-  for (const raw of parsed) {
-    if (!raw || typeof raw !== 'object') continue;
-    const p = raw as Record<string, unknown>;
-    const name = typeof p['name'] === 'string' ? p['name'] : '';
-    if (!name) continue;
+  const collect = (list: unknown[]): void => {
+    for (const raw of list) {
+      if (!raw || typeof raw !== 'object') continue;
+      const p = raw as Record<string, unknown>;
+      const type = typeof p['type'] === 'string' ? (p['type'] as string) : 'UNKNOWN';
+      const subParams = Array.isArray(p['subParams']) ? (p['subParams'] as Record<string, unknown>[]) : [];
 
-    const validators = Array.isArray(p['valueValidators']) ? (p['valueValidators'] as Record<string, unknown>[]) : [];
-    const required = validators.some((v) => v && v['type'] === 'NON_EMPTY');
+      // A GROUP is a purely visual container in the template interface. GTM stores its children as
+      // TOP-LEVEL entries in a tag's `parameter` array and never stores the group's own name, and
+      // groups nest. Emitting the group as a field pointed callers at a key GTM ignores while
+      // hiding the children, and any NON_EMPTY validator on them, that the template really
+      // requires, so recurse into it and report only the real fields.
+      if (type === 'GROUP') {
+        collect(subParams);
+        continue;
+      }
 
-    const selectItems = Array.isArray(p['selectItems']) ? (p['selectItems'] as Record<string, unknown>[]) : [];
-    const options = selectItems
-      .map((s) => (typeof s?.['value'] === 'string' ? (s['value'] as string) : null))
-      .filter((v): v is string => Boolean(v));
+      const name = typeof p['name'] === 'string' ? p['name'] : '';
+      if (!name) continue;
 
-    const subParams = Array.isArray(p['subParams']) ? (p['subParams'] as Record<string, unknown>[]) : [];
-    const subFields = subParams
-      .map((s) => (typeof s?.['name'] === 'string' ? (s['name'] as string) : null))
-      .filter((v): v is string => Boolean(v));
+      const validators = Array.isArray(p['valueValidators']) ? (p['valueValidators'] as Record<string, unknown>[]) : [];
+      const required = validators.some((v) => v && v['type'] === 'NON_EMPTY');
 
-    fields.push({
-      name,
-      type: typeof p['type'] === 'string' ? (p['type'] as string) : 'UNKNOWN',
-      ...(typeof p['displayName'] === 'string' ? { displayName: p['displayName'] as string } : {}),
-      ...(required ? { required: true } : {}),
-      ...(options.length ? { options } : {}),
-      ...(subFields.length ? { subFields } : {}),
-    });
-  }
+      const selectItems = Array.isArray(p['selectItems']) ? (p['selectItems'] as Record<string, unknown>[]) : [];
+      const options = selectItems
+        .map((s) => (typeof s?.['value'] === 'string' ? (s['value'] as string) : null))
+        .filter((v): v is string => Boolean(v));
+
+      const subFields = subParams
+        .map((s) => (typeof s?.['name'] === 'string' ? (s['name'] as string) : null))
+        .filter((v): v is string => Boolean(v));
+
+      fields.push({
+        name,
+        type,
+        ...(typeof p['displayName'] === 'string' ? { displayName: p['displayName'] as string } : {}),
+        ...(required ? { required: true } : {}),
+        ...(options.length ? { options } : {}),
+        ...(subFields.length ? { subFields } : {}),
+      });
+    }
+  };
+  collect(parsed);
   return fields;
 }
 

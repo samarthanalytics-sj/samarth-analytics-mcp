@@ -110,8 +110,19 @@ export function formatGoogleError(err: unknown): string {
     const response = anyErr['response'] as Record<string, unknown> | undefined;
     if (response) {
       const data = response['data'] as Record<string, unknown> | undefined;
-      if (data?.['error']) {
-        const gErr = data['error'] as Record<string, unknown>;
+      const rawError = data?.['error'];
+      // OAuth token endpoints answer with the STRING form of error
+      // ({ error: 'invalid_grant', error_description: '...' }). This branch used to
+      // cast that string to an object, so code and message both came out undefined
+      // and the caller saw "Google API Error : invalid_grant" with the one actionable
+      // sentence (error_description) dropped. Handle the string shape explicitly.
+      if (typeof rawError === 'string') {
+        const description = data?.['error_description'];
+        const detail = typeof description === 'string' && description ? `: ${description}` : '';
+        return `Google API Error ${rawError}${detail}`;
+      }
+      if (rawError && typeof rawError === 'object') {
+        const gErr = rawError as Record<string, unknown>;
         const code = gErr['code'] ?? '';
         const message = gErr['message'] ?? err.message;
         const errors = Array.isArray(gErr['errors'])

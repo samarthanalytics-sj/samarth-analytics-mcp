@@ -9,7 +9,8 @@
 
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
-import { TAG_TYPES, TRIGGER_TYPES, VARIABLE_TYPES, GALLERY_CATEGORIES, searchGallery, identifyTagType, identifyGalleryTemplate, NATIVE_VENDORS, NATIVE_TEMPLATES, findNativeTemplate, customTemplateOrigin } from '../tools/reference.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { TAG_TYPES, TRIGGER_TYPES, VARIABLE_TYPES, GALLERY_CATEGORIES, searchGallery, identifyTagType, identifyGalleryTemplate, NATIVE_VENDORS, NATIVE_TEMPLATES, findNativeTemplate, customTemplateOrigin, registerReferenceTools } from '../tools/reference.js';
 import { GALLERY_TEMPLATES } from '../tools/galleryCatalog.js';
 
 const allTags = [...TAG_TYPES.web, ...TAG_TYPES.server, ...TAG_TYPES.legacy];
@@ -191,25 +192,39 @@ test('a native template with no confirmed code reports null, not a guess', () =>
 
 // ── gallery vs home-grown custom templates ─────────────────────────────────
 
-test('a gallery code and a container-authored code are told apart by shape alone', () => {
-  // cvt_<galleryTemplateId> vs cvt_<containerId>_<templateId>. No lookup needed.
+test('the two cvt_ code shapes are told apart, and only the shape is claimed', () => {
+  // cvt_<galleryTemplateId> vs cvt_<containerId>_<templateId>. No lookup needed for the shape.
   assert.equal(customTemplateOrigin('cvt_MRQN8'), 'gallery');
-  assert.equal(customTemplateOrigin('cvt_1234567_12'), 'local');
+  assert.equal(customTemplateOrigin('cvt_1234567_12'), 'container-scoped');
 
   const gallery = identifyTagType('cvt_MRQN8');
   assert.equal(gallery.origin, 'gallery');
   assert.equal(gallery.name, 'Community Gallery template');
 
-  const local = identifyTagType('cvt_1234567_12');
-  assert.equal(local.origin, 'local');
-  assert.match(local.name, /authored in this container/i);
-  // An in-house template has no publisher, and saying so prevents a pointless hunt.
-  assert.match(local.howToResolve ?? '', /no publisher/i);
+  const scoped = identifyTagType('cvt_1234567_12');
+  assert.equal(scoped.origin, 'container-scoped');
+  // It has to leave BOTH possibilities open and point at the one field that settles it.
+  assert.match(scoped.name, /gallery import or authored in this container/i);
+  assert.match(scoped.howToResolve ?? '', /galleryReference/);
+});
+
+test('a container-scoped cvt_ code is never claimed to be home-grown', () => {
+  // Regression: the numeric pair used to be reported as origin 'local', named "authored in this
+  // container", with "no publisher to look up". Gallery IMPORTS carry that same shape, so real
+  // vendor templates were described as home-grown. This is LinkedIn InsightTag 2.0 as it appears
+  // in a real export: containerId 42209344, templateId 4, with a galleryReference on the template.
+  const linkedin = identifyTagType('cvt_42209344_4');
+  assert.equal(linkedin.known, true);
+  assert.notEqual(linkedin.origin, 'local');
+  assert.doesNotMatch(linkedin.howToResolve ?? '', /no publisher/i);
+  assert.doesNotMatch(linkedin.howToResolve ?? '', /no upstream version to compare against/i);
+  // And it must say plainly that the shape does not prove local authorship.
+  assert.match(linkedin.howToResolve ?? '', /does NOT mean it was written here/);
 });
 
 test('an ambiguous cvt_ code falls back to gallery, never to home-grown', () => {
   // Misreading a vendor template as home-grown sends someone looking for source that does not
-  // exist, so the non-numeric shapes must not be claimed as local.
+  // exist, so the non-numeric shapes must not be claimed as container-scoped.
   assert.equal(customTemplateOrigin('cvt_ABC_DEF'), 'gallery');
   assert.equal(customTemplateOrigin('cvt_5RM3Q'), 'gallery');
   assert.equal(customTemplateOrigin('cvt_1234567_12_3'), 'gallery');
@@ -220,4 +235,41 @@ test('both kinds still resolve through the container, not the snapshot', () => {
     assert.match(identifyTagType(c).howToResolve ?? '', /templates_list/);
     assert.equal(identifyTagType(c).known, true);
   }
+});
+
+// ── the gtm_type_reference search envelope ──────────────────────────────────
+
+const refServer = new McpServer({ name: 'reference-test', version: '0.0.1' }, { capabilities: { tools: {} } });
+registerReferenceTools(refServer);
+// The SDK keeps registered tools in _registeredTools, keyed by name (this is what tools/call reads).
+const refTools = (refServer as unknown as {
+  _registeredTools: Record<string, {
+    handler: (a: Record<string, unknown>, e: { requestId: string }) => Promise<{ content: { text: string }[] }>;
+  }>;
+})._registeredTools;
+
+async function typeReference(args: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const res = await refTools['gtm_type_reference'].handler(args, { requestId: 'test' });
+  return JSON.parse(res.content[0].text) as Record<string, unknown>;
+}
+
+test('truncated means hits were dropped, not that the page happened to be full', async () => {
+  // The flag used to be `matches.length === MAX_GALLERY_MATCHES`, so a query whose hits landed
+  // exactly on the cap was reported as incomplete even though every match had been returned, and
+  // the model was told to go looking for rows that do not exist.
+  const cap = 25;
+  const everyScriptHit = searchGallery('script', GALLERY_TEMPLATES.length);
+  assert.equal(everyScriptHit.length, cap, '"script" must match exactly the cap in this snapshot');
+
+  const full = await typeReference({ search: 'script' });
+  assert.equal(full['count'], cap);
+  assert.equal(full['truncated'], false, 'nothing was dropped, so truncated must be false');
+
+  // "a" is in almost every name, so this one genuinely is cut off.
+  assert.ok(searchGallery('a', GALLERY_TEMPLATES.length).length > cap);
+  const cut = await typeReference({ search: 'a' });
+  assert.equal(cut['count'], cap);
+  assert.equal(cut['truncated'], true, 'a real cutoff must still be reported');
+  // The extra row fetched to detect the cutoff must never be shown.
+  assert.equal((cut['matches'] as unknown[]).length, cap);
 });

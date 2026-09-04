@@ -27,8 +27,8 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { GtmClient } from '../utils/gtmClient.js';
-import { checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
-import { jsonResult, textResult, errorResult } from '../utils/toolResponse.js';
+import { checkGuardrails, getGuardrailConfig, formatGoogleError } from '../utils/guardrails.js';
+import { jsonResult, textResult, errorResult, errorText } from '../utils/toolResponse.js';
 import { paginate } from '../utils/pagination.js';
 import {
   buildGa4EventTag,
@@ -83,6 +83,13 @@ function isPlaceholderMeasurementId(id: string): boolean {
  * user costs a round trip to learn something we could have looked up. Returns null when the
  * container has no Google tag to read, which is a real situation in an empty workspace and the one
  * case where the caller genuinely has to be asked.
+ *
+ * A {{Variable}} tagId counts as an answer. This file recommends exactly that setup (one Constant
+ * holding the Measurement ID, every GA4 tag pointing at it), and a variable reference is valid as
+ * the GA4 tag's measurementIdOverride. The old resolver accepted only a literal G- id, so the very
+ * container it told people to build resolved to null and got refused with "no Google tag to read
+ * the real one from" while a perfectly usable reference sat in it. A literal still wins when the
+ * container has one.
  */
 async function measurementIdFromContainer(client: GtmClient, parent: string): Promise<string | null> {
   try {
@@ -91,14 +98,20 @@ async function measurementIdFromContainer(client: GtmClient, parent: string): Pr
       (data) => data.tag,
       {},
     );
+    let variableHeld: string | null = null;
     for (const tag of tags.items) {
       // googtag carries it as `tagId`; a gaawe carries the override it was built with.
       const key = tag.type === 'googtag' ? 'tagId' : tag.type === 'gaawe' ? 'measurementIdOverride' : null;
       if (!key) continue;
-      const found = (tag.parameter ?? []).find((p) => p.key === key)?.value;
-      if (found && /^G-[A-Z0-9]+$/i.test(found) && !isPlaceholderMeasurementId(found)) return found;
+      const found = (tag.parameter ?? []).find((p) => p.key === key)?.value?.trim();
+      if (!found) continue;
+      if (/^\{\{.+\}\}$/.test(found)) {
+        if (!variableHeld) variableHeld = found;
+        continue;
+      }
+      if (/^G-[A-Z0-9]+$/i.test(found) && !isPlaceholderMeasurementId(found)) return found;
     }
-    return null;
+    return variableHeld;
   } catch {
     // A read failure here must not fail the write path; fall back to asking.
     return null;
@@ -146,8 +159,53 @@ const triggerSchema = z
     formClassesOperator: z.string().optional().describe('equals | contains | matchRegex. Default contains.'),
     intervalMs: z.string().optional().describe('For kind "timer": firing interval in milliseconds. REQUIRED for timer.'),
     limit: z.string().optional().describe('For kind "timer": how many times it may fire.'),
+    // element_visibility and scroll_depth were advertised in the `kind` list while NONE of their
+    // settings were declared here, and zod strips what it does not declare. An element_visibility
+    // call arrived with its selector removed, so buildTrigger emitted elementSelector "" and the
+    // trigger watched nothing: created, reported as success, and dead. Same class of failure as the
+    // missing click fields above.
+    visibilitySelector: z
+      .string()
+      .optional()
+      .describe('For kind "element_visibility": CSS selector of the element to watch, e.g. "#gform_confirmation_message". REQUIRED unless visibilityElementId is given.'),
+    visibilityElementId: z
+      .string()
+      .optional()
+      .describe('For kind "element_visibility": the element\'s id attribute, as an alternative to visibilitySelector.'),
+    visibilityMinPercent: z.string().optional().describe('For kind "element_visibility": minimum percent of the element on screen before it fires. Default 50.'),
+    visibilityFiringFrequency: z.string().optional().describe('For kind "element_visibility": ONCE | ONCE_PER_ELEMENT | MANY_PER_ELEMENT. Default ONCE.'),
+    visibilityObserveDomChanges: z
+      .boolean()
+      .optional()
+      .describe('For kind "element_visibility": keep watching for elements added AFTER page load (an AJAX confirmation message). Default true.'),
+    visibilityMinOnScreenMs: z.string().optional().describe('For kind "element_visibility": require the element to stay on screen for N milliseconds first.'),
+    scrollPercentages: z.string().optional().describe('For kind "scroll_depth": vertical percent thresholds, e.g. "25, 50, 75, 90". This is the default.'),
+    scrollPixels: z.string().optional().describe('For kind "scroll_depth": vertical PIXEL thresholds instead of percentages.'),
+    scrollHorizontalPercentages: z.string().optional().describe('For kind "scroll_depth": horizontal percent thresholds. Off unless supplied.'),
+    pageHostnameValue: z.string().optional().describe('Scope by {{Page Hostname}}. ANDed into the filter of any filter-capable kind.'),
+    pageHostnameOperator: z.string().optional().describe('equals | contains | startsWith | endsWith | matchRegex. Default equals.'),
+    referrerValue: z.string().optional().describe('Scope by {{Referrer}}. ANDed into the filter of any filter-capable kind.'),
+    referrerOperator: z.string().optional().describe('equals | contains | startsWith | endsWith | matchRegex. Default contains.'),
   })
   .describe('The trigger this tag fires on. Reused by name when it already exists, otherwise created.');
+
+/**
+ * The kinds buildTrigger can actually build.
+ *
+ * `kind` is a free-form string on the wire (an enum in the JSON schema would refuse the whole call
+ * with a schema error instead of a sentence the model can act on), so it has to be checked here.
+ * buildTrigger's default branch returns an unscoped All Pages pageview trigger, which means an
+ * off-enum kind like "click" or "form" used to produce a tag firing on EVERY page load while the
+ * tool reported success and echoed the kind it was asked for.
+ */
+const TRIGGER_KINDS: readonly TriggerKind[] = [
+  'pageview', 'link_click', 'all_clicks', 'form_submit', 'custom_event', 'dom_ready', 'window_loaded',
+  'history_change', 'scroll_depth', 'element_visibility', 'youtube_video', 'js_error', 'timer',
+];
+
+function isTriggerKind(value: string): value is TriggerKind {
+  return (TRIGGER_KINDS as readonly string[]).includes(value);
+}
 
 interface CreatedTrigger {
   triggerId: string;
@@ -172,7 +230,12 @@ async function findOrCreateTrigger(
     (data) => data.trigger,
     {},
   );
-  const match = existing.items.find((t) => t.name === input.name);
+  // Match on the SANITIZED name, because that is the name buildTrigger stores. Matching on the raw
+  // input name meant "Click: Apply Now" was created as "Click Apply Now" (sanitizeName strips ':')
+  // and never found again, so the second tag on that trigger tried to create it a second time and
+  // GTM rejected the whole call with a duplicate-name 400 the caller could not explain.
+  const wanted = sanitizeName(input.name).toLowerCase();
+  const match = existing.items.find((t) => (t.name ?? '').toLowerCase() === wanted);
   if (match?.triggerId) {
     return { triggerId: match.triggerId, name: match.name ?? input.name, reused: true };
   }
@@ -310,11 +373,41 @@ export function registerTypedBuilderTools(server: McpServer, getClient: () => Gt
           );
         }
 
-        const triggerInput = { ...trigger, kind: trigger.kind as TriggerKind } as TriggerInput;
+        /**
+         * Refuse a trigger kind this tool cannot build, rather than building the wrong thing.
+         *
+         * `kind` used to be cast straight to TriggerKind with no check, and buildTrigger's default
+         * branch answers an unknown kind with an unscoped All Pages pageview trigger. So a caller
+         * sending the real GTM type name ("click") or a paraphrase ("form", "page_view") got a
+         * trigger of type pageview with NO filter, the tag bound to it, and a success response
+         * echoing the kind it asked for: once published, the event fires on every page load. The
+         * variable tool below refuses an off-enum kind for exactly this reason.
+         */
+        const requestedKind = String(trigger.kind ?? '').trim();
+        if (!isTriggerKind(requestedKind)) {
+          return textResult(
+            `Not creating "${tagName}": trigger.kind "${trigger.kind}" is not one this tool builds. Use one of: ` +
+              `${TRIGGER_KINDS.join(', ')}. Building it anyway would create an unscoped All Pages trigger, so the ` +
+              'tag would fire on every page load instead of on the event you asked for.',
+          );
+        }
+        const triggerInput = { ...trigger, kind: requestedKind } as TriggerInput;
         if (triggerInput.kind === 'timer' && !String(triggerInput.intervalMs ?? '').trim()) {
           return textResult(
             'trigger.kind "timer" requires trigger.intervalMs (the interval in milliseconds, e.g. "30000"). ' +
               'A timer with no interval never fires.',
+          );
+        }
+        // Same reasoning as the timer guard: with neither target set buildTrigger emits an empty
+        // elementSelector and the trigger is created watching nothing.
+        if (
+          triggerInput.kind === 'element_visibility' &&
+          !String(triggerInput.visibilitySelector ?? '').trim() &&
+          !String(triggerInput.visibilityElementId ?? '').trim()
+        ) {
+          return textResult(
+            'trigger.kind "element_visibility" requires trigger.visibilitySelector (a CSS selector) or ' +
+              'trigger.visibilityElementId. With neither, the trigger is created watching no element and never fires.',
           );
         }
 
@@ -365,8 +458,8 @@ export function registerTypedBuilderTools(server: McpServer, getClient: () => Gt
           } else {
             return textResult(
               `Not creating "${tagName}": "${measurementId}" looks like a placeholder Measurement ID, and ` +
-                'this workspace has no Google tag to read the real one from, so there is nothing to fall ' +
-                'back to. GTM would accept the id and the tag would report to nothing. Ask the user for ' +
+                'no usable one could be read from this workspace\'s Google or GA4 tags either, so there is ' +
+                'nothing to fall back to. GTM would accept the id and the tag would report to nothing. Ask the user for ' +
                 'their real G- id. If they confirm they DO want this exact id anyway (a test container, ' +
                 'for example), call again with allowPlaceholderId: true and it will be created as asked.',
             );
@@ -375,6 +468,7 @@ export function registerTypedBuilderTools(server: McpServer, getClient: () => Gt
 
         // Best-effort: a built-in that is already enabled is not an error worth failing the tag over.
         let enabledVariables: string[] = [];
+        let builtInVariablesWarning: string | undefined;
         if (builtIns.length) {
           try {
             await client.accounts.containers.workspaces.built_in_variables.create({
@@ -382,8 +476,16 @@ export function registerTypedBuilderTools(server: McpServer, getClient: () => Gt
               type: builtIns,
             });
             enabledVariables = builtIns;
-          } catch {
-            enabledVariables = builtIns;
+          } catch (err) {
+            // Every type goes in ONE request, so a rejection means NONE were enabled. Reporting
+            // them as enabled anyway (what this catch used to do) told the caller {{Click URL}}
+            // resolved when the trigger condition in fact reads undefined and never fires, and a
+            // single bad extra type in builtInVariables sank the inferred ones silently.
+            enabledVariables = [];
+            builtInVariablesWarning =
+              `Built-in variables were NOT enabled (${builtIns.join(', ')}): ${formatGoogleError(err)}. ` +
+              'Any {{...}} the trigger or tag references stays unresolved until they are enabled, so check ' +
+              'the type names and enable them with built_in_variables_enable.';
           }
         }
 
@@ -417,10 +519,23 @@ export function registerTypedBuilderTools(server: McpServer, getClient: () => Gt
                   eventParameters,
                   firingTriggerId,
                 });
-        const created = await client.accounts.containers.workspaces.tags.create({
-          parent,
-          requestBody: tag as tagmanager_v2.Schema$Tag,
-        });
+        let created;
+        try {
+          created = await client.accounts.containers.workspaces.tags.create({
+            parent,
+            requestBody: tag as tagmanager_v2.Schema$Tag,
+          });
+        } catch (err) {
+          // The trigger write already happened. The bare error used to mention only the tag, so a
+          // model retrying under a different trigger name left a second orphan behind in the
+          // workspace. Say what exists now.
+          const leftBehind = trig.reused
+            ? `The trigger "${trig.name}" (id ${trig.triggerId}) already existed and was reused, so nothing was left behind.`
+            : `A trigger "${trig.name}" (id ${trig.triggerId}) WAS created by this call and is still in workspace ` +
+              `${workspaceId}. Retry with the SAME trigger.name so it is reused, or remove it with triggers_delete; ` +
+              'a different name creates a second one.';
+          return errorText(`create_gtm_tracking_tag failed: ${formatGoogleError(err)}\n\n${leftBehind}`);
+        }
 
         return jsonResult({
           tag: { tagId: created.data.tagId, name: created.data.name, type: created.data.type },
@@ -432,6 +547,9 @@ export function registerTypedBuilderTools(server: McpServer, getClient: () => Gt
           // Present only when the id sent was not the id used. A silent substitution would be
           // worse than the refusal it replaced.
           ...(measurementIdNote ? { measurementIdNote } : {}),
+          // Present only when the built-in enable call was rejected, so "enabledVariables: []" is
+          // never left looking like nothing needed enabling.
+          ...(builtInVariablesWarning ? { builtInVariablesWarning } : {}),
         });
       } catch (err) {
         return errorResult('create_gtm_tracking_tag', err);
@@ -481,6 +599,30 @@ export function registerTypedBuilderTools(server: McpServer, getClient: () => Gt
       try {
         const config = getGuardrailConfig();
         const { dryRun } = checkGuardrails('write', confirm, config);
+
+        /**
+         * The same landmine one level down from the off-enum guard below: an IN-enum kind whose own
+         * required field is missing still built a variable, with an empty parameter. GTM accepts it,
+         * the tool hands back {{name}} as if it were usable, and every tag bound to it reports blank
+         * until someone opens GTM and looks. Refuse before the write instead.
+         */
+        const missingField =
+          kind === 'javascript' && !String(javascript ?? '').trim()
+            ? { field: 'javascript', what: 'the full function body, e.g. "function() { ... }"' }
+            : kind === 'data_layer' && !String(dataLayerName ?? '').trim()
+              ? { field: 'dataLayerName', what: 'the dataLayer key to read, e.g. "ecommerce.value"' }
+              : kind === 'event_data' && !String(keyPath ?? '').trim()
+                ? { field: 'keyPath', what: 'the event-data key to read' }
+                : kind === 'request_header' && !String(headerName ?? '').trim()
+                  ? { field: 'headerName', what: 'the HTTP header to read' }
+                  : null;
+        if (missingField) {
+          return textResult(
+            `Not creating variable "${name}": kind "${kind}" needs \`${missingField.field}\`, ${missingField.what}. ` +
+              'Without it the variable is created empty and every tag bound to it reports blank.',
+          );
+        }
+
         if (dryRun) {
           return textResult(`[DRY RUN] Would create ${kind} variable "${name}" in workspace ${workspaceId}`);
         }

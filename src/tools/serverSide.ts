@@ -414,9 +414,14 @@ function registerGalleryImport(server: McpServer, getClient: () => GtmClient): v
         // import a second copy of a template that is already there.
         const wantOwner = owner.trim().toLowerCase();
         const wantRepo = repository.trim().toLowerCase();
-        const existingPages = await paginate(
-          (pageToken) => api.list({ parent, pageToken }),
-          (data) => (data as { data?: { template?: Record<string, unknown>[] } }).data?.template,
+        // The fetch must hand `paginate` the response BODY, not the gaxios envelope. This used to
+        // pass the raw response through, so `nextPageToken` sat one level down at
+        // `.data.nextPageToken`, was never found, and the scan stopped after page 1: an
+        // already-installed template on page 2 was invisible and got imported a second time, which
+        // is the exact duplicate this tool promises never to make. Same shape as the list handler.
+        const existingPages = await paginate<Record<string, unknown>, Record<string, unknown>>(
+          (pageToken) => api.list({ parent, pageToken }).then((r) => r.data),
+          (data) => data.template as Record<string, unknown>[] | undefined,
         );
         const existing = existingPages.items.find((t) => {
           const ref = t.galleryReference as { owner?: string; repository?: string } | undefined;

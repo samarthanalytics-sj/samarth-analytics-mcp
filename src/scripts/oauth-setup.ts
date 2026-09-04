@@ -44,9 +44,18 @@ async function main(): Promise<void> {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
   const code = await new Promise<string>((resolve) => {
+    // Resolve on 'close' as well as on an answer. Without this, a non-interactive
+    // run (`npm run oauth:setup < /dev/null`, a CI/setup script with no TTY) hits
+    // EOF, readline closes without ever invoking the question callback, the promise
+    // is abandoned and the process drains the event loop and exits 0 having done
+    // nothing and said nothing. Resolving with '' lets the `if (!code)` branch below
+    // report the failure and exit 1.
+    rl.on('close', () => resolve(''));
     rl.question('Paste the authorization code here: ', (answer) => {
-      rl.close();
+      // Resolve BEFORE closing: rl.close() emits 'close' synchronously, so closing
+      // first would let the handler above win the race and discard a real answer.
       resolve(answer.trim());
+      rl.close();
     });
   });
 

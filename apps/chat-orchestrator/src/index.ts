@@ -214,6 +214,23 @@ async function main(): Promise<void> {
     slackSettings: () => settings.current(),
   });
   recorder = events;
+  /**
+   * The same door, minus the notifier, for the one event that is posted by hand.
+   *
+   * `events.record()` forwards to Slack itself whenever the switches allow it, so recording the
+   * admin's test message through `events` and then posting it below sent the channel the SAME
+   * message twice, spent two slots of the burst budget, and brought the repeat cap forward until
+   * the explicit post came back throttled and the endpoint answered 502 about a working webhook.
+   * This recorder shares the buffer and the row writer, so the test event is logged and stored
+   * exactly as before, and the single post stays with the handler, which is the only place that
+   * can report what Slack actually said.
+   */
+  const quietEvents = new EventRecorder({
+    orchestrator: cfg.events.orchestratorName,
+    timezone: cfg.events.timezone,
+    store: events.events,
+    sink: eventSink,
+  });
   await settings.refresh();
   settings.start();
   installCrashHandlers(events);
@@ -513,7 +530,7 @@ async function main(): Promise<void> {
         message: 'No Slack webhook is stored. Paste one into the Webhook field above and save it, then test again.',
       });
     }
-    const test = events.record({
+    const test = quietEvents.record({
       type: 'config.changed',
       status: 'info',
       title: 'Orchestrator Test Notification',
@@ -1035,6 +1052,14 @@ async function main(): Promise<void> {
     res: express.Response,
     fn: (mcp: McpConnection, user: AuthedUser) => Promise<unknown>,
     validate?: () => string | null,
+    /**
+     * Set by the endpoints that WRITE to a container. A deadline stops the waiting, never the work
+     * (see deadline.ts), so telling someone whose 25 tag creates overran that the run "was stopped"
+     * sent them back to a workspace the run was still filling, and a retry then met half its own
+     * output. The duration is deliberately the same: Cloudflare cuts the request at 100 s, so a
+     * longer origin deadline would only hand the browser a CORS-less error page instead.
+     */
+    opts?: { mutates?: boolean },
   ): Promise<void> {
     let user: AuthedUser;
     try {
@@ -1061,14 +1086,26 @@ async function main(): Promise<void> {
     const userJwt = extractBearer(req.headers.authorization);
 
     let mcp: McpConnection;
+    // Kept in a variable rather than passed inline, because a deadline does not cancel the acquire.
+    // The pool marks a session in use only when acquire RESOLVES, so an acquire abandoned by the
+    // timeout below used to increment that count with nothing left to release it: the child was
+    // never idle-evicted, held one of the pool's slots for the life of the process, and /health
+    // reported it busy forever. A late resolution is released straight away instead.
+    const acquiring = pool.acquire(user.id, userJwt);
     try {
       mcp = await deadline(
-        pool.acquire(user.id, userJwt),
+        acquiring,
         cfg.limits.resourceDeadlineMs,
         'Starting a tool session took too long.',
       );
     } catch (err) {
       if (err instanceof DeadlineError) {
+        void acquiring.then(
+          () => pool.release(user.id),
+          // The acquire failing after the deadline is already answered; the catch is only here so
+          // its rejection is attached and cannot become an unhandled rejection.
+          () => undefined,
+        );
         console.error(`[resources] ${req.path} timed out starting a session for ${userRef(user.id)}`);
         res.status(504).json({ code: 'timed_out', message: err.message });
         return;
@@ -1093,7 +1130,9 @@ async function main(): Promise<void> {
         await deadline(
           Promise.resolve(fn(mcp, user)),
           cfg.limits.resourceDeadlineMs,
-          'That lookup took too long and was stopped.',
+          opts?.mutates
+            ? 'This is taking longer than expected. The changes were not cancelled and may still be finishing, so check the workspace before running it again.'
+            : 'That lookup took too long and was stopped.',
         ),
       );
     } catch (err) {
@@ -1276,6 +1315,7 @@ async function main(): Promise<void> {
         if (!finding || typeof finding.category !== 'string') return 'A finding is required.';
         return null;
       },
+      { mutates: true },
     );
   });
 
@@ -1760,6 +1800,7 @@ async function main(): Promise<void> {
         if (ids.length === 0) return 'Select at least one tag to create.';
         return null;
       },
+      { mutates: true },
     );
   });
 
@@ -1824,6 +1865,17 @@ async function main(): Promise<void> {
     if (!Array.isArray(body?.messages) || body.messages.length === 0) {
       return res.status(400).json({ code: 'bad_request', message: 'messages array is required' });
     }
+    // The shape, not just the container. A message whose content was not a string used to travel as
+    // far as audit.recordUserMessage, where redactSecrets() calls .replace() on it and throws
+    // synchronously; that TypeError left this async handler as an unhandled rejection and the crash
+    // handler exited the process, taking every other user's in-flight turn with it. Checked here,
+    // before a session is acquired, so a malformed body costs nothing and leaks nothing.
+    if (body.messages.some((m) => typeof m?.content !== 'string')) {
+      return res.status(400).json({
+        code: 'bad_request',
+        message: 'Every message needs a string content.',
+      });
+    }
     const product: Product = body.context?.product === 'ga4' ? 'ga4' : 'gtm';
 
     const userJwt = extractBearer(req.headers.authorization);
@@ -1880,6 +1932,11 @@ async function main(): Promise<void> {
       const { ok, rejected } = await extractAll(body.attachments);
       extracted = ok;
       if (ok.length === 0 && rejected.length > 0) {
+        // The session was acquired above and the only release is in the turn's finally, which this
+        // early return never reaches. Without this, one unreadable attachment pinned that user's
+        // child as in use for the life of the process: never idle-evicted, still counted busy by
+        // the capacity check, and one pool slot gone for good.
+        pool.release(user.id);
         return res.status(400).json({
           error: 'attachments_unreadable',
           message: rejected.map((r) => r.reason).join(' '),

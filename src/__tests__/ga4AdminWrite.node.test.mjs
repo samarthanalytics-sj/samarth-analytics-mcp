@@ -240,6 +240,42 @@ await test('access binding create carries user + roles (manage.users surface)', 
   assert.deepStrictEqual(call.params.requestBody, { user: 'a@b.com', roles: ['predefinedRoles/analyst'] });
 });
 
+// Regression: the generic update handler used to attach a derived updateMask to EVERY patch.
+// v1alpha accessBindings.patch has no updateMask field, and googleapis-common turns any
+// non-path param into a query param, so the call went out as ?updateMask=roles and Google
+// answered 400 "Cannot bind query parameter" - the role change never happened. These two
+// tools must send the body alone, and must not offer updateMask as an input at all.
+await test('access binding update sends NO updateMask (that API has no such field)', async () => {
+  setEnv({ writes: true });
+  const { server, calls } = buildServer();
+  await callTool(server, 'ga4_update_property_access_binding', { name: 'properties/123/accessBindings/456', roles: ['predefinedRoles/editor'], confirm: true });
+  const prop = calls.find((c) => c.label === 'propAccessBindings' && c.verb === 'patch');
+  assert.ok(prop, 'accessBindings.patch was called');
+  assert.strictEqual(prop.params.name, 'properties/123/accessBindings/456');
+  assert.deepStrictEqual(prop.params.requestBody, { roles: ['predefinedRoles/editor'] });
+  assert.ok(!('updateMask' in prop.params), `updateMask must never reach accessBindings.patch: ${JSON.stringify(prop.params)}`);
+
+  await callTool(server, 'ga4_update_account_access_binding', { name: 'accounts/100/accessBindings/200', roles: ['predefinedRoles/admin'], confirm: true });
+  const acct = calls.find((c) => c.label === 'acctAccessBindings' && c.verb === 'patch');
+  assert.ok(acct, 'accounts.accessBindings.patch was called');
+  assert.ok(!('updateMask' in acct.params), `updateMask must never reach accounts.accessBindings.patch: ${JSON.stringify(acct.params)}`);
+});
+
+await test('access binding update tools expose no updateMask arg, and ignore one if forced in', async () => {
+  setEnv({ writes: true });
+  const { server, calls } = buildServer();
+  for (const n of ['ga4_update_property_access_binding', 'ga4_update_account_access_binding']) {
+    const shape = server._registeredTools[n].inputSchema?.shape ?? {};
+    assert.ok(!('updateMask' in shape), `${n} must not advertise an updateMask arg`);
+  }
+  // Sibling resources keep theirs.
+  assert.ok('updateMask' in (server._registeredTools['ga4_update_custom_dimension'].inputSchema?.shape ?? {}), 'masked resources keep the updateMask arg');
+  // A caller (or a client that skips schema stripping) cannot smuggle one onto the wire.
+  await callTool(server, 'ga4_update_property_access_binding', { name: 'properties/1/accessBindings/2', roles: ['predefinedRoles/viewer'], updateMask: 'roles', confirm: true });
+  const call = calls.find((c) => c.label === 'propAccessBindings' && c.verb === 'patch');
+  assert.ok(!('updateMask' in call.params), `a supplied updateMask must be dropped: ${JSON.stringify(call.params)}`);
+});
+
 await test('delete is blocked when GA4 deletes are disabled (even with writes on)', async () => {
   setEnv({ writes: true, deletes: false });
   const { server, calls } = buildServer();

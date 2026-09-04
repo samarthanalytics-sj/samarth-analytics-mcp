@@ -3,6 +3,7 @@
  * Creates the McpServer instance and registers all tools.
  */
 
+import { createRequire } from 'node:module';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { OAuth2Client } from 'google-auth-library';
 import { getGtmClient } from './utils/gtmClient.js';
@@ -20,7 +21,28 @@ import { describeMode } from './utils/guardrailMode.js';
 import { resolveAuth } from './auth/identityContext.js';
 
 export const SERVER_NAME = 'samarth-gtm-mcp';
-export const SERVER_VERSION = '1.0.0';
+
+/**
+ * The version advertised in every MCP initialize response (and shown in client UIs).
+ *
+ * This used to be a hard-coded '1.0.0' literal. semantic-release owns package.json's version, so
+ * nothing ever moved the literal and clients were told '1.0.0' while the deployed build was
+ * 1.4xx.0, which sends anyone debugging a hosted install after the wrong build. Read the real
+ * version instead. package.json sits one directory above both src/ (tsx/dev) and dist/ (built and
+ * npm-published), so the same relative path resolves in every case. The fallback exists only so a
+ * missing or unreadable package.json cannot stop the server from starting.
+ */
+function readPackageVersion(): string {
+  try {
+    const requireFromHere = createRequire(import.meta.url);
+    const pkg = requireFromHere('../package.json') as { version?: unknown };
+    return typeof pkg.version === 'string' && pkg.version ? pkg.version : '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+}
+
+export const SERVER_VERSION = readPackageVersion();
 
 export function createGtmMcpServer(auth: OAuth2Client): McpServer {
   const config = getGuardrailConfig();

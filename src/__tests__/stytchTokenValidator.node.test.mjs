@@ -5,7 +5,8 @@
  * signs JWTs with Node crypto to exercise every path: valid token + claim
  * extraction, expiry, tampered signature, algorithm pinning (none/HS256),
  * issuer/audience enforcement, nested organization claim, and JWKS rotation
- * (unknown kid forces a refresh). No network, no Stytch, no extra deps.
+ * (unknown kid forces a refresh, but at most once per cooldown window).
+ * No network, no Stytch, no extra deps.
  *
  * Run: node src/__tests__/stytchTokenValidator.node.test.mjs
  */
@@ -182,6 +183,54 @@ await test('unknown kid forces a JWKS refresh', async () => {
   const claims = await v.validate(signJwt(goodPayload));
   assert.strictEqual(claims.memberId, 'member-123');
   assert.ok(n >= 2, 'should have refreshed the JWKS');
+});
+
+await test('repeated unknown kids do NOT refetch the JWKS per request (throttled)', async () => {
+  // Regression: an unknown kid used to force a network fetch on every request, so an
+  // unauthenticated caller could drive one outbound JWKS request per request they sent.
+  let n = 0;
+  const fetchImpl = async () => {
+    n += 1;
+    return { ok: true, status: 200, json: async () => JWKS };
+  };
+  const v = createStytchTokenValidator({ jwksUrl: 'https://x/jwks', fetchImpl, now: () => NOW });
+  for (let i = 0; i < 5; i++) {
+    await assert.rejects(
+      () => v.validate(signJwt(goodPayload, { kid: `bogus-${i}` })),
+      /no JWKS key/
+    );
+  }
+  assert.strictEqual(n, 2, `expected 1 initial fetch + 1 forced refresh, got ${n}`);
+});
+
+await test('a rotated kid is still picked up once the refresh cooldown passes', async () => {
+  let clock = NOW;
+  let n = 0;
+  let rotated = false;
+  const fetchImpl = async () => {
+    n += 1;
+    return {
+      ok: true,
+      status: 200,
+      json: async () => (rotated ? { keys: [{ ...jwk, kid: 'key-2' }] } : JWKS),
+    };
+  };
+  const v = createStytchTokenValidator({ jwksUrl: 'https://x/jwks', fetchImpl, now: () => clock });
+  await v.validate(signJwt(goodPayload)); // caches key-1 (fetch 1)
+  await assert.rejects(
+    () => v.validate(signJwt(goodPayload, { kid: 'key-2' })),
+    /no JWKS key/
+  ); // forced refresh (fetch 2), key-2 not published yet
+  rotated = true;
+  await assert.rejects(
+    () => v.validate(signJwt(goodPayload, { kid: 'key-2' })),
+    /no JWKS key/
+  ); // inside the cooldown: no fetch
+  assert.strictEqual(n, 2, `cooldown should have suppressed the third fetch, got ${n}`);
+  clock = NOW + 61_000;
+  const claims = await v.validate(signJwt(goodPayload, { kid: 'key-2' }));
+  assert.strictEqual(claims.memberId, 'member-123');
+  assert.strictEqual(n, 3, `rotation should refresh after the cooldown, got ${n}`);
 });
 
 await test('malformed token → rejected', async () => {

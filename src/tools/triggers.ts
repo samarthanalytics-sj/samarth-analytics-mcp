@@ -65,6 +65,24 @@ const paramSchema = z
   .optional();
 
 /**
+ * Trigger.eventName is a TIMER-only field.
+ *
+ * This used to read "Custom event name (for customEvent type)", which is the opposite of the API
+ * contract: GTM documents Trigger.eventName as valid only for Timer triggers, and a customEvent
+ * trigger that sends it (instead of putting the name in customEventFilter) is rejected. A model
+ * reading the old text spent a write and a retry to learn that, which is exactly the misleading
+ * description round trip this file's header says it exists to eliminate. triggers_update carried
+ * no description at all, so the same misuse recurred there; both tools now share this one.
+ */
+const EVENT_NAME_DESCRIPTION =
+  'TIMER triggers ONLY: the name of the GTM event the timer fires, as a single Parameter ' +
+  '{type:"template", value:"gtm.timer"} (no key). Defaults to gtm.timer when omitted. ' +
+  'Do NOT send this for a customEvent trigger: GTM rejects it. A customEvent trigger carries its ' +
+  'name in `customEventFilter` as EXACTLY ONE condition, {{_event}} equals <name>, e.g. ' +
+  '[{"type":"equals","parameter":[{"type":"template","key":"arg0","value":"{{_event}}"},' +
+  '{"type":"template","key":"arg1","value":"purchase"}]}]. Any further scoping goes in `filter`.';
+
+/**
  * A GTM scalar field that must be sent as a one-entry Parameter, accepting the plain value too.
  *
  * `waitForTags` is conceptually a boolean and GTM insists on
@@ -142,7 +160,7 @@ export function registerTriggerTools(server: McpServer, getClient: () => GtmClie
         filter: conditionSchema.describe('Conditions that must be met for the trigger to fire ("fires on SOME …").'),
         customEventFilter: conditionSchema.describe('Used for custom event triggers.'),
         autoEventFilter: conditionSchema.describe('Conditions for auto-event triggers (legacy; most scopes use `filter`).'),
-        eventName: paramSchema.describe('Custom event name (for customEvent type).'),
+        eventName: paramSchema.describe(EVENT_NAME_DESCRIPTION),
         interval: paramSchema.describe('Timer trigger: firing interval in MILLISECONDS as a single Parameter {type:"template", value:"5000"} (no key). This is a dedicated TOP-LEVEL GTM field — do NOT put it in `parameter`.'),
         intervalSeconds: paramSchema.describe('Timer trigger: firing interval in SECONDS as a single Parameter (no key). Top-level GTM field. Use interval (ms) OR intervalSeconds, not both.'),
         limit: paramSchema.describe('Timer trigger: max number of times the timer fires, as a single Parameter {type:"template", value:"3"} (no key). Dedicated TOP-LEVEL GTM field — do NOT put it in `parameter`.'),
@@ -186,7 +204,7 @@ export function registerTriggerTools(server: McpServer, getClient: () => GtmClie
         filter: conditionSchema,
         customEventFilter: conditionSchema,
         autoEventFilter: conditionSchema,
-        eventName: paramSchema,
+        eventName: paramSchema.describe(EVENT_NAME_DESCRIPTION),
         interval: paramSchema.describe('Timer trigger: firing interval in ms as a single Parameter. Top-level GTM field — not in `parameter`.'),
         intervalSeconds: paramSchema.describe('Timer trigger: firing interval in seconds as a single Parameter. Top-level GTM field.'),
         limit: paramSchema.describe('Timer trigger: max fire count as a single Parameter. Top-level GTM field — not in `parameter`.'),

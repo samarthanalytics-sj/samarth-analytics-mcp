@@ -120,13 +120,33 @@ export function registerPublishTools(server: McpServer, getClient: () => GtmClie
         });
 
         const versionId = createRes.data.containerVersion?.containerVersionId;
-        if (!versionId) {
-          return errorText('Failed to get version ID from create_version response.');
+        const sync = createRes.data.syncStatus;
+        const syncFailed = sync?.syncError === true || sync?.mergeConflict === true;
+
+        // Diagnose BEFORE the missing-versionId guard. A workspace that fails to compile, or that
+        // is out of sync with the live container, comes back as compilerError / syncStatus with NO
+        // containerVersion at all. The old order ran the versionId guard first, so the one case the
+        // compilerError branch was written for answered with a bare "Failed to get version ID" and
+        // threw away the only field that says what to fix. syncStatus was never read in either
+        // branch.
+        if (createRes.data.compilerError || syncFailed) {
+          const cause = createRes.data.compilerError
+            ? 'compiler errors'
+            : sync?.mergeConflict === true
+              ? 'a merge conflict with the latest container version'
+              : 'a sync error';
+          const head = versionId
+            ? `Version created (${versionId}) but the workspace has ${cause}`
+            : `No version was created: the workspace has ${cause}`;
+          return errorText(
+            `${head}. NOT published. Fix that before publishing.\n${JSON.stringify(createRes.data, null, 2)}`
+          );
         }
 
-        if (createRes.data.compilerError) {
+        if (!versionId) {
+          // Dump the response: without it the caller has nothing to act on.
           return errorText(
-            `Version created (${versionId}) but has compiler errors — NOT published. Fix errors before publishing.\n${JSON.stringify(createRes.data, null, 2)}`
+            `Failed to get version ID from create_version response.\n${JSON.stringify(createRes.data, null, 2)}`
           );
         }
 

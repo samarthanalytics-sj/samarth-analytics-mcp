@@ -164,5 +164,163 @@ await test('a Custom HTML tag on the built-in All Pages trigger IS flagged as a 
   assert.match(byCat(res, 'broad_trigger')[0].message, /Legacy Pixel/);
 });
 
+// ── Tag sequencing ───────────────────────────────────────────────────────────
+
+await test('REGRESSION: a setup/teardown tag with no firing trigger is NOT a missing_trigger error', async () => {
+  // GTM fires setup and cleanup tags as part of the parent tag's sequence, so no trigger of their own
+  // is correct. They used to be reported as error-severity "it will never fire".
+  const server = buildServer({
+    tags: [[
+      { tagId: 't1', name: 'GA4 Config', type: 'gaawc', firingTriggerId: [] },
+      { tagId: 't2', name: 'Cleanup', type: 'html', firingTriggerId: [] },
+      {
+        tagId: 't3',
+        name: 'GA4 Event',
+        type: 'gaawe',
+        firingTriggerId: ['2147479553'],
+        setupTag: [{ tagName: 'GA4 Config', stopOnSetupFailure: true }],
+        teardownTag: [{ tagName: 'Cleanup', stopTeardownOnFailure: false }],
+      },
+    ]],
+    triggers: [[]],
+  });
+  const res = await audit(server);
+  assert.strictEqual(
+    byCat(res, 'missing_trigger').length,
+    0,
+    `sequenced tags must not be reported as never firing, got ${JSON.stringify(byCat(res, 'missing_trigger'))}`
+  );
+  assert.strictEqual(byCat(res, 'sequenced_tag').length, 2, 'both sequenced tags get an info note instead');
+  assert.strictEqual(byCat(res, 'sequenced_tag')[0].severity, 'info');
+});
+
+await test('a tag with no firing trigger that is NOT sequenced is still a missing_trigger error', async () => {
+  const server = buildServer({
+    tags: [[{ tagId: 't1', name: 'Orphan Tag', type: 'gaawe', firingTriggerId: [] }]],
+    triggers: [[]],
+  });
+  const res = await audit(server);
+  assert.strictEqual(byCat(res, 'missing_trigger').length, 1, 'a genuinely untriggered tag must still error');
+  assert.strictEqual(byCat(res, 'sequenced_tag').length, 0);
+});
+
+// ── Variable references ──────────────────────────────────────────────────────
+
+await test('REGRESSION: a tag referencing a deleted {{Variable}} is a broken_reference', async () => {
+  // This check was promised by the file header and the /audit recipe but never ran: the set built for
+  // it held variable IDs and was never read, so a tag bound to a deleted variable audited clean.
+  const server = buildServer({
+    tags: [[{
+      tagId: 't1',
+      name: 'GA4 Event',
+      type: 'gaawe',
+      firingTriggerId: ['2147479553'],
+      parameter: [
+        { type: 'template', key: 'measurementId', value: '{{GA4 Measurement ID}}' },
+        { type: 'list', key: 'eventSettingsTable', list: [{ type: 'map', map: [
+          { type: 'template', key: 'parameter', value: 'plan' },
+          { type: 'template', key: 'parameterValue', value: '{{DLV - plan}}' },
+        ] }] },
+      ],
+    }]],
+    triggers: [[]],
+    variables: [[]],
+  });
+  const res = await audit(server);
+  const refs = byCat(res, 'broken_reference');
+  assert.strictEqual(refs.length, 2, `expected both refs flagged (nested map rows too), got ${JSON.stringify(refs)}`);
+  assert.strictEqual(refs.filter((f) => f.severity === 'error').length, 2);
+  assert.ok(refs.some((f) => /GA4 Measurement ID/.test(f.message)), 'top-level parameter ref');
+  assert.ok(refs.some((f) => /DLV - plan/.test(f.message)), 'nested list/map ref');
+});
+
+await test('an existing variable, an enabled built-in and GTM\'s {{_event}} token are NOT broken references', async () => {
+  const server = buildServer({
+    tags: [[{
+      tagId: 't1',
+      name: 'GA4 Event',
+      type: 'gaawe',
+      firingTriggerId: ['2147479553'],
+      parameter: [
+        { type: 'template', key: 'measurementId', value: '{{GA4 Measurement ID}}' },
+        { type: 'template', key: 'eventName', value: '{{Page URL}}-{{_event}}' },
+      ],
+    }]],
+    triggers: [[]],
+    variables: [[{ variableId: 'v1', name: 'GA4 Measurement ID', type: 'c' }]],
+    biv: [[{ type: 'pageUrl', name: 'Page URL' }]],
+  });
+  const res = await audit(server);
+  assert.strictEqual(
+    byCat(res, 'broken_reference').length,
+    0,
+    `resolvable references must not be flagged, got ${JSON.stringify(byCat(res, 'broken_reference'))}`
+  );
+});
+
+await test('REGRESSION: a variable\'s dangling DISABLING trigger is a broken reference', async () => {
+  const server = buildServer({
+    variables: [[{ variableId: 'v1', name: 'Scoped Var', type: 'c', enablingTriggerId: ['1'], disablingTriggerId: ['999'] }]],
+    triggers: [[{ triggerId: '1', name: 'T1', type: 'customEvent' }]],
+  });
+  const res = await audit(server);
+  const refs = byCat(res, 'broken_reference');
+  assert.strictEqual(refs.length, 1, `only the disabling id is dangling, got ${JSON.stringify(refs)}`);
+  assert.match(refs[0].message, /disabling trigger ID "999"/);
+});
+
+// ── Trigger usage ────────────────────────────────────────────────────────────
+
+await test('REGRESSION: members of a Trigger Group a tag uses are NOT reported unused', async () => {
+  const server = buildServer({
+    tags: [[{ tagId: 't1', name: 'GA4 Event', type: 'gaawe', firingTriggerId: ['g1'] }]],
+    triggers: [[
+      { triggerId: 'g1', name: 'Group', type: 'triggerGroup', parameter: [
+        { type: 'list', key: 'triggerIds', list: [
+          { type: 'triggerReference', value: 'a1' },
+          { type: 'triggerReference', value: 'b1' },
+        ] },
+      ] },
+      { triggerId: 'a1', name: 'Step A', type: 'customEvent' },
+      { triggerId: 'b1', name: 'Step B', type: 'customEvent' },
+    ]],
+  });
+  const res = await audit(server);
+  assert.strictEqual(
+    byCat(res, 'unused_trigger').length,
+    0,
+    `group members are in use, got ${JSON.stringify(byCat(res, 'unused_trigger'))}`
+  );
+});
+
+await test('a trigger reached only by a group NO tag uses is still an orphan', async () => {
+  const server = buildServer({
+    triggers: [[
+      { triggerId: 'g2', name: 'Dead Group', type: 'triggerGroup', parameter: [
+        { type: 'list', key: 'triggerIds', list: [{ type: 'triggerReference', value: 'c1' }] },
+      ] },
+      { triggerId: 'c1', name: 'Step C', type: 'customEvent' },
+    ]],
+  });
+  const res = await audit(server);
+  assert.strictEqual(byCat(res, 'unused_trigger').length, 2, 'nothing live reaches either one');
+});
+
+await test('REGRESSION: a trigger used only to scope a variable is NOT reported unused', async () => {
+  const server = buildServer({
+    triggers: [[
+      { triggerId: '1', name: 'Enable On', type: 'customEvent' },
+      { triggerId: '2', name: 'Disable On', type: 'customEvent' },
+    ]],
+    variables: [[{ variableId: 'v1', name: 'Scoped Var', type: 'c', enablingTriggerId: ['1'], disablingTriggerId: ['2'] }]],
+  });
+  const res = await audit(server);
+  assert.strictEqual(
+    byCat(res, 'unused_trigger').length,
+    0,
+    `variable-scoping triggers are in use, got ${JSON.stringify(byCat(res, 'unused_trigger'))}`
+  );
+});
+
 console.log(`\naudit: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);
