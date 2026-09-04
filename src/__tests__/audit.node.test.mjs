@@ -73,6 +73,26 @@ await test('pagination: a trigger on page 2 is NOT a broken reference for a page
   assert.strictEqual(res.stats.triggers, 2, 'both trigger pages should be counted');
 });
 
+await test('a {{token}} inside a Custom HTML tag body is NOT flagged as a broken variable', async () => {
+  const server = buildServer({
+    tags: [[{ tagId: 't1', name: 'Widget', type: 'html', parameter: [{ type: 'template', key: 'html', value: '<script>render("{{handlebars_token}}")</script>' }], firingTriggerId: ['1'] }]],
+    triggers: [[{ triggerId: '1', name: 'All Pages', type: 'pageview' }]],
+  });
+  const res = await audit(server);
+  const hit = byCat(res, 'broken_reference').filter((f) => /handlebars_token/.test(f.message));
+  assert.strictEqual(hit.length, 0, `incidental {{token}} in Custom HTML must not be flagged, got ${JSON.stringify(hit)}`);
+});
+
+await test('a {{Missing Var}} in a STRUCTURED tag param IS still a broken variable reference', async () => {
+  const server = buildServer({
+    tags: [[{ tagId: 't1', name: 'GA4', type: 'gaawe', parameter: [{ type: 'template', key: 'measurementIdOverride', value: '{{Missing Var}}' }], firingTriggerId: ['1'] }]],
+    triggers: [[{ triggerId: '1', name: 'All Pages', type: 'pageview' }]],
+  });
+  const res = await audit(server);
+  const hit = byCat(res, 'broken_reference').filter((f) => /Missing Var/.test(f.message));
+  assert.strictEqual(hit.length, 1, 'a real missing variable in a non-code param must still be flagged');
+});
+
 await test('ga4_config: a GA4 googtag (G-) next to a Google Ads googtag (AW-) does NOT false-alarm', async () => {
   const server = buildServer({
     tags: [[

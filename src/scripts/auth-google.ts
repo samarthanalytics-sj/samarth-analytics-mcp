@@ -122,7 +122,19 @@ async function waitForCode(parsed: ParsedRedirect, expectedState: string): Promi
       resolve(code);
     });
 
-    server.on('error', reject);
+    server.on('error', (err: NodeJS.ErrnoException) => {
+      // A portless redirect URI (e.g. http://localhost/callback) derives port 80/443 from the scheme,
+      // which a non-root operator cannot bind - surface that as guidance instead of a raw EACCES.
+      if (err.code === 'EACCES' && parsed.port < 1024) {
+        reject(new Error(
+          `Cannot bind port ${parsed.port} without elevated privileges. Your redirect URI has no explicit `
+          + `port, so the callback would land on the scheme's default (${parsed.port}). Set `
+          + `GOOGLE_OAUTH_REDIRECT_URI to a URI with a high port, e.g. ${DEFAULT_REDIRECT_URI}.`
+        ));
+        return;
+      }
+      reject(err);
+    });
     server.listen(parsed.port, '127.0.0.1', () => {
       // ready
     });

@@ -80,6 +80,24 @@ test('environments_update preserves fields the caller did not supply', async () 
   assert.equal(body.enableDebug, true, 'enableDebug must survive a url-only update');
 });
 
+test('environments_update does NOT echo server-managed read-only fields into the full-replace PUT', async () => {
+  const withReadOnly = {
+    ...EXISTING,
+    authorizationCode: 'auth-secret-123',
+    authorizationTimestamp: '2026-01-01T00:00:00Z',
+    containerVersionId: '42',
+    tagManagerUrl: 'https://tagmanager.google.com/x',
+  };
+  const { server, updateCalls } = buildServer(withReadOnly);
+  await runUpdate(server, { name: 'Renamed' });
+  const body = updateCalls[0].requestBody as Record<string, unknown>;
+  assert.equal(body.name, 'Renamed', 'the rename is applied');
+  assert.equal(body.description, 'QA env', 'writable fields are still preserved');
+  for (const k of ['authorizationCode', 'authorizationTimestamp', 'containerVersionId', 'tagManagerUrl', 'path', 'type', 'accountId', 'environmentId']) {
+    assert.equal(body[k], undefined, `read-only field ${k} must not be echoed into the full-replace body`);
+  }
+});
+
 test('environments_update falls back to the stored fingerprint when the caller omits one', async () => {
   const { server, updateCalls } = buildServer();
   await runUpdate(server, { description: 'new note' });

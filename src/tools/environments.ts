@@ -125,7 +125,15 @@ export function registerEnvironmentTools(server: McpServer, getClient: () => Gtm
         // name). Fetch first and overlay only the fields actually provided, the same
         // read-modify-write tags_update / triggers_update / variables_update do.
         const existing = (await client.accounts.containers.environments.get({ path })).data;
-        const merged: tagmanager_v2.Schema$Environment = { ...existing };
+        // Carry only the WRITABLE fields forward. Spreading the whole fetched resource echoed
+        // server-managed fields (authorizationCode, authorizationTimestamp, containerVersionId,
+        // tagManagerUrl, path) back into the full-replace PUT; a restricted environment type
+        // (live/latest) can reject a body carrying those, turning a name-only edit into a 400.
+        const merged: tagmanager_v2.Schema$Environment = {};
+        for (const k of ['name', 'description', 'url', 'enableDebug'] as const) {
+          const ev = (existing as Record<string, unknown>)[k];
+          if (ev !== undefined) (merged as Record<string, unknown>)[k] = ev;
+        }
         for (const [k, v] of Object.entries(updates)) {
           if (v === undefined) continue;
           (merged as Record<string, unknown>)[k] = v;
