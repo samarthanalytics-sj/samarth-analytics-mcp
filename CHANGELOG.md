@@ -1,3 +1,9 @@
+## [1.483.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.483.0...v1.483.1) (2026-09-04)
+
+### Bug Fixes
+
+* **desktop:** make list_gtm_tags groupByType/type robust on large containers ([#937](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/937)) ([91eb606](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/91eb606ae343792f58a0d4e18210fee86d1751ee)), closes [#935](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/935)
+
 ## [1.483.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.482.0...v1.483.0) (2026-08-31)
 
 ### Features
