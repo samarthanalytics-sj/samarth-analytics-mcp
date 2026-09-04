@@ -40,6 +40,8 @@ import {
   sanitizeName,
   tpl,
   boolean,
+  TRIGGER_KINDS,
+  isTriggerKind,
   type GtmTagResource,
   type TriggerInput,
   type TriggerKind,
@@ -189,23 +191,11 @@ const triggerSchema = z
   })
   .describe('The trigger this tag fires on. Reused by name when it already exists, otherwise created.');
 
-/**
- * The kinds buildTrigger can actually build.
- *
- * `kind` is a free-form string on the wire (an enum in the JSON schema would refuse the whole call
- * with a schema error instead of a sentence the model can act on), so it has to be checked here.
- * buildTrigger's default branch returns an unscoped All Pages pageview trigger, which means an
- * off-enum kind like "click" or "form" used to produce a tag firing on EVERY page load while the
- * tool reported success and echoed the kind it was asked for.
- */
-const TRIGGER_KINDS: readonly TriggerKind[] = [
-  'pageview', 'link_click', 'all_clicks', 'form_submit', 'custom_event', 'dom_ready', 'window_loaded',
-  'history_change', 'scroll_depth', 'element_visibility', 'youtube_video', 'js_error', 'timer',
-];
-
-function isTriggerKind(value: string): value is TriggerKind {
-  return (TRIGGER_KINDS as readonly string[]).includes(value);
-}
+// TRIGGER_KINDS / isTriggerKind now live in src/shared/gtm-builders.ts (one source of truth shared
+// with the desktop create_gtm_tracking_tag handler). `kind` is a free-form string on the wire (a JSON
+// schema enum would refuse the whole call with a schema error instead of a sentence the model can act
+// on), so it is checked here before any write: buildTrigger's default branch would otherwise return an
+// unscoped All Pages pageview trigger, so an off-enum kind like "click"/"form" fired on EVERY page.
 
 interface CreatedTrigger {
   triggerId: string;

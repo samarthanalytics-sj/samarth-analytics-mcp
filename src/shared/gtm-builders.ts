@@ -277,7 +277,19 @@ export type TriggerKind =
   // HISTORY_CHANGE 63 - all common enough that not being able to build them was a real gap.
   | 'element_visibility' | 'history_change' | 'scroll_depth' | 'dom_ready' | 'window_loaded' | 'js_error';
 
+/** The trigger kinds buildTrigger can construct, as a RUNTIME list (the type above erases at compile
+ *  time). Typed `readonly TriggerKind[]` so tsc rejects any entry that is not a real kind - keep it in
+ *  step with the union and with buildTrigger's switch. Callers use isTriggerKind() to refuse an
+ *  off-enum kind BEFORE writing anything, since buildTrigger THROWS on an unknown kind. */
+export const TRIGGER_KINDS: readonly TriggerKind[] = [
+  'link_click', 'all_clicks', 'custom_event', 'pageview', 'form_submit', 'youtube_video', 'timer',
+  'element_visibility', 'history_change', 'scroll_depth', 'dom_ready', 'window_loaded', 'js_error',
+];
 
+/** True when `value` is a trigger kind buildTrigger can build. */
+export function isTriggerKind(value: string): value is TriggerKind {
+  return (TRIGGER_KINDS as readonly string[]).includes(value);
+}
 
 /** The standard GTM "Video" built-in variables a YouTube Video tag reports. */
 export const VIDEO_BUILT_IN_VARS = [

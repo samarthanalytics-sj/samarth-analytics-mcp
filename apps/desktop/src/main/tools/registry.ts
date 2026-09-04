@@ -39,6 +39,8 @@ import {
   BUILTIN_ALL_PAGES_TRIGGER_ID,
   buildCustomImageTag,
   buildTrigger,
+  TRIGGER_KINDS,
+  isTriggerKind,
   triggerBuiltInVars,
   triggerDataLayerVarKeys,
   triggerUrlVarNames,
@@ -3796,6 +3798,18 @@ export function buildToolRegistry(
           throw new Error(`unknown platform: ${platform}`);
         }
 
+        // Refuse an off-enum trigger.kind BEFORE any write. buildTrigger THROWS on an unknown kind, but
+        // it runs only after built-ins are enabled and companion variables are created below - so a bad
+        // kind like "click"/"form" would leave orphan variables behind before failing. Check the RAW
+        // requested kind (coerceTriggerInput defaults an empty kind to pageview but passes any other
+        // string straight through).
+        const requestedKind = s(obj(a.trigger).kind).trim();
+        if (requestedKind && !isTriggerKind(requestedKind)) {
+          throw new Error(
+            `trigger.kind "${requestedKind}" is not one this tool builds - use one of: ${TRIGGER_KINDS.join(', ')}. `
+            + 'Building it anyway would create an unscoped All Pages trigger, so the tag would fire on every page load.'
+          );
+        }
         const triggerInput = coerceTriggerInput(obj(a.trigger));
         // A Timer with no interval NEVER fires (blank Interval in the GTM UI) — fail loudly instead of
         // silently creating a broken trigger (enums are advisory; the model can pass any kind string).
@@ -3840,11 +3854,20 @@ export function buildToolRegistry(
           ])
         );
         let enabledVariables: string[] = [];
+        let builtInVariablesWarning: string | undefined;
         if (vars.length) {
           try {
             enabledVariables = await data.enableGtmBuiltInVariables(accountId, containerId, workspaceId, vars);
-          } catch {
-            enabledVariables = vars;
+          } catch (e) {
+            // Every type goes in ONE request, so a rejection means NONE were enabled. Reporting them as
+            // enabled anyway (what this catch used to do) told the caller {{Click Text}} resolved when
+            // the trigger condition in fact reads undefined and the tag never fires - so report [] and
+            // surface why, matching the MCP create_gtm_tracking_tag handler.
+            enabledVariables = [];
+            builtInVariablesWarning =
+              `Built-in variables were NOT enabled (${vars.join(', ')}): ${apiErrorMessage(e)}. `
+              + 'Any {{...}} the trigger or tag references stays unresolved until they are enabled, so check '
+              + 'the type names and enable them with enable_gtm_builtin_variables.';
           }
         }
 
@@ -3972,7 +3995,15 @@ export function buildToolRegistry(
           firingTriggerId: [triggerId],
         } as unknown as Record<string, unknown>);
 
-        return { tag: createdTag, trigger: { triggerId, name: triggerInput.name, reused: reusedTrigger }, enabledVariables, createdVariables };
+        return {
+          tag: createdTag,
+          trigger: { triggerId, name: triggerInput.name, reused: reusedTrigger },
+          enabledVariables,
+          createdVariables,
+          // Present only when the built-in enable call was rejected, so "enabledVariables: []" is not read
+          // as "this tag needs none" - the model must tell the user the referenced variables are unresolved.
+          ...(builtInVariablesWarning ? { builtInVariablesWarning } : {}),
+        };
       },
     },
     {
