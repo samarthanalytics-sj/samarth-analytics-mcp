@@ -58,17 +58,27 @@ function collectTriggerRefs(
  */
 function collectVariableRefs(
   params: tagmanager_v2.Schema$Parameter[] | undefined,
-  into: Set<string>
+  into: Set<string>,
+  skipKeys?: ReadonlySet<string>
 ): void {
   for (const p of params ?? []) {
-    for (const m of (p.value ?? '').matchAll(/\{\{([^{}]+)\}\}/g)) {
-      const name = m[1].trim();
-      if (name && !name.startsWith('_')) into.add(name);
+    // Free-form code params (a Custom HTML tag's `html`, a Custom JS `javascript`) legitimately
+    // contain `{{token}}` text that is NOT a GTM variable - client-side templating, handlebars,
+    // Angular. GTM does substitute real {{Variable}} there too, so a token is genuinely ambiguous;
+    // scanning it produces false "broken variable" ERRORS, so those keys are skipped.
+    if (!(skipKeys && p.key && skipKeys.has(p.key))) {
+      for (const m of (p.value ?? '').matchAll(/\{\{([^{}]+)\}\}/g)) {
+        const name = m[1].trim();
+        if (name && !name.startsWith('_')) into.add(name);
+      }
     }
-    collectVariableRefs(p.list, into);
-    collectVariableRefs(p.map, into);
+    collectVariableRefs(p.list, into, skipKeys);
+    collectVariableRefs(p.map, into, skipKeys);
   }
 }
+
+/** Parameter keys whose value is a free-form code blob, not a GTM field - see collectVariableRefs. */
+const CODE_PARAM_KEYS: ReadonlySet<string> = new Set(['html', 'javascript']);
 
 export function registerAuditTools(server: McpServer, getClient: () => GtmClient): void {
   server.registerTool(
@@ -236,7 +246,7 @@ export function registerAuditTools(server: McpServer, getClient: () => GtmClient
           // Validate referenced variable names exist. GTM does not resolve a deleted variable, it leaves
           // the literal "{{Name}}" text in the parameter, so the tag ships wrong data with no error.
           const varRefs = new Set<string>();
-          collectVariableRefs(tag.parameter, varRefs);
+          collectVariableRefs(tag.parameter, varRefs, CODE_PARAM_KEYS);
           for (const ref of varRefs) {
             if (!knownVariableNames.has(ref)) {
               findings.push({

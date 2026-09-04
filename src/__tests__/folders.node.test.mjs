@@ -196,6 +196,18 @@ await test('REGRESSION: a name-only update keeps the existing notes', async () =
   assert.strictEqual(body.notes, 'owned by ads team');
 });
 
+await test('a folder update does NOT echo server-managed read-only fields into the PUT', async () => {
+  const withReadOnly = { ...EXISTING_FOLDER, path: 'accounts/1/containers/2/workspaces/3/folders/9', tagManagerUrl: 'https://tagmanager.google.com/x' };
+  const { server, calls } = buildUpdateServer(withReadOnly);
+  await update(server, { name: 'Paid Media' });
+  const body = updateBody(calls);
+  assert.strictEqual(body.name, 'Paid Media', 'the rename is applied');
+  assert.strictEqual(body.notes, 'owned by ads team', 'notes preserved');
+  assert.strictEqual(body.path, undefined, 'path (read-only) must not be echoed');
+  assert.strictEqual(body.tagManagerUrl, undefined, 'tagManagerUrl (read-only) must not be echoed');
+  assert.strictEqual(body.fingerprint, undefined, 'fingerprint is passed as a param, not in the body');
+});
+
 await test('REGRESSION: a notes-only update still carries the existing name', async () => {
   // Pre-fix the PUT has no name at all, which GTM rejects or blanks.
   const { server, calls } = buildUpdateServer(EXISTING_FOLDER);

@@ -4,6 +4,7 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import type { tagmanager_v2 } from 'googleapis';
 import type { GtmClient } from '../utils/gtmClient.js';
 import { checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
 import { paginate, paginationFields, buildListResult, DEFAULT_MAX_PAGES } from '../utils/pagination.js';
@@ -166,7 +167,12 @@ export function registerFolderTools(server: McpServer, getClient: () => GtmClien
         // declares both optional. Fetch first and overlay only what was actually supplied, exactly
         // as tags_update / triggers_update / variables_update already do.
         const existing = (await client.accounts.containers.workspaces.folders.get({ path })).data;
-        const merged = { ...existing };
+        // Carry only the WRITABLE fields (name, notes) forward. Spreading the whole fetched resource
+        // echoed server-managed fields (fingerprint, tagManagerUrl, path) back into the full-replace
+        // PUT; send just the writable subset plus the caller's overlay.
+        const merged: tagmanager_v2.Schema$Folder = {};
+        if (existing.name != null) merged.name = existing.name;
+        if (existing.notes != null) merged.notes = existing.notes;
         if (name !== undefined) merged.name = name;
         if (notes !== undefined) merged.notes = notes;
         const res = await client.accounts.containers.workspaces.folders.update({

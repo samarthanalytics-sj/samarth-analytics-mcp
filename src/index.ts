@@ -275,6 +275,11 @@ async function startHttpServer(auth: OAuth2Client): Promise<void> {
       server: ReturnType<typeof createGtmMcpServer>;
       /** Epoch ms of the last request seen on this session. Drives the idle sweep below. */
       lastActivity: number;
+      /** Requests currently being handled on this session (a POST, or an open SSE GET). A session
+       *  with one in flight must never be swept, even if lastActivity - stamped at request START,
+       *  not refreshed during it - has aged past the TTL, or a long tool call / held-open stream
+       *  would be torn down mid-flight. */
+      inFlight: number;
     }
   >();
 
@@ -290,7 +295,7 @@ async function startHttpServer(auth: OAuth2Client): Promise<void> {
     const sweep = setInterval(() => {
       const cutoff = Date.now() - sessionTtlMs;
       for (const [sid, entry] of [...sessions]) {
-        if (entry.lastActivity > cutoff) continue;
+        if (entry.inFlight > 0 || entry.lastActivity > cutoff) continue;
         // Drop the entry first: transport.close() fires onclose, whose delete then finds nothing,
         // and if the transport was already closed the entry still goes away.
         sessions.delete(sid);
@@ -313,6 +318,22 @@ async function startHttpServer(auth: OAuth2Client): Promise<void> {
     res.status(500).json({ jsonrpc: '2.0', error: { code: -32603, message }, id: null });
   };
 
+  /** Guard a session against the idle sweep for the LIFE of a request. Counts it as in-flight and
+   *  stamps lastActivity now; on the response closing (normal end, abort, or an SSE stream the client
+   *  finally disconnects) decrements and re-stamps. Without this, lastActivity is only set when a
+   *  request begins, so a tool call or event stream that outlives the TTL gets closed mid-flight. */
+  const trackRequest = (
+    entry: { inFlight: number; lastActivity: number },
+    res: import('express').Response,
+  ): void => {
+    entry.inFlight += 1;
+    entry.lastActivity = Date.now();
+    res.once('close', () => {
+      entry.inFlight = Math.max(0, entry.inFlight - 1);
+      entry.lastActivity = Date.now();
+    });
+  };
+
   app.post('/mcp', async (req, res) => {
     try {
       const reqAuth = await resolveAuthForRequest(req, res);
@@ -325,7 +346,7 @@ async function startHttpServer(auth: OAuth2Client): Promise<void> {
 
       if (route.kind === 'resume') {
         const entry = sessions.get(route.sessionId)!;
-        entry.lastActivity = Date.now(); // a session in use must never be swept
+        trackRequest(entry, res); // in-flight for the whole request, so a long call is never swept
         transport = entry.transport;
       } else if (route.kind === 'unknown-session') {
         res.status(404).json({
@@ -341,7 +362,7 @@ async function startHttpServer(auth: OAuth2Client): Promise<void> {
         transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => newSessionId,
           onsessioninitialized: (sid) => {
-            sessions.set(sid, { transport, server: sessionServer, lastActivity: Date.now() });
+            sessions.set(sid, { transport, server: sessionServer, lastActivity: Date.now(), inFlight: 0 });
             console.error(`[samarth-gtm-mcp] New HTTP session: ${sid} (active: ${sessions.size})`);
           },
         });
@@ -378,7 +399,7 @@ async function startHttpServer(auth: OAuth2Client): Promise<void> {
         return;
       }
       const entry = sessions.get(sessionId)!;
-      entry.lastActivity = Date.now(); // an open event stream counts as activity
+      trackRequest(entry, res); // a held-open event stream stays in-flight until the client disconnects
       const { transport } = entry;
       await runWithAuth(reqAuth, () => transport.handleRequest(req, res));
     } catch (err) {
