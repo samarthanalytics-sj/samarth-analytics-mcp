@@ -1,3 +1,9 @@
+## [1.486.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.485.0...v1.486.0) (2026-09-04)
+
+### Features
+
+* **desktop:** extend server-container CAPI QC to Snapchat and Microsoft Ads ([#944](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/944)) ([b733c88](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/b733c88ffe1e9be55fcef6baaacb3c0b58671a49))
+
 ## [1.485.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.484.0...v1.485.0) (2026-09-04)
 
 ### Features
