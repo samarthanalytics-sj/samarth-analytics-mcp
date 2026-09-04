@@ -10022,6 +10022,7 @@ function ServerAuditSection({
   // Per-finding auto-fix state, keyed by finding index (mirrors ContainerAuditPanel). Server-audit
   // fixes are non-destructive (pause/unpause, clear testId) so there's no delete/confirm path here.
   const [fix, setFix] = useState<Record<number, { state: 'fixing' | 'done' | 'err'; msg?: string }>>({});
+  const [applyingAll, setApplyingAll] = useState(false);
   // Web <-> Server coverage: the web side of the comparison + its result.
   const [allContainers, setAllContainers] = useState<GtmContainerView[]>([]);
   const [webContainerId, setWebContainerId] = useState('');
@@ -10158,6 +10159,33 @@ function ServerAuditSection({
       const msg = e instanceof Error ? e.message : String(e);
       setFix((s) => ({ ...s, [i]: { state: 'err', msg } }));
       onError(msg);
+    }
+  }
+
+  // Apply every non-destructive auto-fix in order, then re-audit ONCE (rather than per fix). Stops at
+  // the first failure - the fixes already applied stand, and the re-audit reflects them.
+  async function applyAllFixes(): Promise<void> {
+    if (!report || applyingAll || running) return;
+    onError('');
+    setApplyingAll(true);
+    try {
+      for (let i = 0; i < report.findings.length; i += 1) {
+        const f = report.findings[i];
+        if (!(f.autoFixable && f.fix && !f.fix.tool.startsWith('delete')) || fix[i]?.state === 'done') continue;
+        setFix((s) => ({ ...s, [i]: { state: 'fixing' } }));
+        try {
+          await window.desktop.gtm.applyFix(f.fix); // one workspace write at a time
+          setFix((s) => ({ ...s, [i]: { state: 'done' } }));
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          setFix((s) => ({ ...s, [i]: { state: 'err', msg } }));
+          onError(msg);
+          break;
+        }
+      }
+      await run(); // re-audit so the fixed findings drop off (run() clears the fix map)
+    } finally {
+      setApplyingAll(false);
     }
   }
 
@@ -10474,6 +10502,22 @@ function ServerAuditSection({
             {report.counts.findings > 0 && <> ({report.summary.critical} critical · {report.summary.high} high · {report.summary.medium} medium · {report.summary.low} low · {report.summary.info} info)</>}
           </div>
           {report.findings.length === 0 && <div style={{ fontSize: 13, color: 'var(--c-green)', fontWeight: 600 }}>✓ No configuration issues found in this server workspace.</div>}
+          {/* Auto-fixable summary + one-click "apply all". Discoverability: each finding also has its own
+              Apply-fix button, but this surfaces how many can be fixed and applies them in one go. */}
+          {(() => {
+            const fixable = report.findings.filter((f) => f.autoFixable && f.fix && !f.fix.tool.startsWith('delete')).length;
+            if (fixable === 0) return null;
+            return (
+              <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>{fixable} auto-fixable finding{fixable === 1 ? '' : 's'} - each can be applied below{fixable > 1 ? ', or all at once' : ''}.</span>
+                {fixable > 1 && (
+                  <button style={styles.primaryBtn} disabled={applyingAll || running} onClick={() => void applyAllFixes()}>
+                    {applyingAll ? 'Applying…' : `Apply all ${fixable} fixes`}
+                  </button>
+                )}
+              </div>
+            );
+          })()}
           {report.findings.map((f, i) => (
             <div key={i} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' }}>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 4, flexWrap: 'wrap' }}>
