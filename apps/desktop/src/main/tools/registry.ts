@@ -2721,6 +2721,21 @@ export function buildToolRegistry(
         auditServerWorkspace(data, { accountId: s(a.accountId), containerId: s(a.containerId), workspaceId: s(a.workspaceId) }),
     },
     {
+      name: 'plan_server_migration_from_web',
+      description:
+        'READ-ONLY: given a WEB container, list every convertible tag and the plan to port it to a SERVER container - which server tool builds each, the destination ids read off the web tag, and the secrets (CAPI access tokens) the caller must still supply. Creates NOTHING. GA4 is ported automatically as the relay by create_server_container_from_web (reported in `ga4`); Google Ads conversion (awct) and remarketing (sp) -> create_server_tag; Meta/TikTok/LinkedIn/Pinterest/Reddit/Snapchat/Microsoft pixels -> their typed create_*_capi_server_tag tool (need a CAPI token); Floodlight (flc) -> the generic import path; Google Ads call conversion has no sGTM equivalent; Conversion Linker (gclidw) needs no server tag. Returns { ga4, items[], summary }. Use it to scope a full web->server migration, then run the listed tools one per destination.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          webContainerId: { type: 'string', description: 'The WEB container to scan.' },
+        },
+        required: ['accountId', 'webContainerId'],
+        additionalProperties: false,
+      },
+      handler: (a) => data.planServerMigrationFromWeb(s(a.accountId), s(a.webContainerId)),
+    },
+    {
       name: 'verify_server_endpoint',
       description:
         'Runtime check for a server-side GTM tagging server: GET <serverUrl>/healthy to confirm the host is deployed and reachable. https-only, public hosts only. Use after deploying a tagging server, or when an audit flags a missing tagging server URL.',

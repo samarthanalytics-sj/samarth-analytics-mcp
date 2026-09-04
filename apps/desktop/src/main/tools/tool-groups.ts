@@ -216,6 +216,7 @@ const GROUP_MEMBERS: Record<ToolGroup, readonly string[]> = {
     'audit_gtm_container',
     'audit_gtm_container_changes',
     'audit_server_container',
+    'plan_server_migration_from_web',
     'audit_tracking_status',
     'audit_install_drift',
     'verify_tracking_setup',
