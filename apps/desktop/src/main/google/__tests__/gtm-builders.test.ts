@@ -2157,6 +2157,34 @@ test('auditServerContainer (4): flags a Test Event Code left set (testId) as med
   assert.ok(clears, 'the fix clears testId');
 });
 
+test('auditServerContainer: a Meta CAPI tag with NO Data Client enrichment is flagged (lower EMQ); with one it is quiet', () => {
+  const base = {
+    taggingServerUrls: ['https://sgtm.example.com'],
+    transformations: [], triggers: [],
+    tags: [metaCapiTag('700', 'Meta - Purchase CAPI Tag', [
+      { key: 'pixelId', value: '123456789012345' },
+      { key: 'accessToken', value: 'EAA' + 'x'.repeat(60) },
+    ])],
+  };
+  // No Data Client → flagged once, low, actionable.
+  const missing = auditServerContainer({ ...base, clients: [{ clientId: '1', name: 'GA4', type: 'gaaw_client' }] } as never);
+  const f = missing.findings.filter((x) => x.checkId === 'server_capi_no_data_enrichment');
+  assert.equal(f.length, 1, 'flagged when Meta CAPI is present but no Data Client');
+  assert.equal(f[0].severity, 'low');
+  assert.match(f[0].recommendation, /create_stape_data_pipeline/);
+
+  // Data Client present (detected by its field signature) → NOT flagged.
+  const withClient = auditServerContainer({ ...base, clients: [
+    { clientId: '1', name: 'GA4', type: 'gaaw_client' },
+    { clientId: '2', name: 'Data Client', type: 'cvt_DC01', parameter: [{ type: 'boolean', key: 'generateClientId', value: 'true' }] },
+  ] } as never);
+  assert.equal(withClient.findings.some((x) => x.checkId === 'server_capi_no_data_enrichment'), false, 'not flagged once the enrichment Data Client exists');
+
+  // No Meta CAPI at all → not flagged (nothing to enrich).
+  const noCapi = auditServerContainer({ ...base, tags: [], clients: [{ clientId: '1', name: 'GA4', type: 'gaaw_client' }] } as never);
+  assert.equal(noCapi.findings.some((x) => x.checkId === 'server_capi_no_data_enrichment'), false, 'no CAPI tag means no enrichment finding');
+});
+
 test('auditServerContainer (3/4/5): Snapchat + Microsoft CAPI swapped credentials, test code, and missing event_id', () => {
   const UUID = '0a1b2c3d-4e5f-6789-abcd-ef0123456789';
   const longToken = 't'.repeat(120);

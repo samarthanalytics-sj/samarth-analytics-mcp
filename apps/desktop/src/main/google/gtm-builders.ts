@@ -2898,6 +2898,29 @@ export function auditServerContainer(s: ServerContainerSnapshot): AuditReport {
     });
   }
 
+  // ── Meta CAPI present but NO Data Tag -> Data Client enrichment (opportunity, not a defect) ──
+  // A CAPI event can only match on the identity the browser sent it. The Stape Data Tag posts
+  // first-party identity on EVERY page and the server Data Client persists it, so a conversion that
+  // arrives WITHOUT identity still matches - the enrichment that raises Meta Event Match Quality.
+  // Detect the Data Client by its own field signature (same as findStapeDataClient, inlined to avoid a
+  // server-plan -> gtm-builders import cycle). Config-visible, but the EMQ gain is a runtime outcome.
+  const hasMetaCapi = s.tags.some((t) => !t.paused && isMetaCapiServerTag(t));
+  const hasDataClient = s.clients.some((c) => {
+    const keys = new Set((c.parameter ?? []).map((p) => String((p as { key?: string }).key ?? '')));
+    return keys.has('generateClientId') || keys.has('prolongCookies') || keys.has('acceptMultipleEvents') || /data\s*client/i.test(c.name);
+  });
+  if (hasMetaCapi && !hasDataClient) {
+    push({
+      severity: 'low',
+      confidence: 'runtime-required',
+      category: 'ga4',
+      checkId: 'server_capi_no_data_enrichment',
+      message: 'A Meta CAPI server tag is set up but this container has NO Stape Data Tag -> Data Client enrichment, so the CAPI event only carries the identity the browser sent - Event Match Quality is likely lower than it could be.',
+      recommendation: 'Set up the enrichment with create_stape_data_pipeline: a web Data Tag posts first-party identity (em/ph/fbp/fbc/IP/UA) on every page and a server Data Client persists it, so conversions without identity still match. Then build the Meta CAPI tag with mapEmqVariables on.',
+      autoFixable: false,
+    });
+  }
+
   // ── Clients: legacy UA client + duplicate same-type clients ──
   for (const c of s.clients) {
     if (!/(^|_)ua($|_)/i.test(c.type)) continue;
