@@ -2710,7 +2710,7 @@ export function buildToolRegistry(
     {
       name: 'audit_server_container',
       description:
-        'Audit a SERVER container workspace. Checks that a client claims incoming requests; that server tags carry their destination id, have a firing trigger and are not paused; and that a tagging server URL is set. Flags duplicate GA4 relays (double-counting), URL-encoded trigger filter values (e.g. "Sign+Petition+Click") that never match a decoded event name, CAPI tags with swapped credential fields or a leftover Test Event Code (Meta, Snapchat and Microsoft Ads), and CAPI tags at risk of browser/server double-counting for a missing event_id. Same findings shape as audit_gtm_container.',
+        'Audit a SERVER container workspace. Checks that a client claims incoming requests; that server tags carry their destination id, have a firing trigger and are not paused; and that a tagging server URL is set. Flags duplicate GA4 relays (double-counting), URL-encoded trigger filter values (e.g. "Sign+Petition+Click") that never match a decoded event name, CAPI tags with swapped credential fields or a leftover Test Event Code (Meta, Snapchat and Microsoft Ads), CAPI tags at risk of browser/server double-counting for a missing event_id, and a Meta CAPI setup with NO Stape Data Tag enrichment (lower Event Match Quality). Same findings shape as audit_gtm_container.',
       inputSchema: {
         type: 'object',
         properties: { accountId: { type: 'string' }, containerId: { type: 'string' }, workspaceId: { type: 'string' } },
