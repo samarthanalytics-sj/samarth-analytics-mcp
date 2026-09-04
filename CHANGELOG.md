@@ -1,3 +1,9 @@
+## [1.483.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.483.1...v1.483.2) (2026-09-04)
+
+### Bug Fixes
+
+* **desktop:** keep the tool smoke test green on operator-typed fields ([#939](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/939)) ([49c78e0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/49c78e0d1cab5dfced0dcac02353cc87db7552cd))
+
 ## [1.483.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.483.0...v1.483.1) (2026-09-04)
 
 ### Bug Fixes
