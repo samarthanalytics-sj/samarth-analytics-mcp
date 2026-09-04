@@ -1,3 +1,9 @@
+## [1.485.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.484.0...v1.485.0) (2026-09-04)
+
+### Features
+
+* **desktop:** plan a web container's full port to server-side (read-only) ([#943](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/943)) ([229faac](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/229faac6e2af8b473b800ed2a25b842f1fbfc582))
+
 ## [1.484.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.483.5...v1.484.0) (2026-09-04)
 
 ### Features
