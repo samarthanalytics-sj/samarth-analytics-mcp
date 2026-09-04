@@ -1,3 +1,9 @@
+## [1.483.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.483.2...v1.483.3) (2026-09-04)
+
+### Bug Fixes
+
+* harden MCP server tools against silent failures and resource leaks ([#938](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/938)) ([91f854d](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/91f854d9a5a754fc1466cf8d56f677e57aa3a946))
+
 ## [1.483.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.483.1...v1.483.2) (2026-09-04)
 
 ### Bug Fixes
