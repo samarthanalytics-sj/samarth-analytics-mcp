@@ -663,6 +663,53 @@ async function main(): Promise<void> {
     assert.equal(out[0].type, 'gaawe');
   });
 
+  await test('list_gtm_tags groupByType survives a template-list failure by falling back to raw cvt_ codes', async () => {
+    const fd = fakeData();
+    fd.data.listGtmTags = async () => ([
+      { tagId: '1', name: 'Pixel', type: 'cvt_NBJMP', firingTriggerId: [] },
+      { tagId: '2', name: 'GA4 Event', type: 'gaawe', firingTriggerId: [] },
+    ]) as never;
+    fd.data.listGtmTemplates = async () => { throw new Error('insufficient scope'); };
+    const reg = buildToolRegistry(fd.data);
+    const out = JSON.parse(await reg.execute('list_gtm_tags', { accountId: '1', containerId: '2', workspaceId: '3', groupByType: true }));
+    assert.equal(out.totalTags, 2, 'the counts still come through when templates are unavailable');
+    const cvt = out.types.find((t: { type: string }) => t.type === 'cvt_NBJMP');
+    assert.equal(cvt.count, 1);
+    assert.equal(cvt.label, 'cvt_NBJMP (custom template)', 'falls back to the raw code label, not a throw');
+  });
+
+  await test('list_gtm_tags groupByType omits the (owner/repo) suffix when a gallery field is missing', async () => {
+    const fd = fakeData();
+    fd.data.listGtmTags = async () => [{ tagId: '1', name: 'Pixel', type: 'cvt_NBJMP', firingTriggerId: [] }] as never;
+    fd.data.listGtmTemplates = async () => ([
+      { templateId: 'T', name: 'Local Template', type: 'cvt_NBJMP', galleryOwner: 'stape-io', galleryRepository: '' },
+    ]) as never;
+    const reg = buildToolRegistry(fd.data);
+    const out = JSON.parse(await reg.execute('list_gtm_tags', { accountId: '1', containerId: '2', workspaceId: '3', groupByType: true }));
+    const cvt = out.types.find((t: { type: string }) => t.type === 'cvt_NBJMP');
+    assert.equal(cvt.label, 'Local Template', 'no dangling slash when galleryRepository is empty');
+  });
+
+  await test('list_gtm_tags type filter returns a hint (not a bare []) when the type code matches nothing', async () => {
+    const fd = fakeData();
+    fd.data.listGtmTags = async () => ([
+      { tagId: '1', name: 'Pixel', type: 'cvt_NBJMP', firingTriggerId: [] },
+      { tagId: '2', name: 'GA4 Event', type: 'gaawe', firingTriggerId: [] },
+    ]) as never;
+    const reg = buildToolRegistry(fd.data);
+    const out = JSON.parse(await reg.execute('list_gtm_tags', { accountId: '1', containerId: '2', workspaceId: '3', type: 'cvt_WRONG' }));
+    assert.deepEqual(out.tags, [], 'no tags for a non-matching code');
+    assert.ok(/cvt_NBJMP/.test(out.note) && /gaawe/.test(out.note), 'the note lists the available type codes');
+  });
+
+  await test('list_gtm_tags does NOT fetch triggers when the type filter matched zero tags', async () => {
+    const fd = fakeData();
+    fd.data.listGtmTags = async () => [{ tagId: '1', name: 'GA4 Event', type: 'gaawe', firingTriggerId: ['T5'] }] as never;
+    const reg = buildToolRegistry(fd.data);
+    await reg.execute('list_gtm_tags', { accountId: '1', containerId: '2', workspaceId: '3', type: 'cvt_WRONG', resolveTriggers: true });
+    assert.ok(!fd.calls.some((c) => c.startsWith('listTriggers')), 'no wasted trigger fetch on an empty match');
+  });
+
   await test('list_gtm_tags without resolveTriggers does NOT fetch triggers or add firingTriggers', async () => {
     const fd = fakeData();
     fd.data.listGtmTags = async () => [{ tagId: '9', name: 'X', type: 'gaawe', firingTriggerId: ['T5'] }] as never;
