@@ -2359,6 +2359,37 @@ export function isTikTokCapiServerTag(t: AuditTag): boolean {
   return keys.has('generateTtp') || keys.has('eventSource');
 }
 
+/** The official Snapchat CAPI server template stores its destination as `pixelId` + `apiAccessToken`
+ *  (Snap uses `apiAccessToken`, distinct from Meta/TikTok's `accessToken`), so that pair identifies it. PURE. */
+export function isSnapchatCapiServerTag(t: AuditTag): boolean {
+  if (!t.type.startsWith('cvt_')) return false;
+  const keys = new Set((Array.isArray(t.parameter) ? t.parameter : []).map((p) => (p as { key?: string }).key));
+  return keys.has('pixelId') && keys.has('apiAccessToken');
+}
+
+/** The Stape Microsoft Ads (Bing) UET CAPI server template stores its destination as `uetTagId` +
+ *  `authToken` — a pair no other server template uses. PURE. */
+export function isMicrosoftCapiServerTag(t: AuditTag): boolean {
+  if (!t.type.startsWith('cvt_')) return false;
+  const keys = new Set((Array.isArray(t.parameter) ? t.parameter : []).map((p) => (p as { key?: string }).key));
+  return keys.has('uetTagId') && keys.has('authToken');
+}
+
+/** The string value of a named row inside a CAPI list param ('' when absent), e.g. the Snapchat
+ *  serverParameters test_event_code row. PURE. */
+function capiListRowValue(t: AuditTag, listKey: string, rowName: string): string {
+  const list = (Array.isArray(t.parameter) ? t.parameter : []).find((p) => (p as { key?: string }).key === listKey) as
+    | { list?: Array<{ map?: Array<{ key?: string; value?: unknown }> }> } | undefined;
+  for (const row of list?.list ?? []) {
+    const m = row.map ?? [];
+    if (m.find((e) => e.key === 'name')?.value === rowName) {
+      const v = m.find((e) => e.key === 'value')?.value;
+      return typeof v === 'string' ? v : '';
+    }
+  }
+  return '';
+}
+
 /** Does a CAPI tag carry a non-empty row named `rowName` inside its list param `listKey`? Meta stores an
  *  explicit dedup event_id as a serverEventDataList row {name:'event_id'} — an OVERRIDE of the value the
  *  stape template auto-extracts, so its PRESENCE proves an id is sent (its absence proves nothing, because
@@ -2744,41 +2775,66 @@ export function auditServerContainer(s: ServerContainerSnapshot): AuditReport {
     }
   }
 
+  // (3)+(4) SWAPPED CREDENTIAL FIELDS + LEFTOVER TEST EVENT CODE — for each CAPI server template whose
+  //     two credential fields have DISTINCTIVE shapes, flag a paste-into-the-wrong-box (the tag can't
+  //     authenticate), and flag a test code left on before go-live. Values are NEVER echoed - only their
+  //     shape. Covers Meta, Snapchat and Microsoft; TikTok/LinkedIn/Pinterest/Reddit credential fields are
+  //     not distinctive enough to check without false positives, so they are left out.
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   for (const t of s.tags) {
-    if (!isMetaCapiServerTag(t)) continue;
     const resource = { kind: 'tag' as const, id: t.tagId, name: t.name };
-    const pixelId = serverTagParam(t, 'pixelId').trim();
-    const accessToken = serverTagParam(t, 'accessToken').trim();
+    // Per-platform: the two credential field keys, their human labels, the "swapped" shape test, and how a
+    // test event code is stored (Meta: a top-level testId param; Snapchat: a serverParameters row;
+    // Microsoft: none). Order matters - Meta is matched first so a shared-key overlap never misroutes.
+    let cred:
+      | { platform: string; idLabel: string; tokenLabel: string; idVal: string; tokenVal: string;
+          swapped: boolean; testValue: string; autoFixParam?: string }
+      | null = null;
+    if (isMetaCapiServerTag(t)) {
+      const idVal = serverTagParam(t, 'pixelId').trim(); const tokenVal = serverTagParam(t, 'accessToken').trim();
+      cred = {
+        platform: 'Meta', idLabel: 'Pixel ID', tokenLabel: 'Access Token', idVal, tokenVal,
+        // Pixel ID is a ~15-digit number; the token is a long "EAA…" string.
+        swapped: (!isVariableRef(idVal) && (idVal.startsWith('EAA') || idVal.length > 100)) || (!isVariableRef(tokenVal) && /^\d{14,16}$/.test(tokenVal)),
+        testValue: serverTagParam(t, 'testId').trim(), autoFixParam: 'testId',
+      };
+    } else if (isSnapchatCapiServerTag(t)) {
+      const idVal = serverTagParam(t, 'pixelId').trim(); const tokenVal = serverTagParam(t, 'apiAccessToken').trim();
+      cred = {
+        platform: 'Snapchat', idLabel: 'Pixel ID', tokenLabel: 'API Access Token', idVal, tokenVal,
+        // Snap Pixel ID is a UUID; the token is a long opaque string. A UUID in the token field, or a long
+        // non-UUID in the pixel field, is a swap.
+        swapped: (!isVariableRef(idVal) && !UUID_RE.test(idVal) && idVal.length > 60) || (!isVariableRef(tokenVal) && UUID_RE.test(tokenVal)),
+        // Snap stores the test code as a serverParameters row (no top-level testId param), so it is not auto-fixable.
+        testValue: capiListRowValue(t, 'serverParameters', 'test_event_code').trim(),
+      };
+    } else if (isMicrosoftCapiServerTag(t)) {
+      const idVal = serverTagParam(t, 'uetTagId').trim(); const tokenVal = serverTagParam(t, 'authToken').trim();
+      cred = {
+        platform: 'Microsoft Ads', idLabel: 'UET Tag ID', tokenLabel: 'API Token', idVal, tokenVal,
+        // UET Tag ID is a short id; authToken is a long token. A long value in the id field or a short
+        // numeric in the token field is a swap. Microsoft's template has no test-event-code concept.
+        swapped: (!isVariableRef(idVal) && idVal.length > 40) || (!isVariableRef(tokenVal) && /^\d{4,12}$/.test(tokenVal)),
+        testValue: '',
+      };
+    }
+    if (!cred) continue;
 
-    // (3) SWAPPED PIXEL/TOKEN FIELDS — a Pixel ID is a ~15-digit number and an access token
-    //     is a long "EAA…" string. If pixelId holds a token-shaped value and/or accessToken
-    //     holds an id-shaped value, they were pasted into the wrong boxes and the tag can't
-    //     authenticate. Values are NEVER echoed (the token is live) — only their shape.
-    const pixelLooksLikeToken = !isVariableRef(pixelId) && (pixelId.startsWith('EAA') || pixelId.length > 100);
-    const tokenLooksLikePixel = !isVariableRef(accessToken) && /^\d{14,16}$/.test(accessToken);
-    if (pixelLooksLikeToken || tokenLooksLikePixel) {
+    if (cred.swapped) {
       push({
-        severity: 'high',
-        category: 'security',
-        resource,
-        message: `Meta CAPI tag "${t.name}" looks like its Pixel ID and Access Token are swapped — the Pixel ID field holds an access-token-shaped value and/or the Access Token field holds a Pixel-ID-shaped value, so the tag can't send events.`,
-        recommendation: 'Swap them back: the Pixel ID is the ~15-digit number and the Access Token is the long "EAA…" string.',
+        severity: 'high', category: 'security', resource,
+        message: `${cred.platform} CAPI tag "${t.name}" looks like its ${cred.idLabel} and ${cred.tokenLabel} are swapped — one field holds a value shaped like the other, so the tag can't authenticate and sends nothing.`,
+        recommendation: `Swap them back: the ${cred.idLabel} and the ${cred.tokenLabel} were pasted into the wrong fields.`,
         autoFixable: false,
       });
     }
-
-    // (4) TEST EVENT CODE LEFT SET — a non-empty testId routes events to Events Manager's
-    //     TEST view, not production reporting. One-field fix: clear it.
-    const testId = serverTagParam(t, 'testId').trim();
-    if (testId && !isVariableRef(testId)) {
+    if (cred.testValue && !isVariableRef(cred.testValue)) {
       push({
-        severity: 'medium',
-        category: 'ga4',
-        resource,
-        message: `Meta CAPI tag "${t.name}" still has a Test Event Code set — its events land in Events Manager's TEST view, not production reporting.`,
-        recommendation: 'Clear the Test Event Code (testId) before go-live so events count in production.',
-        autoFixable: true,
-        fix: { tool: 'update_gtm_tag', args: { tagId: t.tagId, tag: { parameter: [{ type: 'template', key: 'testId', value: '' }] } } },
+        severity: 'medium', category: 'ga4', resource,
+        message: `${cred.platform} CAPI tag "${t.name}" still has a Test Event Code set — its events land in the destination's TEST view, not production reporting.`,
+        recommendation: 'Clear the Test Event Code before go-live so events count in production.',
+        autoFixable: Boolean(cred.autoFixParam),
+        ...(cred.autoFixParam ? { fix: { tool: 'update_gtm_tag', args: { tagId: t.tagId, tag: { parameter: [{ type: 'template', key: cred.autoFixParam, value: '' }] } } } } : {}),
       });
     }
   }
@@ -2801,20 +2857,33 @@ export function auditServerContainer(s: ServerContainerSnapshot): AuditReport {
   //     silence). Skips paused / never-firing tags (they can't double-count).
   for (const t of s.tags) {
     if (t.paused || !(t.firingTriggerId ?? []).length) continue;
-    let platform: 'Meta' | 'TikTok' | null = null;
+    let platform: string | null = null;
+    let toggle: string | null = null; // the auto-map toggle field, or null when the template has none (Snap)
     let autoMapOff = false;
     let hasExplicitId = false;
     if (isMetaCapiServerTag(t)) {
-      platform = 'Meta';
-      autoMapOff = serverToggleExplicitlyOff(t, 'autoMapServerEventData');
+      platform = 'Meta'; toggle = 'autoMapServerEventData';
+      autoMapOff = serverToggleExplicitlyOff(t, toggle);
       hasExplicitId = capiListRowSet(t, 'serverEventDataList', 'event_id');
     } else if (isTikTokCapiServerTag(t)) {
-      platform = 'TikTok';
-      autoMapOff = serverToggleExplicitlyOff(t, 'autoMapCommonEventData');
+      platform = 'TikTok'; toggle = 'autoMapCommonEventData';
+      autoMapOff = serverToggleExplicitlyOff(t, toggle);
       hasExplicitId = serverTagParam(t, 'eventId').trim() !== '';
+    } else if (isMicrosoftCapiServerTag(t)) {
+      platform = 'Microsoft'; toggle = 'autoMapServerEventDataParameters';
+      autoMapOff = serverToggleExplicitlyOff(t, toggle);
+      hasExplicitId = capiListRowSet(t, 'serverEventDataList', 'eventId');
+    } else if (isSnapchatCapiServerTag(t)) {
+      // The Snapchat template maps serverParameters MANUALLY - it has no auto-extract toggle, so a missing
+      // event_id row is a config-provable gap (autoMapOff is effectively always true).
+      platform = 'Snapchat'; toggle = null; autoMapOff = true;
+      hasExplicitId = capiListRowSet(t, 'serverParameters', 'event_id');
     }
     if (!platform || !autoMapOff || hasExplicitId) continue;
-    const toggle = platform === 'Meta' ? 'autoMapServerEventData' : 'autoMapCommonEventData';
+    const cause = toggle
+      ? `has auto-map (${toggle}) turned off and maps no explicit event_id`
+      : 'maps no explicit event_id and this template does not auto-extract one';
+    const remedyToggle = toggle ? `, or re-enable auto-mapping (${toggle}) so the tag forwards the event's own event_id` : '';
     push({
       severity: 'low',
       confidence: 'runtime-required',
@@ -2823,8 +2892,8 @@ export function auditServerContainer(s: ServerContainerSnapshot): AuditReport {
       // dedup dimension) match on this instead of the finding's prose, which is free to be reworded.
       checkId: 'server_capi_no_event_id',
       resource: { kind: 'tag', id: t.tagId, name: t.name },
-      message: `${platform} CAPI server tag "${t.name}" has auto-map (${toggle}) turned off and maps no explicit event_id, so it only sends one if the incoming event already carries it — which can't be confirmed from the server container. If the same conversion also fires the browser ${platform} Pixel without a shared event_id, the browser and server events can double-count.`,
-      recommendation: `Map an explicit event_id on this tag (e.g. {{ed - event_id}}) and send the SAME id from the browser ${platform} Pixel, or re-enable auto-mapping (${toggle}) so the tag forwards the event's own event_id. If you run server-only (no Pixel), you can ignore this.`,
+      message: `${platform} CAPI server tag "${t.name}" ${cause}, so it only sends one if the incoming event already carries it — which can't be confirmed from the server container. If the same conversion also fires the browser ${platform} Pixel without a shared event_id, the browser and server events can double-count.`,
+      recommendation: `Map an explicit event_id on this tag (e.g. {{ed - event_id}}) and send the SAME id from the browser ${platform} Pixel${remedyToggle}. If you run server-only (no Pixel), you can ignore this.`,
       autoFixable: false,
     });
   }
