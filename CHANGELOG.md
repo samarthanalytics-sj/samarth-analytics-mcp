@@ -1,3 +1,9 @@
+## [1.483.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.483.3...v1.483.4) (2026-09-04)
+
+### Bug Fixes
+
+* **desktop:** bring create_gtm_tracking_tag to parity with the hardened MCP handler ([#940](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/940)) ([d9692f6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d9692f6531d16428cd8ebfa47bcc16919736ef8c))
+
 ## [1.483.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.483.2...v1.483.3) (2026-09-04)
 
 ### Bug Fixes
