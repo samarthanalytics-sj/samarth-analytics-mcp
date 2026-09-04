@@ -111,6 +111,7 @@ function makeFakeData(): { data: GoogleDataService; calls: string[]; mutations: 
     createServerContainerFromWeb: () =>
       r('createServerContainerFromWeb', { serverContainer: { containerId: 'SC1', publicId: 'GTM-SERVER', name: 'Web - Server', taggingServerUrls: [] }, workspaceId: 'w1', measurementId: 'G-1', created: { client: 'GA4', trigger: 'All Events', serverTag: 'GA4 - Server' }, serverUrlSet: false, webWired: null, webNonGa4: [] }),
     deriveWebContainerMeasurementId: () => r('deriveWebContainerMeasurementId', 'G-1'),
+    planServerMigrationFromWeb: () => r('planServerMigrationFromWeb', { ga4: { present: false, measurementIds: [] }, items: [], summary: { total: 0, auto: 0, typedTool: 0, generic: 0, manual: 0, skipped: 0 } }),
     setWebServerContainerUrl: () => r('setWebServerContainerUrl', { tagId: '1', name: 'Google Tag', serverContainerUrl: 'https://sgtm.example.com' }),
     setServerContainerTaggingUrl: () => r('setServerContainerTaggingUrl', { containerId: 'SC1', name: 'Server', taggingServerUrls: ['https://sgtm.example.com'] }),
     createMetaEmqVariables: () => r('createMetaEmqVariables', { created: ['ed - fbp', 'ed - fbc'], skipped: [] }),
@@ -342,7 +343,7 @@ async function main(): Promise<void> {
     // performance, change history, volume, UTM/health/GA4-link audits, audiences, structure,
     // upload diagnostics, budget pacing, recommendations), plus the two phone-conversion reads
     // (detect_page_phone_numbers, plan_phone_conversion_tracking).
-    record('read-only registry exposes the 77 read tools', readOnlyNames.size === 77, `${readOnlyNames.size} tools`);
+    record('read-only registry exposes the 78 read tools', readOnlyNames.size === 78, `${readOnlyNames.size} tools`);
   }
 
   // ── B. Approval is DELETE-ONLY: a declining confirm blocks every destructive

@@ -589,6 +589,7 @@ async function main(): Promise<void> {
       'lookup_corpus_patterns',
       'monitor_ga4_property',
       'plan_phone_conversion_tracking',
+      'plan_server_migration_from_web',
       'profile_tag_types',
       'rank_ga4_campaigns',
       'run_ga4_realtime_report',
@@ -721,7 +722,7 @@ async function main(): Promise<void> {
 
   await test('write tools appear ONLY when a confirm function is provided', async () => {
     const readOnly = buildToolRegistry(fakeData().data);
-    assert.equal(readOnly.list().length, 62, 'read-only registry has 62 tools');
+    assert.equal(readOnly.list().length, 63, 'read-only registry has 63 tools');
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
@@ -743,8 +744,9 @@ async function main(): Promise<void> {
     // plus the GTM write batch_delete_gtm_entities = 115, plus the GTM write update_gtm_variable = 116,
     // plus the three in-place update tools update_gtm_environment / update_gtm_client / update_gtm_transformation = 119,
     // plus the two read-only template-discovery tools describe_template_fields / profile_tag_types = 121,
-    // plus the two CAPI server tags create_snapchat_capi_server_tag / create_microsoft_capi_server_tag = 123.
-    assert.equal(withWrites.list().length, 123 + 64, 'read + write registry has 123 GTM/GA4-read/context/write + 64 GA4-write tools');
+    // plus the two CAPI server tags create_snapchat_capi_server_tag / create_microsoft_capi_server_tag = 123,
+    // plus the read-only plan_server_migration_from_web = 124.
+    assert.equal(withWrites.list().length, 124 + 64, 'read + write registry has 124 GTM/GA4-read/context/write + 64 GA4-write tools');
     for (const n of ['update_gtm_environment', 'update_gtm_client', 'update_gtm_transformation']) {
       assert.equal(withWrites.list().some((t) => t.name === n), true, `${n} present`);
       assert.equal(withWrites.isWrite?.(n), true, `${n} is a write`);

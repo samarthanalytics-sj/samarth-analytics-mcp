@@ -4533,3 +4533,111 @@ export function detectMetaTags(snapshot: ContainerSnapshot): MetaTagDetection {
     hasEcommerce: metaTags.some((m) => m.ecommerceEvents.length > 0),
   };
 }
+
+/* ───────────── Web → server migration planner ───────────── */
+
+export interface ServerMigrationItem {
+  /** The web tag this maps from. */
+  webTag: string;
+  /** Marketing destination, e.g. "GA4", "Google Ads conversion", "Meta". */
+  destination: string;
+  /** How it was recognised: a native GTM type code (high confidence) or a name/snippet heuristic. */
+  detectedBy: 'native-type' | 'name';
+  /** The desktop tool to run to create the server tag, or null when there is no server equivalent. */
+  serverTool: string | null;
+  /** Fields read straight off the web tag (destination ids). */
+  derived: Record<string, string>;
+  /** Secrets/ids the caller must supply that are NOT in the web container (e.g. a CAPI access token). */
+  requires: string[];
+  /** One-line guidance. */
+  note: string;
+  /** Disposition: auto = ported by create_server_container_from_web; typed-tool = a create_*_server tool;
+   *  generic = import-template + tags_create; skip = no server tag needed; manual = no server equivalent. */
+  status: 'auto' | 'typed-tool' | 'generic' | 'skip' | 'manual';
+}
+
+export interface ServerMigrationPlan {
+  ga4: { present: boolean; measurementIds: string[] };
+  items: ServerMigrationItem[];
+  summary: { total: number; auto: number; typedTool: number; generic: number; manual: number; skipped: number };
+}
+
+/** Name/snippet heuristics for template-based (cvt_) or Custom HTML pixels, mapped to their typed
+ *  server CAPI tool. Access tokens are never in the web container, so they are listed in `requires`. */
+const SERVER_MIGRATION_HEURISTICS: ReadonlyArray<{
+  re: RegExp; destination: string; serverTool: string; requires: string[]; note: string;
+}> = [
+  { re: /tiktok|ttq\s*\(/i, destination: 'TikTok', serverTool: 'create_tiktok_capi_server_tag', requires: ['accessToken'], note: 'TikTok Events API server tag.' },
+  { re: /linkedin|_linkedin_partner_id/i, destination: 'LinkedIn', serverTool: 'create_linkedin_capi_server_tag', requires: ['accessToken'], note: 'LinkedIn CAPI server tag.' },
+  { re: /pinterest|pintrk\s*\(/i, destination: 'Pinterest', serverTool: 'create_pinterest_capi_server_tag', requires: ['accessToken'], note: 'Pinterest CAPI server tag.' },
+  { re: /reddit|rdt\s*\(/i, destination: 'Reddit', serverTool: 'create_reddit_capi_server_tag', requires: ['accessToken'], note: 'Reddit CAPI server tag.' },
+  { re: /snap(chat)?|snaptr\s*\(/i, destination: 'Snapchat', serverTool: 'create_snapchat_capi_server_tag', requires: ['apiAccessToken'], note: 'Snapchat CAPI server tag.' },
+  { re: /microsoft|bing|\buet\b/i, destination: 'Microsoft Ads', serverTool: 'create_microsoft_capi_server_tag', requires: ['authToken'], note: 'Microsoft Ads CAPI; REQUIRES MSCLKID forwarded from the web side.' },
+];
+
+/**
+ * Plan the port of a WEB container's conversion tags to a SERVER container: for each recognised
+ * destination, which server tool builds it, the ids read off the web tag, and the secrets the caller
+ * must still provide. PURE and READ-ONLY - it creates nothing. GA4 is reported separately because it is
+ * ported once as the relay by create_server_container_from_web, not per tag.
+ */
+export function planWebToServerMigration(snapshot: ContainerSnapshot): ServerMigrationPlan {
+  const pv = (t: ContainerSnapshot['tags'][number], key: string): string => {
+    for (const p of t.parameter) { const pp = p as { key?: string; value?: unknown }; if (pp.key === key) return String(pp.value ?? '').trim(); }
+    return '';
+  };
+  const meta = detectMetaTags(snapshot);
+  const metaIds = new Set(meta.metaTags.map((m) => m.id));
+  const measurementIds = new Set<string>();
+  const items: ServerMigrationItem[] = [];
+
+  for (const t of snapshot.tags) {
+    const type = String(t.type ?? '');
+    // GA4: aggregated into the relay, collect the measurement id.
+    if ((type === 'googtag' && /^G-/i.test(pv(t, 'tagId'))) || type === 'gaawe') {
+      const mid = pv(t, 'tagId') || pv(t, 'measurementIdOverride') || pv(t, 'measurementId');
+      if (/^G-/i.test(mid)) measurementIds.add(mid);
+      continue;
+    }
+    // Meta (detected by fbq/name/snippet) → Meta CAPI.
+    if (metaIds.has(t.tagId)) {
+      items.push({ webTag: t.name, destination: 'Meta', detectedBy: 'name', serverTool: 'create_meta_capi_server_tag', derived: {}, requires: ['pixelId', 'accessToken'], note: 'Meta Conversions API server tag; auto-imports stape-io/facebook-tag.', status: 'typed-tool' });
+      continue;
+    }
+    // Native Google/Floodlight conversion types (authoritative).
+    if (type === 'awct') {
+      items.push({ webTag: t.name, destination: 'Google Ads conversion', detectedBy: 'native-type', serverTool: 'create_server_tag (platform: ads_conversion)', derived: { conversionId: pv(t, 'conversionId'), conversionLabel: pv(t, 'conversionLabel') }, requires: [], note: 'Fire on a per-event server trigger; set productReporting for ecommerce.', status: 'typed-tool' });
+      continue;
+    }
+    if (type === 'sp') {
+      items.push({ webTag: t.name, destination: 'Google Ads remarketing', detectedBy: 'native-type', serverTool: 'create_server_tag (platform: ads_remarketing)', derived: { conversionId: pv(t, 'conversionId') }, requires: [], note: 'Server-side remarketing audience tag.', status: 'typed-tool' });
+      continue;
+    }
+    if (type === 'awcc') {
+      items.push({ webTag: t.name, destination: 'Google Ads call conversion', detectedBy: 'native-type', serverTool: null, derived: { conversionId: pv(t, 'conversionId') }, requires: [], note: 'No standard sGTM call-conversion tag; keep it client-side or use Google Ads call reporting.', status: 'manual' });
+      continue;
+    }
+    if (type === 'flc') {
+      items.push({ webTag: t.name, destination: 'Floodlight', detectedBy: 'native-type', serverTool: 'templates_import_from_gallery + tags_create', derived: { advertiserId: pv(t, 'advertiserId'), groupTag: pv(t, 'groupTag'), activityTag: pv(t, 'activityTag') }, requires: [], note: 'No typed server Floodlight builder; use a server Floodlight template via the generic path.', status: 'generic' });
+      continue;
+    }
+    if (type === 'gclidw') {
+      items.push({ webTag: t.name, destination: 'Conversion Linker', detectedBy: 'native-type', serverTool: null, derived: {}, requires: [], note: 'Not needed server-side: the server GA4 client + FPID cookies handle linking.', status: 'skip' });
+      continue;
+    }
+    // Template/Custom-HTML pixels by name or snippet.
+    const html = pv(t, 'html');
+    const hay = `${t.name} ${type} ${html}`;
+    const hit = SERVER_MIGRATION_HEURISTICS.find((h) => h.re.test(hay));
+    if (hit) {
+      items.push({ webTag: t.name, destination: hit.destination, detectedBy: 'name', serverTool: hit.serverTool, derived: {}, requires: hit.requires, note: hit.note, status: 'typed-tool' });
+    }
+  }
+
+  const count = (s: ServerMigrationItem['status']): number => items.filter((i) => i.status === s).length;
+  return {
+    ga4: { present: measurementIds.size > 0, measurementIds: [...measurementIds] },
+    items,
+    summary: { total: items.length, auto: measurementIds.size > 0 ? 1 : 0, typedTool: count('typed-tool'), generic: count('generic'), manual: count('manual'), skipped: count('skip') },
+  };
+}

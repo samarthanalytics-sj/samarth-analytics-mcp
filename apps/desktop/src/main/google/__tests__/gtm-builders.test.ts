@@ -70,6 +70,7 @@ import {
   varParam,
   BUILTIN_VARIABLE_NAMES,
   detectMetaTags,
+  planWebToServerMigration,
   customTemplateType,
   buildAdsConversionServerTag,
   buildAdsConversionLinkerServerTag,
@@ -3634,6 +3635,52 @@ test('redditServerEvent + buildRedditCapiServerTag: inherit default, standard/cu
   assert.equal(paramVal(t3, 'eventType'), 'custom');
   assert.equal(paramVal(t3, 'eventNameCustom'), 'my_custom_event');
   assert.equal(paramVal(t3, 'eventName'), undefined);
+});
+
+test('planWebToServerMigration: classifies GA4/Ads/Floodlight/Linker natives + Meta/template pixels, flags required tokens', () => {
+  const P = (key: string, value: string) => ({ type: 'template', key, value });
+  const snapshot = {
+    triggers: [], variables: [],
+    tags: [
+      { tagId: '1', name: 'Google Tag', type: 'googtag', parameter: [P('tagId', 'G-ABC123')] },
+      { tagId: '2', name: 'GA4 Purchase', type: 'gaawe', parameter: [P('measurementIdOverride', 'G-ABC123')] },
+      { tagId: '3', name: 'Ads - Purchase', type: 'awct', parameter: [P('conversionId', '123456789'), P('conversionLabel', 'abcLABEL')] },
+      { tagId: '4', name: 'Ads Remarketing', type: 'sp', parameter: [P('conversionId', 'AW-123456789')] },
+      { tagId: '5', name: 'Call Conversion', type: 'awcc', parameter: [P('conversionId', '987654321'), P('phoneConversionNumber', '+1 555')] },
+      { tagId: '6', name: 'Floodlight Sale', type: 'flc', parameter: [P('advertiserId', '555'), P('groupTag', 'grp'), P('activityTag', 'act')] },
+      { tagId: '7', name: 'Conversion Linker', type: 'gclidw', parameter: [] },
+      { tagId: '8', name: 'Meta Pixel', type: 'html', parameter: [P('html', "<script>fbq('init','111')</script>")] },
+      { tagId: '9', name: 'TikTok Pixel', type: 'cvt_TT01', parameter: [] },
+      { tagId: '10', name: 'Some analytics thing', type: 'html', parameter: [P('html', '<script>console.log(1)</script>')] },
+    ],
+  } as unknown as TContainerSnapshot;
+
+  const plan = planWebToServerMigration(snapshot);
+  const by = (dest: string) => plan.items.find((i) => i.destination === dest);
+
+  assert.deepEqual(plan.ga4, { present: true, measurementIds: ['G-ABC123'] }, 'GA4 aggregated once as the relay, not per tag');
+  assert.equal(by('GA4'), undefined, 'GA4 is not a per-tag item');
+
+  assert.equal(by('Google Ads conversion')?.serverTool, 'create_server_tag (platform: ads_conversion)');
+  assert.deepEqual(by('Google Ads conversion')?.derived, { conversionId: '123456789', conversionLabel: 'abcLABEL' });
+  assert.deepEqual(by('Google Ads conversion')?.requires, [], 'no secret needed for an Ads conversion');
+
+  assert.equal(by('Google Ads remarketing')?.serverTool, 'create_server_tag (platform: ads_remarketing)');
+  assert.equal(by('Google Ads call conversion')?.serverTool, null);
+  assert.equal(by('Google Ads call conversion')?.status, 'manual');
+  assert.equal(by('Floodlight')?.status, 'generic');
+  assert.equal(by('Conversion Linker')?.status, 'skip');
+
+  assert.equal(by('Meta')?.serverTool, 'create_meta_capi_server_tag');
+  assert.deepEqual(by('Meta')?.requires, ['pixelId', 'accessToken']);
+  assert.equal(by('TikTok')?.serverTool, 'create_tiktok_capi_server_tag');
+  assert.deepEqual(by('TikTok')?.requires, ['accessToken']);
+
+  assert.equal(plan.items.some((i) => i.webTag === 'Some analytics thing'), false, 'an unrecognised tag is not in the plan');
+  assert.equal(plan.summary.total, plan.items.length);
+  assert.equal(plan.summary.auto, 1, 'GA4 relay counts as one auto port');
+  assert.equal(plan.summary.manual, 1);
+  assert.equal(plan.summary.skipped, 1);
 });
 
 test('snapServerEvent + buildSnapchatCapiServerTag: inherit default, standard/custom event, EMQ user-data auto-map, event_id dedup', () => {
