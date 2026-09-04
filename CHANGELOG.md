@@ -1,3 +1,9 @@
+## [1.487.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.486.0...v1.487.0) (2026-09-04)
+
+### Features
+
+* **desktop:** one-call Stape Data Tag -> Data Client pipeline for higher Meta EMQ ([#945](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/945)) ([604be8d](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/604be8d17836d011f3075b170b42fad805897a6b))
+
 ## [1.486.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.485.0...v1.486.0) (2026-09-04)
 
 ### Features
