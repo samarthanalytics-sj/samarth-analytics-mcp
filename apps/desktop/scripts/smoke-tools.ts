@@ -279,22 +279,26 @@ function makeFakeData(): { data: GoogleDataService; calls: string[]; mutations: 
 }
 
 // Build a minimal schema-valid argument object for a tool's inputSchema.
-function synthesize(schema: unknown): unknown {
+function synthesize(schema: unknown, key?: string): unknown {
   const s = schema as { type?: string; enum?: unknown[]; properties?: Record<string, unknown>; required?: string[]; items?: unknown };
   if (!s || typeof s !== 'object') return undefined;
   if (Array.isArray(s.enum) && s.enum.length) return s.enum[0];
   switch (s.type) {
-    case 'string': return 'x';
+    // A trigger/filter condition operator is validated against a fixed vocabulary (buildTrigger
+    // THROWS on an unknown operator), so the generic 'x' placeholder would crash the builder tools
+    // (create_gtm_tracking_tag, create_gtm_trigger). Emit a valid operator for any *operator field;
+    // 'equals' is accepted everywhere and every other tool tolerates 'x' regardless.
+    case 'string': return key && /operator$/i.test(key) ? 'equals' : 'x';
     case 'boolean': return false;
     case 'number':
     case 'integer': return 1;
-    case 'array': return s.items ? [synthesize(s.items)] : [];
+    case 'array': return s.items ? [synthesize(s.items, key)] : [];
     case 'object': {
       const out: Record<string, unknown> = {};
       const props = s.properties ?? {};
       // Fill ALL properties (not just required) so tools with conditionally-required fields
       // (e.g. create_server_tag's platform-specific measurementId/conversionId) get valid args.
-      for (const key of Object.keys(props)) if (props[key] !== undefined) out[key] = synthesize(props[key]);
+      for (const key of Object.keys(props)) if (props[key] !== undefined) out[key] = synthesize(props[key], key);
       return out;
     }
     default: return 'x';
