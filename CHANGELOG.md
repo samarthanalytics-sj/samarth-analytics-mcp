@@ -1,3 +1,9 @@
+## [1.490.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.489.0...v1.490.0) (2026-09-04)
+
+### Features
+
+* **desktop:** apply-all + auto-fixable count on the server-container audit ([#948](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/948)) ([c408d19](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c408d1934d789793523dee0c37bb69f495401885))
+
 ## [1.489.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.488.0...v1.489.0) (2026-09-04)
 
 ### Features
