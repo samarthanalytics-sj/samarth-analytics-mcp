@@ -4345,6 +4345,25 @@ export function buildToolRegistry(
       },
     },
     {
+      name: 'create_stape_data_pipeline',
+      description:
+        'ONE STEP: stand up the Stape Data Tag -> Data Client enrichment pipeline that RAISES Meta CAPI Event Match Quality. In the WEB container it creates a Data Tag (stape-io/data-tag, imported automatically) firing on All Pages that posts full first-party identity (em/ph/fbp/fbc/IP/UA + dataLayer + consent) to <serverUrl>/data; in the SERVER container it creates a Data Client (stape-io/data-client) that claims /data and PERSISTS that identity against a first-party client-id cookie - so a later conversion that arrives WITHOUT identity still matches. serverUrl is the deployed tagging-server URL. Idempotent: an existing Data Tag / Data Client is reused. Does NOT deploy the host and does NOT publish. AFTER this, build the Meta CAPI tag with create_meta_capi_server_tag (mapEmqVariables on) so its user_data reads the enriched event; RELAY the returned note + nextSteps to the user.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          webContainerId: { type: 'string', description: 'The WEB container (gets the Data Tag).' },
+          serverContainerId: { type: 'string', description: 'The SERVER container (gets the Data Client).' },
+          serverUrl: { type: 'string', description: 'The deployed tagging-server URL, e.g. https://sgtm.example.com.' },
+        },
+        required: ['accountId', 'webContainerId', 'serverContainerId', 'serverUrl'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => `Set up the Stape Data Tag -> Data Client enrichment pipeline (web ${s(a.webContainerId)} -> server ${s(a.serverContainerId)} at ${s(a.serverUrl)})`,
+      handler: (a) => data.createStapeDataPipeline(s(a.accountId), s(a.webContainerId), s(a.serverContainerId), s(a.serverUrl)),
+    },
+    {
       name: 'set_web_server_container_url',
       description:
         "Wire a WEB container to a server container by setting the web Google tag's server_container_url. tagId is the web Google tag (type googtag; find it with list_gtm_tags); serverUrl exists only AFTER the server host is provisioned. Upserts the config setting, preserving the tag's other settings. QA in GTM Preview afterwards.",

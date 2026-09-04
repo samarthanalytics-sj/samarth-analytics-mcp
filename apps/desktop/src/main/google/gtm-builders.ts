@@ -3509,6 +3509,26 @@ export function buildStapeDataTag(type: string, name: string, serverUrl: string,
   } as unknown as GtmTagResource;
 }
 
+/** Build a Stape DATA CLIENT (SERVER container; gallery template stape-io/data-client, `type` = its
+ *  cvt_ code). It CLAIMS the Data Tag's request path (default /data) and turns each posted payload into a
+ *  server event, persisting first-party identity (via a first-party client-id cookie) so a later
+ *  conversion that arrives WITHOUT identity still matches - the enrichment that raises CAPI Event Match
+ *  Quality. The template's defaults already suit this (generateClientId + prolongCookies on, path /data);
+ *  they are set explicitly here, plus acceptMultipleEvents so a batched dataLayer payload is fully
+ *  processed. Field keys verified against template.tpl. The default /data path matches buildStapeDataTag's
+ *  default request_path, so the pair works with no extra config. PURE. */
+export function buildStapeDataClient(type: string, name: string): GtmClientResource {
+  return {
+    name: sanitizeName(name),
+    type,
+    parameter: [
+      boolean('generateClientId', true),
+      boolean('prolongCookies', true),
+      boolean('acceptMultipleEvents', true),
+    ],
+  } as unknown as GtmClientResource;
+}
+
 /** Build a Stape "TikTok Events API" SERVER tag (gallery template stape-io/tiktok-tag; `type` = its
  *  cvt_ code), tuned for match quality: Event Enhancement ON, generate _ttp ON. A TikTok STANDARD
  *  event sets eventType='standard' + eventName=<canonical>; anything else sets eventType='custom' +

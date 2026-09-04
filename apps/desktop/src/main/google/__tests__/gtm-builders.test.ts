@@ -47,6 +47,8 @@ import {
   snapServerEvent,
   buildMicrosoftCapiServerTag,
   microsoftServerEventType,
+  buildStapeDataTag,
+  buildStapeDataClient,
   buildSnapPixelTag,
   pinterestEvent,
   snapEventType,
@@ -3738,6 +3740,27 @@ test('planWebToServerMigration: classifies GA4/Ads/Floodlight/Linker natives + M
   assert.equal(plan.summary.auto, 1, 'GA4 relay counts as one auto port');
   assert.equal(plan.summary.manual, 1);
   assert.equal(plan.summary.skipped, 1);
+});
+
+test('buildStapeDataTag + buildStapeDataClient: web posts identity to <server>/data, server client claims /data', () => {
+  // WEB Data Tag: All Pages, posts to the server, full dataLayer + common + consent.
+  const tag = buildStapeDataTag('cvt_DT01', 'Data Tag - All Pages', 'https://sgtm.example.com');
+  assert.equal(tag.type, 'cvt_DT01');
+  assert.equal(paramVal(tag, 'gtm_server_domain'), 'https://sgtm.example.com');
+  assert.equal(paramVal(tag, 'request_path'), '/data', 'default request path matches the Data Client');
+  assert.equal(paramVal(tag, 'event_type'), 'standard');
+  for (const k of ['add_data_layer', 'add_common', 'add_consent_state']) assert.equal(paramVal(tag, k), 'true', `${k} on`);
+  assert.deepEqual(tag.firingTriggerId, ['2147479553'], 'fires on the built-in All Pages trigger');
+  // A custom request path threads through.
+  assert.equal(paramVal(buildStapeDataTag('cvt_DT01', 'x', 'https://s.example.com', { requestPath: '/collect' }), 'request_path'), '/collect');
+
+  // SERVER Data Client: persists identity so a later id-less conversion still matches (higher EMQ).
+  const client = buildStapeDataClient('cvt_DC01', 'Data Client');
+  assert.equal(client.type, 'cvt_DC01');
+  assert.equal(client.name, 'Data Client');
+  for (const k of ['generateClientId', 'prolongCookies', 'acceptMultipleEvents']) {
+    assert.equal(paramVal(client, k), 'true', `${k} on so the pipeline persists + batches`);
+  }
 });
 
 test('snapServerEvent + buildSnapchatCapiServerTag: inherit default, standard/custom event, EMQ user-data auto-map, event_id dedup', () => {

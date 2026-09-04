@@ -176,6 +176,7 @@ const GROUP_MEMBERS: Record<ToolGroup, readonly string[]> = {
   'server-side': [
     'create_server_container',
     'create_server_container_from_web',
+    'create_stape_data_pipeline',
     'bootstrap_server_side_tagging',
     'create_gtm_client',
     'update_gtm_client',

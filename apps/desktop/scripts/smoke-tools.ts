@@ -112,6 +112,7 @@ function makeFakeData(): { data: GoogleDataService; calls: string[]; mutations: 
       r('createServerContainerFromWeb', { serverContainer: { containerId: 'SC1', publicId: 'GTM-SERVER', name: 'Web - Server', taggingServerUrls: [] }, workspaceId: 'w1', measurementId: 'G-1', created: { client: 'GA4', trigger: 'All Events', serverTag: 'GA4 - Server' }, serverUrlSet: false, webWired: null, webNonGa4: [] }),
     deriveWebContainerMeasurementId: () => r('deriveWebContainerMeasurementId', 'G-1'),
     planServerMigrationFromWeb: () => r('planServerMigrationFromWeb', { ga4: { present: false, measurementIds: [] }, items: [], summary: { total: 0, auto: 0, typedTool: 0, generic: 0, manual: 0, skipped: 0 } }),
+    createStapeDataPipeline: () => r('createStapeDataPipeline', { dataTag: { name: 'Data Tag - All Pages', tagId: 'T1', reused: false }, dataClient: { name: 'Data Client', clientId: 'C1', reused: false }, requestPath: '/data', note: 'x', nextSteps: [] }),
     setWebServerContainerUrl: () => r('setWebServerContainerUrl', { tagId: '1', name: 'Google Tag', serverContainerUrl: 'https://sgtm.example.com' }),
     setServerContainerTaggingUrl: () => r('setServerContainerTaggingUrl', { containerId: 'SC1', name: 'Server', taggingServerUrls: ['https://sgtm.example.com'] }),
     createMetaEmqVariables: () => r('createMetaEmqVariables', { created: ['ed - fbp', 'ed - fbc'], skipped: [] }),
