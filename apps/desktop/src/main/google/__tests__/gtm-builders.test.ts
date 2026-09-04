@@ -2155,6 +2155,63 @@ test('auditServerContainer (4): flags a Test Event Code left set (testId) as med
   assert.ok(clears, 'the fix clears testId');
 });
 
+test('auditServerContainer (3/4/5): Snapchat + Microsoft CAPI swapped credentials, test code, and missing event_id', () => {
+  const UUID = '0a1b2c3d-4e5f-6789-abcd-ef0123456789';
+  const longToken = 't'.repeat(120);
+  const row = (name: string, value: string) => ({ type: 'map', map: [{ type: 'template', key: 'name', value: name }, { type: 'template', key: 'value', value }] });
+  const cvt = (tagId: string, name: string, type: string, parameter: Array<Record<string, unknown>>) =>
+    ({ tagId, name, type, firingTriggerId: ['1'], blockingTriggerId: [] as string[], paused: false, parameter, consentSettings: null });
+  const rep = auditServerContainer({
+    taggingServerUrls: ['https://sgtm.example.com'],
+    clients: [{ clientId: '1', name: 'GA4', type: 'gaaw_client' }],
+    transformations: [], triggers: [],
+    tags: [
+      // Snapchat SWAPPED: pixelId holds the long token, apiAccessToken holds the UUID. event_id present.
+      cvt('501', 'Snap CAPI A', 'cvt_SN99', [
+        { type: 'template', key: 'pixelId', value: longToken },
+        { type: 'template', key: 'apiAccessToken', value: UUID },
+        { type: 'list', key: 'serverParameters', list: [row('event_id', '{{ed - event_id}}')] },
+      ]),
+      // Snapchat CLEAN wiring + leftover Test Event Code (medium, NOT auto-fixable) + event_id present.
+      cvt('502', 'Snap CAPI B', 'cvt_SN99', [
+        { type: 'template', key: 'pixelId', value: UUID },
+        { type: 'template', key: 'apiAccessToken', value: longToken },
+        { type: 'list', key: 'serverParameters', list: [row('event_id', '{{ed - event_id}}'), row('test_event_code', 'TEST42')] },
+      ]),
+      // Snapchat CLEAN but NO event_id row → dedup flag (Snap has no auto-extract toggle).
+      cvt('503', 'Snap CAPI C', 'cvt_SN99', [
+        { type: 'template', key: 'pixelId', value: UUID },
+        { type: 'template', key: 'apiAccessToken', value: longToken },
+        { type: 'list', key: 'serverParameters', list: [] },
+      ]),
+      // Microsoft SWAPPED: uetTagId holds the long token, authToken holds a short numeric. autoMap on.
+      cvt('601', 'MS CAPI A', 'cvt_MS99', [
+        { type: 'template', key: 'uetTagId', value: longToken },
+        { type: 'template', key: 'authToken', value: '12345678' },
+        { type: 'template', key: 'autoMapServerEventDataParameters', value: 'true' },
+      ]),
+      // Microsoft CLEAN but autoMap OFF and no explicit eventId → dedup flag (like Meta).
+      cvt('602', 'MS CAPI B', 'cvt_MS99', [
+        { type: 'template', key: 'uetTagId', value: '12345678' },
+        { type: 'template', key: 'authToken', value: longToken },
+        { type: 'template', key: 'autoMapServerEventDataParameters', value: 'false' },
+      ]),
+    ],
+  } as never);
+
+  const swapped = rep.findings.filter((f) => /swapped/i.test(f.message));
+  assert.deepEqual(swapped.map((f) => f.resource?.id).sort(), ['501', '601'], 'Snapchat + Microsoft swapped-credential findings');
+  assert.ok(swapped.every((f) => f.severity === 'high' && f.category === 'security'));
+  assert.ok(!swapped.some((f) => f.message.includes(longToken)), 'never echoes the token value');
+
+  const testCode = rep.findings.filter((f) => /Test Event Code/i.test(f.message));
+  assert.deepEqual(testCode.map((f) => f.resource?.id), ['502'], 'only the Snapchat tag with a test_event_code row is flagged');
+  assert.equal(testCode[0].autoFixable, false, 'a Snap test code is a serverParameters row, not one-field auto-fixable');
+
+  const dedup = rep.findings.filter((f) => f.checkId === 'server_capi_no_event_id');
+  assert.deepEqual(dedup.map((f) => f.resource?.id).sort(), ['503', '602'], 'missing-event_id flagged for Snap (no auto-extract) + Microsoft (autoMap off)');
+});
+
 test('auditServerContainer (3/4): a TikTok CAPI tag (cvt_ with pixelId+accessToken but NO generateFbp/actionSource) is NOT audited under Meta rules', () => {
   const rep = auditServerContainer({
     taggingServerUrls: ['https://sgtm.example.com'],
