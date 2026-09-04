@@ -1,3 +1,9 @@
+## [1.484.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.483.5...v1.484.0) (2026-09-04)
+
+### Features
+
+* **desktop:** typed Snapchat + Microsoft Ads CAPI server tags ([#942](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/942)) ([c951d80](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c951d80d25595f04217c71cd9732b7bfda8d7561))
+
 ## [1.483.5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.483.4...v1.483.5) (2026-09-04)
 
 ### Bug Fixes
