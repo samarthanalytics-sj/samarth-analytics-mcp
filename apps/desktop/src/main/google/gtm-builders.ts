@@ -4161,6 +4161,170 @@ export function buildRedditCapiServerTag(
   };
 }
 
+/* ───────────── Snapchat Conversions API (server) ───────────── */
+
+/** Snap SERVER standard events (eventNameStandard SELECT in the official
+ *  Snapchat/capi-google-tag-manager-serverside-tag template.tpl). */
+export const SNAP_SERVER_EVENTS: string[] = [
+  'PAGE_VIEW', 'ADD_CART', 'PURCHASE', 'SIGN_UP', 'VIEW_CONTENT', 'SEARCH', 'SAVE', 'START_CHECKOUT',
+  'LOGIN', 'LIST_VIEW', 'SUBSCRIBE', 'ADD_BILLING', 'ADD_TO_WISHLIST', 'START_TRIAL', 'SHARE', 'RESERVE',
+  'AD_CLICK', 'AD_VIEW', 'COMPLETE_TUTORIAL', 'LEVEL_COMPLETE', 'INVITE', 'RATE', 'SPENT_CREDITS',
+  'ACHIEVEMENT_UNLOCKED', 'APP_INSTALL', 'APP_OPEN',
+];
+const GA4_TO_SNAP_SERVER: Record<string, string> = {
+  pageview: 'PAGE_VIEW', gtmdom: 'PAGE_VIEW', addtocart: 'ADD_CART', purchase: 'PURCHASE',
+  signup: 'SIGN_UP', viewitem: 'VIEW_CONTENT', viewcontent: 'VIEW_CONTENT', search: 'SEARCH',
+  viewsearchresults: 'SEARCH', begincheckout: 'START_CHECKOUT', checkout: 'START_CHECKOUT',
+  subscribe: 'SUBSCRIBE', addpaymentinfo: 'ADD_BILLING', addbillinginfo: 'ADD_BILLING',
+  addtowishlist: 'ADD_TO_WISHLIST', starttrial: 'START_TRIAL', login: 'LOGIN', share: 'SHARE',
+};
+/** Resolve an event to a Snap SERVER standard event, or null (→ a custom event). PURE. */
+export function snapServerEvent(event: string): string | null {
+  const raw = (event ?? '').trim();
+  if (!raw) return null;
+  const norm = raw.toLowerCase().replace(/[\s_-]/g, '');
+  for (const e of SNAP_SERVER_EVENTS) if (e.replace(/[\s_-]/g, '').toLowerCase() === norm) return e;
+  return GA4_TO_SNAP_SERVER[norm] ?? null;
+}
+/** Snap userDataParameters `name` (SELECT) → the `ed - <emqKey>` EMQ variable it reads. Reuses the Meta
+ *  EMQ variables (create_meta_emq_variables), so identity resolves from the incoming event with the same
+ *  nested/header fallbacks. Snap keys with no ed source (ge/st/madid/sc_click_id/sc_cookie1) are left to
+ *  explicit userData rows. Verified against template.tpl's userDataParameters SELECT. */
+export const SNAP_USER_DATA_MAP: ReadonlyArray<readonly [string, string]> = [
+  ['em', 'email_address'], ['ph', 'phone_number'], ['fn', 'first_name'], ['ln', 'last_name'],
+  ['ct', 'city'], ['zp', 'postal_code'], ['country', 'country'], ['external_id', 'external_id'],
+  ['client_ip_address', 'ip_override'], ['client_user_agent', 'user_agent'],
+];
+
+/** Build a Snapchat Conversions API SERVER tag (Snapchat/capi-google-tag-manager-serverside-tag; `type` =
+ *  its cvt_ code). Event-name control (verified against template.tpl): inheritEventName SELECT
+ *  'inherit'|'override'; under 'override', eventName RADIO 'standard'|'custom' picks eventNameStandard vs
+ *  eventNameCustom. Identity maps into userDataParameters, dedup event_id into serverParameters,
+ *  ecommerce into the free-form customDataParameters. PURE. */
+export function buildSnapchatCapiServerTag(
+  type: string,
+  name: string,
+  pixelId: string,
+  apiAccessToken: string,
+  event: string,
+  opts?: {
+    actionSource?: string;
+    eventId?: string;
+    testId?: string;
+    mapEmqVariables?: boolean;
+    userData?: Array<{ name: string; value: string }>;
+    customData?: Array<{ name: string; value: string }>;
+    serverData?: Array<{ name: string; value: string }>;
+    firingTriggerId?: string[];
+  }
+): GtmTagResource {
+  const parameter: Param[] = [
+    tpl('pixelId', pixelId),
+    tpl('apiAccessToken', apiAccessToken),
+    tpl('actionSource', opts?.actionSource && opts.actionSource.trim() ? opts.actionSource : 'WEB'),
+  ];
+  const ev = event?.trim();
+  if (!ev) {
+    parameter.push(tpl('inheritEventName', 'inherit'));
+  } else {
+    const std = snapServerEvent(ev);
+    parameter.push(tpl('inheritEventName', 'override'), tpl('eventName', std ? 'standard' : 'custom'));
+    parameter.push(std ? tpl('eventNameStandard', std) : tpl('eventNameCustom', ev));
+  }
+  const mapEmq = opts?.mapEmqVariables !== false;
+  // userDataParameters: auto-mapped identity rows referencing the ed - EMQ variables PLUS explicit caller
+  // rows, keyed by name so a caller row REPLACES an auto row of the same name and new keys append.
+  const udByName = new Map<string, { name: string; value: string }>();
+  if (mapEmq) for (const [snapKey, emqKey] of SNAP_USER_DATA_MAP) udByName.set(snapKey, { name: snapKey, value: `{{ed - ${emqKey}}}` });
+  for (const u of opts?.userData ?? []) if (u.name && u.name.trim()) udByName.set(u.name.trim(), { name: u.name.trim(), value: u.value });
+  const udTable = nameValueTable('userDataParameters', [...udByName.values()]);
+  if (udTable) parameter.push(udTable);
+  // serverParameters: event_id (dedup with the Snap Pixel) + test_event_code + explicit rows.
+  const sp = [...(opts?.serverData ?? [])];
+  const eventIdVal = opts?.eventId && opts.eventId.trim() ? opts.eventId.trim() : (mapEmq ? '{{ed - event_id}}' : '');
+  if (eventIdVal && !sp.some((r) => r.name === 'event_id')) sp.push({ name: 'event_id', value: eventIdVal });
+  if (opts?.testId && opts.testId.trim() && !sp.some((r) => r.name === 'test_event_code')) sp.push({ name: 'test_event_code', value: opts.testId.trim() });
+  const spTable = nameValueTable('serverParameters', sp);
+  if (spTable) parameter.push(spTable);
+  const cdTable = nameValueTable('customDataParameters', opts?.customData ?? []);
+  if (cdTable) parameter.push(cdTable);
+  return {
+    name: sanitizeName(name),
+    type,
+    ...(opts?.firingTriggerId && opts.firingTriggerId.length ? { firingTriggerId: opts.firingTriggerId } : {}),
+    parameter,
+  };
+}
+
+/* ───────────── Microsoft Ads (Bing) UET Conversions API (server) ───────────── */
+
+/** Microsoft UET has only page-load + custom events, so an event resolves to the eventType SELECT
+ *  'pageLoad' (a pageview) or 'custom' (everything else, carrying customEventEventName). PURE. */
+export function microsoftServerEventType(event: string): { eventType: 'pageLoad' | 'custom'; custom?: string } {
+  const raw = (event ?? '').trim();
+  const norm = raw.toLowerCase().replace(/[\s_-]/g, '');
+  if (norm === '' || norm === 'pageview' || norm === 'pageload' || norm === 'gtmdom') return { eventType: 'pageLoad' };
+  return { eventType: 'custom', custom: raw };
+}
+
+/** Build a Microsoft Ads (Bing) UET Conversions API SERVER tag (stape-io/microsoft-capi-tag; `type` = its
+ *  cvt_ code). Unlike the other CAPI builders the template AUTO-EXTRACTS msclkid/em/ph, event data and
+ *  server event data from the incoming event (autoMap* SELECTs), so no ed - variables are needed - one
+ *  call yields a working tag as long as the web side forwards MSCLKID. Field keys verified against
+ *  template.tpl. PURE. */
+export function buildMicrosoftCapiServerTag(
+  type: string,
+  name: string,
+  uetTagId: string,
+  authToken: string,
+  event: string,
+  opts?: {
+    autoMap?: boolean;
+    eventId?: string;
+    requireConsent?: boolean;
+    userData?: Array<{ name: string; value: string }>;
+    eventData?: Array<{ name: string; value: string }>;
+    serverData?: Array<{ name: string; value: string }>;
+    firingTriggerId?: string[];
+  }
+): GtmTagResource {
+  const auto = opts?.autoMap !== false;
+  const parameter: Param[] = [];
+  // eventTypeSetupMethod RADIO 'standard'|'inherit'. Default INHERIT (map from the incoming GA4 event);
+  // pass `event` to force standard pageLoad or a custom event.
+  const ev = event?.trim();
+  if (!ev) {
+    parameter.push(tpl('eventTypeSetupMethod', 'inherit'));
+  } else {
+    const et = microsoftServerEventType(ev);
+    parameter.push(tpl('eventTypeSetupMethod', 'standard'), tpl('eventType', et.eventType));
+    if (et.eventType === 'custom') parameter.push(tpl('customEventEventName', et.custom ?? ev));
+  }
+  parameter.push(tpl('uetTagId', uetTagId), tpl('authToken', authToken));
+  // The autoMap* fields are SELECTs whose values are the literal strings 'true'/'false'.
+  parameter.push(
+    tpl('autoMapUserDataParameters', auto ? 'true' : 'false'),
+    tpl('autoMapServerEventDataParameters', auto ? 'true' : 'false'),
+    tpl('autoMapEventParameters', auto ? 'true' : 'false'),
+  );
+  parameter.push(tpl('adStorageConsent', opts?.requireConsent ? 'required' : 'optional'));
+  // Optional explicit override rows on top of the auto-map.
+  const sed = [...(opts?.serverData ?? [])];
+  if (opts?.eventId && opts.eventId.trim() && !sed.some((r) => r.name === 'eventId')) sed.push({ name: 'eventId', value: opts.eventId.trim() });
+  const sedTable = nameValueTable('serverEventDataList', sed);
+  if (sedTable) parameter.push(sedTable);
+  const udTable = nameValueTable('userDataParametersList', opts?.userData ?? []);
+  if (udTable) parameter.push(udTable);
+  const edTable = nameValueTable('eventParametersList', opts?.eventData ?? []);
+  if (edTable) parameter.push(edTable);
+  return {
+    name: sanitizeName(name),
+    type,
+    ...(opts?.firingTriggerId && opts.firingTriggerId.length ? { firingTriggerId: opts.firingTriggerId } : {}),
+    parameter,
+  };
+}
+
 /* ───────────── Amazon Ads Conversions API (server) ───────────── */
 
 /** Amazon SERVER standard events (from stape-io/amazon-tag eventNameStandard SELECT). Keep the hyphen in

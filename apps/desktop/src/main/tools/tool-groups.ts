@@ -195,6 +195,8 @@ const GROUP_MEMBERS: Record<ToolGroup, readonly string[]> = {
     'create_pinterest_capi_server_tag',
     'create_reddit_capi_server_tag',
     'create_amazon_capi_server_tag',
+    'create_snapchat_capi_server_tag',
+    'create_microsoft_capi_server_tag',
     'create_stackadapt_server_tag',
   ],
 
