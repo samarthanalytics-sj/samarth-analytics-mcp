@@ -43,6 +43,10 @@ import {
   redditServerEvent,
   buildAmazonCapiServerTag,
   amazonServerEvent,
+  buildSnapchatCapiServerTag,
+  snapServerEvent,
+  buildMicrosoftCapiServerTag,
+  microsoftServerEventType,
   buildSnapPixelTag,
   pinterestEvent,
   snapEventType,
@@ -3630,6 +3634,86 @@ test('redditServerEvent + buildRedditCapiServerTag: inherit default, standard/cu
   assert.equal(paramVal(t3, 'eventType'), 'custom');
   assert.equal(paramVal(t3, 'eventNameCustom'), 'my_custom_event');
   assert.equal(paramVal(t3, 'eventName'), undefined);
+});
+
+test('snapServerEvent + buildSnapchatCapiServerTag: inherit default, standard/custom event, EMQ user-data auto-map, event_id dedup', () => {
+  assert.equal(snapServerEvent('purchase'), 'PURCHASE');
+  assert.equal(snapServerEvent('add_to_cart'), 'ADD_CART');
+  assert.equal(snapServerEvent('PAGE_VIEW'), 'PAGE_VIEW'); // exact SELECT value passes
+  assert.equal(snapServerEvent('view_item'), 'VIEW_CONTENT'); // GA4 alias
+  assert.equal(snapServerEvent('totally_custom'), null);
+
+  // Default: no event → inherit; auto-mapped identity + event_id.
+  const t = buildSnapchatCapiServerTag('cvt_SN01', 'Snap CAPI', '{{Snap Pixel}}', '{{Snap Token}}', '', { firingTriggerId: ['9'] });
+  assert.equal(t.type, 'cvt_SN01');
+  assert.equal(paramVal(t, 'pixelId'), '{{Snap Pixel}}');
+  assert.equal(paramVal(t, 'apiAccessToken'), '{{Snap Token}}');
+  assert.equal(paramVal(t, 'actionSource'), 'WEB');
+  assert.equal(paramVal(t, 'inheritEventName'), 'inherit');
+  const ud = listRows(t, 'userDataParameters');
+  assert.deepEqual(ud.find((r) => r[0] === 'em'), ['em', '{{ed - email_address}}'], 'em maps to the EMQ email variable');
+  assert.deepEqual(ud.find((r) => r[0] === 'client_ip_address'), ['client_ip_address', '{{ed - ip_override}}']);
+  assert.deepEqual(listRows(t, 'serverParameters'), [['event_id', '{{ed - event_id}}']], 'event_id dedup defaults to the EMQ var');
+  assert.deepEqual(t.firingTriggerId, ['9']);
+
+  // Standard event + explicit dedup id + test code + a caller override wins the em collision; mapEmq off drops the auto set.
+  const t2 = buildSnapchatCapiServerTag('cvt_SN01', 'x', 'P', 'T', 'purchase', {
+    eventId: '{{Order ID}}', testId: 'TEST123', userData: [{ name: 'em', value: '{{My Email}}' }, { name: 'blank', value: '  ' }],
+    customData: [{ name: 'price', value: '{{Value}}' }, { name: 'currency', value: 'USD' }],
+  });
+  assert.equal(paramVal(t2, 'inheritEventName'), 'override');
+  assert.equal(paramVal(t2, 'eventName'), 'standard');
+  assert.equal(paramVal(t2, 'eventNameStandard'), 'PURCHASE');
+  assert.equal(listRows(t2, 'userDataParameters').find((r) => r[0] === 'em')?.[1], '{{My Email}}', 'caller row overrides the auto em');
+  assert.ok(!listRows(t2, 'userDataParameters').some((r) => r[0] === 'blank'), 'blank-name rows dropped');
+  const sp = listRows(t2, 'serverParameters');
+  assert.deepEqual(sp.find((r) => r[0] === 'event_id'), ['event_id', '{{Order ID}}'], 'explicit dedup id wins');
+  assert.deepEqual(sp.find((r) => r[0] === 'test_event_code'), ['test_event_code', 'TEST123']);
+  assert.deepEqual(listRows(t2, 'customDataParameters'), [['price', '{{Value}}'], ['currency', 'USD']]);
+
+  const t3 = buildSnapchatCapiServerTag('cvt_SN01', 'x', 'P', 'T', 'my_thing', { mapEmqVariables: false });
+  assert.equal(paramVal(t3, 'eventName'), 'custom');
+  assert.equal(paramVal(t3, 'eventNameCustom'), 'my_thing');
+  assert.equal(listRows(t3, 'userDataParameters').length, 0, 'no auto identity rows when mapEmq is off');
+  assert.equal(listRows(t3, 'serverParameters').length, 0, 'no auto event_id when mapEmq is off and no explicit id');
+});
+
+test('microsoftServerEventType + buildMicrosoftCapiServerTag: inherit/pageLoad/custom, autoMap toggles, override rows', () => {
+  assert.deepEqual(microsoftServerEventType('page_view'), { eventType: 'pageLoad' });
+  assert.deepEqual(microsoftServerEventType(''), { eventType: 'pageLoad' });
+  assert.deepEqual(microsoftServerEventType('purchase'), { eventType: 'custom', custom: 'purchase' });
+
+  // Default: inherit + autoMap on (template extracts msclkid/em/ph from the event).
+  const t = buildMicrosoftCapiServerTag('cvt_MS01', 'MS CAPI', '{{UET}}', '{{MS Token}}', '', { firingTriggerId: ['3'] });
+  assert.equal(t.type, 'cvt_MS01');
+  assert.equal(paramVal(t, 'eventTypeSetupMethod'), 'inherit');
+  assert.equal(paramVal(t, 'uetTagId'), '{{UET}}');
+  assert.equal(paramVal(t, 'authToken'), '{{MS Token}}');
+  assert.equal(paramVal(t, 'autoMapUserDataParameters'), 'true');
+  assert.equal(paramVal(t, 'autoMapServerEventDataParameters'), 'true');
+  assert.equal(paramVal(t, 'autoMapEventParameters'), 'true');
+  assert.equal(paramVal(t, 'adStorageConsent'), 'optional');
+  assert.deepEqual(t.firingTriggerId, ['3']);
+
+  // pageview → standard pageLoad.
+  const t2 = buildMicrosoftCapiServerTag('cvt_MS01', 'x', 'U', 'A', 'pageview');
+  assert.equal(paramVal(t2, 'eventTypeSetupMethod'), 'standard');
+  assert.equal(paramVal(t2, 'eventType'), 'pageLoad');
+  assert.equal(paramVal(t2, 'customEventEventName'), undefined);
+
+  // custom event + autoMap off + explicit override rows + consent required.
+  const t3 = buildMicrosoftCapiServerTag('cvt_MS01', 'x', 'U', 'A', 'lead', {
+    autoMap: false, requireConsent: true, eventId: '{{EID}}',
+    userData: [{ name: 'msclkid', value: '{{msclkid}}' }],
+    eventData: [{ name: 'value', value: '{{V}}' }],
+  });
+  assert.equal(paramVal(t3, 'eventType'), 'custom');
+  assert.equal(paramVal(t3, 'customEventEventName'), 'lead');
+  assert.equal(paramVal(t3, 'autoMapUserDataParameters'), 'false');
+  assert.equal(paramVal(t3, 'adStorageConsent'), 'required');
+  assert.deepEqual(listRows(t3, 'serverEventDataList'), [['eventId', '{{EID}}']]);
+  assert.deepEqual(listRows(t3, 'userDataParametersList'), [['msclkid', '{{msclkid}}']]);
+  assert.deepEqual(listRows(t3, 'eventParametersList'), [['value', '{{V}}']]);
 });
 
 test('amazonServerEvent + buildAmazonCapiServerTag: tagIdsList value column, region, event map, eventId → clientDedupeId', () => {

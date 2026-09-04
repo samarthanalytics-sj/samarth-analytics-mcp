@@ -742,8 +742,9 @@ async function main(): Promise<void> {
     // phone-conversion reads (detect_page_phone_numbers, plan_phone_conversion_tracking) = 114,
     // plus the GTM write batch_delete_gtm_entities = 115, plus the GTM write update_gtm_variable = 116,
     // plus the three in-place update tools update_gtm_environment / update_gtm_client / update_gtm_transformation = 119,
-    // plus the two read-only template-discovery tools describe_template_fields / profile_tag_types = 121.
-    assert.equal(withWrites.list().length, 121 + 64, 'read + write registry has 121 GTM/GA4-read/context/write + 64 GA4-write tools');
+    // plus the two read-only template-discovery tools describe_template_fields / profile_tag_types = 121,
+    // plus the two CAPI server tags create_snapchat_capi_server_tag / create_microsoft_capi_server_tag = 123.
+    assert.equal(withWrites.list().length, 123 + 64, 'read + write registry has 123 GTM/GA4-read/context/write + 64 GA4-write tools');
     for (const n of ['update_gtm_environment', 'update_gtm_client', 'update_gtm_transformation']) {
       assert.equal(withWrites.list().some((t) => t.name === n), true, `${n} present`);
       assert.equal(withWrites.isWrite?.(n), true, `${n} is a write`);

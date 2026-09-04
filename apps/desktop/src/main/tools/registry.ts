@@ -77,6 +77,8 @@ import {
   buildStackAdaptServerTag,
   buildRedditCapiServerTag,
   buildAmazonCapiServerTag,
+  buildSnapchatCapiServerTag,
+  buildMicrosoftCapiServerTag,
   buildTikTokPixelTag,
   buildLinkedInInsightTag,
   buildRedditPixelTag,
@@ -5066,6 +5068,134 @@ export function buildToolRegistry(
           autoMap: bln(a.autoMap),
           optimistic: bln(a.optimistic),
           requireConsent: bln(a.requireConsent),
+          firingTriggerId: Array.isArray(a.firingTriggerId) && a.firingTriggerId.length ? a.firingTriggerId.map(String) : undefined,
+        });
+        return data.createGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), tag as unknown as Record<string, unknown>);
+      },
+    },
+    {
+      name: 'create_snapchat_capi_server_tag',
+      description:
+        'Create a Snapchat Conversions API SERVER tag from the OFFICIAL Snapchat template (Snapchat / capi-google-tag-manager-serverside-tag), imported automatically: the server counterpart of the Snap Pixel. containerId must be the SERVER container. pixelId is the Snap Pixel ID and apiAccessToken the CAPI token (Snapchat Ads Manager > Events Manager), usually {{variables}}. The event name is INHERITED from the incoming event by default; pass `event` to force a Snap standard event (PAGE_VIEW/ADD_CART/PURCHASE/SIGN_UP/VIEW_CONTENT/SEARCH/START_CHECKOUT/SUBSCRIBE/ADD_BILLING/ADD_TO_WISHLIST/START_TRIAL/…, a GA4 name, or a custom name). mapEmqVariables (default true) auto-maps the userDataParameters identity rows (em/ph/fn/ln/ct/zp/country/external_id/client_ip_address/client_user_agent) to the ed - EMQ variables (created if missing) and sends event_id for browser/server dedup. userData ADDS advanced-matching rows (name ∈ em/ph/fn/ln/ge/ct/st/zp/country/client_ip_address/client_user_agent/external_id/subscription_id/lead_id/madid/sc_click_id/sc_cookie1). customData rows carry ecommerce (price/currency/transaction_id/…). Needs a SERVER trigger (create_server_trigger).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          name: { type: 'string', description: 'Optional, defaults to "Snapchat CAPI - <Event> Tag".' },
+          pixelId: { type: 'string' },
+          apiAccessToken: { type: 'string' },
+          event: { type: 'string', description: 'Force an event; omit to inherit from the incoming one.' },
+          eventId: { type: 'string', description: 'Dedup id; omit to send {{ed - event_id}}.' },
+          testId: { type: 'string', description: 'Test event code (serverParameters test_event_code).' },
+          actionSource: { type: 'string', description: 'WEB (default) / MOBILE_APP / OFFLINE.' },
+          mapEmqVariables: { type: 'boolean', description: 'Auto-map identity + event_id from the ed - variables (default true).' },
+          userData: {
+            type: 'array', description: 'Advanced-matching override rows {name,value}.',
+            items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
+          },
+          customData: {
+            type: 'array', description: 'Ecommerce custom_data rows {name,value}.',
+            items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
+          },
+          serverData: {
+            type: 'array', description: 'serverParameters override rows {name,value}.',
+            items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
+          },
+          firingTriggerId: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'pixelId', 'apiAccessToken'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => `Create Snapchat CAPI server tag for ${s(a.event).trim() || 'incoming event'} (pixel ${s(a.pixelId)})`,
+      precheck: (a) => findExistingByName(data, a, s(a.name).trim() || `Snapchat CAPI - ${s(a.event).trim() || 'Event'} Tag`, 'tag'),
+      handler: async (a) => {
+        if (!s(a.pixelId).trim()) throw new Error('pixelId is required (the Snap Pixel ID, usually a {{variable}}).');
+        if (!s(a.apiAccessToken).trim()) throw new Error('apiAccessToken is required (the Snapchat CAPI token, usually a {{variable}}).');
+        const tmpl = await data.importGalleryTemplate(s(a.accountId), s(a.containerId), s(a.workspaceId), 'Snapchat', 'capi-google-tag-manager-serverside-tag');
+        if (!tmpl.type || !tmpl.type.startsWith('cvt_')) {
+          throw new Error(`Could not resolve the Snapchat CAPI template's tag type (got "${tmpl.type}"). Import Snapchat/capi-google-tag-manager-serverside-tag and check list_gtm_templates.`);
+        }
+        const mapEmq = bln(a.mapEmqVariables) !== false;
+        let createdVariables: string[] = [];
+        if (mapEmq) {
+          try { createdVariables = (await data.createMetaEmqVariables(s(a.accountId), s(a.containerId), s(a.workspaceId))).created; } catch { /* best-effort */ }
+        }
+        const event = s(a.event).trim();
+        const name = s(a.name).trim() || `Snapchat CAPI - ${event || 'Event'} Tag`;
+        const rows = (v: unknown): Array<{ name: string; value: string }> | undefined =>
+          Array.isArray(v) ? v.map((p) => ({ name: s(obj(p).name), value: s(obj(p).value) })).filter((p) => p.name) : undefined;
+        const tag = buildSnapchatCapiServerTag(tmpl.type, name, s(a.pixelId), s(a.apiAccessToken), event, {
+          actionSource: a.actionSource != null ? s(a.actionSource) : undefined,
+          eventId: a.eventId != null ? s(a.eventId) : undefined,
+          testId: a.testId != null ? s(a.testId) : undefined,
+          mapEmqVariables: mapEmq,
+          userData: rows(a.userData),
+          customData: rows(a.customData),
+          serverData: rows(a.serverData),
+          firingTriggerId: Array.isArray(a.firingTriggerId) && a.firingTriggerId.length ? a.firingTriggerId.map(String) : undefined,
+        });
+        const created = await data.createGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), tag as unknown as Record<string, unknown>);
+        return { ...created, createdVariables };
+      },
+    },
+    {
+      name: 'create_microsoft_capi_server_tag',
+      description:
+        'Create a Microsoft Ads (Bing) UET Conversions API SERVER tag from the Stape template (stape-io / microsoft-capi-tag), imported automatically. The classic UET tag is WEB-only; this sends conversions server-to-server. containerId must be the SERVER container. uetTagId is your UET Tag ID and authToken the Microsoft Ads CAPI token, usually {{variables}}. REQUIRES the MSCLKID click id to be captured on the web side (from the landing URL) and forwarded to the server. Event type is INHERITED from the incoming event by default; pass `event` to force pageLoad (a pageview) or a custom event name. autoMap (default true) makes the template extract msclkid/em/ph, event data and server event data from the incoming event, so ONE call yields a working tag; userData/eventData/serverData ADD explicit override rows. Needs a SERVER trigger (create_server_trigger).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          name: { type: 'string', description: 'Optional, defaults to "Microsoft CAPI - <Event> Tag".' },
+          uetTagId: { type: 'string' },
+          authToken: { type: 'string' },
+          event: { type: 'string', description: 'Force pageLoad or a custom event; omit to inherit.' },
+          eventId: { type: 'string', description: 'Dedup id (serverEventDataList eventId row).' },
+          autoMap: { type: 'boolean', description: 'Let the template extract msclkid/user/event data from the incoming event (default true).' },
+          requireConsent: { type: 'boolean', description: 'Gate on ad_storage consent (default false).' },
+          userData: {
+            type: 'array', description: 'userDataParametersList override rows {name,value} (name ∈ anonymousId/externalId/msclkid/em/ph/clientIpAddress/clientUserAgent/idfa/gaid).',
+            items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
+          },
+          eventData: {
+            type: 'array', description: 'eventParametersList override rows {name,value} (value/currency/transactionId/…).',
+            items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
+          },
+          serverData: {
+            type: 'array', description: 'serverEventDataList override rows {name,value}.',
+            items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
+          },
+          firingTriggerId: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'uetTagId', 'authToken'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => `Create Microsoft Ads CAPI server tag for ${s(a.event).trim() || 'incoming event'} (UET ${s(a.uetTagId)})`,
+      precheck: (a) => findExistingByName(data, a, s(a.name).trim() || `Microsoft CAPI - ${s(a.event).trim() || 'Event'} Tag`, 'tag'),
+      handler: async (a) => {
+        if (!s(a.uetTagId).trim()) throw new Error('uetTagId is required (your Microsoft Advertising UET Tag ID, usually a {{variable}}).');
+        if (!s(a.authToken).trim()) throw new Error('authToken is required (the Microsoft Ads CAPI token, usually a {{variable}}).');
+        const tmpl = await data.importGalleryTemplate(s(a.accountId), s(a.containerId), s(a.workspaceId), 'stape-io', 'microsoft-capi-tag');
+        if (!tmpl.type || !tmpl.type.startsWith('cvt_')) {
+          throw new Error(`Could not resolve the Stape Microsoft CAPI template's tag type (got "${tmpl.type}"). Import stape-io/microsoft-capi-tag and check list_gtm_templates.`);
+        }
+        const event = s(a.event).trim();
+        const name = s(a.name).trim() || `Microsoft CAPI - ${event || 'Event'} Tag`;
+        const rows = (v: unknown): Array<{ name: string; value: string }> | undefined =>
+          Array.isArray(v) ? v.map((p) => ({ name: s(obj(p).name), value: s(obj(p).value) })).filter((p) => p.name) : undefined;
+        const tag = buildMicrosoftCapiServerTag(tmpl.type, name, s(a.uetTagId), s(a.authToken), event, {
+          autoMap: bln(a.autoMap),
+          eventId: a.eventId != null ? s(a.eventId) : undefined,
+          requireConsent: bln(a.requireConsent),
+          userData: rows(a.userData),
+          eventData: rows(a.eventData),
+          serverData: rows(a.serverData),
           firingTriggerId: Array.isArray(a.firingTriggerId) && a.firingTriggerId.length ? a.firingTriggerId.map(String) : undefined,
         });
         return data.createGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), tag as unknown as Record<string, unknown>);
