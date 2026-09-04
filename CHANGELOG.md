@@ -1,3 +1,9 @@
+## [1.483.5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.483.4...v1.483.5) (2026-09-04)
+
+### Bug Fixes
+
+* address four QC findings in the MCP server (sweep, audit, updates, oauth) ([#941](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/941)) ([62d238d](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/62d238d1a39b332acd3b271ec2cf6aab1b0db437))
+
 ## [1.483.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.483.3...v1.483.4) (2026-09-04)
 
 ### Bug Fixes
