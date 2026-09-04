@@ -1394,6 +1394,40 @@ async function main(): Promise<void> {
     assert.ok(okVar.tag, 'a {{variable}} measurement id is allowed');
   });
 
+  await test('create_tracking_tag REFUSES an off-enum trigger kind before any write (no orphan variables)', async () => {
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data, approveAsIs);
+    await assert.rejects(
+      () => reg.execute('create_gtm_tracking_tag', {
+        accountId: '1', containerId: '2', workspaceId: '3',
+        // "click" is a real GTM EventType name but NOT a kind this tool builds; buildTrigger would throw.
+        platform: 'ga4_event', tagName: 'GA4 - Event - Bad', measurementId: 'G-REAL12345', eventName: 'x',
+        trigger: { name: 'Bad', kind: 'click', clickTextValue: 'Buy' },
+      }),
+      /is not one this tool builds/i,
+      'an off-enum kind is rejected'
+    );
+    assert.ok(!fd.calls.some((c) => c.startsWith('enableVars')), 'no built-ins enabled before the failure');
+    assert.ok(!fd.calls.some((c) => c.startsWith('createVar')), 'no companion variables created - no orphans left behind');
+    assert.ok(!fd.calls.some((c) => c.startsWith('createTrigger')), 'no trigger created');
+    assert.ok(!fd.calls.some((c) => c.startsWith('createTag')), 'no tag created');
+  });
+
+  await test('create_tracking_tag reports enabledVariables [] + a warning when the built-in enable call fails', async () => {
+    const fd = fakeData();
+    fd.data.enableGtmBuiltInVariables = async () => { throw new Error('insufficient permission'); };
+    const reg = buildToolRegistry(fd.data, approveAsIs);
+    const out = JSON.parse(await reg.execute('create_gtm_tracking_tag', {
+      accountId: '1', containerId: '2', workspaceId: '3',
+      platform: 'ga4_event', tagName: 'GA4 - Event - W', measurementId: 'G-REAL12345', eventName: 'x',
+      eventParameters: [{ name: 'click_text', value: '{{Click Text}}' }],
+      trigger: { name: 'W', kind: 'link_click', clickTextValue: 'Buy' },
+    }));
+    assert.deepEqual(out.enabledVariables, [], 'built-ins are NOT reported as enabled when the enable call failed');
+    assert.match(out.builtInVariablesWarning, /were NOT enabled/i, 'a warning explains the referenced variables are unresolved');
+    assert.ok(out.tag, 'the tag is still created (draft) so the model can finish wiring it');
+  });
+
   await test('create on an EXISTING name steers to UPDATE in place, not delete-and-recreate', async () => {
     // The tag already exists -> the precheck must skip the create AND tell the model to update_gtm_tag
     // (with the id), explicitly warning against delete+recreate. This is the fix for the model deleting
