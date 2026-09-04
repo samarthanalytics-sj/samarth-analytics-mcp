@@ -1,3 +1,9 @@
+## [1.489.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.488.0...v1.489.0) (2026-09-04)
+
+### Features
+
+* **desktop:** apply audit fixes from the server-container audit view ([#947](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/947)) ([f0d52a4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/f0d52a47fd274eb382e17604236ee90d2513183c))
+
 ## [1.488.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.487.0...v1.488.0) (2026-09-04)
 
 ### Features
