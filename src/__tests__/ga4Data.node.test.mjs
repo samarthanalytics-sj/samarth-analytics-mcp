@@ -1,7 +1,13 @@
 /**
- * Node test for GA4 Data (read-only) report tools — the truncation-signal fix. GA4's rowCount is the
- * TOTAL matching rows, independent of limit/offset, so a paged response must also report returnedRowCount
- * + hasMore (report) / truncated (realtime) so a caller never treats a partial page as the whole set.
+ * Node test for GA4 Data (read-only) report tools.
+ *
+ * 1. The truncation-signal fix. GA4's rowCount is the TOTAL matching rows, independent of limit/offset,
+ *    so a paged response must also report returnedRowCount + hasMore (report) / truncated (realtime)
+ *    so a caller never treats a partial page as the whole set.
+ * 2. The ga4_check_compatibility reading fix. checkCompatibility returns the property's WHOLE catalogue
+ *    graded for being ADDED to the request, and 400s when the requested set itself clashes, so only the
+ *    requested names may carry a verdict and the 400 IS the incompatible answer.
+ *
  * Imports the COMPILED tool from dist. Run: node src/__tests__/ga4Data.node.test.mjs
  */
 

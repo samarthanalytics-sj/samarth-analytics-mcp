@@ -100,6 +100,29 @@ describe('formatGoogleError', () => {
     expect(result).toContain('The caller does not have permission');
     expect(result).toContain('forbidden');
   });
+
+  it('formats the OAuth string error shape and keeps error_description', () => {
+    // A revoked/expired refresh token fails during token refresh with the STRING
+    // error shape. This used to render as "Google API Error : invalid_grant",
+    // dropping the sentence that tells the user to re-run the auth flow.
+    const err = Object.assign(new Error('invalid_grant'), {
+      response: {
+        data: {
+          error: 'invalid_grant',
+          error_description: 'Token has been expired or revoked.',
+        },
+      },
+    });
+    const result = formatGoogleError(err);
+    expect(result).toBe('Google API Error invalid_grant: Token has been expired or revoked.');
+  });
+
+  it('formats the OAuth string error shape with no description', () => {
+    const err = Object.assign(new Error('unauthorized_client'), {
+      response: { data: { error: 'unauthorized_client' } },
+    });
+    expect(formatGoogleError(err)).toBe('Google API Error unauthorized_client');
+  });
 });
 
 describe('buildPath', () => {

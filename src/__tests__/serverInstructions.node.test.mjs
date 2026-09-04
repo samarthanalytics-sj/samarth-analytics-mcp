@@ -15,7 +15,7 @@
  */
 
 import assert from 'assert';
-import { existsSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { fileURLToPath, pathToFileURL } from 'url';
 import path from 'path';
 
@@ -25,7 +25,9 @@ if (!existsSync(distServer)) {
   console.error(`\n✗ serverInstructions test: ${distServer} not found. Run "npm run build" first.`);
   process.exit(1);
 }
-const { createGtmMcpServer, buildInstructions } = await import(pathToFileURL(distServer).href);
+const { createGtmMcpServer, buildInstructions, SERVER_VERSION } = await import(
+  pathToFileURL(distServer).href
+);
 
 let passed = 0;
 let failed = 0;
@@ -143,6 +145,27 @@ await test('no em dash reaches the client anywhere in the instructions', async (
   // Checking only the mode line would pass trivially while a dozen other lines still shipped them.
   const text = buildInstructions(OFF);
   assert.ok(!text.includes('—'), 'em dash found in the instructions string');
+});
+
+console.log('\nserverInstructions: what a live server tells the model about itself');
+
+await test('REGRESSION: serverInfo.version is the shipped package version, not a stale literal', async () => {
+  // SERVER_VERSION was hard-coded '1.0.0' while semantic-release moved package.json to 1.4xx.0,
+  // so every initialize response advertised a version that had not been true since release one.
+  const pkg = JSON.parse(readFileSync(path.resolve(here, '../../package.json'), 'utf8'));
+  assert.strictEqual(
+    SERVER_VERSION,
+    pkg.version,
+    `clients are told version ${SERVER_VERSION} but this build is ${pkg.version}`
+  );
+});
+
+await test('the server hands the client that same version in serverInfo', async () => {
+  // Guards the wiring as well as the constant: the version has to reach the McpServer options.
+  const info = createGtmMcpServer({}).server._serverInfo;
+  assert.ok(info, 'no serverInfo on the constructed server');
+  assert.strictEqual(info.name, 'samarth-gtm-mcp');
+  assert.strictEqual(info.version, SERVER_VERSION);
 });
 
 console.log(`\nserverInstructions: ${passed} passed, ${failed} failed`);

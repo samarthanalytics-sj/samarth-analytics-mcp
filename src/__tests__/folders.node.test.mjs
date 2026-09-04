@@ -149,5 +149,80 @@ await test('an empty folder returns empty arrays, not a bare {}', async () => {
   assert.deepStrictEqual(b.counts, { tag: 0, trigger: 0, variable: 0 });
 });
 
-console.log(`\nfolders_entities: ${passed} passed, ${failed} failed`);
+/**
+ * folders_update: GTM's folders.update is a full replace, not a patch. The handler used to PUT the
+ * bare `{ name, notes }` the caller passed, so a rename wiped the notes and a notes-only edit sent
+ * no name at all, even though the schema declares both optional. It needs get + update, so it gets
+ * its own client.
+ */
+function buildUpdateServer(existing) {
+  const calls = [];
+  const folders = {
+    get: (p) => {
+      calls.push({ verb: 'get', params: p });
+      return Promise.resolve({ data: { ...existing } });
+    },
+    update: (p) => {
+      calls.push({ verb: 'update', params: p });
+      return Promise.resolve({ data: { ...p.requestBody } });
+    },
+  };
+  const client = { accounts: { containers: { workspaces: { folders } } } };
+  const server = new McpServer({ name: 'folders-test', version: '0.0.1' }, { capabilities: { tools: {} } });
+  registerFolderTools(server, () => client);
+  return { server, calls };
+}
+
+const EXISTING_FOLDER = { folderId: '9', name: 'Marketing', notes: 'owned by ads team', fingerprint: 'f1' };
+
+const update = async (server, extra) => {
+  process.env.GTM_MCP_ENABLE_WRITES = 'true';
+  process.env.DRY_RUN = 'false';
+  const tool = server._registeredTools['folders_update'];
+  const r = await tool.handler({ ...ARGS, confirm: true, ...extra }, { requestId: 'test' });
+  assert.ok(!r.isError, r.content?.[0]?.text);
+  return r;
+};
+const updateBody = (calls) => calls.find((c) => c.verb === 'update').params.requestBody;
+
+console.log('\nfolders_update:');
+
+await test('REGRESSION: a name-only update keeps the existing notes', async () => {
+  // Pre-fix body is { name: 'Paid Media', notes: undefined } and the full-replace PUT clears notes.
+  const { server, calls } = buildUpdateServer(EXISTING_FOLDER);
+  await update(server, { name: 'Paid Media' });
+  const body = updateBody(calls);
+  assert.strictEqual(body.name, 'Paid Media');
+  assert.strictEqual(body.notes, 'owned by ads team');
+});
+
+await test('REGRESSION: a notes-only update still carries the existing name', async () => {
+  // Pre-fix the PUT has no name at all, which GTM rejects or blanks.
+  const { server, calls } = buildUpdateServer(EXISTING_FOLDER);
+  await update(server, { notes: 'new note' });
+  const body = updateBody(calls);
+  assert.strictEqual(body.name, 'Marketing');
+  assert.strictEqual(body.notes, 'new note');
+});
+
+await test('REGRESSION: the fingerprint defaults to the fetched one', async () => {
+  const { server, calls } = buildUpdateServer(EXISTING_FOLDER);
+  await update(server, { name: 'Paid Media' });
+  assert.strictEqual(calls.find((c) => c.verb === 'update').params.fingerprint, 'f1');
+});
+
+await test('a caller-supplied fingerprint still wins over the fetched one', async () => {
+  const { server, calls } = buildUpdateServer(EXISTING_FOLDER);
+  await update(server, { name: 'Paid Media', fingerprint: 'f2' });
+  assert.strictEqual(calls.find((c) => c.verb === 'update').params.fingerprint, 'f2');
+});
+
+await test('an explicit empty notes string still clears the notes', async () => {
+  // The overlay keys on `!== undefined`, so "clear this field" stays expressible.
+  const { server, calls } = buildUpdateServer(EXISTING_FOLDER);
+  await update(server, { notes: '' });
+  assert.strictEqual(updateBody(calls).notes, '');
+});
+
+console.log(`\nfolders: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

@@ -101,6 +101,12 @@ interface VerbSpec {
   query?: (a: Record<string, unknown>) => Record<string, string>;
   /** Reject bodies the API has no fields for BEFORE the request (clear message, no Google 400). */
   validate?: (body: Record<string, unknown>) => void;
+  /** Update only: this resource's patch method has NO updateMask field (v1alpha
+   *  accessBindings.patch replaces the whole binding). googleapis-common keeps every
+   *  non-path param as a query param, so the mask this factory derives used to ride along
+   *  as ?updateMask=roles and Google answered 400 "Cannot bind query parameter" - the role
+   *  change never happened. Set this to send the body alone and to drop the updateMask arg. */
+  noUpdateMask?: boolean;
   desc: string;
 }
 
@@ -214,14 +220,18 @@ function registerResource(
     server.registerTool(
       `ga4_update_${r.key}`,
       {
-        description:
-          `[GA4 WRITE] ${spec.desc} Pass only the fields to change; updateMask is derived from them ` +
-          `(override with an explicit updateMask for nested paths). Requires GA4_MCP_ENABLE_WRITES=true and confirm=true.`,
+        description: spec.noUpdateMask
+          ? `[GA4 WRITE] ${spec.desc} This API has no updateMask: the supplied fields replace the whole resource. ` +
+            `Requires GA4_MCP_ENABLE_WRITES=true and confirm=true.`
+          : `[GA4 WRITE] ${spec.desc} Pass only the fields to change; updateMask is derived from them ` +
+            `(override with an explicit updateMask for nested paths). Requires GA4_MCP_ENABLE_WRITES=true and confirm=true.`,
         inputSchema: z.object({
           name: nameArg(r.plural),
           ...(spec.fields ?? {}),
           ...(allowRaw ? { body: bodyArg } : {}),
-          updateMask: z.string().optional().describe('Comma-separated field paths to update. Omit to derive from the supplied fields.'),
+          ...(spec.noUpdateMask
+            ? {}
+            : { updateMask: z.string().optional().describe('Comma-separated field paths to update. Omit to derive from the supplied fields.') }),
           confirm: z.boolean().describe('Must be true to apply the change.'),
         }),
       },
@@ -230,13 +240,19 @@ function registerResource(
           const { dryRun } = checkGa4Guardrails('write', a.confirm as boolean, getGuardrailConfig());
           const requestBody = { ...(spec.toBody ? spec.toBody(a) : {}), ...((a.body as object) ?? {}) };
           spec.validate?.(requestBody);
-          const updateMask = (a.updateMask as string | undefined)?.trim() || deriveUpdateMask(requestBody);
-          if (!updateMask) return errorText(`ga4_update_${r.key} failed: nothing to update — supply at least one field or updateMask.`);
+          // The derived mask still doubles as the "did the caller actually supply anything"
+          // check for noUpdateMask resources; it is simply never put on the wire for them.
+          const mask = (spec.noUpdateMask ? undefined : (a.updateMask as string | undefined)?.trim()) || deriveUpdateMask(requestBody);
+          if (!mask) return errorText(`ga4_update_${r.key} failed: nothing to update - supply at least one field or updateMask.`);
+          const updateMask = spec.noUpdateMask ? undefined : mask;
           const name = String(a.name).trim();
-          if (dryRun) return textResult(`[DRY RUN] Would patch ${name} (mask ${updateMask}): ${JSON.stringify(requestBody)}`);
+          if (dryRun)
+            return textResult(
+              `[DRY RUN] Would patch ${name} ${updateMask ? `(mask ${updateMask})` : '(full replace, no updateMask)'}: ${JSON.stringify(requestBody)}`
+            );
           const fn = bindVerb(sub(), 'patch');
           if (!fn) return errorText(`ga4_update_${r.key} failed: update is not supported for ${r.plural}.`);
-          const res = await fn({ name, updateMask, requestBody });
+          const res = await fn(updateMask === undefined ? { name, requestBody } : { name, updateMask, requestBody });
           return jsonResult(res.data);
         } catch (err) {
           return errorText(formatGa4Error(`ga4_update_${r.key}`, err));
@@ -518,14 +534,14 @@ function catalog(): ResourceDesc[] {
         toBody: (a) => ({ user: a.user, roles: a.roles }),
         desc: 'Grant a user access to a GA4 property (needs analytics.manage.users scope).',
       },
-      update: { fields: { roles: z.array(z.string()).min(1) }, toBody: (a) => ({ roles: a.roles }), desc: "Change a user's roles on a property (needs analytics.manage.users)." },
+      update: { fields: { roles: z.array(z.string()).min(1) }, toBody: (a) => ({ roles: a.roles }), noUpdateMask: true, desc: "Change a user's roles on a property (needs analytics.manage.users). The roles you pass replace the binding's roles." },
       del: { desc: "Revoke a user's access to a property (needs analytics.manage.users)." },
     },
     {
       key: 'account_access_binding', plural: 'account access bindings', version: 'v1alpha', parent: 'account',
       sub: alpha((c) => c.accounts.accessBindings),
       create: { fields: { user: z.string().min(1), roles: z.array(z.string()).min(1) }, toBody: (a) => ({ user: a.user, roles: a.roles }), desc: 'Grant a user access to a GA4 account (needs analytics.manage.users).' },
-      update: { fields: { roles: z.array(z.string()).min(1) }, toBody: (a) => ({ roles: a.roles }), desc: "Change a user's roles on an account (needs analytics.manage.users)." },
+      update: { fields: { roles: z.array(z.string()).min(1) }, toBody: (a) => ({ roles: a.roles }), noUpdateMask: true, desc: "Change a user's roles on an account (needs analytics.manage.users). The roles you pass replace the binding's roles." },
       del: { desc: "Revoke a user's access to an account (needs analytics.manage.users)." },
     },
   ];

@@ -94,6 +94,36 @@ test('nameless field descriptors are skipped rather than emitted blank', () => {
   assert.deepEqual(parseTemplateParameters(odd)!.map(f => f.name), ['real']);
 });
 
+test('GROUP children are reported as the fields, because that is what GTM stores', () => {
+  // A GROUP is only a visual container: real containers store its children as top-level keys in a
+  // tag's `parameter` array and never the group's own name. Reporting the group as a field sent
+  // callers to a key GTM ignores, and hid the child the template actually requires. Groups nest,
+  // so the walk has to go all the way down.
+  const grouped = `___TEMPLATE_PARAMETERS___
+
+[
+  {"type": "TEXT", "name": "pixelId"},
+  {
+    "type": "GROUP",
+    "name": "advancedSettings",
+    "displayName": "Advanced",
+    "subParams": [
+      {"type": "TEXT", "name": "currency", "valueValidators": [{"type": "NON_EMPTY"}]},
+      {"type": "GROUP", "name": "consentGroup", "subParams": [{"type": "CHECKBOX", "name": "waitForUpdate"}]}
+    ]
+  }
+]
+`;
+  const fields = parseTemplateParameters(grouped)!;
+  assert.deepEqual(fields.map(f => f.name), ['pixelId', 'currency', 'waitForUpdate']);
+  assert.ok(!fields.some(f => f.type === 'GROUP'), 'a group is not a parameter key');
+  // The NON_EMPTY validator lives on a child, so required must survive the hoist.
+  assert.equal(fields.find(f => f.name === 'currency')!.required, true);
+  assert.equal(fields.find(f => f.name === 'currency')!.type, 'TEXT');
+  // The children are real fields, not columns of the group.
+  assert.equal(fields.find(f => f.name === 'waitForUpdate')!.subFields, undefined);
+});
+
 // ── profiling what a container already runs ────────────────────────────────
 
 const TAGS = [

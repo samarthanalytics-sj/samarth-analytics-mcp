@@ -99,7 +99,8 @@ export function registerEnvironmentTools(server: McpServer, getClient: () => Gtm
     'environments_update',
     {
       description:
-        '[WRITE] Update an existing GTM environment. Requires GTM_MCP_ENABLE_WRITES=true and confirm=true.',
+        '[WRITE] Update an existing GTM environment (read-modify-write: omitted fields are preserved). ' +
+        'Requires GTM_MCP_ENABLE_WRITES=true and confirm=true.',
       inputSchema: containerBase.extend({
         environmentId: z.string().describe('The GTM environment ID to update.'),
         name: z.string().optional().describe('New environment name.'),
@@ -118,10 +119,21 @@ export function registerEnvironmentTools(server: McpServer, getClient: () => Gtm
           return textResult(`[DRY RUN] Would update environment ${environmentId}`);
         }
         const client = getClient();
+        const path = `accounts/${accountId}/containers/${containerId}/environments/${environmentId}`;
+        // GTM's update is a full replace. This used to PUT only the caller's fields, which wiped
+        // name/description/enableDebug off the environment (or was rejected outright for a missing
+        // name). Fetch first and overlay only the fields actually provided, the same
+        // read-modify-write tags_update / triggers_update / variables_update do.
+        const existing = (await client.accounts.containers.environments.get({ path })).data;
+        const merged: tagmanager_v2.Schema$Environment = { ...existing };
+        for (const [k, v] of Object.entries(updates)) {
+          if (v === undefined) continue;
+          (merged as Record<string, unknown>)[k] = v;
+        }
         const res = await client.accounts.containers.environments.update({
-          path: `accounts/${accountId}/containers/${containerId}/environments/${environmentId}`,
-          ...(fingerprint ? { fingerprint } : {}),
-          requestBody: updates as tagmanager_v2.Schema$Environment,
+          path,
+          fingerprint: fingerprint ?? existing.fingerprint ?? undefined,
+          requestBody: merged,
         });
         return jsonResult(res.data);
       } catch (err) {

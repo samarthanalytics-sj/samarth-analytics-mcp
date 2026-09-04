@@ -368,20 +368,25 @@ export function findNativeTemplate(name: string): { name: string; code: string |
 const ALL_TAG_ENTRIES = [...TAG_TYPES.web, ...TAG_TYPES.server, ...TAG_TYPES.legacy];
 
 /**
- * Tells a gallery-installed template apart from one authored in the container, from the code alone.
+ * Reports the SHAPE of a custom-template code, which is all a code alone can honestly tell you.
  *
- * The two shapes are genuinely different, so no lookup is needed to distinguish them:
+ *   cvt_MRQN8        gallery:          the gallery's own id, short and alphanumeric
+ *   cvt_1234567_12   container-scoped: containerId + templateId, both numeric
  *
- *   cvt_MRQN8        gallery: the gallery's own id, which is short and alphanumeric
- *   cvt_1234567_12   local:   containerId + templateId, both numeric
+ * The numeric pair used to be reported as 'local', meaning authored in this container. That was
+ * wrong: GTM assigns a container-scoped id to gallery IMPORTS too, and in the export corpus the
+ * overwhelming majority of numeric-pair codes belong to templates that carry a galleryReference.
+ * Calling one of those home-grown told auditors a vendor template had no publisher and no upstream
+ * version, which is exactly the misleading verdict this file exists to avoid. The shape is still
+ * worth reporting, but only as a shape: origin has to come from the template's galleryReference.
  *
- * Only the numeric pair is treated as local. A gallery id could in principle contain an underscore,
- * and misreading a vendor template as home-grown would send someone hunting for source code that
- * does not exist, so anything that is not clearly the numeric pair falls back to gallery.
+ * Anything that is not clearly the numeric pair still falls back to gallery, because a gallery id
+ * could in principle contain an underscore and sending someone hunting for source code that does
+ * not exist is the more expensive mistake.
  */
-export function customTemplateOrigin(code: string): 'gallery' | 'local' {
+export function customTemplateOrigin(code: string): 'gallery' | 'container-scoped' {
   const parts = (code ?? '').split('_');
-  if (parts.length === 3 && /^\d+$/.test(parts[1]) && /^\d+$/.test(parts[2])) return 'local';
+  if (parts.length === 3 && /^\d+$/.test(parts[1]) && /^\d+$/.test(parts[2])) return 'container-scoped';
   return 'gallery';
 }
 
@@ -398,7 +403,7 @@ export function identifyTagType(type: string): {
   name: string;
   known: boolean;
   scope?: 'web' | 'server' | 'legacy';
-  origin?: 'gallery' | 'local';
+  origin?: 'gallery' | 'container-scoped';
   howToResolve?: string;
 } {
   const code = (type ?? '').trim();
@@ -415,17 +420,21 @@ export function identifyTagType(type: string): {
       'Call templates_list for this workspace and match this exact string against each entry\'s ' +
       'tagType; that template\'s name is the real answer, and it comes from the container itself so ' +
       'it works for every custom template, published or not.';
-    if (origin === 'local') {
+    if (origin === 'container-scoped') {
       return {
         code,
-        name: 'Custom template authored in this container',
+        name: 'Custom template, gallery import or authored in this container',
         known: true,
         origin,
-        // Worth separating: an in-house template is a maintenance question (who owns this code,
-        // is it still correct) rather than a vendor question.
+        // This branch used to claim the template was written here and therefore had no publisher.
+        // A container-scoped id proves no such thing: gallery imports get one too, and most codes
+        // of this shape in real containers are imports. Only galleryReference settles it.
         howToResolve:
-          `${resolve} This one was written in this container rather than installed from the ` +
-          'gallery, so it has no publisher to look up and no upstream version to compare against.',
+          `${resolve} The numeric containerId_templateId shape does NOT mean it was written here: ` +
+          'gallery imports are assigned that shape too, and most templates carrying it are imports. ' +
+          'Read the matching template\'s galleryReference. Present means it came from the gallery, ' +
+          'so it has a publisher and an upstream version to compare against; absent means it really ' +
+          'was authored in this container and is a maintenance question rather than a vendor one.',
       };
     }
     return {
@@ -510,12 +519,17 @@ export function registerReferenceTools(server: McpServer): void {
         // A search is a specific question, so answer only that rather than burying the hit in the
         // whole catalogue.
         if (search && search.trim()) {
-          const matches = searchGallery(search);
+          // Ask for one more than we will show. The flag used to be
+          // `matches.length === MAX_GALLERY_MATCHES`, which called a query with exactly 25 hits
+          // truncated and told the model the list was incomplete when nothing had been dropped.
+          const found = searchGallery(search, MAX_GALLERY_MATCHES + 1);
+          const truncated = found.length > MAX_GALLERY_MATCHES;
+          const matches = truncated ? found.slice(0, MAX_GALLERY_MATCHES) : found;
           return jsonResult({
             query: search,
             matches,
             count: matches.length,
-            truncated: matches.length === MAX_GALLERY_MATCHES,
+            truncated,
             snapshotDate: GALLERY_SNAPSHOT_DATE,
             note:
               matches.length === 0

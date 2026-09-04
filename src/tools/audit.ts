@@ -36,6 +36,40 @@ export interface AuditFinding {
   message: string;
 }
 
+/**
+ * Every triggerReference id nested anywhere in a parameter tree. A Trigger Group holds its member
+ * triggers this way (parameter "triggerIds", a list of triggerReference items).
+ */
+function collectTriggerRefs(
+  params: tagmanager_v2.Schema$Parameter[] | undefined,
+  into: Set<string>
+): void {
+  for (const p of params ?? []) {
+    if (p.type === 'triggerReference' && p.value) into.add(p.value);
+    collectTriggerRefs(p.list, into);
+    collectTriggerRefs(p.map, into);
+  }
+}
+
+/**
+ * Every {{Variable}} name referenced anywhere in a parameter tree (list/map rows nest, so this
+ * recurses). Names beginning with "_" are GTM's own reserved tokens ({{_event}} in a customEvent
+ * filter); they are never listed as variables, so they are not references we can validate.
+ */
+function collectVariableRefs(
+  params: tagmanager_v2.Schema$Parameter[] | undefined,
+  into: Set<string>
+): void {
+  for (const p of params ?? []) {
+    for (const m of (p.value ?? '').matchAll(/\{\{([^{}]+)\}\}/g)) {
+      const name = m[1].trim();
+      if (name && !name.startsWith('_')) into.add(name);
+    }
+    collectVariableRefs(p.list, into);
+    collectVariableRefs(p.map, into);
+  }
+}
+
 export function registerAuditTools(server: McpServer, getClient: () => GtmClient): void {
   server.registerTool(
     'audit_container',
@@ -90,7 +124,15 @@ export function registerAuditTools(server: McpServer, getClient: () => GtmClient
         // Treating it as missing flagged every GA4 config tag - which fires on All Pages - as a broken
         // reference, an error-severity false positive in essentially every container audited.
         const triggerExists = (tid: string): boolean => triggerIdSet.has(tid) || isBuiltinTriggerId(tid);
-        const variableIdSet = new Set(variables.map((v) => v.variableId ?? ''));
+        // Tags reference variables by NAME ({{Page URL}}), so the "tags referencing non-existent
+        // variables" check this file promises needs the name set. What used to be built here was a set
+        // of variable IDs that nothing ever read, so the check simply did not run and a tag bound to a
+        // deleted variable audited clean. Only ENABLED built-ins are listed, which is exactly what GTM
+        // resolves a reference against.
+        const knownVariableNames = new Set<string>([
+          ...variables.map((v) => v.name ?? ''),
+          ...builtInVars.map((b) => b.name ?? ''),
+        ]);
         const builtInVarTypes = new Set(builtInVars.map((b) => b.type ?? ''));
 
         // ── Tag checks ───────────────────────────────────────────────────────
@@ -98,6 +140,17 @@ export function registerAuditTools(server: McpServer, getClient: () => GtmClient
         let ga4ConfigCount = 0;
         const paramValue = (tag: tagmanager_v2.Schema$Tag, key: string): string =>
           (tag.parameter ?? []).find((p) => p.key === key)?.value ?? '';
+
+        // A tag named as another tag's setup or teardown tag fires as part of THAT tag's sequence, so
+        // having no firing trigger of its own is correct. It used to be reported as an error-severity
+        // "it will never fire", which made a properly sequenced container look broken to the /audit
+        // recipe, since that recipe leads with missing_trigger errors.
+        const sequencedTagNames = new Set<string>();
+        for (const tag of tags) {
+          for (const seq of [...(tag.setupTag ?? []), ...(tag.teardownTag ?? [])]) {
+            if (seq.tagName) sequencedTagNames.add(seq.tagName);
+          }
+        }
 
         for (const tag of tags) {
           const id = tag.tagId ?? 'unknown';
@@ -121,7 +174,16 @@ export function registerAuditTools(server: McpServer, getClient: () => GtmClient
           // Tags without firing triggers
           const hasFiringTriggers =
             (tag.firingTriggerId?.length ?? 0) > 0 || (tag.firingRuleId?.length ?? 0) > 0;
-          if (!hasFiringTriggers) {
+          if (!hasFiringTriggers && sequencedTagNames.has(name)) {
+            findings.push({
+              severity: 'info',
+              category: 'sequenced_tag',
+              entityType: 'tag',
+              entityId: id,
+              entityName: name,
+              message: `Tag "${name}" (type: ${type}) has no firing triggers of its own; it fires only as a setup/cleanup tag in another tag's sequence.`,
+            });
+          } else if (!hasFiringTriggers) {
             findings.push({
               severity: 'error',
               category: 'missing_trigger',
@@ -167,6 +229,23 @@ export function registerAuditTools(server: McpServer, getClient: () => GtmClient
                 entityId: id,
                 entityName: name,
                 message: `Tag "${name}" references blocking trigger ID "${tid}" which does not exist in this workspace.`,
+              });
+            }
+          }
+
+          // Validate referenced variable names exist. GTM does not resolve a deleted variable, it leaves
+          // the literal "{{Name}}" text in the parameter, so the tag ships wrong data with no error.
+          const varRefs = new Set<string>();
+          collectVariableRefs(tag.parameter, varRefs);
+          for (const ref of varRefs) {
+            if (!knownVariableNames.has(ref)) {
+              findings.push({
+                severity: 'error',
+                category: 'broken_reference',
+                entityType: 'tag',
+                entityId: id,
+                entityName: name,
+                message: `Tag "${name}" references variable "{{${ref}}}" which does not exist in this workspace (no user-defined variable and no enabled built-in variable has that name).`,
               });
             }
           }
@@ -233,6 +312,35 @@ export function registerAuditTools(server: McpServer, getClient: () => GtmClient
             usedTriggerIds.add(tid);
           }
         }
+        // A conditionally scoped variable also uses a trigger, and a Trigger Group reaches its members
+        // through triggerReference parameters. Neither counted before, so a grouped or variable-scoped
+        // trigger was reported as unused_trigger, inviting the user to delete something still in use.
+        // Group membership is expanded only from triggers that are themselves reached, so a member of a
+        // group no tag uses stays an orphan (same rule as the desktop's collectUsedTriggerIds).
+        for (const variable of variables) {
+          for (const tid of [
+            ...(variable.enablingTriggerId ?? []),
+            ...(variable.disablingTriggerId ?? []),
+          ]) {
+            usedTriggerIds.add(tid);
+          }
+        }
+        const groupMembers = new Map<string, string[]>();
+        for (const trigger of triggers) {
+          const refs = new Set<string>();
+          collectTriggerRefs(trigger.parameter, refs);
+          if (refs.size) groupMembers.set(trigger.triggerId ?? '', [...refs]);
+        }
+        const reachQueue = [...usedTriggerIds];
+        while (reachQueue.length) {
+          const from = reachQueue.pop() as string;
+          for (const member of groupMembers.get(from) ?? []) {
+            if (!usedTriggerIds.has(member)) {
+              usedTriggerIds.add(member);
+              reachQueue.push(member);
+            }
+          }
+        }
 
         for (const trigger of triggers) {
           const id = trigger.triggerId ?? 'unknown';
@@ -265,6 +373,21 @@ export function registerAuditTools(server: McpServer, getClient: () => GtmClient
                 entityId: id,
                 entityName: name,
                 message: `Variable "${name}" references enabling trigger ID "${tid}" which does not exist.`,
+              });
+            }
+          }
+
+          // The disabling side was never validated, so a variable whose disabling trigger had been
+          // deleted audited clean even though the header promises this check.
+          for (const tid of variable.disablingTriggerId ?? []) {
+            if (!triggerExists(tid)) {
+              findings.push({
+                severity: 'warning',
+                category: 'broken_reference',
+                entityType: 'variable',
+                entityId: id,
+                entityName: name,
+                message: `Variable "${name}" references disabling trigger ID "${tid}" which does not exist.`,
               });
             }
           }

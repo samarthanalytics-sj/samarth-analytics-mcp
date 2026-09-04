@@ -25,7 +25,11 @@ function auditRecipe(a: { account?: string; container?: string }): string {
   return [
     `Run a full GTM container audit on ${target(a.account, a.container)}.`,
     '',
-    '1. Resolve the target: if given a public GTM-XXXXXXX id use containers_lookup, otherwise accounts_list → containers_list. audit_container needs ALL THREE ids — accountId, containerId AND workspaceId (it audits ONE workspace, it does NOT auto-pick the latest) — so also run workspaces_list and choose the working workspace (usually "Default Workspace"). Confirm the three ids with the user.',
+    // containers_lookup accepts ONLY destinationId (a linked G-/AW- destination id); the GTM API's
+    // separate tagId parameter is not exposed by that tool. This step used to say "if given a public
+    // GTM-XXXXXXX id use containers_lookup", which can never resolve the very id the argsSchema
+    // invites, so the audit stalled. Resolve a public id by matching publicId in containers_list.
+    '1. Resolve the target: accounts_list → containers_list, and when you were given a public GTM-XXXXXXX id pick the container whose publicId matches it (do NOT use containers_lookup for that: it only accepts destinationId, a linked G-/AW- destination id, not a GTM-XXXXXXX container id). audit_container needs ALL THREE ids - accountId, containerId AND workspaceId (it audits ONE workspace, it does NOT auto-pick the latest) - so also run workspaces_list and choose the working workspace (usually "Default Workspace"). Confirm the three ids with the user.',
     '2. Call audit_container with accountId + containerId + workspaceId (pass includeInfo=true for the verbose info-level findings). It is READ-ONLY. Each finding has a severity (error | warning | info) and a category — the categories are exactly: missing_trigger (tag with no firing trigger), paused_tag, broken_reference (references a variable/trigger that no longer exists), ga4_config, duplicate_name, broad_trigger, unused_trigger, missing_builtin_variable, empty_folder.',
     '3. Summarise: a one-line verdict + the counts of error / warning / info, then the findings grouped by category. Lead with the errors — missing_trigger and broken_reference first (they stop tags firing), then ga4_config, then the warnings.',
     '4. For each notable finding give the one-line why + the concrete fix. Do NOT change anything unless the user explicitly asks (writes are gated behind GTM_MCP_ENABLE_WRITES and need confirm=true).',

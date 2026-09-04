@@ -89,5 +89,23 @@ await test('triggers_update forwards a top-level interval through the read-modif
   assert.deepStrictEqual(body.interval, { type: 'template', value: '10000' }, 'update must set the top-level interval field');
 });
 
+await test('eventName is described as TIMER-only on BOTH create and update, pointing customEvent at customEventFilter', () => {
+  const { server } = buildServer();
+  for (const n of ['triggers_create', 'triggers_update']) {
+    const shape = server._registeredTools[n].inputSchema?.shape ?? {};
+    const d = shape.eventName?.description ?? '';
+    assert.ok(d, `${n}.eventName must carry a description`);
+    assert.ok(/timer/i.test(d), `${n}.eventName must say the field is Timer-only, got: ${d}`);
+    assert.ok(
+      d.includes('customEventFilter') && d.includes('{{_event}}'),
+      `${n}.eventName must send customEvent triggers to customEventFilter with {{_event}}, got: ${d}`
+    );
+    assert.ok(
+      !/custom event name \(for customEvent type\)/i.test(d),
+      `${n}.eventName must not claim to be the customEvent name: GTM rejects that write`
+    );
+  }
+});
+
 console.log(`\ntriggers: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

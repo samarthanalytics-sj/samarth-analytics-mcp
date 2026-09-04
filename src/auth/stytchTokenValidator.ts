@@ -81,6 +81,14 @@ export function createStytchTokenValidator(cfg: ValidatorConfig): StytchTokenVal
 
   let cachedKeys: Jwk[] | null = null;
   let fetchedAt = 0;
+  // Throttle for kid-miss refreshes. A kid we have never seen used to force a JWKS
+  // fetch on EVERY request, so anyone who can reach /mcp could turn unauthenticated
+  // traffic into the same volume of outbound requests to Stytch, and once Stytch rate
+  // limits the JWKS endpoint a real token arriving after the cache TTL is rejected.
+  // A genuine key rotation is still picked up within one cooldown window.
+  const forcedRefreshCooldownMs = 60_000;
+  // -Infinity so the first kid miss of the process always refreshes, whatever the clock.
+  let lastForcedRefreshAt = Number.NEGATIVE_INFINITY;
 
   async function getKeys(forceRefresh: boolean): Promise<Jwk[]> {
     if (!forceRefresh && cachedKeys && now() - fetchedAt < cacheMs) {
@@ -100,9 +108,14 @@ export function createStytchTokenValidator(cfg: ValidatorConfig): StytchTokenVal
     let keys = await getKeys(false);
     let key = keys.find((k) => k.kid === kid) ?? (kid ? undefined : keys[0]);
     if (!key) {
-      // Key not found — keys may have rotated; refresh once.
-      keys = await getKeys(true);
-      key = keys.find((k) => k.kid === kid) ?? (kid ? undefined : keys[0]);
+      // Key not found: keys may have rotated, so refresh once, but at most once per
+      // cooldown window (see forcedRefreshCooldownMs). Claim the window BEFORE awaiting
+      // the fetch so a burst of concurrent unknown-kid requests cannot all get through.
+      if (now() - lastForcedRefreshAt >= forcedRefreshCooldownMs) {
+        lastForcedRefreshAt = now();
+        keys = await getKeys(true);
+        key = keys.find((k) => k.kid === kid) ?? (kid ? undefined : keys[0]);
+      }
     }
     if (!key) throw new TokenValidationError(`no JWKS key for kid=${kid ?? '(none)'}`);
     return key;

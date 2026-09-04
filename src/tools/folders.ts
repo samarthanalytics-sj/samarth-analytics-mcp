@@ -140,7 +140,9 @@ export function registerFolderTools(server: McpServer, getClient: () => GtmClien
   server.registerTool(
     'folders_update',
     {
-      description: '[WRITE] Update a GTM folder. Requires GTM_MCP_ENABLE_WRITES=true and confirm=true.',
+      description:
+        '[WRITE] Update a GTM folder (read-modify-write: omitted fields are preserved). ' +
+        'Requires GTM_MCP_ENABLE_WRITES=true and confirm=true.',
       inputSchema: wsBase.extend({
         folderId: z.string(),
         name: z.string().optional(),
@@ -157,10 +159,20 @@ export function registerFolderTools(server: McpServer, getClient: () => GtmClien
           return textResult(`[DRY RUN] Would update folder ${folderId}`);
         }
         const client = getClient();
+        const path = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/folders/${folderId}`;
+        // GTM's folders.update is a full replace, not a patch. The body used to be the bare
+        // `{ name, notes }` the caller passed, so renaming a folder silently wiped its notes and a
+        // notes-only edit sent no name at all (GTM blanks or rejects it) even though the schema
+        // declares both optional. Fetch first and overlay only what was actually supplied, exactly
+        // as tags_update / triggers_update / variables_update already do.
+        const existing = (await client.accounts.containers.workspaces.folders.get({ path })).data;
+        const merged = { ...existing };
+        if (name !== undefined) merged.name = name;
+        if (notes !== undefined) merged.notes = notes;
         const res = await client.accounts.containers.workspaces.folders.update({
-          path: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/folders/${folderId}`,
-          ...(fingerprint ? { fingerprint } : {}),
-          requestBody: { name, notes },
+          path,
+          fingerprint: fingerprint ?? existing.fingerprint ?? undefined,
+          requestBody: merged,
         });
         return jsonResult(res.data);
       } catch (err) {

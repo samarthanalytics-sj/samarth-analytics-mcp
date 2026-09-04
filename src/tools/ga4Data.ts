@@ -23,6 +23,8 @@ import { z } from 'zod';
 import type { Ga4DataClient } from '../utils/ga4Client.js';
 import { jsonResult, errorText } from '../utils/toolResponse.js';
 import { formatGa4Error, toPropertyName } from '../utils/ga4Errors.js';
+import { formatGoogleError } from '../utils/guardrails.js';
+import { googleErrorStatus } from '../utils/writeDiagnostics.js';
 
 const propertyArg = z
   .string()
@@ -42,6 +44,26 @@ const metricsArg = z
   .min(1)
   .max(10)
   .describe('Metric names, e.g. ["eventCount","totalUsers"]. At least 1, max 10.');
+
+/**
+ * True when `name` appears in `text` as a whole API name.
+ *
+ * Used to read which requested field the Data API named in an incompatibility
+ * rejection. The boundary check keeps "sessions" from matching inside
+ * "sessionsPerUser", which would report a field Google never mentioned.
+ */
+function mentionsName(text: string, name: string): boolean {
+  if (!name) return false;
+  const isNameChar = (c: string) => /[A-Za-z0-9_:]/.test(c);
+  for (let from = 0; ; ) {
+    const at = text.indexOf(name, from);
+    if (at < 0) return false;
+    const before = at === 0 ? '' : text.charAt(at - 1);
+    const after = text.charAt(at + name.length);
+    if (!isNameChar(before) && !isNameChar(after)) return true;
+    from = at + 1;
+  }
+}
 
 export function registerGa4DataTools(
   server: McpServer,
@@ -172,11 +194,13 @@ export function registerGa4DataTools(
       }),
     },
     async ({ property, dimensions, metrics }) => {
+      const askedDimensions = dimensions ?? [];
+      const askedMetrics = metrics ?? [];
       try {
         // Both lists are optional, so a call with NEITHER is well-formed - and it would return two
         // empty buckets, which reads as "nothing is incompatible" for a check that tested nothing.
         // Refuse it instead of answering a question nobody asked.
-        if ((dimensions?.length ?? 0) === 0 && (metrics?.length ?? 0) === 0) {
+        if (askedDimensions.length === 0 && askedMetrics.length === 0) {
           return errorText(
             'Nothing to check: pass at least one dimension or metric. An empty request would report no incompatibilities without having tested anything.'
           );
@@ -184,33 +208,80 @@ export function registerGa4DataTools(
         const res = await getClient().properties.checkCompatibility({
           property: toPropertyName(property),
           requestBody: {
-            dimensions: (dimensions ?? []).map((name) => ({ name })),
-            metrics: (metrics ?? []).map((name) => ({ name })),
+            dimensions: askedDimensions.map((name) => ({ name })),
+            metrics: askedMetrics.map((name) => ({ name })),
           },
         });
         const dims = res.data.dimensionCompatibilities ?? [];
         const mets = res.data.metricCompatibilities ?? [];
-        const names = (rows: Array<Record<string, unknown>>, ok: boolean): string[] =>
-          rows
-            .filter((r) => ((r.compatibility as string) === 'COMPATIBLE') === ok)
-            .map((r) => ((r.dimensionMetadata ?? r.metricMetadata) as { apiName?: string } | undefined)?.apiName ?? '')
-            .filter(Boolean);
-        const incompatible = { dimensions: names(dims as never, false), metrics: names(mets as never, false) };
-        const anyIncompatible = incompatible.dimensions.length + incompatible.metrics.length > 0;
+        // checkCompatibility does NOT grade the request field by field. It answers "what ELSE could
+        // this report carry", returning the property's ENTIRE dimension/metric catalogue marked
+        // COMPATIBLE/INCOMPATIBLE for being ADDED to the request, and it refuses the call outright
+        // (400, handled below) when the requested set itself clashes. The old code bucketed that whole
+        // catalogue, so a valid two-field request came back with dozens of never-requested names under
+        // `incompatible` and a caller was told its working report was broken. Only the fields the
+        // caller actually sent get a verdict now; the rest of the compatible catalogue is offered
+        // separately as `canAlsoAdd` so the information is kept but can never read as a verdict.
+        type CompatRow = {
+          compatibility?: string | null;
+          dimensionMetadata?: { apiName?: string | null } | null;
+          metricMetadata?: { apiName?: string | null } | null;
+        };
+        const grade = (rows: CompatRow[], asked: string[]) => {
+          const wanted = new Set(asked);
+          const verdict = new Map<string, boolean>();
+          const canAlsoAdd: string[] = [];
+          for (const row of rows) {
+            const name = (row.dimensionMetadata ?? row.metricMetadata)?.apiName ?? '';
+            if (!name) continue;
+            const ok = row.compatibility === 'COMPATIBLE';
+            if (wanted.has(name)) verdict.set(name, ok);
+            else if (ok) canAlsoAdd.push(name);
+          }
+          // Reaching here means the API accepted the set, and it only does that when the set is
+          // compatible - so a requested field the catalogue happens not to list is compatible by that
+          // contract, not an unanswered field. Only an explicit INCOMPATIBLE overrides it.
+          return {
+            compatible: asked.filter((n) => verdict.get(n) !== false),
+            incompatible: asked.filter((n) => verdict.get(n) === false),
+            canAlsoAdd,
+          };
+        };
+        const d = grade(dims, askedDimensions);
+        const m = grade(mets, askedMetrics);
+        const incompatible = { dimensions: d.incompatible, metrics: m.incompatible };
+        const allCompatible = incompatible.dimensions.length + incompatible.metrics.length === 0;
         return jsonResult({
-          compatible: { dimensions: names(dims as never, true), metrics: names(mets as never, true) },
+          requested: { dimensions: askedDimensions, metrics: askedMetrics },
+          allCompatible,
+          compatible: { dimensions: d.compatible, metrics: m.compatible },
           incompatible,
-          // Each verdict is relative to the WHOLE set you sent, so two mutually incompatible fields
-          // both come back incompatible and dropping ONE can make the other fine. Reporting this
-          // stops a caller discarding more fields than the property actually requires.
-          ...(anyIncompatible
-            ? {
-                note:
-                  'Each verdict is relative to the full set requested. Two fields that clash are BOTH reported incompatible, so removing one may make the other usable - drop them one at a time and re-check rather than discarding the whole incompatible list. The compatible list is safe to run as-is.',
-              }
-            : {}),
+          canAlsoAdd: { dimensions: d.canAlsoAdd, metrics: m.canAlsoAdd },
+          note: allCompatible
+            ? 'Every requested field is compatible: this set is safe to run as-is. `canAlsoAdd` lists the OTHER fields on this property that could join the same report, and is not a verdict on anything you asked about.'
+            : 'Fields under `incompatible` cannot sit in the same report as the rest of this set. Two fields that clash are both reported, so removing one may make the other usable - drop them one at a time and re-check rather than discarding the whole list.',
         });
       } catch (err) {
+        const apiMessage = formatGoogleError(err);
+        // The API never answers "these clash" with a list: when the requested set is incompatible it
+        // REFUSES the call with 400 and names the field(s) to remove in the message. Returning that as
+        // a tool error - the old behaviour - meant the one question this tool exists to answer came
+        // back as a failure. Report it as the verdict instead. Only a 400 that actually talks about
+        // compatibility is converted; every other failure still surfaces as an error.
+        if (googleErrorStatus(err) === 400 && /compatib/i.test(apiMessage)) {
+          // Match Google's wording against the names WE sent rather than parsing its sentence shape,
+          // so nothing is invented and a reworded message degrades to an empty list plus apiMessage.
+          const named = (asked: string[]) => asked.filter((n) => mentionsName(apiMessage, n));
+          return jsonResult({
+            requested: { dimensions: askedDimensions, metrics: askedMetrics },
+            allCompatible: false,
+            compatible: { dimensions: [], metrics: [] },
+            incompatible: { dimensions: named(askedDimensions), metrics: named(askedMetrics) },
+            apiMessage,
+            note:
+              'The Data API rejected this combination outright, so it returned no per-field verdict: `compatible` is empty because nothing was graded, not because every field is unusable. `incompatible` lists only the fields Google named in `apiMessage`. Drop one of them and re-check.',
+          });
+        }
         return errorText(formatGa4Error('ga4_check_compatibility', err));
       }
     }

@@ -54,6 +54,15 @@ for (const needle of [
 ]) {
   check(`recipe includes "${needle}"`, text.includes(needle));
 }
+// Step 7 previously said to "add" a server_container_url row to configSettingsTable via tags_update.
+// tags_update merges parameters BY TOP-LEVEL KEY (src/utils/tagParams.ts mergeParametersByKey), so a
+// partial list REPLACES the whole table and wipes the tag's other config rows. The recipe must tell the
+// assistant to read the tag first and resend the full list.
+check(
+  'step 7 reads the Google tag first and resends the FULL configSettingsTable',
+  text.includes('tags_get') && /REPLACES the whole list/.test(text) && /BY TOP-LEVEL KEY/.test(text)
+);
+
 // Provided args are interpolated.
 check('interpolates the GA4 Measurement ID arg', text.includes('G-ABC123'));
 check('interpolates the Ads conversion id arg (only when given)', text.includes('AW-999') && text.toLowerCase().includes('sgtmadsct'));
@@ -99,6 +108,12 @@ check('audit prompt is read-only (no writes)', /read-?only/i.test(auditText) && 
 check('audit resolves a workspaceId (audit_container requires all three ids)', auditText.includes('workspaceId') && auditText.includes('workspaces_list'));
 // It must NOT claim audit_container detects Consent Mode / security (it does not).
 check('audit does not falsely claim consent/security detection', /does NOT check Consent Mode/i.test(auditText));
+// containers_lookup takes ONLY destinationId (a linked G-/AW- id), so a public GTM-XXXXXXX id has to be
+// resolved by matching publicId in containers_list; the recipe must not send it to containers_lookup.
+check(
+  'audit resolves a public GTM- id via containers_list + publicId, not containers_lookup',
+  auditText.includes('containers_list') && auditText.includes('publicId') && /do NOT use containers_lookup/i.test(auditText)
+);
 // /report → ga4_run_report, read-only, honours the dateRange arg.
 const reportText = prompts['report'].callback({ property: 'properties/42', dateRange: 'last 7 days' }).messages[0].content.text;
 check('report prompt calls ga4_run_report + interpolates args', reportText.includes('ga4_run_report') && reportText.includes('properties/42') && reportText.includes('last 7 days'));

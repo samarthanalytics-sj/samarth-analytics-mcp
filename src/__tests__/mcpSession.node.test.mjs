@@ -14,7 +14,7 @@
  */
 
 import assert from 'assert';
-import { existsSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { fileURLToPath, pathToFileURL } from 'url';
 import path from 'path';
 
@@ -110,6 +110,62 @@ test('an empty-string session id is treated as absent', () => {
 
 test('the unknown-session message tells the client how to recover', () => {
   assert.match(UNKNOWN_SESSION_MESSAGE, /initialize/);
+});
+
+console.log('\nindex.ts: HTTP transport session lifetime and body limit');
+
+// These two live in src/index.ts, which cannot be imported: it calls main() at module load, so
+// loading it would start a server. The routing decision above was extracted into utils/mcpSession.ts
+// precisely so it could be tested; the remaining two invariants are structural, so they are read
+// out of the source the way listPagination.node.test.mjs reads the tool tree. Comments are stripped
+// first - a sentence about a sweep is not a sweep - with the same care over the `//` inside a URL.
+const indexSrc = readFileSync(path.resolve(here, '../index.ts'), 'utf-8');
+const indexCode = indexSrc
+  .replace(/\/\*[\s\S]*?\*\//g, ' ')
+  .split('\n')
+  .map((line) => line.replace(/(^|[^:])\/\/.*/, '$1'))
+  .join('\n');
+
+test('REGRESSION: express.json carries an explicit body limit', () => {
+  // It used to be a bare express.json(), whose 100 kB default rejected a legitimate tools/call
+  // (templates_create with a real template's templateData) with an HTML 413 the client could not
+  // parse, while the identical call succeeded over stdio.
+  assert.ok(
+    !/express\.json\(\s*\)/.test(indexCode),
+    'express.json() with no options is back: the 100 kB default silently 413s large writes'
+  );
+  assert.match(indexCode, /express\.json\(\s*\{\s*limit:/);
+});
+
+test('a body-parser failure is answered as JSON-RPC, not as Express HTML', () => {
+  assert.ok(
+    indexCode.includes("err.type === 'entity.too.large'"),
+    'nothing recognises an oversized body, so the client still gets Express HTML'
+  );
+  const at = indexCode.indexOf('Malformed request body');
+  assert.ok(at >= 0, 'no body-parser error handler');
+  assert.match(indexCode.slice(at, at + 400), /jsonrpc: '2\.0'/);
+});
+
+test('REGRESSION: every stored session records lastActivity', () => {
+  // Sessions used to live until the client sent an explicit DELETE. A client that crashes,
+  // relaunches or loses the network never sends one, so each reconnect left a full McpServer
+  // resident forever and activeSessions only ever climbed.
+  assert.match(indexCode, /sessions\.set\([^)]*lastActivity:/);
+  const refreshes = indexCode.match(/lastActivity = Date\.now\(\)/g) ?? [];
+  assert.ok(
+    refreshes.length >= 2,
+    `a resumed session and an opened event stream must both refresh lastActivity, found ${refreshes.length}`
+  );
+});
+
+test('REGRESSION: an idle sweep closes sessions the client never deleted', () => {
+  assert.match(indexCode, /GTM_MCP_HTTP_SESSION_TTL_MS/);
+  const sweep = /setInterval\(\s*\(\)\s*=>\s*\{([\s\S]*?)\n\s*\},/.exec(indexCode);
+  assert.ok(sweep, 'no setInterval sweep over the session map');
+  assert.match(sweep[1], /lastActivity/);
+  assert.match(sweep[1], /sessions\.delete\(/);
+  assert.match(sweep[1], /transport\.close\(\)/);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

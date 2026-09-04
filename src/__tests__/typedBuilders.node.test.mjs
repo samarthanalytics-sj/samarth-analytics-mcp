@@ -30,12 +30,14 @@ if (!existsSync(dist)) {
 const { registerTypedBuilderTools } = await import(pathToFileURL(dist).href);
 const { McpServer } = await import(pathToFileURL(sdk).href);
 
-/** A GTM client that records calls instead of making them. */
-function stubClient({ existingTriggers = [], existingTags = [] } = {}) {
+/** A GTM client that records calls instead of making them. `failCreate` rejects one write kind
+ *  ('builtin' | 'trigger' | 'tag' | 'variable'), which is how a partly-written composite is tested. */
+function stubClient({ existingTriggers = [], existingTags = [], failCreate = null } = {}) {
   const calls = [];
   const record = (kind) => ({
     list: async () => ({ data: { trigger: existingTriggers, tag: existingTags } }),
     create: async (a) => {
+      if (failCreate === kind) throw new Error(`stub: ${kind} create rejected`);
       calls.push({ kind, body: a.requestBody, type: a.type });
       return {
         data: {
@@ -58,6 +60,7 @@ function stubClient({ existingTriggers = [], existingTags = [] } = {}) {
           variables: record('variable'),
           built_in_variables: {
             create: async (a) => {
+              if (failCreate === 'builtin') throw new Error('stub: built-in variables rejected');
               calls.push({ kind: 'builtin', type: a.type });
               return { data: {} };
             },
@@ -90,6 +93,13 @@ const EMAIL_TAG = {
 };
 
 const call = (server, tool, args) => server._registeredTools[tool].handler(args, { requestId: 't' });
+/** Call a tool the way the MCP SDK does: THROUGH its zod inputSchema, so a field the schema does
+ *  not declare is stripped before the handler ever sees it. Anything asserting that an input
+ *  survives to the built resource has to go this way, or it is testing nothing. */
+const callValidated = (server, tool, args) => {
+  const t = server._registeredTools[tool];
+  return t.handler(t.inputSchema.parse(args), { requestId: 't' });
+};
 const json = (res) => JSON.parse(res.content[0].text);
 const text = (res) => res.content[0].text;
 
@@ -377,6 +387,147 @@ await test('the default platform is still GA4, so existing callers are unchanged
   await call(serverWith(client), 'create_gtm_tracking_tag', EMAIL_TAG);
   const tag = client.calls.find((c) => c.kind === 'tag');
   assert.strictEqual(tag.body.type, 'gaawe');
+});
+
+console.log('\ntrigger kinds: an unbuildable one must never become an unscoped All Pages trigger:');
+
+await test('an off-enum trigger kind is REFUSED, not built as pageview', async () => {
+  // buildTrigger's default branch answers an unknown kind with an unscoped All Pages pageview
+  // trigger, so "click" (the real GTM type name) used to produce a GA4 tag firing on EVERY page
+  // load, with the tool reporting success and echoing the kind it was asked for.
+  const client = stubClient();
+  const res = await call(serverWith(client), 'create_gtm_tracking_tag', {
+    ...EMAIL_TAG,
+    trigger: { name: 'CTA Click', kind: 'click', clickElementValue: '#cta' },
+  });
+  assert.match(text(res), /not creating/i, 'it must refuse');
+  assert.match(text(res), /link_click/, 'it must list the kinds that do work');
+  assert.strictEqual(client.calls.length, 0, 'nothing may be written for a kind we cannot build');
+});
+
+await test('the kinds the schema advertises are all still accepted', async () => {
+  // The guard above must refuse ONLY what buildTrigger cannot build. A typo in the accepted list
+  // would silently take a working kind away.
+  for (const kind of ['pageview', 'link_click', 'all_clicks', 'form_submit', 'custom_event', 'dom_ready',
+    'window_loaded', 'history_change', 'scroll_depth', 'youtube_video', 'js_error']) {
+    const client = stubClient();
+    const res = await call(serverWith(client), 'create_gtm_tracking_tag', {
+      ...EMAIL_TAG,
+      trigger: { name: `T ${kind}`, kind, eventName: 'generate_lead' },
+    });
+    assert.ok(!/not creating/i.test(text(res)), `kind ${kind} must not be refused: ${text(res)}`);
+    assert.ok(client.calls.some((c) => c.kind === 'tag'), `kind ${kind} must still create a tag`);
+  }
+});
+
+await test('the element_visibility selector survives the schema instead of being stripped', async () => {
+  // The schema advertised element_visibility while declaring none of its settings, and zod strips
+  // what it does not declare: the selector never reached buildTrigger, which emitted
+  // elementSelector "" and created a trigger watching nothing.
+  const client = stubClient();
+  await callValidated(serverWith(client), 'create_gtm_tracking_tag', {
+    ...EMAIL_TAG,
+    trigger: { name: 'Thanks Visible', kind: 'element_visibility', visibilitySelector: '#gform_confirmation_message' },
+  });
+  const trig = client.calls.find((c) => c.kind === 'trigger').body;
+  assert.strictEqual(trig.type, 'elementVisibility');
+  const param = (key) => trig.parameter.find((p) => p.key === key)?.value;
+  assert.strictEqual(param('selectorType'), 'CSS');
+  assert.strictEqual(param('elementSelector'), '#gform_confirmation_message');
+});
+
+await test('element_visibility with no target is refused, like a timer with no interval', async () => {
+  const client = stubClient();
+  const res = await call(serverWith(client), 'create_gtm_tracking_tag', {
+    ...EMAIL_TAG,
+    trigger: { name: 'Thanks Visible', kind: 'element_visibility' },
+  });
+  assert.match(text(res), /visibilitySelector/);
+  assert.strictEqual(client.calls.length, 0);
+});
+
+console.log('\ntrigger reuse keys on the name that is actually stored:');
+
+await test('a trigger whose name GTM sanitises is found again, not duplicated', async () => {
+  // buildTrigger stores sanitizeName(name), so "Click: Apply Now" is created as "Click Apply Now".
+  // Matching the RAW name missed it, and the second tag on that trigger sent a create GTM rejected
+  // with a duplicate-name 400 the caller could not explain.
+  const client = stubClient({ existingTriggers: [{ triggerId: 'T-old', name: 'Click Apply Now' }] });
+  const res = await call(serverWith(client), 'create_gtm_tracking_tag', {
+    ...EMAIL_TAG,
+    trigger: { name: 'Click: Apply Now', kind: 'link_click', clickUrlValue: '/apply' },
+  });
+  assert.strictEqual(client.calls.some((c) => c.kind === 'trigger'), false, 'no second trigger may be created');
+  assert.strictEqual(json(res).trigger.reused, true);
+  assert.deepStrictEqual(client.calls.find((c) => c.kind === 'tag').body.firingTriggerId, ['T-old']);
+});
+
+console.log('\nwhat the response claims must match what actually happened:');
+
+await test('a rejected built-in enable is reported, not claimed as done', async () => {
+  // All the types go in ONE request, so a rejection means NONE were enabled. Claiming otherwise
+  // told the caller {{Click URL}} resolved while the trigger condition reads undefined.
+  const client = stubClient({ failCreate: 'builtin' });
+  const res = await call(serverWith(client), 'create_gtm_tracking_tag', EMAIL_TAG);
+  assert.deepStrictEqual(json(res).enabledVariables, [], 'nothing was enabled, so nothing may be listed');
+  assert.match(json(res).builtInVariablesWarning, /NOT enabled/);
+  assert.match(json(res).builtInVariablesWarning, /clickUrl/, 'it must name what is still missing');
+});
+
+await test('a failed tag write names the trigger it already created', async () => {
+  // The trigger write has already happened. Reporting only the tag failure left an orphan the
+  // caller did not know about, and a retry under a new trigger name made a second one.
+  const client = stubClient({ failCreate: 'tag' });
+  const res = await call(serverWith(client), 'create_gtm_tracking_tag', EMAIL_TAG);
+  assert.strictEqual(res.isError, true);
+  assert.match(text(res), /T-new/, 'the orphaned trigger id must be in the error');
+  assert.match(text(res), /triggers_delete/, 'and how to clean it up');
+});
+
+await test('a Google tag holding its id in a {{Constant}} is a usable fallback', async () => {
+  // One Constant holding the Measurement ID with every GA4 tag pointing at it is the setup this
+  // tool recommends. The resolver accepted only a literal G- id, so that container was refused with
+  // "no Google tag to read the real one from" while a perfectly valid reference sat in it.
+  const client = stubClient({
+    existingTags: [{ type: 'googtag', parameter: [{ key: 'tagId', value: '{{GA4 Measurement ID}}' }] }],
+  });
+  const res = await call(serverWith(client), 'create_gtm_tracking_tag', { ...EMAIL_TAG, measurementId: 'G-123456789' });
+  const tag = client.calls.find((c) => c.kind === 'tag');
+  assert.ok(tag, 'the tag must be created, not refused');
+  assert.strictEqual(tag.body.parameter.find((p) => p.key === 'measurementIdOverride').value, '{{GA4 Measurement ID}}');
+  assert.match(json(res).measurementIdNote, /GA4 Measurement ID/, 'a substitution must never be silent');
+});
+
+await test('a literal id still wins over a {{Constant}} elsewhere in the container', async () => {
+  const client = stubClient({
+    existingTags: [
+      { type: 'gaawe', parameter: [{ key: 'measurementIdOverride', value: '{{GA4 Measurement ID}}' }] },
+      { type: 'googtag', parameter: [{ key: 'tagId', value: 'G-REAL9876' }] },
+    ],
+  });
+  await call(serverWith(client), 'create_gtm_tracking_tag', { ...EMAIL_TAG, measurementId: 'G-123456789' });
+  const tag = client.calls.find((c) => c.kind === 'tag').body;
+  assert.strictEqual(tag.parameter.find((p) => p.key === 'measurementIdOverride').value, 'G-REAL9876');
+});
+
+console.log('\ncreate_gtm_variable_typed - an in-enum kind can be just as empty:');
+
+await test('a kind missing its OWN required field is refused, not created blank', async () => {
+  // The off-enum guard stops "telepathy"; this stops "javascript" with no javascript, which built a
+  // jsm variable with an empty parameter, was accepted by GTM, and reported blank in every tag.
+  for (const [kind, field] of [
+    ['javascript', 'javascript'],
+    ['data_layer', 'dataLayerName'],
+    ['event_data', 'keyPath'],
+    ['request_header', 'headerName'],
+  ]) {
+    const client = stubClient();
+    const res = await call(serverWith(client), 'create_gtm_variable_typed', {
+      ...WS, name: `Empty ${kind}`, kind, confirm: true,
+    });
+    assert.match(text(res), new RegExp(field), `${kind} must name the field it needs`);
+    assert.strictEqual(client.calls.length, 0, `${kind} must not create an empty variable`);
+  }
 });
 
 console.log(`\n${passed} passed, ${failed} failed\n`);

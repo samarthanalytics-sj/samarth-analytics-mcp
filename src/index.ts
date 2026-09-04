@@ -64,7 +64,35 @@ async function startHttpServer(auth: OAuth2Client): Promise<void> {
   const { default: express } = await import('express');
 
   const app = express();
-  app.use(express.json());
+  // Body limit. express.json()'s 100 kB default rejected legitimate calls before they ever reached
+  // the transport (templates_create / templates_update carrying a real template's templateData, a
+  // large tags_create html parameter), and body-parser answers with an HTML 413 that a JSON-RPC
+  // client cannot parse - so the identical call succeeded over stdio and died over HTTP with an
+  // unreadable error. 8mb matches the sibling apps/web-audit-mcp HTTP server.
+  const bodyLimit = process.env.GTM_MCP_HTTP_BODY_LIMIT ?? '8mb';
+  app.use(express.json({ limit: bodyLimit }));
+  // Body-parser failures (oversized or malformed JSON) never reach a route, so convert them here
+  // into a JSON-RPC error body. Express's default error handler would send HTML.
+  app.use(
+    (
+      err: Error & { status?: number; type?: string },
+      _req: import('express').Request,
+      res: import('express').Response,
+      next: import('express').NextFunction
+    ): void => {
+      if (res.headersSent) {
+        next(err);
+        return;
+      }
+      const tooLarge = err.type === 'entity.too.large';
+      const message = tooLarge
+        ? `Request body exceeds the ${bodyLimit} limit. Raise GTM_MCP_HTTP_BODY_LIMIT if this call is legitimate.`
+        : `Malformed request body: ${err.message}`;
+      res
+        .status(typeof err.status === 'number' ? err.status : 400)
+        .json({ jsonrpc: '2.0', error: { code: tooLarge ? -32600 : -32700, message }, id: null });
+    }
+  );
 
   // PORT is the conventional env var injected by hosts like Render/Fly;
   // GTM_MCP_HTTP_PORT takes precedence when explicitly set.
@@ -245,8 +273,37 @@ async function startHttpServer(auth: OAuth2Client): Promise<void> {
     {
       transport: InstanceType<typeof StreamableHTTPServerTransport>;
       server: ReturnType<typeof createGtmMcpServer>;
+      /** Epoch ms of the last request seen on this session. Drives the idle sweep below. */
+      lastActivity: number;
     }
   >();
+
+  /** Idle-session sweep. A session used to live until the client sent an explicit DELETE, and a
+   *  client that crashes, relaunches or loses the network never sends one: every reconnect minted a
+   *  fresh McpServer (every tool registration plus the prompts) and left its predecessor resident
+   *  for the life of the process, so activeSessions and memory only ever climbed, and anyone able to
+   *  reach /mcp could mint sessions without bound by looping initialize. Set
+   *  GTM_MCP_HTTP_SESSION_TTL_MS=0 to turn the sweep off. */
+  const ttlRaw = parseInt(process.env.GTM_MCP_HTTP_SESSION_TTL_MS ?? '', 10);
+  const sessionTtlMs = Number.isFinite(ttlRaw) && ttlRaw >= 0 ? ttlRaw : 30 * 60_000;
+  if (sessionTtlMs > 0) {
+    const sweep = setInterval(() => {
+      const cutoff = Date.now() - sessionTtlMs;
+      for (const [sid, entry] of [...sessions]) {
+        if (entry.lastActivity > cutoff) continue;
+        // Drop the entry first: transport.close() fires onclose, whose delete then finds nothing,
+        // and if the transport was already closed the entry still goes away.
+        sessions.delete(sid);
+        console.error(
+          `[samarth-gtm-mcp] Closing idle HTTP session: ${sid} (active: ${sessions.size})`
+        );
+        void Promise.resolve(entry.transport.close()).catch(() => undefined);
+        void entry.server.close().catch(() => undefined);
+      }
+    }, Math.min(sessionTtlMs, 60_000));
+    // The listener is what keeps this process alive; the sweep must never be the reason it stays up.
+    sweep.unref();
+  }
 
   /** JSON-RPC error body for a handler that threw, so a failure is a protocol error the client can read
    *  rather than a dead socket (or a dead process). Guarded on headersSent because the transport may
@@ -267,7 +324,9 @@ async function startHttpServer(auth: OAuth2Client): Promise<void> {
       let transport: InstanceType<typeof StreamableHTTPServerTransport>;
 
       if (route.kind === 'resume') {
-        transport = sessions.get(route.sessionId)!.transport;
+        const entry = sessions.get(route.sessionId)!;
+        entry.lastActivity = Date.now(); // a session in use must never be swept
+        transport = entry.transport;
       } else if (route.kind === 'unknown-session') {
         res.status(404).json({
           jsonrpc: '2.0',
@@ -282,7 +341,7 @@ async function startHttpServer(auth: OAuth2Client): Promise<void> {
         transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => newSessionId,
           onsessioninitialized: (sid) => {
-            sessions.set(sid, { transport, server: sessionServer });
+            sessions.set(sid, { transport, server: sessionServer, lastActivity: Date.now() });
             console.error(`[samarth-gtm-mcp] New HTTP session: ${sid} (active: ${sessions.size})`);
           },
         });
@@ -318,7 +377,9 @@ async function startHttpServer(auth: OAuth2Client): Promise<void> {
         res.status(400).json({ error: 'Missing or invalid mcp-session-id header.' });
         return;
       }
-      const { transport } = sessions.get(sessionId)!;
+      const entry = sessions.get(sessionId)!;
+      entry.lastActivity = Date.now(); // an open event stream counts as activity
+      const { transport } = entry;
       await runWithAuth(reqAuth, () => transport.handleRequest(req, res));
     } catch (err) {
       console.error('[samarth-gtm-mcp] GET /mcp failed:', err instanceof Error ? err.message : String(err));
