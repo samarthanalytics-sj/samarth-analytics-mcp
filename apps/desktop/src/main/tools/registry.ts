@@ -2281,7 +2281,7 @@ export function buildToolRegistry(
           containerId: { type: 'string' },
           workspaceId: { type: 'string' },
           resolveTriggers: { type: 'boolean', description: 'Also return each tag\'s firingTriggers [{triggerId,name,customEventName,conditions}], resolved from list_gtm_triggers. Use for any inventory that needs the trigger name or its customEventName.' },
-          groupByType: { type: 'boolean', description: 'Return a compact, COMPLETE count of tags per type ({ totalTags, types:[{type,label,count}] }) instead of the tag objects. Use this for "all tag types in the container" - it is aggregated over every tag and is never truncated.' },
+          groupByType: { type: 'boolean', description: 'Return a compact, COMPLETE count of tags per type ({ totalTags, types:[{type,label,count}] }) instead of the tag objects. Use this for "all tag types in the container" - it is aggregated over every tag and is never truncated. Takes precedence over and IGNORES `type`; to filter to one type, pass `type` alone without groupByType.' },
           type: { type: 'string', description: 'Return only tags whose type EXACTLY equals this code (e.g. "gaawe", "html", "cvt_NBJMP"). Narrows a large container so the result is not truncated.' },
         },
         required: ['accountId', 'containerId', 'workspaceId'],
@@ -2293,14 +2293,24 @@ export function buildToolRegistry(
         // exist" is answerable on any container. cvt_* codes are opaque, so resolve them to the
         // imported template's name via list_gtm_templates.
         if (a.groupByType === true) {
-          let labelForCvt: (type: string) => string = (type) => type;
+          // groupByType takes precedence over `type` (see the schema note). The per-type COUNTS need
+          // no template data - only the friendly cvt_ labels do - so a template-read failure must
+          // degrade to raw cvt_ codes, never sink the whole summary (the one thing this feature is
+          // meant to answer on a large container). Best-effort, matching the GA4-audit convention.
+          let labelForCvt: (type: string) => string = (type) => `${type} (custom template)`;
           if (allTags.some((t) => (t.type ?? '').startsWith('cvt_'))) {
-            const tmpls = await data.listGtmTemplates(s(a.accountId), s(a.containerId), s(a.workspaceId));
-            const byType = new Map(tmpls.map((t) => [t.type, t]));
-            labelForCvt = (type) => {
-              const tm = byType.get(type);
-              return tm ? (tm.galleryOwner ? `${tm.name} (${tm.galleryOwner}/${tm.galleryRepository})` : tm.name) : `${type} (custom template)`;
-            };
+            try {
+              const tmpls = await data.listGtmTemplates(s(a.accountId), s(a.containerId), s(a.workspaceId));
+              const byType = new Map(tmpls.map((t) => [t.type, t]));
+              labelForCvt = (type) => {
+                const tm = byType.get(type);
+                if (!tm) return `${type} (custom template)`;
+                // Only render "(owner/repo)" when BOTH gallery fields are present, else a dangling slash.
+                return tm.galleryOwner && tm.galleryRepository ? `${tm.name} (${tm.galleryOwner}/${tm.galleryRepository})` : tm.name;
+              };
+            } catch {
+              // Template list unavailable (missing scope, quota, transient): keep the raw cvt_ codes.
+            }
           }
           const counts = new Map<string, number>();
           for (const t of allTags) counts.set(t.type ?? '', (counts.get(t.type ?? '') ?? 0) + 1);
@@ -2311,7 +2321,14 @@ export function buildToolRegistry(
         }
         const wantType = s(a.type).trim();
         const tags = wantType ? allTags.filter((t) => (t.type ?? '') === wantType) : allTags;
-        if (a.resolveTriggers !== true) return tags;
+        // A zero-match on an EXPLICIT type filter is ambiguous (bad code vs genuinely none), so hand
+        // the model the available codes rather than a bare [] it might report as "no such tags".
+        if (wantType && tags.length === 0) {
+          const available = [...new Set(allTags.map((t) => t.type ?? '').filter(Boolean))].sort();
+          return { tags: [], note: `No tags in this container have type "${wantType}". Available type codes: ${available.join(', ') || '(none)'}.` };
+        }
+        // Skip the trigger fetch when there is nothing to join it to (empty container or no matches).
+        if (a.resolveTriggers !== true || tags.length === 0) return tags;
         // Server-side join so the model gets the REAL firing trigger name + customEventName instead of
         // guessing (or leaving it blank): the tag->trigger link the model kept fabricating.
         const triggers = await data.listGtmTriggers(s(a.accountId), s(a.containerId), s(a.workspaceId));
