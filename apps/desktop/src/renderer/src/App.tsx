@@ -10019,6 +10019,9 @@ function ServerAuditSection({
   const [workspaceId, setWorkspaceId] = useState('');
   const [running, setRunning] = useState(false);
   const [report, setReport] = useState<AuditReportView | null>(null);
+  // Per-finding auto-fix state, keyed by finding index (mirrors ContainerAuditPanel). Server-audit
+  // fixes are non-destructive (pause/unpause, clear testId) so there's no delete/confirm path here.
+  const [fix, setFix] = useState<Record<number, { state: 'fixing' | 'done' | 'err'; msg?: string }>>({});
   // Web <-> Server coverage: the web side of the comparison + its result.
   const [allContainers, setAllContainers] = useState<GtmContainerView[]>([]);
   const [webContainerId, setWebContainerId] = useState('');
@@ -10131,12 +10134,30 @@ function ServerAuditSection({
     onError('');
     setRunning(true);
     setReport(null);
+    setFix({});
     try {
       setReport(await window.desktop.gtm.auditServer(accountId, containerId, workspaceId));
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {
       setRunning(false);
+    }
+  }
+
+  // Apply one finding's auto-fix, then re-run the audit so the report reflects the change. Server-audit
+  // fixes are non-destructive (e.g. set_gtm_tag_paused, clearing a stray testId), so this is a plain
+  // one-click apply - no delete/confirm path (delete fixes are excluded at the button below).
+  async function applyFix(i: number, f: AuditFindingView): Promise<void> {
+    if (!f.fix || fix[i]?.state === 'fixing') return; // never double-issue a write
+    setFix((s) => ({ ...s, [i]: { state: 'fixing' } }));
+    try {
+      await window.desktop.gtm.applyFix(f.fix);
+      setFix((s) => ({ ...s, [i]: { state: 'done' } }));
+      await run(); // re-audit so the fixed finding drops off (run() clears the fix map)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setFix((s) => ({ ...s, [i]: { state: 'err', msg } }));
+      onError(msg);
     }
   }
 
@@ -10468,6 +10489,20 @@ function ServerAuditSection({
                 <div style={{ fontSize: 12, marginTop: 6, padding: '6px 9px', borderRadius: 6, background: 'var(--surface-2)', borderLeft: '3px solid var(--c-blue)' }}>
                   <div style={{ color: 'var(--text-muted)' }}>🧠 {annotationLabel(f.userNote)}</div>
                   <div style={{ marginTop: 2, fontStyle: 'italic' }}>“{f.userNote.text}”</div>
+                </div>
+              )}
+              {/* Per-finding auto-fix (non-destructive only; delete fixes are excluded). Applies the
+                  finding's ready-to-run tool call via the generic applyFix IPC, then re-audits. */}
+              {f.autoFixable && f.fix && !f.fix.tool.startsWith('delete') && (
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8, flexWrap: 'wrap' }}>
+                  <button
+                    style={styles.ghostBtn}
+                    disabled={fix[i]?.state === 'fixing' || fix[i]?.state === 'done'}
+                    onClick={() => void applyFix(i, f)}
+                  >
+                    {fix[i]?.state === 'fixing' ? 'Applying…' : fix[i]?.state === 'done' ? '✓ Applied' : 'Apply fix'}
+                  </button>
+                  {fix[i]?.state === 'err' && <span style={{ fontSize: 12, color: 'var(--c-red)' }}>✗ {fix[i]!.msg}</span>}
                 </div>
               )}
             </div>
