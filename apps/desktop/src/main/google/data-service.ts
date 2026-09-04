@@ -5,7 +5,7 @@ import type { OAuth2Client } from 'google-auth-library';
 import type { AccountClientManager } from './account-clients';
 import type { RegistryService } from '../services/registry-service';
 import type { ContainerSnapshot, ServerContainerSnapshot } from './gtm-builders';
-import { ga4TagFields, readGa4EventParameters, applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, normalizeTriggerType, setCustomEventName, customEventNameOf, describeTriggerConditions, buildGa4Client, buildGa4ServerTag, buildMetaCapiServerTag, buildTikTokCapiServerTag, buildStapeDataTag, buildServerAllEventsTrigger, buildServerEventTrigger, buildAdsConversionServerTag, buildMetaEmqVariables, buildTikTokEmqVariables, buildEcommerceDlvVariables, buildGa4EventTag, buildTrigger, planTriggerRetarget, type TriggerInput, buildGtmClient, buildVariable, sanitizeName, matchesServerContainer, customTemplateType, upsertGoogleTagConfig, taggingUrlFirstPartyIssue, parseTemplateParameters, summariseTagTypes, type TemplateField, type TagTypeProfile, triggerUsageBreakdown, detectMetaTags, planWebToServerMigration, evaluateTrackingSetup, GA4_ECOMMERCE_FUNNEL_EVENTS, type TrackingSetupReport, type TrackingSetupCheck } from './gtm-builders';
+import { ga4TagFields, readGa4EventParameters, applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, normalizeTriggerType, setCustomEventName, customEventNameOf, describeTriggerConditions, buildGa4Client, buildGa4ServerTag, buildMetaCapiServerTag, buildTikTokCapiServerTag, buildStapeDataTag, buildStapeDataClient, buildServerAllEventsTrigger, buildServerEventTrigger, buildAdsConversionServerTag, buildMetaEmqVariables, buildTikTokEmqVariables, buildEcommerceDlvVariables, buildGa4EventTag, buildTrigger, planTriggerRetarget, type TriggerInput, buildGtmClient, buildVariable, sanitizeName, matchesServerContainer, customTemplateType, upsertGoogleTagConfig, taggingUrlFirstPartyIssue, parseTemplateParameters, summariseTagTypes, type TemplateField, type TagTypeProfile, triggerUsageBreakdown, detectMetaTags, planWebToServerMigration, evaluateTrackingSetup, GA4_ECOMMERCE_FUNNEL_EVENTS, type TrackingSetupReport, type TrackingSetupCheck } from './gtm-builders';
 import { resolveGa4MeasurementIds } from './gtm-ga4-check';
 import { withQuotaRetry, withRetry, QUOTA_RE, TRANSIENT_5XX_RE, NOT_FOUND_OR_PERMISSION_RE } from './quota-retry';
 import { log } from '../logger';
@@ -2320,6 +2320,63 @@ export class GoogleDataService {
     const workspaceId = await this.defaultWorkspaceId(accountId, webContainerId);
     const snap = await this.getGtmContainerSnapshot(accountId, webContainerId, workspaceId);
     return planWebToServerMigration(snap);
+  }
+
+  /** One call: stand up the Stape Data Tag -> Data Client enrichment pipeline that raises Meta CAPI Event
+   *  Match Quality. WEB: a Data Tag on All Pages posts full first-party identity (em/ph/fbp/fbc/IP/UA +
+   *  dataLayer + consent) to <serverUrl>/data. SERVER: a Data Client claims /data and persists it via a
+   *  first-party client-id cookie, so a later conversion WITHOUT identity still matches. Idempotent by
+   *  parameter signature (an existing Data Tag / Data Client is reused). Draft-only; does NOT publish. */
+  async createStapeDataPipeline(accountId: string, webContainerId: string, serverContainerId: string, serverUrl: string): Promise<{
+    dataTag: { name: string; tagId?: string; reused: boolean };
+    dataClient: { name: string; clientId?: string; reused: boolean };
+    requestPath: string;
+    note: string;
+    nextSteps: string[];
+  }> {
+    const url = (serverUrl ?? '').trim();
+    if (!url) throw new Error('serverUrl is required (the deployed tagging-server URL, e.g. https://sgtm.example.com).');
+    const { findStapeDataTag, findStapeDataClient } = await import('./server-plan');
+
+    // WEB: the Data Tag (All Pages -> <serverUrl>/data).
+    const webWs = await this.defaultWorkspaceId(accountId, webContainerId);
+    const webSnap = await this.getGtmContainerSnapshot(accountId, webContainerId, webWs);
+    let dataTag: { name: string; tagId?: string; reused: boolean };
+    const existingTag = findStapeDataTag(webSnap);
+    if (existingTag) {
+      dataTag = { name: existingTag.name, tagId: existingTag.tagId, reused: true };
+    } else {
+      const tmpl = await this.importGalleryTemplate(accountId, webContainerId, webWs, 'stape-io', 'data-tag');
+      if (!tmpl.type || !tmpl.type.startsWith('cvt_')) throw new Error(`Could not resolve the Stape Data Tag template type (got "${tmpl.type}"). Import stape-io/data-tag and check list_gtm_templates.`);
+      const created = await this.createGtmTag(accountId, webContainerId, webWs, buildStapeDataTag(tmpl.type, 'Data Tag - All Pages', url) as unknown as Record<string, unknown>);
+      dataTag = { name: created.name, tagId: created.tagId, reused: false };
+    }
+
+    // SERVER: the Data Client that claims /data.
+    const srvWs = await this.defaultWorkspaceId(accountId, serverContainerId);
+    const clients = await this.listGtmClients(accountId, serverContainerId, srvWs).catch(() => []);
+    let dataClient: { name: string; clientId?: string; reused: boolean };
+    const existingClient = findStapeDataClient({ taggingServerUrls: [], clients, tags: [], transformations: [] } as never);
+    if (existingClient) {
+      dataClient = { name: existingClient.name, clientId: existingClient.clientId, reused: true };
+    } else {
+      const tmpl = await this.importGalleryTemplate(accountId, serverContainerId, srvWs, 'stape-io', 'data-client');
+      if (!tmpl.type || !tmpl.type.startsWith('cvt_')) throw new Error(`Could not resolve the Stape Data Client template type (got "${tmpl.type}"). Import stape-io/data-client and check list_gtm_templates.`);
+      const created = await this.createGtmClient(accountId, serverContainerId, srvWs, buildStapeDataClient(tmpl.type, 'Data Client') as unknown as Record<string, unknown>);
+      dataClient = { name: created.name || 'Data Client', clientId: created.clientId, reused: false };
+    }
+
+    return {
+      dataTag,
+      dataClient,
+      requestPath: '/data',
+      note: 'Data Tag -> Data Client enrichment is set up. The Data Tag posts first-party identity (em/ph/fbp/fbc/IP/UA) on EVERY page to <serverUrl>/data; the Data Client persists it against a first-party client-id cookie, so a later conversion that lacks identity still matches. To lift Meta EMQ, build the Meta CAPI server tag with create_meta_capi_server_tag (mapEmqVariables on) - its ed - user_data now resolves from the enriched, persisted event data. Publish BOTH containers and QA in Meta Events Manager (Test Events) / GTM Preview.',
+      nextSteps: [
+        'Publish the WEB and SERVER containers (this only drafts them).',
+        'Confirm the Data Client claims /data with audit_server_container.',
+        'After traffic, check Meta Events Manager - Event Match Quality should rise.',
+      ],
+    };
   }
 
   async deriveWebContainerMeasurementId(accountId: string, webContainerId: string): Promise<string> {
