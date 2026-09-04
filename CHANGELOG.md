@@ -1,3 +1,9 @@
+## [1.488.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.487.0...v1.488.0) (2026-09-04)
+
+### Features
+
+* **desktop:** audit flags a Meta CAPI setup missing the Data Tag EMQ enrichment ([#946](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/946)) ([f5df3c9](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/f5df3c90117ba75ebe9fb0084378ca75bfacd8ff))
+
 ## [1.487.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.486.0...v1.487.0) (2026-09-04)
 
 ### Features
