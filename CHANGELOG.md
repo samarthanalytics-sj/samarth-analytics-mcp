@@ -1,3 +1,9 @@
+## [1.492.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.491.0...v1.492.0) (2026-09-07)
+
+### Features
+
+* **desktop:** container inventory tables on audit_gtm_container ([#951](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/951)) ([dd17d23](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/dd17d239f19fef9707c39b67c2278f46457ecce9))
+
 ## [1.491.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.490.0...v1.491.0) (2026-09-07)
 
 ### Features
