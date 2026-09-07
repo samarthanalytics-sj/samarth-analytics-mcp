@@ -355,6 +355,10 @@ const api = {
     // Save the (renderer-built) template rows as a native Excel .xlsx → saved path or null.
     exportXlsx: (defaultName: string, headers: string[], rows: string[][]): Promise<string | null> =>
       ipcRenderer.invoke('suggestions:exportXlsx', defaultName, headers, rows),
+    // Save the suggestions as a native Excel .xlsx with each tag's proof screenshot embedded (the format
+    // that can show images, which a CSV can't) → saved path or null. `rows` = [{ tag, screenshot? }].
+    exportXlsxProofs: (defaultName: string, rows: Array<{ tag: SuggestedTagView; screenshot?: string }>): Promise<string | null> =>
+      ipcRenderer.invoke('suggestions:exportXlsxProofs', defaultName, rows),
     // Save ONE verification proof screenshot (a JPEG/PNG data-URI) to a user-chosen file → saved path or null.
     exportProofImage: (defaultName: string, dataUrl: string): Promise<string | null> =>
       ipcRenderer.invoke('suggestions:exportProofImage', defaultName, dataUrl),

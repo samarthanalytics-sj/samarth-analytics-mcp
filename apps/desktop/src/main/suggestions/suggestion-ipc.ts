@@ -24,6 +24,7 @@ import type { RegistryService } from '../services/registry-service';
 import { memoryApplies } from '../../shared/chat-memory';
 import { deriveSuggestionRules, applySuggestionRules, describeAppliedRules } from '../../shared/suggestion-rules';
 import { runVerifyDriver, runSuggestionScreenshots, detectLiveContainers, type SuggestionShotTag } from './verify-driver';
+import type { SuggestionProofRow } from './suggestions-xlsx';
 import { runFormSubmitDriver, type FormSubmitFieldInput } from './form-submit-driver';
 import { evaluateVerify, verdictsFromMonitor } from './verify-tags';
 import { routeTagsToPages, normalizeVerifyPages, expandTagsOverPages } from './verify-routing';
@@ -161,6 +162,23 @@ export function registerSuggestionsIpc(data: GoogleDataService, memory?: MemoryS
     const { buildSuggestionsXlsx } = await import('./suggestions-xlsx');
     const buf = await buildSuggestionsXlsx(safeHeaders, safeRows);
     await writeFile(filePath, buf);
+    return filePath;
+  });
+
+  // Native Excel (.xlsx) of the suggestions with each tag's locate-only PROOF screenshot embedded in the
+  // Proof cell — the one download format that can show the located control INSIDE the spreadsheet (the CSV
+  // and the tabular xlsx above can't hold images). One row per tag; `rows` is [{ tag, screenshot? }] built
+  // by the renderer (edit-applied tags + their captured proofs). exceljs + the builder are imported lazily.
+  ipcMain.handle('suggestions:exportXlsxProofs', async (e, defaultName: unknown, rows: unknown) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const name = String(defaultName ?? 'GA4 tag suggestions (with proofs).xlsx').replace(/[\\/:*?"<>|]/g, '_');
+    const list = Array.isArray(rows) ? (rows as SuggestionProofRow[]) : [];
+    if (list.length === 0) return null;
+    const opts = { title: 'Export tag suggestions with proofs (Excel)', defaultPath: name, filters: [{ name: 'Excel', extensions: ['xlsx'] }] };
+    const { canceled, filePath } = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
+    if (canceled || !filePath) return null;
+    const { buildSuggestionsProofsXlsx } = await import('./suggestions-xlsx');
+    await writeFile(filePath, await buildSuggestionsProofsXlsx(list));
     return filePath;
   });
 

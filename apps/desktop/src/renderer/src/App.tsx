@@ -4985,6 +4985,28 @@ function TagReviewPanel({
     }
   }
 
+  // Native Excel (.xlsx) with each tag's proof screenshot EMBEDDED in the spreadsheet — the one format that
+  // can show the located control inside the file (a CSV / the plain xlsx above can't hold images). One row
+  // per tag; keeps each suggestion's id so its row pairs with the captured proof (sShots), applying edits.
+  async function downloadStructureXlsxProofs(): Promise<void> {
+    const picked = suggestions.filter((s) => selected[s.id]);
+    const chosen = picked.length ? picked : suggestions;
+    if (!chosen.length) return;
+    setExportNote('');
+    try {
+      const rows = chosen.map((s) => ({ tag: effective(s), ...(sShots[s.id] ? { screenshot: sShots[s.id] } : {}) }));
+      const withImg = rows.filter((r) => r.screenshot).length;
+      const saved = await window.desktop.tags.exportXlsxProofs('GA4 tag suggestions (with proofs).xlsx', rows);
+      setExportNote(
+        saved
+          ? `✓ Saved ${rows.length} tag(s)${withImg ? `, ${withImg} with a proof image` : ''} to ${saved}`
+          : 'Export cancelled',
+      );
+    } catch (e) {
+      onError(String(e));
+    }
+  }
+
   // Download the whole scan's measurement plan as a client-ready "install runbook"
   // Markdown: per-tag GTM structure + site-side install steps + a consolidated
   // "what your developer must do" section. Uses the SAME deduped, edit-applied list
@@ -5888,6 +5910,13 @@ function TagReviewPanel({
                 </button>
                 <button style={styles.linkBtn} onClick={() => void downloadStructureXlsx()}>
                   ⬇ Excel
+                </button>
+                <button
+                  style={styles.linkBtn}
+                  onClick={() => void downloadStructureXlsxProofs()}
+                  title="Excel workbook with each tag's proof screenshot embedded in the row (a CSV can't hold images)"
+                >
+                  ⬇ Excel + proofs
                 </button>
                 <button style={styles.linkBtn} onClick={() => void downloadRunbook('md')}>
                   ⬇ Install runbook
