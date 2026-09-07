@@ -1,5 +1,6 @@
 import type { GoogleDataService } from './data-service';
 import { auditContainer, auditServerContainer, type AuditReport } from './gtm-builders';
+import { buildContainerInventory, type ContainerInventory } from './gtm-inventory';
 import { diffAudits, type AuditDrift } from './gtm-monitor';
 import { AuditHistoryStore } from '../storage/audit-history';
 
@@ -13,15 +14,25 @@ export interface WorkspaceCtx {
   workspaceId: string;
 }
 
+/** An audit report optionally carrying the human-readable inventory tables (chat only). */
+export type AuditReportWithInventory = AuditReport & { inventory?: ContainerInventory };
+
 /**
  * Audit a workspace and return a report whose auto-fixable findings carry a
  * directly-runnable `fix` — the validated workspace ids are written LAST so a
  * fix can never be retargeted at another container.
+ *
+ * `opts.includeInventory` attaches the three inventory tables (Tag / Trigger /
+ * Variable Audit) for the chat to render. The background monitor omits it, so
+ * the stored audit history stays lean.
  */
-export async function auditWorkspace(data: GoogleDataService, ctx: WorkspaceCtx): Promise<AuditReport> {
-  const report = auditContainer(
-    await data.getGtmContainerSnapshot(ctx.accountId, ctx.containerId, ctx.workspaceId)
-  );
+export async function auditWorkspace(
+  data: GoogleDataService,
+  ctx: WorkspaceCtx,
+  opts?: { includeInventory?: boolean },
+): Promise<AuditReportWithInventory> {
+  const snapshot = await data.getGtmContainerSnapshot(ctx.accountId, ctx.containerId, ctx.workspaceId);
+  const report: AuditReportWithInventory = auditContainer(snapshot);
   for (const f of report.findings) {
     if (f.fix) {
       f.fix.args = {
@@ -32,6 +43,7 @@ export async function auditWorkspace(data: GoogleDataService, ctx: WorkspaceCtx)
       };
     }
   }
+  if (opts?.includeInventory) report.inventory = buildContainerInventory(snapshot);
   return report;
 }
 
