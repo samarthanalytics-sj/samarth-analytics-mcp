@@ -1250,6 +1250,9 @@ export interface AuditTag {
   blockingTriggerId?: string[];
   paused: boolean;
   parameter: Array<Record<string, unknown>>;
+  /** Tag firing option: 'oncePerEvent' | 'oncePerLoad' | 'unlimited'. Drives the inventory's
+   *  "Firing Option" column and the form-tag once-per-load hint. Absent = GTM's default (oncePerEvent). */
+  tagFiringOption?: string;
   /** Consent Mode v2 settings, when present on the tag. consentType is a
    *  parameter list that may itself reference {{variables}}. */
   consentSettings?: { consentStatus?: string; consentType?: unknown } | null;
