@@ -1,3 +1,9 @@
+## [1.494.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.493.0...v1.494.0) (2026-09-07)
+
+### Features
+
+* **webaudit:** suggest a granular scroll-depth GA4 tag ([#953](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/953)) ([5cc996a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/5cc996a2808a2334f2303c484170e9472bc16932))
+
 ## [1.493.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.492.0...v1.493.0) (2026-09-07)
 
 ### Features
