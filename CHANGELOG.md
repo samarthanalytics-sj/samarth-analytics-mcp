@@ -1,3 +1,9 @@
+## [1.491.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.490.0...v1.491.0) (2026-09-07)
+
+### Features
+
+* **docker:** self-hosting compose stack (MCP + web-audit + runtime-worker) ([#950](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/950)) ([824ece5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/824ece52cd2585ce75ba9c159f5b007c807e0266))
+
 ## [1.490.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.489.0...v1.490.0) (2026-09-04)
 
 ### Features
