@@ -1,7 +1,7 @@
 // Pure tests for the "GTM Structure - GA4 Events" template mapping (the table view
 // + CSV download share this). Run: tsx src/shared/__tests__/tag-template.test.ts
 
-import { suggestionToGroup, suggestionsToTemplateCsv, suggestionsToInstallRunbookMarkdown, installPlanNeedsAction, installPlanStatus, installPlanProgress, triggerWhens, dedupeViewsByGtmName, TEMPLATE_HEADERS, applyTagEdit, applyWhensToTrigger, adsIdentityIssue, conditionToOperator, CONDITION_LABELS , conversionActionNameFromTag } from '../tag-template';
+import { suggestionToGroup, suggestionsToTemplateCsv, suggestionsToInstallRunbookMarkdown, installPlanNeedsAction, installPlanStatus, installPlanProgress, triggerWhens, triggerConditionText, dedupeViewsByGtmName, TEMPLATE_HEADERS, applyTagEdit, applyWhensToTrigger, adsIdentityIssue, conditionToOperator, CONDITION_LABELS , conversionActionNameFromTag } from '../tag-template';
 import type { SuggestedTagView } from '../ipc';
 
 let passed = 0;
@@ -70,6 +70,15 @@ const yt = base({
 });
 const gyt = suggestionToGroup(yt);
 check('group: youtube_video → "YouTube Video" type, no when conditions', gyt.triggerType === 'YouTube Video' && gyt.whens.length === 0 && gyt.rowCount === 4);
+
+const scroll = base({
+  id: 'sd', tagName: 'GA4 - Event - Scroll Depth Tag', eventName: 'scroll',
+  eventParameters: [{ name: 'percent_scrolled', value: '{{Scroll Depth Threshold}}' }],
+  trigger: { name: 'Scroll Depth Trigger', kind: 'scroll_depth' },
+});
+const gsd = suggestionToGroup(scroll);
+check('group: scroll_depth → "Scroll Depth" type, no when conditions', gsd.triggerType === 'Scroll Depth' && gsd.whens.length === 0);
+check('runbook: scroll_depth condition text spells out the milestones', /scroll depth 25 \/ 50 \/ 75 \/ 90%/i.test(triggerConditionText(scroll)));
 
 // ── the GA4 Configuration (google_tag) base tag ──────────────────────────────
 const gtag = base({ id: 'g', platform: 'google_tag', tagName: 'GA4 Configuration', eventName: '', tagId: '{{GA4 Measurement ID}}', trigger: { name: 'All Pages', kind: 'pageview' }, configSettings: [{ name: 'send_page_view', value: 'true' }] });

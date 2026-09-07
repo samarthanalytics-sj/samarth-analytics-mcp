@@ -151,7 +151,7 @@ assert.strictEqual(
 
 // ── buildTriggerInstallPlan: NATIVE trigger kinds → a "nothing to install" native plan ──────────────
 {
-  for (const kind of ['link_click', 'all_clicks', 'pageview', 'timer', 'youtube_video', 'form_submit']) {
+  for (const kind of ['link_click', 'all_clicks', 'pageview', 'timer', 'youtube_video', 'form_submit', 'scroll_depth']) {
     const plan = buildTriggerInstallPlan({ kind });
     check(`trigger-native: ${kind} → single native requirement`, only(plan.requires, 'native').length === 1 && plan.requires.length === 1);
     check(`trigger-native: ${kind} → no site-code`, !siteCode(plan.requires));
@@ -160,6 +160,7 @@ assert.strictEqual(
   // link_click / youtube_video carry a specific, recognisable native detail.
   check('trigger-native: link_click detail names Just Links', /Just Links/.test((buildTriggerInstallPlan({ kind: 'link_click' }).requires[0] as { detail: string }).detail));
   check('trigger-native: youtube_video detail names the YouTube Video trigger', /YouTube Video/.test((buildTriggerInstallPlan({ kind: 'youtube_video' }).requires[0] as { detail: string }).detail));
+  check('trigger-native: scroll_depth detail names the Scroll Depth trigger', /Scroll Depth/.test((buildTriggerInstallPlan({ kind: 'scroll_depth' }).requires[0] as { detail: string }).detail));
 }
 
 // ── buildTriggerInstallPlan: a NON-ecommerce custom_event → site-code with the bare dataLayer push ───

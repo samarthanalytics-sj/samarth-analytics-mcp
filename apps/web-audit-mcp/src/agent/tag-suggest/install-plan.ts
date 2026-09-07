@@ -447,6 +447,8 @@ const NATIVE_TRIGGER_DETAIL: Record<string, string> = {
     "GTM's built-in YouTube Video trigger fires; enable the YouTube Video built-in variables.",
   form_submit:
     "GTM's built-in Form Submission trigger fires on the native <form> submit.",
+  scroll_depth:
+    "GTM's built-in Scroll Depth trigger fires at the vertical thresholds; the Scroll Depth built-in variables are enabled with the tag.",
 };
 
 /** Human label for a native trigger kind, used in the one-line summary ("Native Link Click — …"). */
@@ -457,6 +459,7 @@ const NATIVE_TRIGGER_LABEL: Record<string, string> = {
   timer: 'Timer',
   youtube_video: 'YouTube Video',
   form_submit: 'Form Submission',
+  scroll_depth: 'Scroll Depth',
 };
 
 /**

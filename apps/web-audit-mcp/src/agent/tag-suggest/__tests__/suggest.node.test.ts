@@ -701,6 +701,23 @@ check('full: an untitled "other" form yields NO form-submit tag (generic tag + c
 const siteWideOther = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/a', purpose: 'other', action: '', provider: prov0 }, { page: '/b', purpose: 'other', action: '', provider: prov0 }], elements: [] }, { full: true });
 check('full: a site-wide untitled "other" form also yields NO tag (no catch-all fold)', !siteWideOther.some((s) => s.trigger.kind === 'form_submit'));
 
+// ── Scroll-depth suggestion — full mode only (site-wide, EM-flagged, ranks last) ──────────────────
+const scrollFull = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [] }, { full: true });
+const scrollTag = scrollFull.find((s) => s.trigger.kind === 'scroll_depth');
+check('scroll: full mode emits exactly ONE site-wide GA4 scroll-depth tag',
+  !!scrollTag && scrollTag!.platform === 'ga4_event' && scrollTag!.page === 'site-wide'
+    && scrollFull.filter((s) => s.trigger.kind === 'scroll_depth').length === 1
+    && scrollTag!.tagName === 'GA4 - Event - Scroll Depth Tag' && scrollTag!.trigger.name === 'Scroll Depth Trigger');
+check('scroll: fires on GA4 "scroll" with percent_scrolled = {{Scroll Depth Threshold}}',
+  !!scrollTag && scrollTag!.eventName === 'scroll'
+    && (scrollTag!.eventParameters ?? []).some((p) => p.name === 'percent_scrolled' && p.value === '{{Scroll Depth Threshold}}'));
+check('scroll: flagged for Enhanced Measurement overlap + low confidence',
+  !!scrollTag && scrollTag!.enhancedMeasurementOverlap === true && scrollTag!.confidence === 'low');
+check('scroll: NOT emitted in the lean (non-full) suggestion list',
+  !buildSuggestions({ siteHost: 'a.com', forms: [], elements: [] }).some((s) => s.trigger.kind === 'scroll_depth'));
+check('scroll: no Meta counterpart is derived (GA4-only engagement signal)',
+  !buildSuggestions({ siteHost: 'a.com', forms: [], elements: [] }, { full: true, platforms: ['meta'] }).some((s) => s.trigger.kind === 'scroll_depth'));
+
 // ── FAQ accordion grouping ───────────────────────────────────────────────────
 // >=2 question rows (CTA text ending "?") collapse into ONE tag. {{Click Text}} ends with "?" is the
 // PRIMARY condition (always present, corpus-dominant); a stable shared class ANDs the {{Click

@@ -1090,6 +1090,38 @@ function videoSuggestion(embeds: VideoEmbed[]): SuggestedTag | null {
   };
 }
 
+// GA4's recommended scroll parameter, valued from the GTM built-in Scroll Depth variable (auto-enabled
+// when the scroll_depth trigger is created). percent_scrolled reports 25/50/75/90 as the visitor crosses
+// each vertical threshold.
+const SCROLL_PARAMS = [{ name: 'percent_scrolled', value: '{{Scroll Depth Threshold}}' }] as const;
+const SCROLL_EVENT = 'scroll';
+
+// One site-wide GA4 scroll-depth tag firing on GTM's built-in Scroll Depth trigger at 25/50/75/90%. This
+// has no on-page signal (scroll applies to every page), so it's emitted on every scan rather than derived
+// from a detected element — and, like YouTube video, it's FLAGGED for Enhanced Measurement overlap: GA4 EM
+// already sends a single `scroll` at 90%, so this earns its place only for the shallower 25/50/75%
+// milestones. LOW confidence so it ranks dead last and the operator opts in. The trigger carries no
+// thresholds, so buildTrigger applies its 25/50/75/90 default.
+function scrollSuggestion(): SuggestedTag {
+  return {
+    id: hashId('scroll|depth'),
+    page: 'site-wide',
+    confidence: 'low',
+    enhancedMeasurementOverlap: true,
+    platform: 'ga4_event',
+    tagName: tagNameOf('Scroll Depth', 'scroll_depth'),
+    measurementId: GA4_VAR,
+    eventName: SCROLL_EVENT,
+    label: 'Scroll depth → GA4 "scroll" at 25/50/75/90%  ⚠ Enhanced Measurement already sends scroll at 90%',
+    evidence:
+      'granular scroll-depth milestones (25/50/75/90%). GA4 Enhanced Measurement auto-tracks only a single ' +
+      'scroll at 90% — create this for the shallower milestones, and turn OFF EM "Scrolls" to avoid a ' +
+      'duplicate 90% event',
+    eventParameters: [...SCROLL_PARAMS],
+    trigger: { name: trigNameOf('Scroll Depth', 'scroll_depth'), kind: 'scroll_depth' },
+  };
+}
+
 // ── eCommerce funnel suggestions (only when the site is detected as a store) ──
 // The GA4 recommended ecommerce funnel, in funnel order. Each becomes a GA4 event tag with the EXPLICIT
 // event parameters GA4 recommends for that event (items/value/currency/…), each valued from an
@@ -1936,6 +1968,12 @@ export function buildSuggestions(
     ...shareTags,
     ...input.elements.filter((e) => !skip(e)).map((e) => elementSuggestion(e, socialPattern)),
     videoSuggestion(input.videoEmbeds ?? []),
+    // Site-wide scroll-depth tag. It has no on-page signal (scroll applies everywhere), so — like the
+    // GA4 Configuration tag — it's part of the COMPLETE list only (opts.full), not the lean MCP scan;
+    // that also keeps it off the default suggestion count. EM-flagged + low confidence, so it ranks last.
+    // Its Meta/etc. counterparts are NOT derived — scroll depth is a GA4-only engagement signal, so the
+    // platform derivers return null for it.
+    ...(opts.full ? [scrollSuggestion()] : []),
     // eCommerce funnel event tags — only for a detected store. They flow through the SAME dedup/rank
     // AND the SAME Meta derivation (toMetaSuggestion) below, so their Meta counterparts come for free.
     ...ecommerceSuggestions(input.websiteType === 'ecommerce'),
