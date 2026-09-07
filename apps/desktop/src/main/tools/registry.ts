@@ -2835,11 +2835,15 @@ export function buildToolRegistry(
         additionalProperties: false,
       },
       handler: (a) =>
-        auditWorkspace(data, {
-          accountId: s(a.accountId),
-          containerId: s(a.containerId),
-          workspaceId: s(a.workspaceId),
-        }),
+        auditWorkspace(
+          data,
+          {
+            accountId: s(a.accountId),
+            containerId: s(a.containerId),
+            workspaceId: s(a.workspaceId),
+          },
+          { includeInventory: true },
+        ),
     },
     {
       name: 'audit_gtm_container_changes',

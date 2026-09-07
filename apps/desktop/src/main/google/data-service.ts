@@ -69,6 +69,7 @@ interface RawTag {
   setupTag?: unknown;
   teardownTag?: unknown;
   parentFolderId?: string | null;
+  tagFiringOption?: string | null;
 }
 interface RawTrigger {
   triggerId?: string | null;
@@ -123,6 +124,7 @@ function toSnapshot(tags: RawTag[], triggers: RawTrigger[], variables: RawVariab
         return teardown.length ? { teardownTag: teardown as Array<{ tagName: string; stopTeardownOnFailure: boolean }> } : {};
       })(),
       ...(t.parentFolderId ? { parentFolderId: t.parentFolderId } : {}),
+      ...(t.tagFiringOption ? { tagFiringOption: t.tagFiringOption } : {}),
     })),
     triggers: triggers.map((t) => ({
       triggerId: t.triggerId ?? '',
