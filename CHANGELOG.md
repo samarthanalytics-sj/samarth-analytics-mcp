@@ -1,3 +1,9 @@
+## [1.493.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.492.0...v1.493.0) (2026-09-07)
+
+### Features
+
+* **desktop:** Excel export of tag suggestions with proof screenshots embedded ([#952](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/952)) ([9fc3f7e](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/9fc3f7e08e6de8e665317062cc7ecce23705881c))
+
 ## [1.492.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.491.0...v1.492.0) (2026-09-07)
 
 ### Features
