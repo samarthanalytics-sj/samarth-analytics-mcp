@@ -156,7 +156,7 @@ export interface SuggestInput {
   dataLayerEvents?: string[];
 }
 
-export type TriggerKind = 'link_click' | 'all_clicks' | 'custom_event' | 'pageview' | 'form_submit' | 'youtube_video';
+export type TriggerKind = 'link_click' | 'all_clicks' | 'custom_event' | 'pageview' | 'form_submit' | 'youtube_video' | 'scroll_depth';
 export type FilterOp = 'equals' | 'contains' | 'startsWith' | 'endsWith' | 'matchRegex' | 'cssSelector';
 
 /** SAME shape as the desktop create_gtm_tracking_tag input → directly creatable. */

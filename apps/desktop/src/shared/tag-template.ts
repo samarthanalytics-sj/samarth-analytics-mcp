@@ -27,6 +27,7 @@ const TRIGGER_TYPE: Record<string, string> = {
   custom_event: 'Custom Event',
   pageview: 'Page View',
   youtube_video: 'YouTube Video',
+  scroll_depth: 'Scroll Depth',
 };
 
 // Our filter-operator TOKEN → the exact GTM UI "Condition" label (so the review-table dropdown reads
@@ -454,6 +455,7 @@ export function triggerConditionText(s: SuggestedTagView): string {
     return t.kind === 'all_clicks' ? 'fires on every click'
       : t.kind === 'form_submit' ? 'fires on every form submit'
       : t.kind === 'youtube_video' ? 'fires on YouTube video start / progress (25/50/75/90%) / complete'
+      : t.kind === 'scroll_depth' ? 'fires at scroll depth 25 / 50 / 75 / 90%'
       : 'fires on its built-in trigger';
   }
   return parts.join(' AND ');
