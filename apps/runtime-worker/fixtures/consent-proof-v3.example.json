@@ -1,0 +1,117 @@
+{
+  "schema": "samarth.runtime-capture/v3",
+  "capturedAt": "2026-06-01T00:00:00.000Z",
+  "requestedUrls": ["https://example.com/"],
+  "mode": "passive",
+  "notes": [
+    "Passive capture: each state is declared metadata + an injected Consent Mode default. No real CMP UI is driven.",
+    "This is an EXAMPLE fixture for documentation and tests — it is not a real capture."
+  ],
+  "states": [
+    {
+      "state": "default_denied",
+      "consentFields": {
+        "ad_storage": "denied",
+        "analytics_storage": "denied",
+        "ad_user_data": "denied",
+        "ad_personalization": "denied"
+      },
+      "pages": [
+        {
+          "requestedUrl": "https://example.com/",
+          "finalUrl": "https://example.com/",
+          "consentState": "default_denied",
+          "consoleErrors": [],
+          "pageErrors": [],
+          "consentEvents": [
+            { "kind": "default", "tMs": 120, "fields": { "ad_storage": "denied", "analytics_storage": "denied", "ad_user_data": "denied", "ad_personalization": "denied" } }
+          ],
+          "firstMeasurementTMs": 480,
+          "trackerHits": [
+            {
+              "url": "https://www.google-analytics.com/g/collect?v=2&tid=G-XXXX&en=page_view&gcs=G100&gcd=11111",
+              "method": "POST",
+              "groups": ["ga4"],
+              "matched": ["ga4_collect"],
+              "query": { "gcs": "G100", "gcd": "11111", "tid": "G-XXXX", "en": "page_view" },
+              "tMs": 480
+            }
+          ],
+          "cookies": [{ "name": "_ga", "tMs": 500 }],
+          "dataLayerEvents": ["gtm.js", "gtm.dom", "gtm.load"],
+          "dataLayerKeys": ["event", "consent"]
+        }
+      ]
+    },
+    {
+      "state": "granted",
+      "consentFields": {
+        "ad_storage": "granted",
+        "analytics_storage": "granted",
+        "ad_user_data": "granted",
+        "ad_personalization": "granted"
+      },
+      "pages": [
+        {
+          "requestedUrl": "https://example.com/",
+          "finalUrl": "https://example.com/",
+          "consentState": "granted",
+          "consoleErrors": [],
+          "pageErrors": [],
+          "consentEvents": [
+            { "kind": "default", "tMs": 120, "fields": { "ad_storage": "granted", "analytics_storage": "granted", "ad_user_data": "granted", "ad_personalization": "granted" } }
+          ],
+          "firstMeasurementTMs": 460,
+          "trackerHits": [
+            {
+              "url": "https://www.google-analytics.com/g/collect?v=2&tid=G-XXXX&en=page_view&gcs=G111&gcd=11111",
+              "method": "POST",
+              "groups": ["ga4"],
+              "matched": ["ga4_collect"],
+              "query": { "gcs": "G111", "gcd": "11111", "tid": "G-XXXX", "en": "page_view" },
+              "tMs": 460
+            }
+          ],
+          "cookies": [{ "name": "_ga", "tMs": 480 }, { "name": "_gid", "tMs": 480 }],
+          "dataLayerEvents": ["gtm.js", "gtm.dom", "gtm.load"],
+          "dataLayerKeys": ["event", "consent"]
+        }
+      ]
+    },
+    {
+      "state": "analytics_granted_ads_denied",
+      "consentFields": {
+        "ad_storage": "denied",
+        "analytics_storage": "granted",
+        "ad_user_data": "denied",
+        "ad_personalization": "denied"
+      },
+      "pages": [
+        {
+          "requestedUrl": "https://example.com/",
+          "finalUrl": "https://example.com/",
+          "consentState": "analytics_granted_ads_denied",
+          "consoleErrors": [],
+          "pageErrors": [],
+          "consentEvents": [
+            { "kind": "default", "tMs": 120, "fields": { "ad_storage": "denied", "analytics_storage": "granted", "ad_user_data": "denied", "ad_personalization": "denied" } }
+          ],
+          "firstMeasurementTMs": 470,
+          "trackerHits": [
+            {
+              "url": "https://www.google-analytics.com/g/collect?v=2&tid=G-XXXX&en=page_view&gcs=G101&gcd=11111",
+              "method": "POST",
+              "groups": ["ga4"],
+              "matched": ["ga4_collect"],
+              "query": { "gcs": "G101", "gcd": "11111", "tid": "G-XXXX", "en": "page_view" },
+              "tMs": 470
+            }
+          ],
+          "cookies": [{ "name": "_ga", "tMs": 490 }],
+          "dataLayerEvents": ["gtm.js", "gtm.dom", "gtm.load"],
+          "dataLayerKeys": ["event", "consent"]
+        }
+      ]
+    }
+  ]
+}

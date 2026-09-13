@@ -1,0 +1,11 @@
+# Used when building with the repo root as Docker context
+# (apps/web-audit-mcp/Dockerfile). Keeps node_modules, build output and
+# secrets out of the context — the Dockerfile installs/builds from source.
+**/node_modules
+**/dist
+.git
+**/.env
+**/.env.*
+**/*.gtm-mcp-tokens.json
+.vercel
+**/*.log

@@ -1,0 +1,45 @@
+# Local Docker run. Same image as production, none of the production scaffolding.
+#
+#   docker compose -f apps/chat-orchestrator/compose.local.yaml up --build
+#
+# Run from the REPO ROOT: the build context needs both the MCP server and the
+# orchestrator.
+#
+# Differences from compose.yaml, all deliberate:
+#   - no nginx and no certbot, so no certificate is needed to start
+#   - the port IS published, but only to 127.0.0.1, so it stays off your network
+#   - NODE_ENV=development, which re-enables the dev identity modes that the
+#     production guards refuse (see config.ts)
+#   - a small pool, because a laptop is not a server
+#
+# This is for proving the pipeline works. Do not expose it.
+
+services:
+  orchestrator:
+    build:
+      context: ../..
+      dockerfile: apps/chat-orchestrator/Dockerfile
+    image: samarth-chat-orchestrator:local
+    env_file:
+      - .env
+    environment:
+      # Production refuses GOOGLE_IDENTITY_MODE=inherit and DEV_NO_AUTH, because
+      # both mean every user shares one Google account. Locally that is exactly
+      # what you want while testing with your own account.
+      NODE_ENV: development
+      MCP_POOL_MAX_SESSIONS: "3"
+    ports:
+      # Loopback only. Binding 0.0.0.0 here would put an unencrypted endpoint
+      # that handles Google tokens onto your LAN.
+      - "127.0.0.1:8787:8787"
+    # volumes:
+    #   Uncomment ONLY after `npm run auth:google` has created the file at the
+    #   repo root. Docker bind-mounts a missing source path by creating a
+    #   DIRECTORY there, and a directory named .gtm-mcp-tokens.json then breaks
+    #   auth:google itself, which is a confusing hole to dig out of.
+    #
+    #   Needed only for GOOGLE_IDENTITY_MODE=inherit. In supabase mode each
+    #   user's token comes from the platform and no file is involved.
+    #   - ../../.gtm-mcp-tokens.json:/app/.gtm-mcp-tokens.json:ro
+    mem_limit: 2g
+    stop_grace_period: 15s

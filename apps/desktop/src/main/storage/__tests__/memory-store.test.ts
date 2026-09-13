@@ -1,0 +1,187 @@
+import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { MemoryStore } from '../memory-store';
+
+let passed = 0;
+let failed = 0;
+function test(name: string, fn: () => void): void {
+  try { fn(); console.log(`  ✓ ${name}`); passed++; }
+  catch (e) { console.error(`  ✗ ${name}: ${(e as Error).message}`); failed++; }
+}
+
+const dir = mkdtempSync(join(tmpdir(), 'mem-store-'));
+let seq = 100;
+const clock = (): number => (seq += 1); // deterministic, monotonic
+
+console.log('\nMemoryStore:');
+
+test('add + list returns the memory', () => {
+  const s = new MemoryStore(join(dir, 'a.json'), 500, clock);
+  const r = s.add('acct1', { kind: 'rule', text: 'always snake_case events' });
+  assert.equal(r.deduped, false);
+  assert.equal(r.memory.kind, 'rule');
+  const list = s.list('acct1');
+  assert.equal(list.length, 1);
+  assert.equal(list[0].text, 'always snake_case events');
+  assert.equal(list[0].enabled, true);
+});
+
+test('secret in the text is redacted before it persists', () => {
+  const s = new MemoryStore(join(dir, 'b.json'), 500, clock);
+  const r = s.add('acct1', { kind: 'fact', text: 'the key is AIzaSyA1234567890abcdefghijklmnopqrstuvw' });
+  assert.equal(r.redacted, true);
+  assert.ok(!r.memory.text.includes('AIzaSy'));
+  assert.ok(r.memory.text.includes('[redacted]'));
+});
+
+test('duplicate (same kind+scope+text) refreshes instead of adding', () => {
+  const s = new MemoryStore(join(dir, 'c.json'), 500, clock);
+  s.add('acct1', { kind: 'fact', text: 'client uses shopify' });
+  const r2 = s.add('acct1', { kind: 'fact', text: 'Client Uses Shopify' }); // case-insensitive dupe
+  assert.equal(r2.deduped, true);
+  assert.equal(s.list('acct1').length, 1);
+});
+
+test('scope separates memories of the same text', () => {
+  const s = new MemoryStore(join(dir, 'd.json'), 500, clock);
+  s.add('acct1', { kind: 'fact', text: 'note', scope: { containerId: 'GTM-A' } });
+  s.add('acct1', { kind: 'fact', text: 'note', scope: { containerId: 'GTM-B' } });
+  assert.equal(s.list('acct1').length, 2);
+});
+
+test('accounts are isolated', () => {
+  const s = new MemoryStore(join(dir, 'e.json'), 500, clock);
+  s.add('acct1', { kind: 'fact', text: 'a1' });
+  s.add('acct2', { kind: 'fact', text: 'a2' });
+  assert.equal(s.list('acct1').length, 1);
+  assert.equal(s.list('acct2').length, 1);
+  assert.equal(s.list('acct1')[0].text, 'a1');
+});
+
+test('update patches text (re-redacting) + toggles + returns null for missing', () => {
+  const s = new MemoryStore(join(dir, 'f.json'), 500, clock);
+  const { memory } = s.add('acct1', { kind: 'fact', text: 'old' });
+  const up = s.update('acct1', memory.id, { text: 'new value', enabled: false, pinned: true });
+  assert.equal(up?.text, 'new value');
+  assert.equal(up?.enabled, false);
+  assert.equal(up?.pinned, true);
+  assert.equal(s.update('acct1', 'nope', { text: 'x' }), null);
+});
+
+test('remove + clear', () => {
+  const s = new MemoryStore(join(dir, 'g.json'), 500, clock);
+  const { memory } = s.add('acct1', { kind: 'fact', text: 'x' });
+  s.add('acct1', { kind: 'fact', text: 'y' });
+  assert.equal(s.remove('acct1', memory.id), true);
+  assert.equal(s.remove('acct1', memory.id), false);
+  assert.equal(s.list('acct1').length, 1);
+  assert.equal(s.clear('acct1'), 1);
+  assert.equal(s.list('acct1').length, 0);
+});
+
+test('a deletion leaves a tombstone, so a handover can retract it too', () => {
+  const s = new MemoryStore(join(dir, 'tomb.json'), 500, clock);
+  const { memory } = s.add('acct1', { kind: 'rule', text: 'secret-ish note', scope: { containerId: 'GTM-A' } });
+  assert.equal(s.tombstones('acct1').length, 0, 'nothing recorded before a delete');
+  s.remove('acct1', memory.id);
+
+  const [t] = s.tombstones('acct1');
+  assert.ok(t, 'the delete was recorded');
+  assert.equal(t.kind, 'rule');
+  assert.equal(t.clientScoped, true);
+  assert.equal(t.containerId, 'GTM-A', 'kept for per-client export filtering');
+  // The whole point: a note is often deleted BECAUSE of what it said.
+  assert.ok(!JSON.stringify(t).includes('secret-ish'), 'the deleted text is not kept');
+  assert.match(t.key, /^[0-9a-f]{32,}$/, 'only a hash travels');
+});
+
+test('tombstones survive a reload and do not duplicate', () => {
+  const file = join(dir, 'tomb2.json');
+  const a = new MemoryStore(file, 500, clock);
+  const m1 = a.add('acct1', { kind: 'fact', text: 'gone' }).memory;
+  a.remove('acct1', m1.id);
+  // Re-adding then re-deleting the same note must not stack two identical tombstones.
+  const m2 = a.add('acct1', { kind: 'fact', text: 'gone' }).memory;
+  a.remove('acct1', m2.id);
+  assert.equal(a.tombstones('acct1').length, 1);
+
+  const b = new MemoryStore(file, 500, clock);
+  assert.equal(b.tombstones('acct1').length, 1, 'persisted across a reload');
+});
+
+test('clear records a tombstone per note, so a wipe propagates too', () => {
+  const s = new MemoryStore(join(dir, 'tomb3.json'), 500, clock);
+  s.add('acct1', { kind: 'fact', text: 'one' });
+  s.add('acct1', { kind: 'fact', text: 'two' });
+  s.clear('acct1');
+  assert.equal(s.tombstones('acct1').length, 2);
+  assert.equal(s.tombstones('acct2').length, 0, 'another account is untouched');
+});
+
+test('cap evicts oldest non-pinned first; pinned survive', () => {
+  const s = new MemoryStore(join(dir, 'h.json'), 3, clock); // cap = 3
+  const pin = s.add('acct1', { kind: 'fact', text: 'keep me', pinned: true }).memory;
+  s.add('acct1', { kind: 'fact', text: 'old1' });
+  s.add('acct1', { kind: 'fact', text: 'old2' });
+  s.add('acct1', { kind: 'fact', text: 'old3' }); // pushes over cap → evict oldest UNPINNED (old1)
+  const texts = s.list('acct1').map((m) => m.text);
+  assert.equal(s.list('acct1').length, 3);
+  assert.ok(texts.includes('keep me'), 'pinned survived');
+  assert.ok(!texts.includes('old1'), 'oldest unpinned evicted');
+  assert.equal(s.list('acct1').find((m) => m.id === pin.id)?.pinned, true);
+});
+
+test('a secret in a scope label is redacted (defense in depth)', () => {
+  const s = new MemoryStore(join(dir, 'j.json'), 500, clock);
+  const r = s.add('acct1', { kind: 'fact', text: 'note', scope: { containerId: 'GTM-A', label: 'sk-proj-abcdEFGH1234ijklMNOP5678qrstUVWX90abYZcd_efGH-ijKL' } });
+  assert.ok(!(r.memory.scope.label ?? '').includes('sk-proj-'), 'label secret redacted');
+});
+
+test('adding at a cap full of pinned keeps the NEW memory (no silent loss)', () => {
+  const s = new MemoryStore(join(dir, 'k.json'), 2, clock);
+  s.add('acct1', { kind: 'fact', text: 'p1', pinned: true });
+  s.add('acct1', { kind: 'fact', text: 'p2', pinned: true });
+  const r = s.add('acct1', { kind: 'fact', text: 'newbie' }); // unpinned, over cap, all existing pinned
+  assert.equal(s.list('acct1').length, 2);
+  assert.ok(s.list('acct1').map((m) => m.text).includes('newbie'), 'the just-added memory survived');
+  assert.ok(s.list('acct1').some((m) => m.id === r.memory.id), 'returned memory is actually present');
+});
+
+test('persists across reloads (atomic file)', () => {
+  const path = join(dir, 'i.json');
+  const s1 = new MemoryStore(path, 500, clock);
+  s1.add('acct1', { kind: 'rule', text: 'persisted rule', pinned: true });
+  const s2 = new MemoryStore(path, 500, clock); // fresh instance reads the file
+  const list = s2.list('acct1');
+  assert.equal(list.length, 1);
+  assert.equal(list[0].text, 'persisted rule');
+  assert.equal(list[0].pinned, true);
+});
+
+test('recordUse bumps useCount + lastUsedAt but NEVER updatedAt (eviction order must not churn on read)', () => {
+  let now = 1000;
+  const s = new MemoryStore(join(dir, 'use.json'), 500, () => now);
+  const a = s.add('acct1', { kind: 'fact', text: 'used note' }).memory;
+  const b = s.add('acct1', { kind: 'fact', text: 'unused note' }).memory;
+  now = 2000;
+  s.recordUse('acct1', [a.id, 'nope-unknown-id']);
+  now = 3000;
+  s.recordUse('acct1', [a.id]);
+  const got = s.list('acct1').find((m) => m.id === a.id)!;
+  assert.equal(got.useCount, 2);
+  assert.equal(got.lastUsedAt, 3000);
+  assert.equal(got.updatedAt, 1000, 'updatedAt untouched by use');
+  const other = s.list('acct1').find((m) => m.id === b.id)!;
+  assert.equal(other.useCount ?? 0, 0, 'unlisted memory untouched');
+  // Usage survives a reload (persisted).
+  const s2 = new MemoryStore(join(dir, 'use.json'), 500, () => now);
+  assert.equal(s2.list('acct1').find((m) => m.id === a.id)!.useCount, 2);
+  // Empty ids: a no-op that never throws.
+  s.recordUse('acct1', []);
+});
+
+console.log(`\nMemoryStore: ${passed} passed, ${failed} failed`);
+rmSync(dir, { recursive: true, force: true });
+if (failed) process.exit(1);

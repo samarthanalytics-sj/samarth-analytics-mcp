@@ -1,0 +1,28 @@
+node_modules/
+dist/
+.env
+.env.docker
+*.env.local
+*.key
+*.json.key
+coverage/
+.DS_Store
+*.tsbuildinfo
+
+# OAuth token storage written by `npm run auth:google`
+.gtm-mcp-tokens.json
+*.gtm-mcp-tokens.json
+
+# Samarth Desktop local data (account registry, encrypted secrets, and the
+# Google OAuth client config — contains a client secret). Never commit.
+/data/
+oauth-client.json
+
+# Vercel CLI local artifacts
+.vercel/
+
+# local tooling (mcp-publisher binary)
+.tools/
+
+# Local tunnel binary (downloaded, not source)
+tools/cloudflared.exe

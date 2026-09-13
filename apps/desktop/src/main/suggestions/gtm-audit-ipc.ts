@@ -1,0 +1,670 @@
+// IPC for the "Container audit" panel — surfaces the EXISTING audit engine
+// (auditWorkspace → auditContainer) and its ready-to-run fixes as a UI, instead
+// of only via chat. Two channels:
+//   gtm:audit     (read)  snapshot the container + return findings (+ fixes)
+//   gtm:applyFix  (write) run one finding's fix (pause/unpause tag, delete unused
+//                         trigger, …) through the existing approval-gated tools.
+//
+// The fix already carries its workspace ids (auditWorkspace injects them last),
+// so applyFix just runs it. The confirm fn auto-approves because the RENDERER
+// performed an explicit confirmation (a stronger one for destructive deletes)
+// before invoking this — write tools still only exist because a confirm fn is
+// supplied, and nothing is ever published.
+
+import { ipcMain, dialog, BrowserWindow } from 'electron';
+import { writeFile, unlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type { GoogleDataService } from '../google/data-service';
+import { auditWorkspace, auditServerWorkspace } from '../google/audit-runner';
+import { auditServerContainer, plainDashes } from '../google/gtm-builders';
+import { buildServerCoverage } from '../google/server-coverage';
+import { serverContainerDocMarkdown, serverContainerDocCsv, buildServerDocView } from '../google/server-doc';
+import { serverCoverageToCsv, serverCoverageToHtml, type CoverageExportMeta } from '../google/server-coverage-export';
+import { buildServerPlan } from '../google/server-plan';
+import { googleTagConfigValue } from '../google/gtm-builders';
+import type { ServerCoverageView } from '../../shared/ipc';
+import { buildToolRegistry, type ConfirmFn } from '../tools/registry';
+import { buildVariable, findGa4BaseTag, ga4VariablePlan } from '../google/gtm-builders';
+import { withQuotaRetry } from '../google/quota-retry';
+import { reportHtmlDocument, dedupedReportPath } from '../google/ga4-report-export';
+import { gtmAuditHtml, type GtmAuditHtmlMeta } from '../../shared/gtm-audit-html';
+import type { AuditReportView, WorkspaceCompareResultView, VerifyExportPayload, AuditFindingView } from '../../shared/ipc';
+import type { MemoryStore } from '../storage/memory-store';
+import type { RegistryService } from '../services/registry-service';
+import { memoryApplies } from '../../shared/chat-memory';
+import { annotateFindings } from '../../shared/audit-annotations';
+import { deriveVerifyHints, applyVerifyHints, describeVerifySkip } from '../../shared/verify-hints';
+
+// A prior download of the same report may still be open in a PDF viewer, which locks the file
+// (EBUSY/EPERM/EACCES on Windows). Fall back to a suffixed name so a re-download always succeeds.
+const LOCK_CODES = new Set(['EBUSY', 'EPERM', 'EACCES']);
+async function writeReportFile(filePath: string, data: string | Uint8Array): Promise<string> {
+  for (let i = 0; i <= 50; i++) {
+    const target = dedupedReportPath(filePath, i);
+    try {
+      // Text exports (md/csv/doc-html) follow house style: plain hyphens, never em/en dashes.
+      await writeFile(target, typeof data === 'string' ? plainDashes(data) : data);
+      return target;
+    } catch (err) {
+      const code = (err as { code?: string }).code ?? '';
+      if (!LOCK_CODES.has(code) || i === 50) throw err;
+    }
+  }
+  throw new Error('unreachable');
+}
+
+export function registerGtmAuditIpc(data: GoogleDataService, memory?: MemoryStore, registry?: RegistryService): void {
+  /**
+   * Attach the user's own notes to the findings, and change nothing else.
+   *
+   * Cross-feature leverage, in its safe form: the operator sees the finding at FULL severity plus
+   * what they already said about it. Deliberately NOT a suppression mechanism - a note typed months
+   * ago cannot prove runtime behaviour, so it can add context and never a verdict (see
+   * shared/audit-annotations). Best-effort: no stores, no active account, or a read that throws all
+   * return the audit exactly as the engine produced it.
+   */
+  function withUserNotes<T extends { findings: AuditFindingView[] }>(result: T): T {
+    try {
+      if (!memory || !registry) return result;
+      const active = registry.getActiveView();
+      if (!active) return result;
+      const ctx = { containerId: active.gtmContext?.containerId, property: active.ga4Context?.property };
+      const notes = memory.list(active.id).filter((m) => memoryApplies(m, ctx));
+      if (!notes.length) return result;
+      return { ...result, findings: annotateFindings(result.findings ?? [], notes) };
+    } catch (e) {
+      console.error('[audit] user-note pass skipped:', e instanceof Error ? e.message : e);
+      return result;
+    }
+  }
+
+  ipcMain.handle('gtm:audit', (_e, accountId: unknown, containerId: unknown, workspaceId: unknown) => {
+    const a = String(accountId ?? '');
+    const c = String(containerId ?? '');
+    const w = String(workspaceId ?? '');
+    if (!a || !c || !w) throw new Error('Pick a GTM account, container and workspace first.');
+    // The audit READ (list tags/triggers/variables) also trips GTM's per-minute quota
+    // during heavy sessions — retry it with backoff so the panel doesn't crash on a 429.
+    return withQuotaRetry(async () => withUserNotes(await auditWorkspace(data, { accountId: a, containerId: c, workspaceId: w })));
+  });
+
+  // SERVER container audit (read-only): the sGTM config audit — clients claiming, duplicate GA4
+  // relays, dead URL-encoded triggers, CAPI pitfalls, legacy/duplicate clients, unused variables,
+  // dangling references. Config-level only; never reads server runtime logs.
+  ipcMain.handle('gtm:auditServer', (_e, accountId: unknown, containerId: unknown, workspaceId: unknown) => {
+    const a = String(accountId ?? '');
+    const c = String(containerId ?? '');
+    const w = String(workspaceId ?? '');
+    if (!a || !c || !w) throw new Error('Pick the server container and workspace first.');
+    return withQuotaRetry(() => auditServerWorkspace(data, { accountId: a, containerId: c, workspaceId: w }));
+  });
+
+  // WEB <-> SERVER coverage (read-only, config-level): is every event the web container sends
+  // actually handled by the server container, per destination - plus Measurement-ID match and
+  // whether the web Google tag even points at the tagging server. Pure engine does the comparison.
+  ipcMain.handle('gtm:serverCoverage', async (_e, accountId: unknown, webContainerId: unknown, webWorkspaceId: unknown, serverContainerId: unknown, serverWorkspaceId: unknown) => {
+    const a = String(accountId ?? '');
+    const wc = String(webContainerId ?? '');
+    const ww = String(webWorkspaceId ?? '');
+    const sc = String(serverContainerId ?? '');
+    const sw = String(serverWorkspaceId ?? '');
+    if (!a || !wc || !ww || !sc || !sw) throw new Error('Pick the web container/workspace and the server container/workspace first.');
+    const [webSnap, srvSnap] = await Promise.all([
+      withQuotaRetry(() => data.getGtmContainerSnapshot(a, wc, ww)),
+      withQuotaRetry(() => data.getServerContainerSnapshot(a, sc, sw)),
+    ]);
+    return buildServerCoverage(webSnap, srvSnap, auditServerContainer(srvSnap).summary);
+  });
+
+  // One-click coverage fix (WRITE, draft-only, confirmed in the UI): clone an existing same-platform
+  // server tag for a missing event - template credentials carry over, only the trigger is new.
+  ipcMain.handle('gtm:createServerTagForEvent', (_e, accountId: unknown, containerId: unknown, workspaceId: unknown, templateTagId: unknown, eventName: unknown, tagName: unknown) => {
+    const a = String(accountId ?? '');
+    const c = String(containerId ?? '');
+    const w = String(workspaceId ?? '');
+    const t = String(templateTagId ?? '');
+    const ev = String(eventName ?? '').trim();
+    const name = String(tagName ?? '').trim();
+    if (!a || !c || !w || !t || !ev || !name) throw new Error('Missing event or template for the server-tag create.');
+    return withQuotaRetry(() => data.createServerTagForEvent(a, c, w, t, ev, name));
+  });
+
+  // REMEDIATION PLAN (read-only): audit the target server container (or a blank one) against the
+  // web container and return the categorized, selectable fix list + detected values + inventory.
+  ipcMain.handle('gtm:planServer', async (_e, accountId: unknown, webContainerId: unknown, serverContainerId: unknown) => {
+    const a = String(accountId ?? '');
+    const wc = String(webContainerId ?? '');
+    const sc = serverContainerId != null ? String(serverContainerId).trim() : '';
+    if (!a || !wc) throw new Error('Pick a GTM account and the web container first.');
+    const webWsList = await withQuotaRetry(() => data.listGtmWorkspaces(a, wc)).catch(() => []);
+    const webWs = webWsList[0]?.workspaceId ?? '';
+    const web = webWs ? await withQuotaRetry(() => data.getGtmContainerSnapshot(a, wc, webWs)).catch(() => null) : null;
+    const googleTag = web?.tags.find((t) => t.type === 'googtag' && !t.paused);
+    const webGoogleTagServerUrl = googleTag ? googleTagConfigValue(googleTag as unknown as Record<string, unknown>, 'server_container_url').trim() : '';
+    const derivedMeasurementId = await withQuotaRetry(() => data.deriveWebContainerMeasurementId(a, wc)).catch(() => null);
+    let server = null;
+    let enabledBuiltIns: string[] = [];
+    if (sc) {
+      const srvWsList = await withQuotaRetry(() => data.listGtmWorkspaces(a, sc)).catch(() => []);
+      const srvWs = srvWsList[0]?.workspaceId ?? '';
+      if (srvWs) {
+        server = await withQuotaRetry(() => data.getServerContainerSnapshot(a, sc, srvWs)).catch(() => null);
+        enabledBuiltIns = (await withQuotaRetry(() => data.listGtmEnabledBuiltInVariables(a, sc, srvWs)).catch(() => [])).map((b) => b.type);
+      }
+    }
+    return buildServerPlan({ web, server, enabledBuiltIns, derivedMeasurementId, webGoogleTagServerUrl });
+  });
+
+  // APPLY the selected plan items (WRITE, confirmed in the UI, draft-only). Idempotent per item.
+  ipcMain.handle('gtm:applyServerPlan', async (_e, payload: unknown) => {
+    const o = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
+    const a = String(o.accountId ?? '');
+    const wc = String(o.webContainerId ?? '');
+    const sc = o.serverContainerId != null ? String(o.serverContainerId).trim() : '';
+    const newName = o.newName != null ? String(o.newName).trim() : '';
+    const selected = Array.isArray(o.selected) ? o.selected.map(String) : [];
+    const values = (o.values && typeof o.values === 'object' ? o.values : {}) as Record<string, string>;
+    if (!a || !wc) throw new Error('Pick a GTM account and the web container first.');
+    if (!sc && !newName) throw new Error('Pick a server container to complete, or name a new one.');
+    if (!selected.length) throw new Error('Select at least one fix to apply.');
+    return withQuotaRetry(
+      () => data.applyServerPlan(a, wc, { serverContainerId: sc || undefined, newName: newName || undefined }, selected, values),
+      { maxRetries: 2 }
+    );
+  });
+
+  // COVERAGE report export (CSV / PDF): the renderer passes the coverage result it already holds
+  // (same pattern as ga4:exportReport) plus display names; pure builders render it.
+  ipcMain.handle('gtm:exportServerCoverage', async (e, format: unknown, coverage: unknown, names: unknown) => {
+    const fmt = format === 'pdf' ? 'pdf' : 'csv';
+    const v = coverage as ServerCoverageView;
+    if (!v || !Array.isArray(v.rows) || !v.score || !v.summary) throw new Error('Run the coverage comparison first.');
+    const meta = (names && typeof names === 'object' ? names : {}) as Partial<CoverageExportMeta>;
+    const docMeta: CoverageExportMeta = {
+      webName: meta.webName || 'web container',
+      serverName: meta.serverName || 'server container',
+      webWorkspace: meta.webWorkspace,
+      serverWorkspace: meta.serverWorkspace,
+      generatedAt: new Date().toLocaleString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
+    };
+    const base = `${docMeta.webName} vs ${docMeta.serverName} - coverage`.replace(/[\\/:*?"<>|]/g, '_').replace(/\s{2,}/g, ' ').trim();
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const opts = {
+      title: 'Export coverage report',
+      defaultPath: `${base}.${fmt}`,
+      filters: [fmt === 'pdf' ? { name: 'PDF', extensions: ['pdf'] } : { name: 'CSV', extensions: ['csv'] }],
+    };
+    const { canceled, filePath } = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
+    if (canceled || !filePath) return null;
+    if (fmt === 'csv') return writeReportFile(filePath, serverCoverageToCsv(v, docMeta));
+    const pdfWin = new BrowserWindow({
+      show: false,
+      webPreferences: { javascript: false, sandbox: true, contextIsolation: true, nodeIntegration: false },
+    });
+    try {
+      await pdfWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(serverCoverageToHtml(v, docMeta)));
+      const pdf = await pdfWin.webContents.printToPDF({ printBackground: true });
+      return await writeReportFile(filePath, pdf);
+    } finally {
+      if (!pdfWin.isDestroyed()) pdfWin.destroy();
+    }
+  });
+
+  // Everything the documentation needs, fetched once: server snapshot, live version id, version
+  // history (best-effort), the audit, and - only when a WEB container ref was provided - the
+  // web<->server coverage link. Never guesses: any best-effort piece that fails is simply absent.
+  async function serverDocData(a: string, c: string, w: string, web: unknown): Promise<{
+    snap: Awaited<ReturnType<typeof data.getServerContainerSnapshot>>;
+    liveVersionId: string | null;
+    audit: ReturnType<typeof auditServerContainer>;
+    extras: { versions: Array<{ versionId: string; name: string; numTags: number; numTriggers: number; numVariables: number; deleted: boolean; live: boolean }> | null; coverage: ReturnType<typeof buildServerCoverage> | null };
+  }> {
+    const [snap, liveVersionId, versionsRaw] = await Promise.all([
+      withQuotaRetry(() => data.getServerContainerSnapshot(a, c, w)),
+      data.getGtmLiveContainerVersionId(a, c).catch(() => null),
+      data.listGtmVersions(a, c).catch(() => null),
+    ]);
+    const audit = auditServerContainer(snap);
+    let coverage: ReturnType<typeof buildServerCoverage> | null = null;
+    const webRef = (web && typeof web === 'object' ? web : null) as { containerId?: string; workspaceId?: string } | null;
+    const wc = String(webRef?.containerId ?? '');
+    const ww = String(webRef?.workspaceId ?? '');
+    if (wc && ww) {
+      try {
+        const webSnap = await withQuotaRetry(() => data.getGtmContainerSnapshot(a, wc, ww));
+        coverage = buildServerCoverage(webSnap, snap, audit.summary);
+      } catch {
+        coverage = null; // the doc stands without the web link
+      }
+    }
+    const versions = versionsRaw
+      ? versionsRaw
+          .slice()
+          .sort((x, y) => Number(y.versionId) - Number(x.versionId))
+          .slice(0, 10)
+          .map((v) => ({ ...v, live: liveVersionId != null && v.versionId === liveVersionId }))
+      : null;
+    return { snap, liveVersionId, audit, extras: { versions, coverage } };
+  }
+
+  // SERVER container DOCUMENTATION view (read): the documentation rendered ON-SCREEN. Same
+  // snapshot + audit + builders as the export below, returned as JSON instead of a file.
+  ipcMain.handle('gtm:serverDoc', async (_e, accountId: unknown, containerId: unknown, workspaceId: unknown, names: unknown, web: unknown) => {
+    const a = String(accountId ?? '');
+    const c = String(containerId ?? '');
+    const w = String(workspaceId ?? '');
+    if (!a || !c || !w) throw new Error('Pick the server container and workspace first.');
+    const meta = (names && typeof names === 'object' ? names : {}) as { containerName?: string; publicId?: string; workspaceName?: string };
+    const { snap, liveVersionId, audit, extras } = await serverDocData(a, c, w, web);
+    return buildServerDocView(snap, {
+      containerName: meta.containerName || `container ${c}`,
+      publicId: meta.publicId,
+      workspaceName: meta.workspaceName,
+      generatedAt: new Date().toLocaleString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
+      liveVersionId,
+    }, audit, extras);
+  });
+
+  // SERVER container DOCUMENTATION export (md / csv / pdf): clients, tags (destination + firing
+  // triggers + referenced variables), triggers, variables, transformations - from the same config
+  // snapshot the audit reads. Secret-shaped values are never written to the document.
+  ipcMain.handle('gtm:exportServerDoc', async (e, accountId: unknown, containerId: unknown, workspaceId: unknown, format: unknown, names: unknown, web: unknown) => {
+    const a = String(accountId ?? '');
+    const c = String(containerId ?? '');
+    const w = String(workspaceId ?? '');
+    const fmt = format === 'pdf' ? 'pdf' : format === 'csv' ? 'csv' : format === 'xlsx' ? 'xlsx' : 'md';
+    if (!a || !c || !w) throw new Error('Pick the server container and workspace first.');
+    const meta = (names && typeof names === 'object' ? names : {}) as { containerName?: string; publicId?: string; workspaceName?: string };
+    // The audit runs on the SAME snapshot - the doc carries the issues, making it a deliverable.
+    const { snap, liveVersionId, audit, extras } = await serverDocData(a, c, w, web);
+    const docMeta = {
+      containerName: meta.containerName || `container ${c}`,
+      publicId: meta.publicId,
+      workspaceName: meta.workspaceName,
+      generatedAt: new Date().toLocaleString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
+      liveVersionId,
+    };
+    const base = `${(docMeta.containerName || 'Server container').replace(/[\\/:*?"<>|]/g, '_').replace(/\s{2,}/g, ' ').trim()} - server documentation`;
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const opts = {
+      title: 'Export server container documentation',
+      defaultPath: `${base}.${fmt}`,
+      filters: [fmt === 'pdf' ? { name: 'PDF', extensions: ['pdf'] } : fmt === 'csv' ? { name: 'CSV', extensions: ['csv'] } : fmt === 'xlsx' ? { name: 'Excel workbook', extensions: ['xlsx'] } : { name: 'Markdown', extensions: ['md'] }],
+    };
+    const { canceled, filePath } = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
+    if (canceled || !filePath) return null;
+    if (fmt === 'xlsx') {
+      const { buildServerDocXlsx } = await import('../google/server-doc-xlsx');
+      return writeReportFile(filePath, await buildServerDocXlsx(snap, docMeta, audit, extras));
+    }
+    if (fmt === 'csv') return writeReportFile(filePath, serverContainerDocCsv(snap, docMeta, audit, extras));
+    const md = serverContainerDocMarkdown(snap, docMeta, audit, extras);
+    if (fmt === 'md') return writeReportFile(filePath, md);
+    const pdfWin = new BrowserWindow({
+      show: false,
+      webPreferences: { javascript: false, sandbox: true, contextIsolation: true, nodeIntegration: false },
+    });
+    try {
+      const html = reportHtmlDocument(base, md);
+      await pdfWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+      const pdf = await pdfWin.webContents.printToPDF({ printBackground: true });
+      return await writeReportFile(filePath, pdf);
+    } finally {
+      if (!pdfWin.isDestroyed()) pdfWin.destroy();
+    }
+  });
+
+  // WORKSPACE COMPARISON (read): diff 2+ workspaces in the same container side by side. Fetches each
+  // workspace's snapshot (tags/triggers/variables) + folders, flattens them, and returns the base-vs-each
+  // diff + summary. Pure diff engine (workspace-diff.ts) does the comparison; this only gathers the data.
+  // Read-only — never writes. Capped at 10 workspaces per run to bound the GTM read quota.
+  ipcMain.handle('gtm:compareWorkspaces', async (_e, accountId: unknown, containerId: unknown, workspaceIds: unknown) => {
+    const a = String(accountId ?? '');
+    const c = String(containerId ?? '');
+    const ids = (Array.isArray(workspaceIds) ? workspaceIds : []).map((w) => String(w ?? '').trim()).filter(Boolean);
+    const uniqueIds = [...new Set(ids)];
+    if (!a || !c) throw new Error('Pick a GTM account and container first.');
+    if (uniqueIds.length < 2) throw new Error('Pick at least two workspaces to compare.');
+    if (uniqueIds.length > 10) throw new Error('Compare at most 10 workspaces at a time.');
+    const { toWorkspaceInput, compareWorkspaces } = await import('../google/workspace-diff');
+    // Resolve workspace names once (the picker sends ids; the report/labels want names).
+    const wsList = await withQuotaRetry(() => data.listGtmWorkspaces(a, c));
+    const nameById = new Map(wsList.map((w) => [w.workspaceId, w.name] as const));
+    // Fetch each workspace's snapshot + folders. Sequential (not Promise.all) to be gentle on the per-minute
+    // read quota; each call already retries a 429. Order follows the picker so the FIRST id is the base.
+    const inputs = [];
+    for (const wid of uniqueIds) {
+      const [snap, folders, builtIns] = await Promise.all([
+        withQuotaRetry(() => data.getGtmContainerSnapshot(a, c, wid)),
+        withQuotaRetry(() => data.listGtmFolders(a, c, wid)).catch(() => [] as Array<{ folderId: string; name: string }>),
+        // Built-ins + folder membership are best-effort: a 403/absent list must not abort the comparison.
+        withQuotaRetry(() => data.listGtmEnabledBuiltInVariables(a, c, wid)).catch(() => [] as Array<{ type: string; name: string }>),
+      ]);
+      inputs.push(toWorkspaceInput(wid, nameById.get(wid) ?? `Workspace ${wid}`, snap, folders, builtIns));
+    }
+    return compareWorkspaces(c, inputs);
+  });
+
+  // Export a workspace COMPARISON — separate from the container-audit report. CSV or Markdown built by the
+  // renderer (this just writes the file the user picks). Read-only, no GTM access. Returns the saved path.
+  ipcMain.handle('gtm:exportWorkspaceDiff', async (e, defaultName: unknown, content: unknown) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const name = String(defaultName ?? 'workspace-comparison.csv').replace(/[\\/:*?"<>|]/g, '_');
+    const ext = (name.split('.').pop() ?? '').toLowerCase();
+    const filter =
+      ext === 'md' ? { name: 'Markdown', extensions: ['md'] }
+      : ext === 'csv' ? { name: 'CSV', extensions: ['csv'] }
+      : { name: 'All Files', extensions: ['*'] };
+    const opts = { title: 'Export workspace comparison', defaultPath: name, filters: [filter] };
+    const { canceled, filePath } = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
+    if (canceled || !filePath) return null;
+    await writeFile(filePath, plainDashes(String(content ?? '')), 'utf8');
+    return filePath;
+  });
+
+  // Export the workspace comparison as a styled PDF (mirrors the on-screen diff). The renderer sends the
+  // full compare result; workspaceDiffHtml() renders the same summary cards + per-entity diff table, printed
+  // in a hidden, script-disabled window — same pipeline as the GA4 / audit reports.
+  ipcMain.handle('gtm:exportWorkspaceDiffPdf', async (e, defaultName: unknown, result: unknown) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const base = String(defaultName ?? 'GTM workspace comparison')
+      .replace(/[\\/:*?"<>|]/g, '_').replace(/\.pdf$/i, '').trim() || 'GTM workspace comparison';
+    const r = result as WorkspaceCompareResultView;
+    if (!r || !Array.isArray(r.pairs) || !Array.isArray(r.workspaces)) throw new Error('Invalid comparison result.');
+    const { workspaceDiffHtml } = await import('../../shared/gtm-workspace-diff-html');
+    const opts = { title: 'Export workspace comparison', defaultPath: `${base}.pdf`, filters: [{ name: 'PDF', extensions: ['pdf'] }] };
+    const { canceled, filePath } = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
+    if (canceled || !filePath) return null;
+    const pdfWin = new BrowserWindow({ show: false, webPreferences: { javascript: false, sandbox: true, contextIsolation: true, nodeIntegration: false } });
+    try {
+      const html = reportHtmlDocument(base, '', { execHtml: workspaceDiffHtml(r) });
+      await pdfWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+      const pdf = await pdfWin.webContents.printToPDF({ printBackground: true });
+      return await writeReportFile(filePath, pdf);
+    } finally {
+      if (!pdfWin.isDestroyed()) pdfWin.destroy();
+    }
+  });
+
+  // Export the workspace comparison as a native Excel (.xlsx) workbook — Summary + Common + Uncommon +
+  // Detailed-diff sheets, with each row's full config values (no truncation) and colour-coded merge/diff
+  // status. The renderer sends the full compare result; buildWorkspaceDiffXlsx() (exceljs, main-only) makes
+  // the Buffer. Read-only export — no GTM access. Returns the saved path, or null if cancelled.
+  ipcMain.handle('gtm:exportWorkspaceDiffXlsx', async (e, defaultName: unknown, result: unknown) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const base = String(defaultName ?? 'GTM workspace comparison')
+      .replace(/[\\/:*?"<>|]/g, '_').replace(/\.xlsx$/i, '').trim() || 'GTM workspace comparison';
+    const r = result as WorkspaceCompareResultView;
+    if (!r || !Array.isArray(r.pairs) || !Array.isArray(r.workspaces) || !r.consolidated) throw new Error('Invalid comparison result.');
+    const opts = { title: 'Export workspace comparison', defaultPath: `${base}.xlsx`, filters: [{ name: 'Excel', extensions: ['xlsx'] }] };
+    const { canceled, filePath } = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
+    if (canceled || !filePath) return null;
+    const { buildWorkspaceDiffXlsx } = await import('../google/workspace-diff-xlsx');
+    return await writeReportFile(filePath, await buildWorkspaceDiffXlsx(r));
+  });
+
+  // Save the container-audit findings to a file the user picks (CSV or Markdown — the renderer
+  // builds the content; this just writes it). Read-only export, no GTM access. Returns the saved
+  // path, or null if cancelled. The dialog filter is inferred from the default filename's extension.
+  ipcMain.handle('gtm:exportAudit', async (e, defaultName: unknown, content: unknown) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const name = String(defaultName ?? 'container-audit.csv').replace(/[\\/:*?"<>|]/g, '_');
+    const ext = (name.split('.').pop() ?? '').toLowerCase();
+    const filter =
+      ext === 'md'
+        ? { name: 'Markdown', extensions: ['md'] }
+        : ext === 'csv'
+          ? { name: 'CSV', extensions: ['csv'] }
+          : { name: 'All Files', extensions: ['*'] };
+    const opts = { title: 'Export container audit', defaultPath: name, filters: [filter] };
+    const { canceled, filePath } = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
+    if (canceled || !filePath) return null;
+    await writeFile(filePath, plainDashes(String(content ?? '')), 'utf8');
+    return filePath;
+  });
+
+  // Save the container-audit as a styled PDF that mirrors the panel: the renderer sends the FULL
+  // structured report + scope meta; gtmAuditHtml() renders the same severity cards / icons / type
+  // labels the UI shows, and the document is printed in a hidden, script-disabled window — the same
+  // pipeline as the GA4 report.
+  ipcMain.handle('gtm:exportAuditPdf', async (e, defaultName: unknown, report: unknown, meta: unknown) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const base = String(defaultName ?? 'GTM container audit')
+      .replace(/[\\/:*?"<>|]/g, '_')
+      .replace(/\.pdf$/i, '')
+      .trim() || 'GTM container audit';
+    const r = report as AuditReportView;
+    if (!r || !Array.isArray(r.findings) || !r.counts || !r.summary) throw new Error('Invalid audit report.');
+    const m: GtmAuditHtmlMeta = meta && typeof meta === 'object' ? (meta as GtmAuditHtmlMeta) : {};
+    const opts = { title: 'Export container audit', defaultPath: `${base}.pdf`, filters: [{ name: 'PDF', extensions: ['pdf'] }] };
+    const { canceled, filePath } = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
+    if (canceled || !filePath) return null;
+    const pdfWin = new BrowserWindow({
+      show: false,
+      webPreferences: { javascript: false, sandbox: true, contextIsolation: true, nodeIntegration: false },
+    });
+    try {
+      const html = reportHtmlDocument(base, '', { execHtml: gtmAuditHtml(r, m) });
+      await pdfWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+      const pdf = await pdfWin.webContents.printToPDF({ printBackground: true });
+      return await writeReportFile(filePath, pdf);
+    } finally {
+      if (!pdfWin.isDestroyed()) pdfWin.destroy();
+    }
+  });
+
+  // Export the TAG-VERIFICATION results (the Tag-verification tab's table) to a file the user picks:
+  //   csv → a text spreadsheet (Status · Tag · Event · Fired via · Signal · Proof)
+  //   pdf → the styled results report (scorecard + table) with each tag's PROOF SCREENSHOT embedded
+  //   doc → the same HTML written as .doc (Word/Docs open it) — screenshots embedded as data-URIs
+  // The renderer sends the derived rows + counts (VerifyExportPayload); the pure builders format them.
+  // Read-only export — no GTM access. Returns the saved path, or null if cancelled.
+  ipcMain.handle('verify:exportResults', async (e, format: unknown, defaultName: unknown, payload: unknown) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const fmt = String(format ?? '').toLowerCase();
+    if (fmt !== 'pdf' && fmt !== 'docx' && fmt !== 'xlsx') throw new Error('Unsupported export format.');
+    const p = payload as VerifyExportPayload;
+    if (!p || !Array.isArray(p.rows) || !p.counts) throw new Error('Invalid verification results.');
+    const base = String(defaultName ?? 'Tag verification')
+      .replace(/[\\/:*?"<>|]/g, '_')
+      .replace(/\.(pdf|docx|xlsx)$/i, '')
+      .trim() || 'Tag verification';
+    const filter =
+      fmt === 'docx' ? { name: 'Word', extensions: ['docx'] }
+      : fmt === 'xlsx' ? { name: 'Excel', extensions: ['xlsx'] }
+      : { name: 'PDF', extensions: ['pdf'] };
+    const opts = { title: 'Export tag verification', defaultPath: `${base}.${fmt}`, filters: [filter] };
+    const { canceled, filePath } = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
+    if (canceled || !filePath) return null;
+
+    // XLSX: a native Excel workbook with each proof screenshot EMBEDDED in the Proof cell (the one
+    // spreadsheet format that can show the image). exceljs is heavy, so it's imported only for this branch.
+    if (fmt === 'xlsx') {
+      const { buildVerifyResultsXlsx } = await import('./verify-results-xlsx');
+      return await writeReportFile(filePath, await buildVerifyResultsXlsx(p));
+    }
+
+    // DOCX: a REAL Word document with each proof embedded as a binary media part. Unlike the HTML-based .doc
+    // (data: URI images, which Google Docs strips on import), this uploads to Google Docs WITH its images.
+    if (fmt === 'docx') {
+      const { buildVerifyResultsDocx } = await import('./verify-results-docx');
+      return await writeReportFile(filePath, buildVerifyResultsDocx(p));
+    }
+
+    const { verifyResultsHtml } = await import('../../shared/verify-results-html');
+
+    // PDF: the same styled HTML the report uses, with the proof screenshots inline (self-contained).
+    const html = reportHtmlDocument(base, '', { word: false, execHtml: verifyResultsHtml(p) });
+
+    // Render the HTML in a hidden, script-disabled window and print it. The document can be several
+    // MB once the JPEG proofs are embedded, which can exceed the data:-URL navigation limit — so write it
+    // to a temp file and loadFile() it (robust for any size) instead of a data: URL.
+    const tmpHtml = join(tmpdir(), `samarth-verify-${process.pid}-${Date.now()}.html`);
+    await writeFile(tmpHtml, html, 'utf8');
+    const pdfWin = new BrowserWindow({ show: false, webPreferences: { javascript: false, sandbox: true, contextIsolation: true, nodeIntegration: false } });
+    try {
+      await pdfWin.loadFile(tmpHtml);
+      const pdf = await pdfWin.webContents.printToPDF({ printBackground: true });
+      return await writeReportFile(filePath, pdf);
+    } finally {
+      if (!pdfWin.isDestroyed()) pdfWin.destroy();
+      await unlink(tmpHtml).catch(() => {});
+    }
+  });
+
+  // Verifiable tags for the Container-audit "Verify firing" flow: snapshot the
+  // container + map each GA4/base tag's native trigger to the verify engine's shape.
+  ipcMain.handle('gtm:verifiableTags', async (_e, accountId: unknown, containerId: unknown, workspaceId: unknown) => {
+    const a = String(accountId ?? ''), c = String(containerId ?? ''), w = String(workspaceId ?? '');
+    if (!a || !c || !w) throw new Error('Pick a GTM account, container and workspace first.');
+    const snap = await withQuotaRetry(() => data.getGtmContainerSnapshot(a, c, w));
+    const { snapshotToVerifyInputs } = await import('./container-verify');
+    const inputs = snapshotToVerifyInputs(snap);
+    // Cross-feature leverage: a saved note can say a tag cannot be driven (behind a login, production
+    // only). Those are held back rather than attempted-and-failed on every run. A skip is NOT a pass:
+    // it joins the SAME "not verifiable" list the UI already shows, carrying the note that caused it,
+    // so an unverifiable tag stays distinguishable from a broken one. Best-effort throughout.
+    try {
+      if (!memory || !registry) return inputs;
+      const active = registry.getActiveView();
+      if (!active) return inputs;
+      const notes = memory.list(active.id).filter((m) => memoryApplies(m, { containerId: active.gtmContext?.containerId, property: active.ga4Context?.property }));
+      const hints = deriveVerifyHints(notes);
+      if (!hints.length) return inputs;
+      const applied = applyVerifyHints(inputs.tags, hints);
+      if (!applied.skipped.length) return inputs;
+      return {
+        ...inputs,
+        tags: applied.tags,
+        skipped: [...(inputs.skipped ?? []), ...applied.skipped.map((k) => ({ id: k.id, reason: describeVerifySkip(k) }))],
+      };
+    } catch (e) {
+      console.error('[verify] saved-hint pass skipped:', e instanceof Error ? e.message : e);
+      return inputs;
+    }
+  });
+
+  // Repair a created tag's firing trigger to a corrected shape (the "Verify firing → auto-heal" fix):
+  // rewrite the trigger's conditions in place, or rebind this tag to a corrected trigger if shared.
+  // Draft-only write; the renderer confirms before invoking. Retries the per-minute quota.
+  ipcMain.handle('gtm:retargetTrigger', async (_e, ctx: unknown) => {
+    const o = (ctx && typeof ctx === 'object' ? ctx : {}) as Record<string, unknown>;
+    const accountId = String(o.accountId ?? ''), containerId = String(o.containerId ?? ''), workspaceId = String(o.workspaceId ?? '');
+    const tagName = String(o.tagName ?? '').trim();
+    const corrected = o.trigger;
+    if (!accountId || !containerId || !workspaceId) throw new Error('Pick a GTM account, container and draft workspace first.');
+    if (!tagName) throw new Error('Which tag to repair?');
+    if (!corrected || typeof corrected !== 'object') throw new Error('No corrected trigger provided.');
+    return withQuotaRetry(
+      () => data.retargetTagTrigger(accountId, containerId, workspaceId, tagName, corrected as Parameters<typeof data.retargetTagTrigger>[4]),
+      { maxRetries: 3 }
+    );
+  });
+
+  // Align a GA4 Event tag's Event Name to an observed value (the "align event name" verify fix).
+  // Draft-only write; the renderer confirms before invoking. Retries the per-minute quota.
+  ipcMain.handle('gtm:setTagEventName', async (_e, ctx: unknown) => {
+    const o = (ctx && typeof ctx === 'object' ? ctx : {}) as Record<string, unknown>;
+    const accountId = String(o.accountId ?? ''), containerId = String(o.containerId ?? ''), workspaceId = String(o.workspaceId ?? '');
+    const tagName = String(o.tagName ?? '').trim();
+    const eventName = String(o.eventName ?? '').trim();
+    if (!accountId || !containerId || !workspaceId) throw new Error('Pick a GTM account, container and draft workspace first.');
+    if (!tagName) throw new Error('Which tag to align?');
+    if (!eventName) throw new Error('Provide the event name to set.');
+    return withQuotaRetry(() => data.setGa4TagEventName(accountId, containerId, workspaceId, tagName, eventName), { maxRetries: 3 });
+  });
+
+  ipcMain.handle('gtm:applyFix', async (_e, fix: unknown) => {
+    const f = (fix && typeof fix === 'object' ? fix : {}) as { tool?: string; args?: Record<string, unknown> };
+    if (!f.tool || !f.args || typeof f.args !== 'object') throw new Error('Invalid fix.');
+    const approve: ConfirmFn = async (p) => p.details; // renderer already confirmed
+    const reg = buildToolRegistry(data, approve, 'gtm');
+    // GTM's per-minute write quota trips during big batches — retry the transient
+    // 429 / "Quota exceeded" with exponential backoff (default 3 retries) instead of
+    // failing the fix. f.tool/f.args are constants here, so a retry is idempotent.
+    const tool = f.tool;
+    const args = f.args;
+    // 5 retries (more than the default) — a saturated per-minute quota during a big batch
+    // can need several backoffs before a single write gets through.
+    return JSON.parse(await withQuotaRetry(() => reg.execute(tool, args), { maxRetries: 5 })) as unknown;
+  });
+
+  // Create a complete SERVER container FROM a web container in one step: derive the web container's
+  // GA4 Measurement ID, bootstrap the server container (container + GA4 client + trigger + GA4 relay
+  // tag), and — when a server URL is supplied — record it on the server container and point the web
+  // Google tag at it. The renderer confirms first (this is a write); nothing is published.
+  ipcMain.handle('gtm:createServerContainer', async (_e, ctx: unknown) => {
+    const o = (ctx && typeof ctx === 'object' ? ctx : {}) as Record<string, unknown>;
+    const accountId = String(o.accountId ?? '');
+    const webContainerId = String(o.webContainerId ?? '');
+    const name = String(o.name ?? '').trim();
+    const serverUrl = o.serverUrl != null ? String(o.serverUrl).trim() : '';
+    const serverContainerId = o.serverContainerId != null ? String(o.serverContainerId).trim() : '';
+    if (!accountId || !webContainerId) throw new Error('Pick a GTM account and the web container to base the server container on.');
+    if (!name && !serverContainerId) throw new Error('Give the new server container a name, or pick an existing one to complete.');
+    // The bootstrap fires several writes (container + client + trigger + tag + URL wiring) and can
+    // trip the per-minute quota; retry the whole flow with backoff (it is idempotent: by target id
+    // when completing an existing container, by name otherwise).
+    return withQuotaRetry(() => data.createServerContainerFromWeb(accountId, webContainerId, name, serverUrl || undefined, serverContainerId || undefined), { maxRetries: 3 });
+  });
+
+  // Ensure a GA4 base/config tag exists. If none is present, store the Measurement
+  // ID in a Constant variable and create a Google Tag that references {{<var>}},
+  // firing on the built-in All Pages trigger. Draft-only; the renderer confirms
+  // first. No-op (no write) when a GA4 base tag already exists.
+  ipcMain.handle('gtm:ensureGa4Config', async (_e, ctx: unknown) => {
+    const o = (ctx && typeof ctx === 'object' ? ctx : {}) as Record<string, unknown>;
+    const accountId = String(o.accountId ?? '');
+    const containerId = String(o.containerId ?? '');
+    const workspaceId = String(o.workspaceId ?? '');
+    if (!accountId || !containerId || !workspaceId) throw new Error('Pick a GTM account, container and draft workspace first.');
+    const measurementId = String(o.measurementId ?? '').trim() || 'G-123456789';
+    const variableName = String(o.variableName ?? '').trim() || 'GA4 - Variable';
+    const tagName = String(o.tagName ?? '').trim() || 'GA4 Configuration';
+
+    const snap = await data.getGtmContainerSnapshot(accountId, containerId, workspaceId);
+    const existing = findGa4BaseTag(snap);
+    if (existing) {
+      return { created: false, present: true, existingTag: existing.name, variableName, measurementId, tagName };
+    }
+
+    // Only reuse an existing same-named variable if it's a Constant — otherwise the
+    // base tag's {{name}} would resolve to a wrong-purpose variable (a dataLayer
+    // lookup, a custom-JS value, …) and silently misconfigure GA4.
+    const plan = ga4VariablePlan(snap, variableName);
+    if (plan.action === 'conflict') {
+      throw new Error(
+        `A variable named "${variableName}" already exists but is not a Measurement-ID constant (type "${plan.existingType}"). Rename it, or use a different variable name, so the GA4 tag binds to a constant.`,
+      );
+    }
+
+    const approve: ConfirmFn = async (p) => p.details; // renderer already confirmed
+    const reg = buildToolRegistry(data, approve, 'gtm');
+
+    const variableCreated = plan.action === 'create';
+    if (variableCreated) {
+      await reg.execute('create_gtm_variable', {
+        accountId,
+        containerId,
+        workspaceId,
+        variable: buildVariable({ kind: 'constant', name: variableName, value: measurementId }),
+      });
+    }
+    // Use the create_gtm_tracking_tag path so the firing trigger is a real, created
+    // Page View "All Pages" trigger (reused by name) — not the built-in id, which
+    // the API may not accept on tag creation.
+    const tagRes = JSON.parse(
+      await reg.execute('create_gtm_tracking_tag', {
+        accountId,
+        containerId,
+        workspaceId,
+        platform: 'google_tag',
+        tagName,
+        tagId: `{{${variableName}}}`,
+        trigger: { name: 'All Pages', kind: 'pageview' },
+      }),
+    ) as { tag?: { name?: string } };
+    return { created: true, present: false, variableCreated, variableName, measurementId, tagName: tagRes?.tag?.name ?? tagName };
+  });
+}

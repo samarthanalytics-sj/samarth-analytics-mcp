@@ -1,0 +1,336 @@
+// PURE mapper: a GTM container SNAPSHOT (the audited tags + triggers) → the verify
+// engine's VerifyTagInput[]. This is what lets "Verify firing" run against the tags
+// that ALREADY EXIST in the container (the Container-audit panel), by translating
+// GTM's native tag/trigger config into the driver's trigger shape.
+//
+// No browser, no I/O — unit-testable. Best-effort + defensive: a tag whose trigger
+// can't be mapped to a drivable interaction is skipped (returned in `skipped`).
+
+import type { ContainerSnapshot, AuditTag, AuditTrigger, AuditVariable } from '../google/gtm-builders';
+import type { VerifyTagInput } from '../../shared/ipc';
+
+type Rec = Record<string, unknown>;
+
+/** Built-in GTM variables that are NOT dataLayer keys (they're auto-event / URL data), so a condition
+ *  on one is never turned into a synthetic dataLayer push. */
+const BUILTIN_VAR_RE =
+  /^(click (text|url|id|classes|element|target|listener)|form (id|classes|element|text|url|target)|page (path|url|hostname|fragment)|referrer|event|container (id|version)|random number|html id|error (message|url|line)|new history fragment|old history fragment|history source|scroll (depth threshold|depth units|direction)|video .*|element (visibility|url))$/i;
+
+/** Map each Data Layer Variable's DISPLAY name (lowercased) → the dataLayer KEY it reads. A GTM DLV
+ *  (type "v") stores the key in its `name` parameter, e.g. display "DLV - form_name" reads key
+ *  "form_name". Lets a `{{DLV - form_name}}` condition be pushed as `{ form_name: … }`. */
+function dlvKeyMap(variables: AuditVariable[]): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const v of variables) {
+    if ((v.type ?? '').toLowerCase() !== 'v') continue; // "v" = Data Layer Variable
+    const nameParam = (v.parameter ?? []).find((p) => (p as Rec).key === 'name') as Rec | undefined;
+    const key = nameParam && typeof nameParam.value === 'string' ? nameParam.value.trim() : '';
+    const display = (v.name ?? '').trim().toLowerCase();
+    if (key && display) map.set(display, key);
+  }
+  return map;
+}
+
+/** Resolve a `{{Variable}}` reference to the dataLayer key to push, or undefined when it isn't a
+ *  pushable dataLayer variable (a built-in, or a non-DLV we can't synthesize a value for). */
+function dataLayerKeyOf(rawVar: string, map: Map<string, string>): string | undefined {
+  const display = rawVar.replace(/^\{\{/, '').replace(/\}\}$/, '').trim();
+  if (!display || BUILTIN_VAR_RE.test(display)) return undefined;
+  return map.get(display.toLowerCase());
+}
+
+/** For a custom_event trigger, resolve its EXTRA (ANDed) conditions into the dataLayer key→value pairs
+ *  the synthetic push must carry so the tag's condition matches — the fix for many tags sharing one
+ *  `form_submission` event but split by `{{form_name}}`/`{{form_id}}`. Only positive equals/contains/
+ *  startsWith/endsWith conditions on a resolvable Data Layer Variable are usable: pushing the literal
+ *  arg1 satisfies all four. matchRegex/cssSelector/negated/page conditions and unresolvable variables
+ *  are left out (the tag then stays "inconclusive" rather than being wrongly proven). */
+function customEventDataFrom(trig: AuditTrigger, map: Map<string, string>): Record<string, string> {
+  const data: Record<string, string> = {};
+  for (const c of (trig.filter ?? []) as Rec[]) {
+    if (isNegated(c)) continue;
+    const op = opOf(c);
+    if (!['equals', 'contains', 'startsWith', 'endsWith'].includes(op)) continue;
+    const value = argOf(c, 'arg1');
+    if (value === undefined) continue;
+    const key = dataLayerKeyOf(argOf(c, 'arg0') ?? '', map);
+    // Never let a resolved key clobber the reserved `event` key — that's the event name the push
+    // already sets, and overriding it would drive the wrong event.
+    if (key && key !== 'event') data[key] = value;
+  }
+  return data;
+}
+
+/** Read a condition/param arg (arg0 = the {{variable}}, arg1 = the value). */
+function argOf(cond: Rec, key: string): string | undefined {
+  const params = Array.isArray(cond.parameter) ? (cond.parameter as Rec[]) : [];
+  const p = params.find((x) => x.key === key);
+  return p && typeof p.value === 'string' ? p.value : undefined;
+}
+
+/** GTM condition type → the verify driver's operator (falls back to equals). */
+function opOf(cond: Rec): string {
+  const t = typeof cond.type === 'string' ? cond.type : 'equals';
+  const known = ['equals', 'contains', 'startsWith', 'endsWith', 'matchRegex', 'cssSelector'];
+  return known.includes(t) ? t : 'equals';
+}
+
+/** A tag parameter value by key (GTM Tag.parameter = [{type,key,value}, …]). */
+function tagParam(tag: AuditTag, key: string): string | undefined {
+  const p = tag.parameter.find((x) => x.key === key);
+  return p && typeof p.value === 'string' ? (p.value as string) : undefined;
+}
+
+/** A trigger-level parameter value by key (GTM Trigger.parameter = [{type,key,value}, …]) — where an
+ *  Element Visibility trigger stores its target selector (elementSelector/selectorType). */
+function triggerParam(trig: AuditTrigger, key: string): string | undefined {
+  const p = (trig.parameter ?? []).find((x) => (x as Rec).key === key) as Rec | undefined;
+  return p && typeof p.value === 'string' ? p.value : undefined;
+}
+
+/** First non-empty (present + non-whitespace) value. GA4 event tags ship an EMPTY
+ *  measurementId tagReference plus measurementIdOverride holding the real G-XXXX, so a
+ *  bare ?? chain over tagParam (which returns '' not undefined) would shadow the real id. */
+function firstNonEmpty(...vals: Array<string | undefined>): string | undefined {
+  for (const v of vals) if (v && v.trim()) return v;
+  return undefined;
+}
+
+/** True if a GTM condition is NEGATED. GTM stores "does not equal / contain" as the base
+ *  condition type PLUS a {type:boolean, key:'negate', value:'true'} parameter — NOT a distinct
+ *  type. The driver only does POSITIVE matching, so a negated condition can't be faithfully
+ *  driven and its trigger is skipped rather than mapped to an inverted positive match. */
+function isNegated(cond: Rec): boolean {
+  const params = Array.isArray(cond.parameter) ? (cond.parameter as Rec[]) : [];
+  return params.some((p) => p.key === 'negate' && (p.value === true || String(p.value).toLowerCase() === 'true'));
+}
+
+/** Map a GTM trigger type to the verify trigger kind, or null if not drivable here. */
+function kindOf(type: string): VerifyTagInput['trigger']['kind'] | null {
+  const t = type.toLowerCase();
+  if (t === 'linkclick') return 'link_click';
+  if (t === 'click') return 'all_clicks';
+  if (t === 'formsubmission' || t === 'formsubmit') return 'form_submit';
+  if (t === 'customevent') return 'custom_event';
+  // Interaction triggers the driver now performs FOR REAL: scroll the page, bring the element into
+  // view, change history — so these tags fire like they do for a real user (not skipped as before).
+  if (t === 'scrolldepth') return 'scroll';
+  if (t === 'elementvisibility') return 'element_visibility';
+  if (t === 'historychange') return 'history_change';
+  if (['pageview', 'domready', 'windowloaded', 'init', 'consentinit', 'serverpageview'].includes(t)) return 'pageview';
+  return null; // timer, youTubeVideo, jsError, triggerGroup … (not faithfully drivable in a headless pass)
+}
+
+/** Built-in trigger ids (All Pages / Init / DOM Ready / …) live in the 2147479xxx range and are not
+ *  returned by triggers.list — a tag firing on one is treated as a pageview. */
+function isBuiltinTriggerId(id: string): boolean {
+  return /^21474795\d{2}$/.test(id) || Number(id) >= 2147479553;
+}
+
+/** Build a verify trigger from a GTM trigger's conditions. Returns null when the trigger can't be
+ *  driven faithfully (unsupported type, negated condition, or no locatable target) — the caller
+ *  then records the tag in `skipped` instead of emitting a trigger that yields a wrong verdict. */
+function triggerFrom(trig: AuditTrigger, dlvMap: Map<string, string>): VerifyTagInput['trigger'] | null {
+  const kind = kindOf(trig.type);
+  if (!kind) return null;
+
+  // The driver has no negation support (it drives the element that POSITIVELY matches), so any
+  // negated condition ("does not equal/contain") would invert the verdict — skip the whole trigger.
+  const allConds = [...(trig.filter ?? []), ...(trig.autoEventFilter ?? []), ...(trig.customEventFilter ?? [])] as Rec[];
+  if (allConds.some(isNegated)) return null;
+
+  const out: VerifyTagInput['trigger'] = { name: trig.name, kind };
+
+  // Click/form conditions live in filter + autoEventFilter; custom-event name in customEventFilter.
+  const conds = [...(trig.filter ?? []), ...(trig.autoEventFilter ?? [])] as Rec[];
+  for (const c of conds) {
+    const variable = (argOf(c, 'arg0') ?? '').toLowerCase();
+    const value = argOf(c, 'arg1');
+    if (value === undefined) continue;
+    const op = opOf(c);
+    if (variable.includes('click text')) {
+      out.clickTextValue = value;
+      out.clickTextOperator = op;
+    } else if (variable.includes('click url')) {
+      out.clickUrlValue = value;
+      out.clickUrlOperator = op;
+    } else if (variable.includes('form id')) {
+      out.formIdValue = value;
+      out.formIdOperator = op;
+    } else if (variable.includes('form classes')) {
+      out.formClassesValue = value;
+      out.formClassesOperator = op;
+    } else if (variable.includes('page path')) {
+      out.pagePathValue = value;
+      out.pagePathOperator = op;
+    } else if (variable.includes('page url')) {
+      out.pageUrlValue = value;
+      out.pageUrlOperator = op;
+    }
+  }
+
+  if (kind === 'custom_event') {
+    // customEventFilter: arg0 = {{_event}}, arg1 = the dataLayer event name.
+    const cef = (trig.customEventFilter ?? []) as Rec[];
+    const ev = cef.map((c) => argOf(c, 'arg1')).find((v) => v && v !== '.*');
+    if (ev) out.eventName = ev;
+    if (!out.eventName) return null; // no concrete dataLayer event name to push → can't drive it
+    // Carry the trigger's form-specific conditions so the synthetic push satisfies the RIGHT tag
+    // when many tags share one form_submission event (split by {{form_name}}/{{form_id}}/…).
+    const data = customEventDataFrom(trig, dlvMap);
+    if (Object.keys(data).length) out.customEventData = data;
+  }
+
+  if (kind === 'element_visibility') {
+    // The visibility trigger names its target by ID or CSS selector in the trigger's own parameters.
+    // Capture it so the driver scrolls the RIGHT element into view; no selector still drives (the
+    // driver falls back to a full-page scroll that reveals below-the-fold content).
+    const sel = triggerParam(trig, 'elementSelector');
+    if (sel) {
+      const selType = (triggerParam(trig, 'selectorType') || '').toUpperCase();
+      out.clickElementValue = selType === 'ID' && !sel.startsWith('#') ? '#' + sel : sel;
+      out.clickElementOperator = 'cssSelector';
+    }
+  }
+
+  // Click triggers need a text/URL the driver can locate on the page. A click scoped ONLY by
+  // {{Click ID}}/{{Click Classes}}/{{Click Element}} or by page (no Click Text/URL) has no
+  // locatable target — skip it rather than report a guaranteed false NOT-FIRED.
+  if ((kind === 'link_click' || kind === 'all_clicks') && !out.clickTextValue && !out.clickUrlValue) {
+    return null;
+  }
+  return out;
+}
+
+/** Route a page-scoped trigger to its own page so a page-specific click/form/pageview is driven
+ *  there — not on the homepage (where its target is absent → false NOT-FIRED). Only exact/prefix
+ *  path scopes are usable for navigation; a "contains" URL fragment is too ambiguous to route. */
+function pageFromTrigger(trigger: VerifyTagInput['trigger']): string | undefined {
+  const usable = (op?: string): boolean => op === undefined || op === 'equals' || op === 'startsWith';
+  if (trigger.pagePathValue && usable(trigger.pagePathOperator)) {
+    const p = trigger.pagePathValue.trim();
+    if (p.startsWith('/')) return p;
+  }
+  if (trigger.pageUrlValue && usable(trigger.pageUrlOperator)) {
+    const v = trigger.pageUrlValue.trim();
+    if (v.startsWith('/')) return v;
+    try {
+      const u = new URL(v);
+      if (u.pathname && u.pathname !== '/') return u.pathname;
+    } catch {
+      /* not a full URL and not a path — can't route */
+    }
+  }
+  return undefined;
+}
+
+/** Detect a pixel VENDOR from the tag's name, so a Custom-Template / Custom-HTML tag we can't decode
+ *  is matched to the SPECIFIC network beacon that proves it fired (facebook.com/tr for Meta, etc.).
+ *  Name-based (heuristic) — a clear vendor word wins; otherwise the caller falls back to a generic
+ *  'ad' match (any recognised pixel beacon counts). */
+function pixelPlatformFromName(name: string): VerifyTagInput['platform'] | undefined {
+  const n = (name || '').toLowerCase();
+  if (/\bmeta\b|facebook|\bfb\b|fbq|meta[\s-]*pixel/.test(n)) return 'meta_pixel';
+  if (/tiktok|ttq/.test(n)) return 'tiktok_pixel';
+  if (/linkedin/.test(n)) return 'linkedin_insight';
+  if (/pinterest|pintrk/.test(n)) return 'pinterest_tag';
+  if (/snap(chat)?\b/.test(n)) return 'snap_pixel';
+  if (/reddit|rdt/.test(n)) return 'reddit_pixel';
+  if (/hotjar/.test(n)) return 'hotjar';
+  return undefined;
+}
+
+/** The verify platform for a tag. GA4/base tags are decoded from their /collect hit; pixel/ad tags
+ *  can't be decoded but ARE proven by their network beacon. We map to a platform ONLY when the vendor
+ *  is pinned precisely — by NAME for Custom Templates / Custom HTML (Meta/TikTok/…), or by TYPE for
+ *  Google Ads — so a tag is matched only by ITS vendor's beacon and never cross-credited by another
+ *  pixel that fired on the same interaction. Anything we can't pin (unnamed template, no observable
+ *  beacon) returns null → honestly skipped, never a generic guess. */
+function platformOf(tag: AuditTag): VerifyTagInput['platform'] | null {
+  const type = tag.type;
+  if (type === 'gaawe') return 'ga4_event';
+  if (type === 'googtag' || type === 'gaawc') return 'google_tag';
+  // Custom Template (cvt_*) + Custom HTML: home of Meta/TikTok/… pixels. Verify only when the vendor
+  // is clear from the name — its SPECIFIC beacon proves firing. An unnamed template stays skipped.
+  if (type.startsWith('cvt_') || type === 'html') return pixelPlatformFromName(tag.name) ?? null;
+  // Google Ads conversion / remarketing: the TYPE pins the vendor precisely (not a name guess).
+  if (type === 'awct') return 'google_ads_conversion';
+  if (type === 'sp') return 'google_ads_remarketing';
+  return null;
+}
+
+export interface ContainerVerifyResult {
+  tags: VerifyTagInput[];
+  /** Tags that couldn't be turned into a drivable verification, with the reason. */
+  skipped: Array<{ tagId: string; name: string; reason: string }>;
+}
+
+/**
+ * Translate the container snapshot into verifiable tags. Each GA4/base tag is paired with the FIRST
+ * of its firing triggers that maps to a drivable interaction (click/form/custom-event/pageview). A
+ * firing trigger that is a built-in id (All Pages, etc.) is treated as pageview.
+ */
+export function snapshotToVerifyInputs(snapshot: ContainerSnapshot): ContainerVerifyResult {
+  const triggerById = new Map(snapshot.triggers.map((t) => [t.triggerId, t]));
+  const dlvMap = dlvKeyMap(snapshot.variables ?? []);
+  const tags: VerifyTagInput[] = [];
+  const skipped: ContainerVerifyResult['skipped'] = [];
+
+  for (const tag of snapshot.tags) {
+    const platform = platformOf(tag);
+    if (!platform) {
+      skipped.push({ tagId: tag.tagId, name: tag.name, reason: `tag type "${tag.type}" not verifiable in this MVP` });
+      continue;
+    }
+    if (tag.paused) {
+      skipped.push({ tagId: tag.tagId, name: tag.name, reason: 'tag is paused' });
+      continue;
+    }
+
+    // Pick the first firing trigger that maps to a drivable kind (built-ins → pageview).
+    let trigger: VerifyTagInput['trigger'] | null = null;
+    for (const tid of tag.firingTriggerId ?? []) {
+      const trig = triggerById.get(tid);
+      if (!trig) {
+        if (isBuiltinTriggerId(tid)) trigger = { name: 'All Pages', kind: 'pageview' };
+        if (trigger) break;
+        continue;
+      }
+      const mapped = triggerFrom(trig, dlvMap);
+      if (mapped) {
+        trigger = mapped;
+        break;
+      }
+    }
+    if (!trigger) {
+      skipped.push({ tagId: tag.tagId, name: tag.name, reason: 'no firing trigger maps to a drivable interaction (click/form/custom-event/pageview)' });
+      continue;
+    }
+
+    // GA4 decodes its event from the /collect hit; the base Google tag sends page_view; pixel/ad tags
+    // aren't event-decodable (proven by beacon), so their eventName is cosmetic.
+    const eventName = platform === 'ga4_event' ? tagParam(tag, 'eventName') ?? ''
+      : platform === 'google_tag' ? 'page_view'
+      : tagParam(tag, 'eventName') ?? '';
+    // GA4 event tags ship an EMPTY measurementId tagReference + measurementIdOverride with the real
+    // G-XXXX; google tags carry it under tagId. Skip empty values so the real id (used for tid=
+    // attribution) isn't shadowed by the placeholder.
+    const measurementId = firstNonEmpty(
+      tagParam(tag, 'measurementId'),
+      tagParam(tag, 'measurementIdOverride'),
+      tagParam(tag, 'tagId'),
+    );
+    const page = pageFromTrigger(trigger);
+
+    tags.push({
+      id: tag.tagId,
+      tagName: tag.name,
+      eventName,
+      platform,
+      ...(measurementId ? { measurementId } : {}),
+      ...(page ? { page } : {}),
+      trigger,
+    });
+  }
+  return { tags, skipped };
+}

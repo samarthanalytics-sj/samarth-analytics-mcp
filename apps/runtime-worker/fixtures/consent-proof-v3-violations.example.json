@@ -1,0 +1,92 @@
+{
+  "schema": "samarth.runtime-capture/v3",
+  "capturedAt": "2026-06-01T00:00:00.000Z",
+  "requestedUrls": ["https://shop.example/"],
+  "mode": "passive",
+  "notes": [
+    "EXAMPLE fixture demonstrating NON-COMPLIANT runtime behaviour for tests.",
+    "Each state is declared metadata; this is not a real capture.",
+    "default_denied: a Meta pixel fires under ads-denied AND a GA4 hit carries no gcs/gcd; an _fbp cookie is set before the consent default.",
+    "granted: a GA4 hit fires before the consent default event (ordering violation)."
+  ],
+  "states": [
+    {
+      "state": "default_denied",
+      "consentFields": {
+        "ad_storage": "denied",
+        "analytics_storage": "denied",
+        "ad_user_data": "denied",
+        "ad_personalization": "denied"
+      },
+      "pages": [
+        {
+          "requestedUrl": "https://shop.example/",
+          "finalUrl": "https://shop.example/",
+          "consentState": "default_denied",
+          "consoleErrors": ["Uncaught TypeError: cmp is not a function"],
+          "pageErrors": [],
+          "consentEvents": [
+            { "kind": "default", "tMs": 300, "fields": { "ad_storage": "denied", "analytics_storage": "denied", "ad_user_data": "denied", "ad_personalization": "denied" } }
+          ],
+          "firstMeasurementTMs": 220,
+          "trackerHits": [
+            {
+              "url": "https://www.google-analytics.com/g/collect?v=2&tid=G-XXXX&en=page_view",
+              "method": "POST",
+              "groups": ["ga4"],
+              "matched": ["ga4_collect"],
+              "query": { "tid": "G-XXXX", "en": "page_view" },
+              "tMs": 220
+            },
+            {
+              "url": "https://www.facebook.com/tr?id=123456789&ev=PageView",
+              "method": "GET",
+              "groups": ["meta"],
+              "matched": ["meta_pixel"],
+              "query": {},
+              "tMs": 240
+            }
+          ],
+          "cookies": [{ "name": "_fbp", "tMs": 180 }, { "name": "_ga", "tMs": 230 }],
+          "dataLayerEvents": ["gtm.js", "gtm.dom"],
+          "dataLayerKeys": ["event", "consent"]
+        }
+      ]
+    },
+    {
+      "state": "granted",
+      "consentFields": {
+        "ad_storage": "granted",
+        "analytics_storage": "granted",
+        "ad_user_data": "granted",
+        "ad_personalization": "granted"
+      },
+      "pages": [
+        {
+          "requestedUrl": "https://shop.example/",
+          "finalUrl": "https://shop.example/",
+          "consentState": "granted",
+          "consoleErrors": [],
+          "pageErrors": [],
+          "consentEvents": [
+            { "kind": "default", "tMs": 500, "fields": { "ad_storage": "granted", "analytics_storage": "granted", "ad_user_data": "granted", "ad_personalization": "granted" } }
+          ],
+          "firstMeasurementTMs": 300,
+          "trackerHits": [
+            {
+              "url": "https://www.google-analytics.com/g/collect?v=2&tid=G-XXXX&en=page_view&gcs=G111&gcd=11111",
+              "method": "POST",
+              "groups": ["ga4"],
+              "matched": ["ga4_collect"],
+              "query": { "gcs": "G111", "gcd": "11111", "tid": "G-XXXX", "en": "page_view" },
+              "tMs": 300
+            }
+          ],
+          "cookies": [{ "name": "_ga", "tMs": 320 }],
+          "dataLayerEvents": ["gtm.js", "gtm.dom", "gtm.load"],
+          "dataLayerKeys": ["event", "consent"]
+        }
+      ]
+    }
+  ]
+}
