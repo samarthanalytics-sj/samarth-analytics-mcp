@@ -1,0 +1,127 @@
+// Shared GA4/GTM measurement methodology, used by the chat LLM surface so it stays consistent with the
+// deterministic tag-suggestion engine:
+//   - GA4_EVENT_SELECTION: what user intent maps to which GA4 event, and what to skip. Included in the
+//     full creation methodology below.
+//   - GTM_CREATION_METHODOLOGY: the above + how to actually BUILD tags/triggers/variables via the
+//     create_gtm_* tools. Used by the chat brain (which CREATES resources).
+// The deterministic scanner (buildSuggestions) already implements these rules in code; these strings
+// keep the LLM paths aligned with it. Framework-free (pure strings) so both callers can import safely.
+
+export const GA4_EVENT_SELECTION =
+  'GA4 EVENT SELECTION — measure user INTENT with GA4 recommended/standard events (raw snake_case names), and skip noise. ' +
+  'TRACK: form submissions (a lead/contact/newsletter/signup form → generate_lead or form_submission); key CTA/button clicks ' +
+  '(a specific event per intent — book_demo_click, request_quote_click, contact_sales_click, get_started_click, subscribe_click, ' +
+  'add_to_cart_click — or a generic cta_click for any other prominent conversion button); email_click (mailto:), phone_click ' +
+  '(tel:), file_download (pdf/doc/zip links), outbound_click (external links); video engagement (video_start / video_progress / ' +
+  'video_complete); and ecommerce events (view_item, add_to_cart, begin_checkout, purchase, …) on transactional pages. ' +
+  'SKIP — these are NOT conversions: primary navigation / menu links, cookie-consent / CMP controls (Accept all, Reject all, ' +
+  'Manage preferences), pure UI chrome (menu, close, toggle, pagination next/prev, show more), and social-share widgets unless ' +
+  'the user asks. An event NAME is ALWAYS the raw snake_case value the dataLayer/GA4 uses (purchase, add_to_cart, generate_lead, ' +
+  'file_download) — never a display label. ';
+
+export const GTM_CREATION_METHODOLOGY =
+  GA4_EVENT_SELECTION +
+  'GTM CREATION METHODOLOGY — build tags, triggers, and variables ONLY via the create_gtm_* tools (never hand-write GTM API JSON; ' +
+  'the builders produce valid resources). OBJECT MODEL + ORDER: a Tag fires on Trigger(s); a Trigger filters on Variables; create ' +
+  'dependencies FIRST — variables → triggers → tag. For a standard GA4 event, PREFER create_gtm_tracking_tag: it creates the tag, ' +
+  'its trigger, and any missing built-in / data-layer variables together, correctly wired. Before creating, LIST/AUDIT the ' +
+  'container to reuse a matching trigger/variable and to avoid duplicate tag names. ' +
+  'TRIGGERS by intent: link/CTA click → link_click or all_clicks filtered on {{Click URL}} and/or {{Click Text}} (never an ' +
+  'unfiltered all-clicks — it over-fires); form submit → form_submit scoped to ONE form via {{Form ID}} (equals) or a unique ' +
+  '{{Form Classes}} (contains), else {{Page Path}} for the single page it lives on; an unrecognized/unscoped form is NOT tracked ' +
+  '(there is no site-wide form catch-all) — leave waitForTags/checkValidation OFF; a native form trigger does NOT fire for iframe/AJAX forms (instead listen ' +
+  'for the provider submit event → push a dataLayer event → fire on a Custom Event trigger); dataLayer event → custom_event whose ' +
+  'EVENT NAME is the raw snake_case value the dataLayer pushes (distinct from the trigger display name) — a Custom Event trigger can ' +
+  'ALSO carry ANDed filter conditions ({{Page Path}} contains /contact, {{Form ID}} equals X) to scope a data-layer form trigger to ' +
+  'ONE form/page, the pattern real containers use; pageview; youtube_video; ' +
+  'timer (its interval/limit/eventName are TOP-LEVEL trigger fields, not parameter[]). ' +
+  'VARIABLES: Data Layer Variable (kind data_layer, dataLayerName = the exact key, e.g. ecommerce.value); constant; built-ins ' +
+  '({{Click URL}}, {{Form ID}}, {{Page Path}}, …) are ENABLED, not created — create_gtm_tracking_tag enables the ones its trigger ' +
+  'needs; always create a referenced variable BEFORE the trigger/tag that reads it. ' +
+  'GA4 EVENT TAG: type gaawe; event parameters go in eventSettingsTable (not eventParameters); measurementId = {{GA4 Measurement ID}}; ' +
+  'for ecommerce build the parameters from the GA4 ecommerce reference, each value reading {{Ecommerce <param>}} off the dataLayer. ' +
+  'STANDARD EVENT PARAMETERS: a click/CTA tag sends click_text ({{Click Text}}), click_url ({{Click URL}}), page_url ({{Page URL}}), previous_page ({{Referrer}}); a form tag sends form_id ({{Form ID}}), form_name ({{Form Name}} — GTM has NO built-in {{Form Name}}, so create_gtm_tracking_tag auto-creates ONE reusable "Form Name" Custom JS variable that reads the submitted form; use {{Form Name}}, never a hardcoded string), page_url, previous_page. ' +
+  'TRIGGER CONDITIONS must be EXACT — tell GTM precisely WHEN to fire: a click/CTA trigger matches {{Click Text}} EQUALS the exact button label (not contains, which would also fire on a longer label); scope a page-specific trigger (a form that lives on only one page, or a Thank-You / confirmation page) with {{Page Path}} (or {{Page URL}}) CONTAINS the path fragment — e.g. Page Path contains "/request-demo", or a Thank-You page is Page URL contains "/purchase-successful/". That path condition is how you say "fire ONLY on this page" rather than on every page. ' +
+  'GOTCHAS: always go through the builders (container exports use UPPER_SNAKE enums, the API takes camelCase); moving to a folder ' +
+  'with an empty array 500s; retry on quota errors; folders, environments, and versions ARE API-supported. ' +
+  'WORKFLOW per request: (1) restate the intent + the GA4 event it maps to; (2) audit/list for reusable triggers/variables and dup ' +
+  'names; (3) create missing variables, then the trigger, then the tag (or one create_gtm_tracking_tag call); (4) report EXACTLY ' +
+  'what was created and that nothing is published; (5) if a trigger cannot reliably fire (iframe/AJAX form, SPA route), say so and ' +
+  'give the dataLayer / Custom-Event alternative rather than a tag that silently will not fire. Name tags/triggers per the GA4 ' +
+  'naming convention already specified above. ' +
+  'CHANGING AN EXISTING ENTITY — to modify a tag/trigger/variable that already exists, UPDATE it IN PLACE: update_gtm_tag, ' +
+  'update_gtm_trigger, update_gtm_variable (all read-modify-write, so omitted fields are preserved), or a targeted editor ' +
+  '(add_ga4_event_parameters, set_gtm_tag_paused, set_gtm_tag_consent, set_ga4_measurement_id, move_gtm_entities_to_folder). ' +
+  'NEVER delete the entity and create a new one to "change" it: delete+recreate assigns a NEW id, which silently breaks every ' +
+  'tag/trigger that referenced the old one and loses its version history. If a create returns "already exists", that is your cue ' +
+  'to UPDATE that id (the message gives it), not to delete and recreate. Deleting is only for an entity the user genuinely wants ' +
+  'REMOVED, not as a step in an edit. ' +
+  'BULK BUILDS — when the user asks to create MANY entities at once (e.g. "create these 40 tags"), build ALL of them in this SAME ' +
+  'turn without stopping to ask "shall I proceed?" between them: every create lands in the DRAFT workspace and is reversible, so ' +
+  'there is nothing to gate on mid-way, and pausing after each batch just wastes the user\'s time. Keep issuing the create calls ' +
+  'until the whole list is done, then give ONE final summary of everything created (and anything skipped/failed). Do NOT split the ' +
+  'work across multiple replies or ask the user to say "continue" unless a genuine BLOCKER stops you (a tool error, a missing ' +
+  'account/measurement id, or ambiguous input you cannot resolve) — in which case stop and say exactly what you need. ';
+
+// Full GTM trigger + variable reference for the chat brain: which type to use, and which TOOL creates
+// it (the typed builders cover the common cases; everything else uses the raw create_gtm_variable /
+// create_gtm_trigger tools with a hand-shaped GTM API v2 resource). Grounded in the actual builder
+// capability map, so it never tells the model to build something the tool cannot.
+export const GTM_TRIGGER_VARIABLE_REFERENCE =
+  'GTM TRIGGER & VARIABLE REFERENCE — choose the right type, then the right tool. ' +
+  'WHICH TOOL: TYPED builders cover the common cases and are PREFERRED — create_gtm_tracking_tag (tag + trigger + built-ins in one; trigger.kind = pageview | all_clicks | link_click | form_submit | custom_event | youtube_video | element_visibility | history_change | scroll_depth | dom_ready | window_loaded | js_error | timer) and create_gtm_variable_typed (kind = constant | data_layer | javascript [= Custom JavaScript] | event_data [server only]). Every OTHER trigger/variable type has NO typed builder — create it with the RAW tools create_gtm_trigger / create_gtm_variable, passing a correctly shaped GTM API v2 resource (shapes below); never guess the shape, and if a create is rejected the field keys are wrong for that type, so fix them. ' +
+  'TRIGGERS — when to use each: Page View (base/config Google-tag/GA4 tags that need no DOM). All Elements / all_clicks (any click; scope by {{Click Text}} / {{Click URL}} / {{Click Classes}} / {{Click ID}}). Just Links / link_click (only <a> clicks — outbound, downloads, mailto/tel). Form Submission / form_submit (a NATIVE <form> submit only; an AJAX/JS form needs a dataLayer event on a custom_event trigger, or a Thank-You Page View). Custom Event / custom_event (a dataLayer event the site pushes — purchase, add_to_cart, generate_lead, AJAX-form success; the EVENT NAME is the raw snake_case value). YouTube Video / youtube_video (video engagement). ' +
+  'ALSO typed (use create_gtm_tracking_tag / create_gtm_trigger with these kinds, do NOT hand-build the resource): DOM Ready [dom_ready] (tag must read the DOM); Window Loaded [window_loaded] (needs late / 3rd-party content); Element Visibility [element_visibility] (an element enters the viewport: section / sticky CTA / banner seen, or an AJAX thank-you message when the URL does not change; give visibilitySelector OR visibilityElementId, and leave visibilityObserveDomChanges ON so an element injected AFTER load is still observed); History Change [history_change] (SPA route change via pushState/hash, i.e. virtual pageviews); Scroll Depth [scroll_depth] (defaults to 25/50/75/90 percent); Timer [timer] (time-on-page; intervalMs + limit); JavaScript Error [js_error]. Only Trigger Group [triggerGroup] (fire once ALL listed triggers have fired) still needs RAW create_gtm_trigger, because it references other triggers by id. Filter operators: equals | contains | startsWith | endsWith | matchRegex | greater | greaterOrEquals | less | lessOrEquals | cssSelector, each with a not- form (notEquals, notContains, ...). Attach a trigger under the EXCEPTIONS of a tag to BLOCK it (internal traffic, consent denied). ' +
+  'VARIABLES — when to use each: Data Layer Variable (create_gtm_variable_typed kind data_layer; read a dataLayer key, dot-notation for nested e.g. ecommerce.value — the primary source of developer-pushed values). Constant (kind constant; a fixed reused id — GA4 Measurement ID, conversion label). Custom JavaScript (kind javascript; a function(){…} that computes/normalises a value and can read other {{vars}} — e.g. trim + lowercase a label). Event Data (kind event_data; SERVER container only — reads keyPath off the incoming event, the server data-layer). Request Header (kind request_header; SERVER container only — reads one HTTP header via headerName, e.g. X-Geo-Country / X-Device-Os that the tagging host injects). ' +
+  'These need RAW create_gtm_variable: Lookup Table [type smm] and RegEx Table [remm] (map ONE input variable to an output — see GROUPING); DOM Element [d] (scrape a value from the page by id or CSS selector — the element TEXT or a chosen ATTRIBUTE like href / data-* / value; the element must exist at read time, so pair with DOM Ready); Auto-Event Variable [aev] (a property of the element that fired a click/form/visibility event — element / classes / id / text / url / a named attribute); URL [u] (a URL component — full / host / path / a query key like utm_* or gclid / fragment); HTTP Referrer [f]; 1st-Party Cookie [k] (read a cookie by name); JavaScript Variable [j] (read a page GLOBAL by dotted name — distinct from Custom JavaScript). ' +
+  'Built-ins ({{Click Text}}, {{Click URL}}, {{Form ID}}, {{Page Path}}, {{Page URL}}, {{Referrer}}, {{Video …}}, …) are ENABLED, not created — create_gtm_tracking_tag auto-enables the ones its tag/trigger reference; otherwise call enable_gtm_builtin_variables. ' +
+  'GROUPING — ONE tag for MANY related clicks/pages (do NOT make N near-identical tags): (A) SIMPLE, fully typed — one create_gtm_tracking_tag whose click trigger uses {{Click Text}} matchRegex "^(Art Select|Opus|Van Gogh Gluedown|…)$" (anchor ^…$ so each item stays exact). (B) LOOKUP TABLE (the GTM-idiomatic way, more readable and can emit a group label) — build a Lookup Table variable [create_gtm_variable type smm] with Input Variable {{Click Text}} and one row per label mapped to "true" (defaultValue "false"), e.g. "Browse By Range Variable"; ENABLE its input built-in (enable_gtm_builtin_variables → Click Text); create the trigger [create_gtm_trigger type linkClick or click] filtered on [{{Browse By Range Variable}} equals true]; then ONE GA4 event tag on that trigger (create_gtm_trigger then create_gtm_tag, or create_gtm_tag_with_trigger), sending the specific item via {{Click Text}} (or a second Lookup Table mapping label → a friendly value). The same pattern groups PAGES: a Lookup/RegEx Table on {{Page Path}} → a Page View trigger on {{var}} equals true. ' +
+  // RAW SHAPES moved to shared/jit-reference.ts: they are only needed when a RAW create is
+  // REJECTED, and they arrive attached to that failure. Keeping them here cost every turn ~530
+  // tokens for a fallback path the typed builders usually make unnecessary.
+  'If a RAW create_gtm_variable / create_gtm_trigger is rejected, the exact GTM API v2 resource shape for that type comes back WITH the error - fix the field keys from it rather than guessing again. ' +
+  'EQUALS vs CONTAINS: EQUALS for an exact value (an exact button label like "Get your recording", an exact path like /checkout/success) — it will not mis-fire ("Buy Now" will not match "Buy Now, Pay Later"). CONTAINS / matchRegex / startsWith / endsWith for a FAMILY of values (a path segment, a label fragment, a url substring). If a label varies by whitespace or case, normalise it first with a Custom JavaScript variable (trim + lowercase), then match that. ';
+
+// Expert decision rules distilled from the GTM Understanding Guide (docs/gtm-understanding-guide.md).
+// These are the choices that separate a robust setup from a fragile one; kept concise for the chat prompt.
+// Companion reference libraries (lookup catalogs, not inlined here — kept in docs to keep the prompt
+// lean and avoid clashing with the engine's own conventions): docs/ga4-100-examples.md (100 worked GA4
+// tag/trigger/variable examples) and docs/gtm-other-tag-types.md (non-GA4 tags — Google Ads / Floodlight
+// / Remarketing / Conversion Linker / Google Tag native config, and Meta/TikTok/LinkedIn/Bing/Pinterest/
+// Hotjar/Clarity pixels). Its "prefer a gallery template over Custom HTML" guidance matches the chat
+// prompt (create_meta_pixel_tag / import_gallery_template + GTM_DECISION_RULES); its "consent-gate every
+// marketing tag" principle is enforced on the AUDIT path (GTM_AUDIT_METHODOLOGY), NOT yet on the tag-
+// create path — a known gap. Web tag types with no typed builder (Conversion Linker, Ads Call Conversion,
+// Ads Remarketing, Floodlight, Custom Image) fall to the raw create_gtm_tag tool.
+export const GTM_DECISION_RULES =
+  'GTM DECISION RULES (how an expert chooses) — ' +
+  'THE ONE FORK: GTM learns an event happened either from the DATA LAYER (the site pushes dataLayer.push({event:"…", …})) or from AUTO-EVENT listeners (GTM watches clicks/forms/scroll). PREFER the data layer — match it with a Custom Event trigger + Data Layer Variables; it is structured, intentional, and survives redesigns. Auto-event (Click / Form Submission triggers + Click/Form built-ins or DOM scraping) is a FRAGILE fallback that breaks on AJAX forms, SPAs, framework-churned class names, and markup changes — use it only when there is no data layer and one cannot be added. ' +
+  'GETTING A VALUE — reliability ladder (prefer higher): (1) Data Layer Variable; (2) a 1st-Party Cookie or a global JS value the site sets; (3) DOM Element (scrape text/attribute) as a LAST resort — it breaks silently on markup changes, so read it on DOM Ready or later. ' +
+  'IDENTIFY A PAGE by {{Page Path}} (e.g. Page Path equals "/contact"). {{Page URL}} equals "/contact" NEVER matches (Page URL is the whole URL); {{Page URL}} contains "/contact" is loose (matches query strings and any host). Use {{Page URL}} only when you truly need the whole URL (protocol / cross-domain). To READ or GATE ON the VALUE of a query parameter, use a URL variable (component = Query, key = e.g. utm_source) equals its value — NOT {{Page URL}} contains "utm_source=" (order-dependent + fragile). Firing on the mere PRESENCE of a query is fine (e.g. a site-search RESULTS page: {{Page URL}} contains "?q="). Use {{Page Hostname}} to gate environments (e.g. exclude staging). ' +
+  // TRIGGER-CONDITION DECISION FRAMEWORK. Mirrors the executable ladder in
+  // apps/web-audit-mcp/src/agent/tag-suggest/trigger-strategy.ts, so the chat agent and the
+  // suggestion engine choose the SAME condition for the same element. Change both together.
+  'CLICK - pick the condition by DURABILITY, most durable first, and stop at the first one that is present and distinctive: (1) {{Click ID}}, or a data-* attribute via {{Click Element}} matches CSS selector [data-cta="..."]; (2) a SEMANTIC class via {{Click Classes}} (dealer-phone, book-a-demo, newsletter-signup) - an author named it, so it survives copy and URL changes; (3) {{Click URL}} - durable for tel:/mailto:/outbound schemes, weaker for internal paths that get reorganised, unavailable for a JS control with no href; (4) {{Click Text}} LAST, because marketing edits copy without thinking about analytics. REJECT as class signals: build-generated names (css-1x2y3z, sc-AbCdEf, jss142, button_a1b2c3, elementor-element-*, ng-tns-c*, React useId ":r7:") which change at the next deploy; runtime STATE names (is-active, collapsed, expanded) which toggle as the element opens so half the clicks miss; and generic wrappers (.btn, .card, .wrapper, .elementor-widget) which fire on every button on the site. If NOTHING durable exists, SAY SO and do not invent a condition: a trigger that never matches is indistinguishable from a working one until someone audits the data weeks later. ' +
+  'CLICK VARIABLES MEAN DIFFERENT THINGS PER TRIGGER TYPE - the most common cause of a tag that looks configured and collects nothing. On Just Links (link_click) GTM resolves the click up to the <a>, so {{Click ID}} / {{Click Classes}} / {{Click URL}} describe the ANCHOR whichever child was clicked. On All Elements (all_clicks) they describe the EXACT node clicked, so for <button class="book-demo"><svg/><span>Book</span></button> a {{Click Classes}} condition NEVER fires; use {{Click Element}} matches CSS selector ".book-demo, .book-demo *" instead, which also covers the inner icon and span. ' +
+  '{{Click Classes}} and {{Form Classes}} hold the WHOLE class attribute as ONE string: never `equals` (an element with several classes would never match), and `contains "checkout-submit"` also fires on "checkout-submit-alt". Use matchRegex "(^|\s)checkout-submit(\s|$)" for an exact class. Note that a btn-* / card-* / wrapper-* name is a STYLING wrapper, not a purpose, so it is rejected outright rather than matched precisely. ' +
+  'ONE CONDITION vs MANY: use a single condition when the signal is unique to the interaction. Add a SECOND only when it is not - a second semantic class to narrow a repeated component (12 dealer cards sharing .dealer-phone), otherwise {{Page Path}} to scope it to the page the element is on. Do NOT page-scope a header/footer/nav component: firing on every page is the correct behaviour there, and scoping would stop it. Repeated components should collapse to ONE class-keyed tag, never one tag per instance. ' +
+  'For links use Click - Just Links and turn ON "Wait for Tags" so the tag fires before navigation; for buttons use Click - All Elements but ALWAYS add a condition (never fire on every click). ' +
+  'FORM — reliability order, best first: (1) a data-layer success event the form/plugin pushes (Custom Event) — fires on real success, not a click; (2) Element Visibility on the thank-you / success message when the URL does not change; (3) the native Form Submission trigger, ONLY for simple HTML forms that do a real submit (it fails on AJAX / JS-validated / SPA forms). Scope a form trigger by {{Form ID}} equals (not contains), often plus {{Page Path}}. ' +
+  'ECOMMERCE needs a data layer (no reliable auto-event way): the site pushes an ecommerce object with an items array on view_item / add_to_cart / begin_checkout / purchase / …; fire a GA4 event tag on a Custom Event trigger per event name, with Send Ecommerce Data ON so the items array is actually sent. ' +
+  'ALL conditions in ONE trigger combine with AND (there is no OR inside a trigger — use a regex "a|b|c" or a second trigger). ' +
+  // Named explicitly because "prefer a template" is useless without knowing WHICH one. Both
+  // surfaces read this: the desktop has import_gallery_template and can install it; the hosted
+  // chat does not, and TOOL_RULES already tells it to give the manual steps instead of pretending
+  // to act. So one rule serves both without either one lying about what it can do.
+  'PIXEL TAG TYPE - PREFER THE OFFICIAL GALLERY TEMPLATE OVER CUSTOM HTML. A pasted vendor snippet ' +
+  'runs as arbitrary page script, declares no permissions (so a strict CSP can block it), has no ' +
+  'Consent Mode integration, and rots silently when the vendor changes their API. The sandboxed ' +
+  'template has all four properties and the vendor maintains it. The ones worth naming: Meta Pixel ' +
+  '(facebook / GoogleTagManager-WebTemplate-For-FacebookPixel), TikTok Pixel (tiktok / ' +
+  'gtm-template-pixel), LinkedIn Insight Tag 2.0 (linkedin / linkedin-gtm-community-template), Snap ' +
+  'Pixel (Snapchat / snapchat-google-tag-manager), Pinterest Tag (pinterest / ws-gtm-template), and ' +
+  'Microsoft UET. If you can import it, do; if you cannot, say the template exists, name it, and ' +
+  'give the steps (Templates > Search Gallery > add to workspace > switch the tag type > move the ' +
+  'id into the template field > delete the Custom HTML so it does not fire twice). Reach for Custom ' +
+  'HTML only when no template exists, and say that is why. ' +
+  'MISTAKES TO AVOID: contains where equals/starts-with was meant; {{Page URL}} to match a path; reading a query param VALUE via {{Page URL}} contains (firing on the mere presence of a query, like a search-results page, is fine); DOM scraping when a dataLayer value exists; the native Form Submission trigger on an AJAX form; a tag with NO firing trigger, or a {{Name}} that resolves to nothing; matching on {{Click Text}} or framework class names; unanchored regex that over-matches; hardcoded IDs repeated across tags (use a Constant); Custom HTML where a sandboxed template exists. ';

@@ -1,0 +1,243 @@
+#!/usr/bin/env node
+/**
+ * Browser-based Google OAuth onboarding for the Samarth GTM MCP server.
+ *
+ * Usage:
+ *   npm run auth:google
+ *
+ * What it does:
+ *   1. Starts a tiny localhost HTTP callback server on GOOGLE_OAUTH_CALLBACK_PORT
+ *      (default 3001).
+ *   2. Generates a Google OAuth authorization URL with the least-privilege GTM
+ *      scopes the server actually uses.
+ *   3. Opens the URL in your default browser (or prints it if no browser is
+ *      available).
+ *   4. Captures the `code` from the redirect, exchanges it for tokens, and
+ *      writes them to a local gitignored token file (default
+ *      `./.gtm-mcp-tokens.json`, override with GTM_MCP_TOKEN_FILE).
+ *
+ * Requires that GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET (or the
+ * legacy GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET) are set in the environment
+ * or in a .env file in the working directory.
+ */
+
+import 'dotenv/config';
+import http from 'http';
+import { URL } from 'url';
+import { exec } from 'child_process';
+import { randomBytes } from 'crypto';
+import {
+  DEFAULT_REDIRECT_URI,
+  buildOAuth2ClientForFlow,
+  exchangeCodeForTokens,
+  getTokenFilePath,
+  resolveOAuthClient,
+  ALL_SCOPES,
+} from '../auth/googleAuth.js';
+
+function openInBrowser(url: string): void {
+  const platform = process.platform;
+  const cmd =
+    platform === 'darwin' ? `open "${url}"` :
+    platform === 'win32' ? `start "" "${url}"` :
+    `xdg-open "${url}"`;
+  exec(cmd, (err) => {
+    if (err) {
+      // Non-fatal — user can copy the URL from stdout.
+    }
+  });
+}
+
+interface ParsedRedirect {
+  port: number;
+  pathname: string;
+  origin: string;
+}
+
+function parseRedirect(redirectUri: string): ParsedRedirect {
+  const u = new URL(redirectUri);
+  if (u.hostname !== 'localhost' && u.hostname !== '127.0.0.1') {
+    throw new Error(
+      `Redirect URI must point to localhost for the browser flow (got ${u.hostname}). ` +
+        `Set GOOGLE_OAUTH_REDIRECT_URI to e.g. ${DEFAULT_REDIRECT_URI}.`
+    );
+  }
+  // A portless redirect URI (e.g. http://localhost/oauth/callback) used to fall
+  // back to 3001 while Google sent the browser to the scheme's implicit port,
+  // so the code never reached the listener and the script hung forever. Derive
+  // the default from the scheme so we listen exactly where the browser lands.
+  const port = u.port ? parseInt(u.port, 10) : u.protocol === 'https:' ? 443 : 80;
+  return { port, pathname: u.pathname || '/oauth/callback', origin: u.origin };
+}
+
+async function waitForCode(parsed: ParsedRedirect, expectedState: string): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const server = http.createServer((req, res) => {
+      if (!req.url) {
+        res.statusCode = 400;
+        res.end('Missing URL.');
+        return;
+      }
+      const reqUrl = new URL(req.url, parsed.origin);
+      if (reqUrl.pathname !== parsed.pathname) {
+        res.statusCode = 404;
+        res.end('Not found.');
+        return;
+      }
+      // This listener used to exchange the first `code` any caller handed it, and
+      // no state was sent at all. Any page open in the browser could drive a
+      // cross-origin GET here and get its own Google account persisted into the
+      // token file (login CSRF). Ignore anything that does not carry our state,
+      // and keep waiting rather than aborting so a stray request cannot end the
+      // onboarding run.
+      if (reqUrl.searchParams.get('state') !== expectedState) {
+        res.statusCode = 400;
+        res.end('Unexpected or missing state parameter, ignoring this callback.');
+        return;
+      }
+      const code = reqUrl.searchParams.get('code');
+      const error = reqUrl.searchParams.get('error');
+      if (error) {
+        res.statusCode = 400;
+        res.setHeader('content-type', 'text/html');
+        res.end(`<html><body><h1>Authorization failed</h1><p>${escapeHtml(error)}</p></body></html>`);
+        server.close();
+        reject(new Error(`Authorization error: ${error}`));
+        return;
+      }
+      if (!code) {
+        res.statusCode = 400;
+        res.end('Missing authorization code.');
+        return;
+      }
+      res.statusCode = 200;
+      res.setHeader('content-type', 'text/html');
+      res.end(
+        '<html><body style="font-family: sans-serif; max-width: 480px; margin: 64px auto;">' +
+          '<h1>✅ Authorization complete</h1>' +
+          '<p>You can close this tab and return to your terminal.</p>' +
+          '</body></html>'
+      );
+      server.close();
+      resolve(code);
+    });
+
+    server.on('error', (err: NodeJS.ErrnoException) => {
+      // A portless redirect URI (e.g. http://localhost/callback) derives port 80/443 from the scheme,
+      // which a non-root operator cannot bind - surface that as guidance instead of a raw EACCES.
+      if (err.code === 'EACCES' && parsed.port < 1024) {
+        reject(new Error(
+          `Cannot bind port ${parsed.port} without elevated privileges. Your redirect URI has no explicit `
+          + `port, so the callback would land on the scheme's default (${parsed.port}). Set `
+          + `GOOGLE_OAUTH_REDIRECT_URI to a URI with a high port, e.g. ${DEFAULT_REDIRECT_URI}.`
+        ));
+        return;
+      }
+      reject(err);
+    });
+    server.listen(parsed.port, '127.0.0.1', () => {
+      // ready
+    });
+  });
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[c] as string);
+}
+
+async function main(): Promise<void> {
+  console.log('=== Samarth GTM MCP — Google OAuth onboarding ===');
+  console.log('');
+
+  const creds = resolveOAuthClient();
+  if (!creds) {
+    console.error(
+      'No OAuth client configured. Set one of the following in your .env or environment:\n' +
+        '  GOOGLE_OAUTH_CLIENT_ID + GOOGLE_OAUTH_CLIENT_SECRET   (preferred)\n' +
+        '  GOOGLE_CLIENT_ID       + GOOGLE_CLIENT_SECRET         (legacy, still supported)\n' +
+        '\n' +
+        'See README → Friendly Google Auth Options for how to create one in Google Cloud Console.'
+    );
+    process.exit(1);
+  }
+
+  console.log(`OAuth client source : ${creds.source}`);
+  console.log(`Redirect URI        : ${creds.redirectUri}`);
+  console.log(`Token file (output) : ${getTokenFilePath()}`);
+  console.log(`Scopes              :`);
+  for (const s of ALL_SCOPES) console.log(`  - ${s}`);
+  console.log('');
+
+  let parsed: ParsedRedirect;
+  try {
+    parsed = parseRedirect(creds.redirectUri);
+  } catch (err) {
+    console.error(String(err));
+    process.exit(1);
+    return;
+  }
+
+  // Unguessable per-run value so the callback listener can tell Google's redirect
+  // apart from any other request that reaches the loopback port.
+  const state = randomBytes(32).toString('hex');
+
+  const oauth2Client = buildOAuth2ClientForFlow();
+  const authUrl = oauth2Client.generateAuthUrl({
+    access_type: 'offline',
+    scope: ALL_SCOPES,
+    prompt: 'consent',
+    state,
+  });
+
+  console.log('Opening the Google authorization URL in your browser…');
+  console.log('If the browser does not open, copy this URL manually:');
+  console.log('');
+  console.log(authUrl);
+  console.log('');
+
+  const codePromise = waitForCode(parsed, state);
+  openInBrowser(authUrl);
+
+  let code: string;
+  try {
+    code = await codePromise;
+  } catch (err) {
+    console.error('Authorization did not complete:', String(err));
+    process.exit(1);
+    return;
+  }
+
+  console.log('Exchanging authorization code for tokens…');
+  try {
+    const tokens = await exchangeCodeForTokens(code, { persist: true });
+    console.log('');
+    // exchangeCodeForTokens only writes the token file when a refresh_token came
+    // back. The "Saved ..." lines below used to print unconditionally, so a
+    // response without one told the user about a file that was never created and
+    // the next server start failed with no credentials. Report the real outcome.
+    if (!tokens.refresh_token) {
+      console.error('⚠ Google did not return a refresh_token, so nothing was saved to');
+      console.error(`  ${getTokenFilePath()}`);
+      console.error('');
+      console.error('Revoke prior access at https://myaccount.google.com/permissions and');
+      console.error('re-run `npm run auth:google`.');
+      process.exit(1);
+      return;
+    }
+    console.log('Done. Saved refresh_token + access_token to:');
+    console.log(`  ${getTokenFilePath()}`);
+    console.log('');
+    console.log('You can now start the MCP server without setting GOOGLE_ACCESS_TOKEN or');
+    console.log('GOOGLE_REFRESH_TOKEN in .env — the server will read them from the token file.');
+  } catch (err) {
+    console.error('Token exchange failed:', String(err));
+    process.exit(1);
+  }
+}
+
+main().catch((err) => {
+  console.error('Unexpected error:', err);
+  process.exit(1);
+});

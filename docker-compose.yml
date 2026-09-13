@@ -1,0 +1,106 @@
+# Samarth Analytics - self-hosting stack.
+#
+# Brings up the three services that make sense on your own box (a VPS or a
+# desktop via Cloudflare Tunnel). The LLM is a hosted API, so none of these
+# need a GPU - they run the Node MCP servers and headless Chromium only.
+#
+#   mcp            GTM/GA4/Ads MCP server, Streamable HTTP transport   :3001
+#   web-audit      Web-audit MCP (crawl + consent + verify), HTTP      :8081 -> 8080
+#   runtime-worker Read-only headless-Chromium capture worker          :8082 -> 8080
+#
+# Quick start:
+#   1. cp .env.docker.example .env.docker   # then fill in the secrets
+#   2. docker compose build
+#   3. docker compose up -d
+#   4. docker compose ps          # all three should be "healthy"
+#
+# Each service is read-only by default (GTM/GA4 write guardrails stay off).
+# See docs/SELF_HOSTING_DOCKER.md for the full runbook, Cloudflare Tunnel, and
+# how to flip write guardrails on deliberately.
+
+services:
+  # ── GTM / GA4 / Google Ads MCP server (Streamable HTTP) ──────────────────
+  mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: samarth-gtm-mcp:local
+    restart: unless-stopped
+    env_file:
+      - .env.docker
+    environment:
+      # Force the HTTP transport (the image defaults to stdio for desktop use).
+      GTM_MCP_TRANSPORT: http
+      GTM_MCP_HTTP_PORT: "3001"
+      NODE_ENV: production
+    ports:
+      - "3001:3001"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # ── Web-audit MCP (crawl, consent audit, tag verify) ─────────────────────
+  # Build context is the repo root: this server compiles in the shared consent
+  # engine from apps/portal/shared (see apps/web-audit-mcp/Dockerfile).
+  web-audit:
+    build:
+      context: .
+      dockerfile: apps/web-audit-mcp/Dockerfile
+    image: samarth-web-audit-mcp:local
+    restart: unless-stopped
+    env_file:
+      - .env.docker
+    environment:
+      WEB_AUDIT_TRANSPORT: http
+      WEB_AUDIT_HTTP_PORT: "8080"
+      # Real form submits stay OFF unless you deliberately enable them.
+      WEB_AUDIT_ENABLE_VERIFY: "false"
+    ports:
+      - "8081:8080"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  # ── Read-only runtime capture worker (headless Chromium) ─────────────────
+  runtime-worker:
+    build:
+      context: ./apps/runtime-worker
+      dockerfile: Dockerfile
+    image: samarth-runtime-worker:local
+    restart: unless-stopped
+    env_file:
+      - .env.docker
+    environment:
+      PORT: "8080"
+    ports:
+      - "8082:8080"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  # ── Cloudflare Tunnel (optional) ─────────────────────────────────────────
+  # Uncomment to expose the stack over HTTPS from a home/office box with no
+  # static IP and no open inbound ports. Create the tunnel + token first:
+  #   https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/
+  # Route your hostname to http://mcp:3001 (and web-audit:8080) in the tunnel
+  # config, then set CLOUDFLARE_TUNNEL_TOKEN in .env.docker.
+  #
+  # cloudflared:
+  #   image: cloudflare/cloudflared:latest
+  #   restart: unless-stopped
+  #   command: tunnel --no-autoupdate run
+  #   env_file:
+  #     - .env.docker
+  #   environment:
+  #     TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN}
+  #   depends_on:
+  #     - mcp

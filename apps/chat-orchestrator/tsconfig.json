@@ -1,0 +1,42 @@
+{
+  // Module settings are load-bearing, do not "simplify" them:
+  //
+  // The system prompt imports the shared GTM methodology from apps/desktop, and
+  // apps/desktop/package.json has no "type": "module". Under NodeNext, TypeScript picks the
+  // module format from the INPUT file's nearest package.json, so that one file emitted as
+  // CommonJS while everything around it emitted as ESM. The output then landed under this
+  // package (which IS "type": "module"), Node parsed the CJS file as ESM, and the process died
+  // at startup with "does not provide an export named GA4_EVENT_SELECTION". tsx hid this in dev
+  // because it transpiles per-file on the fly.
+  //
+  // "module": "ES2022" forces ESM for every file regardless of which app it came from.
+  // "moduleResolution": "Bundler" is the only resolution mode ES2022 accepts here, and its one
+  // downside is that it does NOT require .js extensions on relative imports, while Node at
+  // runtime does. src/__tests__/build.test.ts guards that gap.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022"],
+    "outDir": "./dist",
+    "rootDir": "..",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "declaration": false,
+    "sourceMap": true
+  },
+  // The two desktop files are pulled in on purpose, so the website runs the SAME create loop as the
+  // desktop app rather than a second copy of it. create-suggested-tags.ts was split out of
+  // suggestion-service.ts for exactly this: the rest of that module reaches ../google/gtm-builders,
+  // which re-exports the repo-root src/, and rootDir here is "..".
+  "include": [
+    "src/**/*.ts",
+    "../desktop/src/shared/gtm-methodology.ts",
+    "../desktop/src/main/suggestions/create-suggested-tags.ts",
+    "../desktop/src/main/google/quota-retry.ts"
+  ],
+  "exclude": ["node_modules", "dist"]
+}

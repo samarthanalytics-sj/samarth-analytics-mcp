@@ -1,0 +1,865 @@
+/**
+ * Web Audit MCP — pure-logic test suite (no browser required).
+ * Run: tsx apps/web-audit-mcp/src/__tests__/web-audit.node.test.ts
+ *
+ * Covers the SSRF guard, CMP registry shape + text heuristics, form PII
+ * analysis, the banner compliance rules over fixture captures, the RuntimeInput
+ * bridge into the shared Consent Mode v2 engine, and the GTM container bridge
+ * (parseGtmContainer + reconciled-coverage escalation in runConsentEngine).
+ */
+
+import { urlAllowed } from '../utils/urlGuard.js';
+import { classifyUrl, parseQuery, MEASUREMENT_GROUPS } from '../agent/browser.js';
+import { CMP_VENDORS, ACCEPT_TEXT_RE, REJECT_TEXT_RE } from '../agent/cmp.js';
+import { analyzeForms, classifyFieldPii, type RawForm, type RawFormField } from '../agent/forms.js';
+import { buildFillPlan, classifyFieldRole, selectorFor, localeById, US_LOCALE } from '../agent/form-fill.js';
+import { sameSite, normalizeUrl, urlPriority } from '../agent/crawler.js';
+import { buildExclude, attachRects, resolvePageList } from '../agent/tag-suggest/scan.js';
+import {
+  parseSitemapLocs,
+  extractLinks,
+  sitemapsInRobots,
+  prioritize,
+  pathOf,
+} from '../agent/tag-suggest/discover.js';
+import { isBlogLike } from '../agent/tag-suggest/blog-paths.js';
+import type { PageScan } from '../agent/tag-suggest/collect.js';
+import { extractConsentEvents, extractEventNames, type ScenarioCapture } from '../agent/capture.js';
+import {
+  evaluateBannerRules,
+  evaluateFormFindings,
+  buildRuntimeInput,
+  runConsentEngine,
+  scoreFindings,
+  sortFindings,
+  isFiringHit,
+  gcsIndicatesDenied,
+} from '../agent/compliance.js';
+import { parseGtmContainer, GtmContainerError } from '../agent/gtmConfig.js';
+import {
+  extractConfiguredDestinations,
+  extractObservedDestinations,
+  reconcile,
+} from '../agent/reconcile.js';
+import { isAuthorized, buildHealthBody } from '../http.js';
+import { loadConfig } from '../utils/config.js';
+import { runConsentRuntimeRules } from '../../../portal/shared/consent-audit.js';
+import { detectEmbeddedForm } from '../agent/tag-suggest/providers.js';
+import { buildSuggestInput } from '../agent/tag-suggest/collect.js';
+import type { PageScan, PageSignals } from '../agent/tag-suggest/collect.js';
+
+let passed = 0;
+let failed = 0;
+const failures: string[] = [];
+
+function check(name: string, cond: boolean, detail?: string): void {
+  if (cond) {
+    passed += 1;
+  } else {
+    failed += 1;
+    failures.push(`✗ ${name}${detail ? ` — ${detail}` : ''}`);
+  }
+}
+
+// ── urlGuard ────────────────────────────────────────────────────────────────
+
+check('guard: public https ok', urlAllowed('https://example.com/x').ok);
+check('guard: plain http ok', urlAllowed('http://example.com').ok);
+check('guard: ftp blocked', !urlAllowed('ftp://example.com').ok);
+check('guard: file blocked', !urlAllowed('file:///etc/passwd').ok);
+check('guard: localhost blocked', !urlAllowed('http://localhost:3000').ok);
+check('guard: .localhost blocked', !urlAllowed('http://foo.localhost').ok);
+check('guard: 127.0.0.1 blocked', !urlAllowed('http://127.0.0.1').ok);
+check('guard: 10.x blocked', !urlAllowed('http://10.1.2.3').ok);
+check('guard: 192.168 blocked', !urlAllowed('http://192.168.1.1').ok);
+check('guard: 172.16 blocked', !urlAllowed('http://172.16.0.1').ok);
+check('guard: 172.32 allowed', urlAllowed('http://172.32.0.1').ok);
+check('guard: metadata blocked', !urlAllowed('http://169.254.169.254/latest/meta-data/').ok);
+check('guard: CGNAT blocked', !urlAllowed('http://100.64.0.1').ok);
+check('guard: decimal ip blocked', !urlAllowed('http://2130706433/').ok);
+check('guard: hex ip blocked', !urlAllowed('http://0x7f000001/').ok);
+check('guard: octal ip blocked', !urlAllowed('http://0177.0.0.1/').ok);
+check('guard: ipv6 loopback blocked', !urlAllowed('http://[::1]/').ok);
+check('guard: ipv6 mapped loopback blocked', !urlAllowed('http://[::ffff:127.0.0.1]/').ok);
+check('guard: ipv6 mapped hex metadata blocked', !urlAllowed('http://[::ffff:a9fe:a9fe]/').ok);
+check('guard: ULA blocked', !urlAllowed('http://[fc00::1]/').ok);
+check('guard: allowlist match', urlAllowed('https://shop.example.com', ['example.com']).ok);
+check('guard: allowlist exact', urlAllowed('https://example.com', ['example.com']).ok);
+check('guard: allowlist miss', !urlAllowed('https://notexample.com', ['example.com']).ok);
+check('guard: allowlist no suffix-confusion', !urlAllowed('https://evilexample.com', ['example.com']).ok);
+
+// ── tracker classification ─────────────────────────────────────────────────
+
+const ga4 = classifyUrl('https://region1.google-analytics.com/g/collect?v=2&tid=G-123&gcs=G111&en=page_view');
+check('classify: ga4 collect', ga4.ids.includes('ga4_collect') && ga4.groups.includes('ga4'));
+const meta = classifyUrl('https://www.facebook.com/tr?id=123&ev=PageView');
+check('classify: meta pixel', meta.groups.includes('meta'));
+const gtm = classifyUrl('https://www.googletagmanager.com/gtm.js?id=GTM-XXX');
+check('classify: gtm loader', gtm.groups.includes('gtm'));
+check('classify: gtm not a measurement group', !MEASUREMENT_GROUPS.has('gtm'));
+const q = parseQuery('https://x.test/g/collect?gcs=G100&en=page_view&dl=https%3A%2F%2Fa.b');
+check('parseQuery decodes', q.gcs === 'G100' && q.dl === 'https://a.b');
+
+// ── CMP registry ────────────────────────────────────────────────────────────
+
+const vendorIds = new Set(CMP_VENDORS.map((v) => v.id));
+check('cmp: vendor ids unique', vendorIds.size === CMP_VENDORS.length);
+check('cmp: every vendor has presence + accept', CMP_VENDORS.every((v) => v.presence.length > 0 && v.accept.length > 0));
+check('cmp: covers major vendors', ['onetrust', 'cookiebot', 'usercentrics', 'didomi', 'quantcast', 'trustarc'].every((id) => vendorIds.has(id)));
+check('cmp: accept text en', ACCEPT_TEXT_RE.test('Accept all cookies'));
+check('cmp: accept text de', ACCEPT_TEXT_RE.test('Alle akzeptieren'));
+check('cmp: accept text fr', ACCEPT_TEXT_RE.test("J'accepte"));
+check('cmp: accept text es', ACCEPT_TEXT_RE.test('Aceptar todo'));
+check('cmp: reject text en', REJECT_TEXT_RE.test('Reject all'));
+check('cmp: reject text only-necessary', REJECT_TEXT_RE.test('Only necessary cookies'));
+check('cmp: reject text de', REJECT_TEXT_RE.test('Nur notwendige Cookies'));
+check('cmp: reject text fr', REJECT_TEXT_RE.test('Continuer sans accepter'));
+check('cmp: accept not matching reject', !REJECT_TEXT_RE.test('Accept all cookies'));
+check('cmp: reject not matching accept', !ACCEPT_TEXT_RE.test('Reject all'));
+check('cmp: privacy-policy link is neither', !ACCEPT_TEXT_RE.test('Privacy policy') && !REJECT_TEXT_RE.test('Privacy policy'));
+
+// ── crawler helpers ─────────────────────────────────────────────────────────
+
+check('crawl: same host', sameSite('https://example.com/a', 'https://example.com'));
+check('crawl: www variant', sameSite('https://www.example.com/a', 'https://example.com'));
+check('crawl: subdomain ok', sameSite('https://shop.example.com', 'https://example.com'));
+check('crawl: other host rejected', !sameSite('https://other.com', 'https://example.com'));
+check('crawl: asset skipped', normalizeUrl('/logo.png', 'https://example.com') === null);
+check('crawl: mailto skipped', normalizeUrl('mailto:x@y.z', 'https://example.com') === null);
+check('crawl: hash stripped', normalizeUrl('https://example.com/a#frag', 'https://example.com') === 'https://example.com/a');
+check('crawl: contact prioritised', urlPriority('https://x.com/contact-us') > urlPriority('https://x.com/blog/post'));
+// Broadened FORMY_RE tokens (kept in sync with scan-core.ts) are all prioritised.
+check('crawl: broadened form tokens prioritised',
+  ['https://x.com/free-audit', 'https://x.com/consultation', 'https://x.com/get-started', 'https://x.com/pricing', 'https://x.com/schedule-a-demo', 'https://x.com/services']
+    .every((u) => urlPriority(u) === 1) && urlPriority('https://x.com/about') === 0);
+// /careers carries the "Apply for … " form — must be prioritised so its form is discovered.
+check('crawl: careers page prioritised (has the apply form)', urlPriority('https://x.com/careers') === 1 && urlPriority('https://x.com/jobs') === 1);
+
+// ── form analysis ───────────────────────────────────────────────────────────
+
+function field(over: Partial<RawFormField>): RawFormField {
+  return { tag: 'input', type: 'text', name: '', id: '', label: '', placeholder: '', autocomplete: '', required: false, ...over };
+}
+function form(over: Partial<RawForm>): RawForm {
+  const fields = over.fields ?? [];
+  return { index: 0, action: 'https://example.com/submit', method: 'post', formId: '', formName: '', formClasses: '', title: '', fieldCount: fields.length, fields, hasPrivacyLink: false, text: '', ...over };
+}
+
+check('pii: email by type', classifyFieldPii(field({ type: 'email' })) === 'email');
+check('pii: phone by name', classifyFieldPii(field({ name: 'phone_number' })) === 'phone');
+check('pii: name by label', classifyFieldPii(field({ label: 'First name' })) === 'name');
+check('pii: dob by label', classifyFieldPii(field({ label: 'Date of birth' })) === 'date_of_birth');
+check('pii: payment by autocomplete', classifyFieldPii(field({ autocomplete: 'cc-number' })) === 'payment');
+check('pii: plain text not pii', classifyFieldPii(field({ name: 'company_size' })) === null);
+
+// ── form-fill: role classification (Option 2 — from the form's OWN fields) ───────────────────────
+check('role: email by type', classifyFieldRole(field({ type: 'email' })) === 'email');
+check('role: phone by autocomplete', classifyFieldRole(field({ autocomplete: 'tel' })) === 'phone');
+check('role: first name → given_name', classifyFieldRole(field({ label: 'First Name' })) === 'given_name');
+check('role: last name → family_name', classifyFieldRole(field({ name: 'last_name' })) === 'family_name');
+check('role: full/your name → full_name', classifyFieldRole(field({ label: 'Your Name' })) === 'full_name');
+check('role: company distinct from name', classifyFieldRole(field({ label: 'Company Name' })) === 'company');
+check('role: city vs state vs postal vs country', classifyFieldRole(field({ name: 'city' })) === 'city'
+  && classifyFieldRole(field({ label: 'State / Province' })) === 'state'
+  && classifyFieldRole(field({ name: 'zip' })) === 'postal'
+  && classifyFieldRole(field({ autocomplete: 'country-name' })) === 'country');
+check('role: textarea → message', classifyFieldRole(field({ tag: 'textarea', type: 'textarea' })) === 'message');
+check('role: subject before message', classifyFieldRole(field({ label: 'Subject' })) === 'subject');
+check('role: a category select → select', classifyFieldRole(field({ tag: 'select', type: 'select-one', name: 'category', options: ['A', 'B'] })) === 'select');
+check('role: privacy checkbox → consent', classifyFieldRole(field({ type: 'checkbox', label: 'I agree to the privacy policy' })) === 'consent');
+check('role: marketing checkbox → marketing_opt_in', classifyFieldRole(field({ type: 'checkbox', label: 'Send me the newsletter' })) === 'marketing_opt_in');
+// Honeypot (anti-spam) fields — filling them makes the site silently reject the submit (form_start
+// fires but form_submission never does). Detect by name AND by a hidden text-style field.
+check('role: honeypot by name → honeypot', classifyFieldRole(field({ name: 'honeypot', label: 'Leave this empty' })) === 'honeypot');
+check('role: honeypot by hp name → honeypot', classifyFieldRole(field({ name: 'contact_hp' })) === 'honeypot');
+check('role: hidden text field (off-screen honeypot, innocuous name) → honeypot', classifyFieldRole(field({ name: 'b_1a2b_3c4d', hidden: true })) === 'honeypot');
+check('role: "php" name is NOT a honeypot (hp bounded)', classifyFieldRole(field({ name: 'php_nonce' })) !== 'honeypot');
+check('role: a VISIBLE email named honeypot-ish is still classified normally when hidden=false', classifyFieldRole(field({ type: 'email', name: 'work_email' })) === 'email');
+// buildFillPlan must DROP honeypots (not shown, not filled).
+{
+  const plan = buildFillPlan([
+    field({ type: 'email', name: 'email', required: true }),
+    field({ name: 'honeypot', label: 'honeypot' }),
+    field({ name: 'website_url', hidden: true }), // off-screen honeypot with an innocuous name
+  ], US_LOCALE, { emailTag: 'r' });
+  check('fill: honeypot fields are dropped from the plan', plan.length === 1 && plan[0].name === 'email');
+  check('fill: no dropped field is left with a value', !plan.some((p) => p.role === 'honeypot'));
+}
+
+// ── form-fill: plan values (US locale) ───────────────────────────────────────────────────────────
+{
+  const fields: RawFormField[] = [
+    field({ type: 'email', name: 'email', required: true }),
+    field({ label: 'First Name', name: 'fname', required: true }),
+    field({ label: 'Last Name', name: 'lname' }),
+    field({ type: 'tel', name: 'phone' }),
+    field({ tag: 'select', type: 'select-one', name: 'country', options: ['Please select', 'Canada', 'United States', 'Mexico'] }),
+    field({ tag: 'select', type: 'select-one', name: 'category', options: ['-- Choose --', 'Sales', 'Support'] }),
+    field({ tag: 'textarea', type: 'textarea', name: 'message' }),
+    field({ type: 'checkbox', label: 'I accept the terms', name: 'consent', required: true }),
+  ];
+  const plan = buildFillPlan(fields, US_LOCALE, { emailTag: 'run1' });
+  const byName = (n: string): (typeof plan)[number] | undefined => plan.find((p) => p.name === n);
+  check('fill: email is test@gmail.com (+tag only when a tag is supplied)', byName('email')?.value === 'test+run1@gmail.com');
+  check('fill: email is plain test@gmail.com by default (no tag)', buildFillPlan(fields).find((p) => p.name === 'email')?.value === 'test@gmail.com');
+  check('fill: given/family names are simple Test values', byName('fname')?.value === 'Test' && byName('lname')?.value === 'Test');
+  check('fill: phone is the simple test number', byName('phone')?.value === '1234567890');
+  check('fill: country select picks the matching real option', byName('country')?.value === 'United States');
+  check('fill: category select skips the placeholder, picks first real option', byName('category')?.value === 'Sales');
+  check('fill: message gets the simple test text', byName('message')?.value === 'test form please ignore');
+  check('fill: required consent checkbox → checked', byName('consent')?.value === 'true');
+  check('fill: selector is name-based', byName('email')?.selector === '[name="email"]');
+  check('fill: required flag carried through', byName('email')?.required === true && byName('lname')?.required === false);
+  check('fill: options carried onto select rows', (byName('country')?.options ?? []).includes('Mexico'));
+}
+check('fill: unknown locale id falls back to US', localeById('zz').id === 'us');
+check('fill: selectorFor prefers name then id', selectorFor(field({ name: 'x' })) === '[name="x"]' && selectorFor(field({ id: 'y' })) === '#y');
+
+const contactForm = form({
+  index: 0,
+  fields: [
+    field({ type: 'email', name: 'email' }),
+    field({ name: 'full_name', label: 'Full name' }),
+    field({ tag: 'textarea', type: 'textarea', name: 'message' }),
+  ],
+});
+const contactAnalysis = analyzeForms([contactForm], 'https://example.com/contact')[0];
+check('forms: contact purpose', contactAnalysis.purpose === 'contact');
+check('forms: pii without notice flagged', contactAnalysis.issues.some((i) => i.id.includes('pii_no_notice')));
+
+// A single EMAIL input (newsletter signup) must NOT be misread as a search box, even if named "s"/"q".
+const loneEmailMkt = form({ index: 9, fields: [field({ type: 'email', name: 's' })], fieldCount: 1, text: 'subscribe to our newsletter for product updates' });
+check('forms: lone email signup → newsletter, not search', analyzeForms([loneEmailMkt], 'https://example.com')[0].purpose === 'newsletter');
+// A LONE email input (even named "q", no marketing copy) is the canonical newsletter shape — a box that
+// captures nothing but an address. It must be classified 'newsletter' (broadened Fix B rule), and above
+// all must NOT be misrouted to 'search' by its name. (Was 'contact' before Fix B; a bare email capture
+// is a subscription, not a contact form.)
+const loneEmailPlain = form({ index: 10, fields: [field({ type: 'email', name: 'q' })], fieldCount: 1, text: '' });
+const loneEmailPlainPurpose = analyzeForms([loneEmailPlain], 'https://example.com')[0].purpose;
+check('forms: lone email (no marketing copy) → newsletter, not search', loneEmailPlainPurpose === 'newsletter');
+
+// Fix B: an email+name box whose visible text lacks a MARKETING_RE keyword but carries a sign-up VERB
+// ("Sign up") is a newsletter subscription, not a contact form (2 text inputs, no message).
+const emailNameSignup = form({ index: 11, fields: [field({ type: 'email', name: 'email' }), field({ name: 'first_name', label: 'First name' })], text: 'sign up for the latest' });
+check('forms: email+name with a "Sign up" verb → newsletter (no marketing keyword needed)', analyzeForms([emailNameSignup], 'https://example.com')[0].purpose === 'newsletter');
+// A REAL contact form (email+name+message textarea) is NEVER pulled into newsletter — the !hasMessage guard.
+const emailNameMessage = form({ index: 12, fields: [field({ type: 'email', name: 'email' }), field({ name: 'name', label: 'Name' }), field({ tag: 'textarea', type: 'textarea', name: 'message' })], text: 'sign up and subscribe to our newsletter' });
+check('forms: email+name+message (a message field) → still contact even with marketing/sign-up copy', analyzeForms([emailNameMessage], 'https://example.com')[0].purpose === 'contact');
+// >=3 text inputs (a fuller lead form) is not a newsletter box → contact, even with a sign-up verb.
+const emailThreeFields = form({ index: 13, fields: [field({ type: 'email', name: 'email' }), field({ name: 'name', label: 'Name' }), field({ type: 'tel', name: 'phone' })], text: 'sign up now' });
+check('forms: email + 3 text fields → still contact (too many inputs for a newsletter box)', analyzeForms([emailThreeFields], 'https://example.com')[0].purpose === 'contact');
+// The earlier lone-text-search branch is unchanged: a lone text input named "s" is still a search box.
+const searchBox = form({ index: 14, fields: [field({ type: 'text', name: 's' })], fieldCount: 1, action: 'https://example.com/?s=', text: '' });
+check('forms: a lone text search box (name "s") → still search (unchanged, that branch is earlier)', analyzeForms([searchBox], 'https://example.com')[0].purpose === 'search');
+
+// Fix B refinement (adversarial review): "join" is scoped to a list — a careers/RSVP/waitlist lead
+// capture (email+name, "Join our team" / "Join the waitlist") is NOT a newsletter.
+const joinTeam = form({ index: 15, fields: [field({ type: 'email', name: 'email' }), field({ name: 'name', label: 'Name' })], text: 'join our team — apply now' });
+check('forms: email+name "Join our team" (careers) → contact, not newsletter', analyzeForms([joinTeam], 'https://example.com')[0].purpose === 'contact');
+const joinWaitlist = form({ index: 16, fields: [field({ type: 'email', name: 'email' }), field({ name: 'name', label: 'Name' })], text: 'join the waitlist' });
+check('forms: email+name "Join the waitlist" (lead) → contact, not newsletter', analyzeForms([joinWaitlist], 'https://example.com')[0].purpose === 'contact');
+// A subscription "join" still classifies as newsletter.
+const joinNews = form({ index: 17, fields: [field({ type: 'email', name: 'email' }), field({ name: 'name', label: 'Name' })], text: 'join our newsletter for weekly tips' });
+check('forms: email+name "Join our newsletter" → newsletter (subscription join still matches)', analyzeForms([joinNews], 'https://example.com')[0].purpose === 'newsletter');
+// A passwordless / magic-link login (lone email, "log in" copy, no password) → login, NOT newsletter.
+const magicLink = form({ index: 18, fields: [field({ type: 'email', name: 'email' })], fieldCount: 1, text: 'log in — email me a login link' });
+check('forms: lone email magic-link login ("log in") → login, not newsletter', analyzeForms([magicLink], 'https://example.com')[0].purpose === 'login');
+
+const noticedForm = form({ index: 1, fields: contactForm.fields, hasPrivacyLink: true });
+check(
+  'forms: privacy link suppresses notice issue',
+  analyzeForms([noticedForm], 'https://example.com')[0].issues.every((i) => !i.id.includes('pii_no_notice')),
+);
+
+const newsletterForm = form({
+  index: 2,
+  fields: [
+    field({ type: 'email', name: 'email' }),
+    field({ type: 'checkbox', name: 'newsletter_optin', label: 'Subscribe to our newsletter', checked: true }),
+  ],
+  text: 'subscribe to our newsletter for updates',
+  hasPrivacyLink: true,
+});
+const newsletterAnalysis = analyzeForms([newsletterForm], 'https://example.com')[0];
+check('forms: prechecked marketing flagged high', newsletterAnalysis.issues.some((i) => i.id.includes('prechecked_marketing') && i.severity === 'high'));
+check('forms: marketing checkbox captured', newsletterAnalysis.marketingCheckboxes.length === 1 && newsletterAnalysis.marketingCheckboxes[0].prechecked);
+
+const loginForm = form({
+  index: 3,
+  fields: [field({ type: 'email', name: 'email' }), field({ type: 'password', name: 'password' })],
+});
+const loginAnalysis = analyzeForms([loginForm], 'https://example.com/login')[0];
+check('forms: login purpose', loginAnalysis.purpose === 'login');
+check('forms: login exempt from notice rule', loginAnalysis.issues.every((i) => !i.id.includes('pii_no_notice')));
+
+const thirdPartyForm = form({ index: 4, action: 'https://lists.mailvendor.io/subscribe', fields: [field({ type: 'email', name: 'email' })], hasPrivacyLink: true });
+check('forms: third-party action flagged', analyzeForms([thirdPartyForm], 'https://example.com')[0].issues.some((i) => i.id.includes('third_party_action')));
+
+const insecureForm = form({ index: 5, action: 'http://example.com/submit', fields: [field({ type: 'email', name: 'email' })], hasPrivacyLink: true });
+check('forms: insecure action flagged', analyzeForms([insecureForm], 'https://example.com')[0].issues.some((i) => i.id.includes('insecure_action') && i.severity === 'high'));
+
+// ── consent event extraction ────────────────────────────────────────────────
+
+const dlLog = [
+  { t: 12, entry: ['consent', 'default', { ad_storage: 'denied', analytics_storage: 'denied', ad_user_data: 'denied', ad_personalization: 'denied' }] },
+  { t: 300, entry: { event: 'gtm.js' } },
+  { t: 4200, entry: ['consent', 'update', { ad_storage: 'granted', analytics_storage: 'granted' }] },
+  { t: 4300, entry: ['event', 'page_view', {}] },
+];
+const consentEvents = extractConsentEvents(dlLog);
+check('dl: consent default extracted', consentEvents[0]?.kind === 'default' && consentEvents[0]?.fields.ad_storage === 'denied' && consentEvents[0]?.tMs === 12);
+check('dl: consent update extracted', consentEvents[1]?.kind === 'update' && consentEvents[1]?.fields.analytics_storage === 'granted');
+check('dl: event names', extractEventNames(dlLog).join(',') === 'gtm.js,page_view');
+
+// ── banner rules over fixture captures ─────────────────────────────────────
+
+function hit(over: Partial<ScenarioCapture['trackerHits'][number]>): ScenarioCapture['trackerHits'][number] {
+  return { url: 'https://region1.google-analytics.com/g/collect?v=2', method: 'POST', ids: ['ga4_collect'], groups: ['ga4'], tMs: 1000, resourceType: 'fetch', ...over };
+}
+function capture(over: Partial<ScenarioCapture>): ScenarioCapture {
+  return {
+    scenario: 'ignore',
+    requestedUrl: 'https://example.com/',
+    finalUrl: 'https://example.com/',
+    httpStatus: 200,
+    cmp: { detected: true, vendorName: 'OneTrust', vendorId: 'onetrust', accept: { selector: '#onetrust-accept-btn-handler' }, rejectOnFirstLayer: false, method: 'vendor' },
+    interaction: null,
+    interactionTMs: null,
+    trackerHits: [],
+    networkRequestCount: 10,
+    consentEvents: [],
+    dataLayerEvents: [],
+    dataLayerKeys: [],
+    cookiesPreInteraction: [],
+    cookiesFinal: [],
+    consoleErrors: [],
+    pageErrors: [],
+    forms: null,
+    notes: [],
+    ...over,
+  };
+}
+
+check('rules: firing hit detection', isFiringHit(hit({})));
+check('rules: gtm.js not firing', !isFiringHit(hit({ url: 'https://www.googletagmanager.com/gtm.js', ids: ['gtm_loader'], groups: ['gtm'] })));
+check('rules: fbevents.js not firing', !isFiringHit(hit({ url: 'https://connect.facebook.net/en_US/fbevents.js', ids: ['meta_pixel'], groups: ['meta'] })));
+check('rules: fb /tr firing', isFiringHit(hit({ url: 'https://www.facebook.com/tr?id=1', ids: ['meta_pixel'], groups: ['meta'] })));
+check('rules: gcs G100 denied', gcsIndicatesDenied(hit({ query: { gcs: 'G100' } })));
+check('rules: gcs G111 not denied', !gcsIndicatesDenied(hit({ query: { gcs: 'G111' } })));
+
+// Pre-consent fire (no gcs) → critical.
+const preConsent = evaluateBannerRules([capture({ trackerHits: [hit({})] })]);
+check('rules: preconsent fire critical', preConsent.some((f) => f.id.startsWith('banner_preconsent_fire') && f.severity === 'critical'));
+check('rules: no reject first layer flagged', preConsent.some((f) => f.id === 'banner_no_reject_first_layer'));
+
+// Pre-consent cookieless ping (gcs=G100) → info, not critical.
+const advanced = evaluateBannerRules([capture({ trackerHits: [hit({ query: { gcs: 'G100' } })] })]);
+check('rules: advanced pings are info', advanced.some((f) => f.id.startsWith('banner_advanced_pings') && f.severity === 'info'));
+check('rules: advanced pings not critical', !advanced.some((f) => f.severity === 'critical'));
+
+// Fires after reject → critical; cookies after reject → high; no update → medium.
+const rejectCapture = capture({
+  scenario: 'reject',
+  cmp: { detected: true, vendorName: 'OneTrust', rejectOnFirstLayer: true, accept: { selector: '#a' }, reject: { selector: '#r' }, method: 'vendor' },
+  interaction: { action: 'reject', clicked: true, selector: '#onetrust-reject-all-handler', tMs: 5000 },
+  interactionTMs: 5000,
+  trackerHits: [hit({ tMs: 6500 })],
+  cookiesFinal: ['_ga', '_fbp', 'session_id'],
+});
+const rejectFindings = evaluateBannerRules([rejectCapture]);
+check('rules: fires after reject critical', rejectFindings.some((f) => f.id.startsWith('banner_fires_after_reject') && f.severity === 'critical'));
+check('rules: cookies after reject high', rejectFindings.some((f) => f.id.startsWith('banner_cookies_after_reject') && f.severity === 'high'));
+check('rules: reject without update flagged', rejectFindings.some((f) => f.id.startsWith('banner_reject_no_update')));
+check('rules: session cookie not flagged as tracking', !rejectFindings.some((f) => f.finding.includes('session_id')));
+
+// Compliant site: banner, no pre-consent firing, update on reject, no cookies.
+const compliantReject = capture({
+  scenario: 'reject',
+  cmp: { detected: true, vendorName: 'Cookiebot (Usercentrics)', rejectOnFirstLayer: true, accept: { selector: '#a' }, reject: { selector: '#r' }, method: 'vendor' },
+  interaction: { action: 'reject', clicked: true, selector: '#r', tMs: 5000 },
+  interactionTMs: 5000,
+  consentEvents: [
+    { kind: 'default', tMs: 10, fields: { ad_storage: 'denied', analytics_storage: 'denied' } },
+    { kind: 'update', tMs: 5100, fields: { ad_storage: 'denied', analytics_storage: 'denied' } },
+  ],
+  trackerHits: [hit({ url: 'https://www.googletagmanager.com/gtm.js', ids: ['gtm_loader'], groups: ['gtm'] })],
+});
+const compliantFindings = evaluateBannerRules([
+  capture({
+    cmp: compliantReject.cmp,
+    consentEvents: [{ kind: 'default', tMs: 10, fields: { ad_storage: 'denied', analytics_storage: 'denied' } }],
+    trackerHits: [hit({ url: 'https://www.googletagmanager.com/gtm.js', ids: ['gtm_loader'], groups: ['gtm'] })],
+  }),
+  compliantReject,
+]);
+check('rules: compliant site has no critical/high', compliantFindings.every((f) => f.severity !== 'critical' && f.severity !== 'high'), JSON.stringify(compliantFindings.map((f) => f.id)));
+
+// No CMP but trackers fire → high.
+const noCmp = evaluateBannerRules([capture({ cmp: { detected: false, rejectOnFirstLayer: false }, trackerHits: [hit({})] })]);
+check('rules: missing cmp flagged', noCmp.some((f) => f.id === 'banner_missing_cmp' && f.severity === 'high'));
+
+// Form findings flow through.
+const formCapture = capture({
+  forms: analyzeForms([newsletterForm], 'https://example.com'),
+});
+check('rules: form findings mapped', evaluateFormFindings([formCapture]).some((f) => f.domain === 'forms' && f.severity === 'high'));
+
+// ── scoring ────────────────────────────────────────────────────────────────
+
+check('score: clean = 100', scoreFindings([]).score === 100 && scoreFindings([]).verdict === 'compliant_looking');
+const scored = scoreFindings(sortFindings(preConsent));
+check('score: violations reduce score', scored.score < 100);
+const sorted = sortFindings([...noCmp, ...advanced]);
+check('sort: severity order', sorted[0].severity === 'high' && sorted[sorted.length - 1].severity === 'info');
+
+// ── engine bridge ───────────────────────────────────────────────────────────
+
+const runtime = buildRuntimeInput([capture({ trackerHits: [hit({})] }), rejectCapture]);
+check('bridge: states mapped', runtime.states.includes('unknown') && runtime.states.includes('default_denied'));
+check('bridge: pages mapped', runtime.pages.length === 2 && runtime.pages[0].trackerHits?.length === 1);
+check('bridge: firstMeasurementTMs', runtime.pages[0].firstMeasurementTMs === 1000);
+check('bridge: ok flag', runtime.ok === true);
+
+const engineFindings = runConsentRuntimeRules(runtime);
+check('bridge: engine accepts runtime input', Array.isArray(engineFindings));
+check('bridge: engine emits consent findings', engineFindings.every((f) => f.domain === 'consent'));
+
+// ── GTM container bridge (reconciled coverage) ──────────────────────────────
+
+// A "full" export_container payload: raw GTM API objects with parameters and
+// per-tag consentSettings present.
+const fullContainer = {
+  exportedAt: '2026-06-15T00:00:00Z',
+  workspace: { name: 'Default Workspace' },
+  tags: [
+    {
+      tagId: '1',
+      name: 'GA4 Configuration',
+      type: 'gaawc',
+      parameter: [{ key: 'measurementId', value: 'G-ABC123' }],
+      consentSettings: { consentStatus: 'NEEDED' },
+      firingTriggerId: ['2147479553'],
+    },
+    {
+      tagId: '2',
+      name: 'Meta Pixel Base',
+      type: 'html',
+      parameter: [{ key: 'html', value: '<script>fbq("init","123")</script>' }],
+      consentSettings: { consentStatus: 'NOT_SET' },
+    },
+  ],
+  triggers: [{ triggerId: '2147479553', name: 'Consent Initialization All Pages', type: 'consentInit' }],
+  variables: [
+    { variableId: '1', name: 'Consent — ad_storage', type: 'k', parameter: [{ key: 'name', value: 'ad_storage' }] },
+  ],
+};
+
+const parsed = parseGtmContainer(fullContainer);
+check('gtm: tags parsed', parsed.tags.length === 2);
+check('gtm: triggers parsed', parsed.triggers.length === 1);
+check('gtm: variables parsed', parsed.variables.length === 1);
+check('gtm: textBlob lowercased + includes tag name', parsed.textBlob.includes('ga4 configuration'));
+check('gtm: textBlob includes param value', parsed.textBlob.includes('g-abc123'));
+check('gtm: textBlob includes variable param', parsed.textBlob.includes('ad_storage'));
+check('gtm: textBlob excludes trigger names', !parsed.textBlob.includes('consent initialization all pages'));
+check('gtm: usageContexts default empty', parsed.usageContexts.length === 0);
+
+// Nested under a `container` key, with usageContext.
+const nested = parseGtmContainer({ container: { usageContext: ['SERVER'], tags: fullContainer.tags, triggers: [], variables: [] } });
+check('gtm: nested container tags', nested.tags.length === 2);
+check('gtm: usageContexts lowercased', nested.usageContexts.join(',') === 'server');
+
+// Defensive rejections.
+let summaryRejected = false;
+try {
+  parseGtmContainer({ tags: [{ tagId: '1', name: 'GA4', type: 'gaawc', paramCount: 3 }], triggers: [], variables: [] });
+} catch (e) {
+  summaryRejected = e instanceof GtmContainerError;
+}
+check('gtm: summary export rejected', summaryRejected);
+
+let emptyRejected = false;
+try {
+  parseGtmContainer({});
+} catch (e) {
+  emptyRejected = e instanceof GtmContainerError;
+}
+check('gtm: empty object rejected', emptyRejected);
+
+let nullRejected = false;
+try {
+  parseGtmContainer(null);
+} catch (e) {
+  nullRejected = e instanceof GtmContainerError;
+}
+check('gtm: null rejected', nullRejected);
+
+// runConsentEngine: coverage escalation.
+const baseCaptures = [capture({ trackerHits: [hit({})] }), rejectCapture];
+
+const engNone = await runConsentEngine(baseCaptures, undefined);
+check('engine: no container → runtime_only', engNone.coverage === 'runtime_only');
+check('engine: runtime-only findings are consent', engNone.findings.every((f) => f.domain === 'consent'));
+
+const engRecon = await runConsentEngine(baseCaptures, fullContainer);
+check('engine: full container → reconciled', engRecon.coverage === 'reconciled', engRecon.coverage);
+check('engine: reconciled has no note', engRecon.note === undefined);
+
+const engBad = await runConsentEngine(baseCaptures, { tags: [{ name: 'x', paramCount: 2 }], triggers: [], variables: [] });
+check('engine: bad container → runtime_only + note', engBad.coverage === 'runtime_only' && typeof engBad.note === 'string');
+check('engine: bad-container note mentions full', /full/i.test(engBad.note ?? ''));
+
+// ── HTTP transport helpers ──────────────────────────────────────────────────
+
+check('http: no token → open', isAuthorized(undefined, ''));
+check('http: no token ignores header', isAuthorized('Bearer whatever', ''));
+check('http: correct bearer accepted', isAuthorized('Bearer s3cret', 's3cret'));
+check('http: wrong bearer rejected', !isAuthorized('Bearer nope', 's3cret'));
+check('http: missing header with token rejected', !isAuthorized(undefined, 's3cret'));
+check('http: bare token without scheme rejected', !isAuthorized('s3cret', 's3cret'));
+check('http: length-mismatch rejected', !isAuthorized('Bearer s3cre', 's3cret'));
+
+const health = buildHealthBody({
+  activeSessions: 2,
+  playwrightAvailable: true,
+  authRequired: true,
+  config: loadConfig(),
+});
+check('http: health status ok', health.status === 'ok' && health.transport === 'http');
+check('http: health reports sessions', health.activeSessions === 2);
+check('http: health reports playwright + auth', health.playwrightAvailable === true && health.authRequired === true);
+check('http: health surfaces config', typeof health.config.interactionEnabled === 'boolean' && Array.isArray(health.config.allowlist));
+
+// ── tag-presence reconciliation (configured vs fired) ───────────────────────
+
+const reconContainer = {
+  tags: [
+    { name: 'GA4 Config', type: 'gaawc', parameter: [{ key: 'measurementId', value: 'G-ABC123' }] },
+    { name: 'Ads Conversion', type: 'awct', parameter: [{ key: 'conversionId', value: 'AW-123456789/AbCdEf' }] },
+    { name: 'Paused Meta', type: 'html', paused: true, parameter: [{ key: 'html', value: "<script>fbq('init','111222333')</script>" }] },
+  ],
+  triggers: [],
+  variables: [],
+};
+
+const cfgDests = extractConfiguredDestinations(reconContainer);
+check('reconcile: extracts GA4 measurement id', cfgDests.some((d) => d.vendor === 'ga4' && d.id === 'G-ABC123'));
+check('reconcile: normalizes Ads id (drops /label)', cfgDests.some((d) => d.vendor === 'google_ads' && d.id === 'AW-123456789'));
+check('reconcile: skips a paused tag', !cfgDests.some((d) => d.vendor === 'meta'));
+
+// Real capture shapes: GA4 carries query.tid; the Meta pixel id is ONLY in the
+// /tr url (the pipeline keeps query for GA4 hits only); the gtm.js loader is not
+// a firing destination.
+const reconCaptures = [
+  capture({
+    trackerHits: [
+      hit({ url: 'https://region1.google-analytics.com/g/collect?v=2&tid=G-XYZ999', query: { tid: 'G-XYZ999' } }),
+      hit({ url: 'https://www.facebook.com/tr?id=111222333&ev=PageView', ids: ['meta_pixel'], groups: ['meta'] }),
+      hit({ url: 'https://www.googletagmanager.com/gtm.js?id=GTM-XXXX', ids: ['gtm_loader'], groups: ['gtm'] }),
+    ],
+  }),
+];
+const obsDests = extractObservedDestinations(reconCaptures);
+check('reconcile: observes GA4 tid', obsDests.some((d) => d.vendor === 'ga4' && d.id === 'G-XYZ999'));
+check('reconcile: observes Meta pixel id from the /tr url', obsDests.some((d) => d.vendor === 'meta' && d.id === '111222333'));
+check('reconcile: gtm.js loader is not an observed destination', !obsDests.some((d) => d.source.includes('gtm.js')));
+
+// Consent was granted (an accept capture ran) → configured-but-never-fired is meaningful.
+const rec = reconcile(reconContainer, reconCaptures, { consentGranted: true });
+const reconIds = rec.findings.map((f) => f.id);
+check('reconcile: GA4 measurement id mismatch flagged', reconIds.includes('ga4_measurement_id_mismatch'));
+check('reconcile: Ads configured-but-not-fired flagged', reconIds.includes('configured_not_fired_google_ads'));
+check('reconcile: Meta fired-but-not-configured flagged', reconIds.includes('fired_not_configured_meta'));
+check('reconcile: configured_not_fired is low severity', rec.findings.find((f) => f.id === 'configured_not_fired_google_ads')?.severity === 'low');
+check('reconcile: per-vendor summary records GA4 configured+fired', rec.byVendor.some((v) => v.vendor === 'ga4' && v.configured && v.fired));
+
+// Without a consent-granted capture, a non-firing configured vendor is NOT flagged (it may be consent-gated).
+const recNoConsent = reconcile(reconContainer, reconCaptures, { consentGranted: false });
+check('reconcile: configured_not_fired suppressed without a consent grant', !recNoConsent.findings.some((f) => f.id.startsWith('configured_not_fired')));
+
+// A googtag carrying an AW- id is Google Ads, not GA4.
+const googtagDests = extractConfiguredDestinations({ tags: [{ name: 'GTag', type: 'googtag', parameter: [{ key: 'tagId', value: 'AW-555' }] }], triggers: [], variables: [] });
+check('reconcile: googtag with AW- id is google_ads', googtagDests.some((d) => d.vendor === 'google_ads' && d.id === 'AW-555'));
+check('reconcile: googtag with AW- id is not GA4', !googtagDests.some((d) => d.vendor === 'ga4'));
+
+// GA4 id is matched only in a real gtag context, not arbitrary "G-FORCE" text.
+const noiseHtml = extractConfiguredDestinations({ tags: [{ name: 'Promo', type: 'html', parameter: [{ key: 'html', value: '<div class="G-FORCE">G-WAGON sale</div>' }] }], triggers: [], variables: [] });
+check('reconcile: arbitrary G-XXXX text in HTML is not a GA4 destination', !noiseHtml.some((d) => d.vendor === 'ga4'));
+const realHtml = extractConfiguredDestinations({ tags: [{ name: 'gtag', type: 'html', parameter: [{ key: 'html', value: "gtag('config','G-REALID1234')" }] }], triggers: [], variables: [] });
+check('reconcile: gtag config G- id in HTML is detected', realHtml.some((d) => d.vendor === 'ga4' && d.id === 'G-REALID1234'));
+
+// A GA4 Google-signals / remarketing ping (no conversion id) is not an Ads destination.
+const signalsObs = extractObservedDestinations([
+  capture({ trackerHits: [hit({ url: 'https://googleads.g.doubleclick.net/pagead/viewthroughconversion/123/?', ids: ['google_ads'], groups: ['google_ads'] })] }),
+]);
+check('reconcile: google-signals remarketing ping is not an Ads destination', !signalsObs.some((d) => d.vendor === 'google_ads'));
+
+// Malformed captures don't throw (matches the module's tolerant posture).
+check('reconcile: tolerates malformed captures', extractObservedDestinations([{}, { trackerHits: null }] as unknown as ScenarioCapture[]).length === 0);
+
+// A matched container (same GA4 id fired, nothing else) produces no reconcile findings.
+const cleanRec = reconcile(
+  { tags: [{ name: 'GA4', type: 'gaawc', parameter: [{ key: 'measurementId', value: 'G-ABC123' }] }], triggers: [], variables: [] },
+  [capture({ trackerHits: [hit({ url: 'https://r.google-analytics.com/g/collect?tid=G-ABC123', query: { tid: 'G-ABC123' } })] })],
+);
+check('reconcile: matched GA4 yields no reconcile findings', cleanRec.findings.length === 0);
+
+// ── tag-suggest: cross-origin embedded form providers ────────────────────────
+const sig = (over: Partial<PageSignals> = {}): PageSignals => ({ scriptSrcs: [], classNames: [], selectorsPresent: [], iframeSrcs: [], ...over });
+check('embed: Calendly iframe detected', detectEmbeddedForm(sig({ iframeSrcs: ['https://calendly.com/acme/intro'] }))?.vendor === 'calendly');
+check('embed: Jotform iframe detected', detectEmbeddedForm(sig({ iframeSrcs: ['https://form.jotform.com/2412345'] }))?.vendor === 'jotform');
+check('embed: Formstack detected', detectEmbeddedForm(sig({ iframeSrcs: ['https://acme.formstack.com/forms/x'] }))?.vendor === 'formstack');
+check('embed: Tally detected', detectEmbeddedForm(sig({ iframeSrcs: ['https://tally.so/embed/abc'] }))?.vendor === 'tally');
+check('embed: Google Forms detected', detectEmbeddedForm(sig({ iframeSrcs: ['https://docs.google.com/forms/d/e/x/viewform'] }))?.vendor === 'googleforms');
+check('embed: Wufoo detected', detectEmbeddedForm(sig({ iframeSrcs: ['https://acme.wufoo.com/forms/x'] }))?.vendor === 'wufoo');
+check('embed: plain page → no embedded form', detectEmbeddedForm(sig({ iframeSrcs: ['https://www.youtube.com/embed/x'] })) === null);
+// A page with a readable search-y form AND a cross-origin Calendly embed: the embed still surfaces.
+const pgEmbed: PageScan = {
+  page: '/contact',
+  elements: [],
+  forms: [{ purpose: 'search', action: '/search', method: 'get', fields: [{ type: 'search', name: 'q', required: false }] }],
+  signals: sig({ iframeSrcs: ['https://calendly.com/acme/intro'] }),
+};
+const embedInput = buildSuggestInput([pgEmbed], 'example.com');
+check('embed: co-present Calendly embed is not suppressed by another form', embedInput.forms.some((f) => f.provider.vendor === 'calendly'));
+// A readable provider form (its OWN .hs-form class) must NOT be doubled by the synth embed.
+const pgHubReadable: PageScan = {
+  page: '/contact',
+  elements: [],
+  forms: [{ purpose: 'contact', action: '/submit', method: 'post', formClasses: 'hs-form', fields: [{ type: 'email', name: 'email', required: true }] }],
+  signals: sig({ classNames: ['hs-form'], scriptSrcs: ['https://js.hsforms.net/forms/v2.js'] }),
+};
+check('embed: readable HubSpot form is not double-counted by the synth embed', buildSuggestInput([pgHubReadable], 'example.com').forms.length === 1);
+// But an UNRELATED readable form (a search box) must NOT suppress the HubSpot embed on the same page.
+const pgHubBeside: PageScan = {
+  page: '/pricing',
+  elements: [],
+  forms: [{ purpose: 'search', action: '/search', method: 'get', fields: [{ type: 'search', name: 'q', required: false }] }],
+  signals: sig({ classNames: ['hs-form'], scriptSrcs: ['https://js.hsforms.net/forms/v2.js'] }),
+};
+check('embed: HubSpot embed surfaces beside an unrelated search form', buildSuggestInput([pgHubBeside], 'example.com').forms.some((f) => f.provider.vendor === 'hubspot'));
+
+// ── report ──────────────────────────────────────────────────────────────────
+
+/* ── skip filter: which pages a crawl refuses to follow ───────────────────── */
+{
+  const skip = buildExclude({ skipBlog: true });
+  check('skip: asking to skip blogs produces a filter', typeof skip === 'function');
+  const on = (p: string): boolean => (skip ? skip(`https://x.com${p}`) : false);
+  for (const p of ['/blog', '/blog/post-1', '/news/', '/2026/08/a-post', '/press', '/author/sam']) {
+    check(`skip: ${p} is treated as editorial`, on(p));
+  }
+  // The ones that must survive: a "tag-management" service page is the whole point of the scan, and
+  // "blogger-outreach" only contains the word blog.
+  for (const p of ['/contact', '/pricing', '/solutions/tag-management', '/blogger-outreach', '/free-audit']) {
+    check(`skip: ${p} is kept`, !on(p));
+  }
+  check('skip: a query string cannot smuggle a skip word past a needed page', !on('/contact?from=/blog'));
+
+  // undefined, not a predicate that always says no, so the crawler keeps its original behaviour
+  // rather than calling a filter that cannot exclude anything.
+  check('skip: no options means no filter', buildExclude({}) === undefined);
+  check('skip: blank patterns mean no filter', buildExclude({ skipPatterns: ['  '] }) === undefined);
+
+  const custom = buildExclude({ skipPatterns: ['/Careers', '/legal'] });
+  const onCustom = (p: string): boolean => (custom ? custom(`https://x.com${p}`) : false);
+  check('skip: extra patterns match case-insensitively', onCustom('/careers/engineer') && onCustom('/legal/terms'));
+  check('skip: extra patterns leave everything else alone', !onCustom('/contact'));
+}
+
+
+
+/* ── ringing the element a suggestion is about ─────────────────────────────── */
+{
+  const rect = { x: 10, y: 20, w: 100, h: 40 };
+  const other = { x: 500, y: 600, w: 80, h: 30 };
+  const page = (over: Partial<PageScan>): PageScan =>
+    ({ page: '/contact', elements: [], forms: [], signals: {} as never, ...over }) as PageScan;
+  const sug = (over: Record<string, unknown>): SuggestedTag =>
+    ({ id: 'x', page: '/contact', platform: 'ga4_event', tagName: 'T', measurementId: 'G-1', ...over }) as SuggestedTag;
+
+  // Exactly one element with that href → ringed.
+  const one = attachRects(
+    [sug({ trigger: { name: 'Email', kind: 'link_click', clickUrlValue: 'mailto:' } })],
+    [page({ elements: [{ page: '/contact', kind: 'email', text: 'hi', href: 'mailto:a@b.com', rect }] as never })],
+  );
+  check('rect: a single matching element is ringed', JSON.stringify(one[0].rect) === JSON.stringify(rect));
+
+  // Two candidates → nothing, because a ring around the wrong control is worse than no ring.
+  const two = attachRects(
+    [sug({ trigger: { name: 'Email', kind: 'link_click', clickUrlValue: 'mailto:' } })],
+    [page({
+      elements: [
+        { page: '/contact', kind: 'email', text: 'a', href: 'mailto:a@b.com', rect },
+        { page: '/contact', kind: 'email', text: 'b', href: 'mailto:c@d.com', rect: other },
+      ] as never,
+    })],
+  );
+  check('rect: an ambiguous match is left unringed', two[0].rect === undefined);
+
+  // A site-wide suggestion is proved on the first page carrying exactly one match.
+  const wide = attachRects(
+    [sug({ page: 'site-wide', trigger: { name: 'Phone', kind: 'link_click', clickUrlValue: 'tel:' } })],
+    [
+      page({ page: '/', elements: [] }),
+      page({ page: '/contact', elements: [{ page: '/contact', kind: 'phone', text: 'call', href: 'tel:+1', rect }] as never }),
+    ],
+  );
+  check('rect: a site-wide tag is ringed on an example page', JSON.stringify(wide[0].rect) === JSON.stringify(rect));
+  check('rect: and it names the page that example came from', wide[0].proofPage === '/contact');
+
+  // A form suggestion rings the form, and only when one form is unambiguous.
+  const form = attachRects(
+    [sug({ trigger: { name: 'Contact', kind: 'form_submit' } })],
+    [page({ forms: [{ purpose: 'contact', action: '/x', rect }] as never })],
+  );
+  check('rect: a single form on the page is ringed', JSON.stringify(form[0].rect) === JSON.stringify(rect));
+
+  const forms2 = attachRects(
+    [sug({ trigger: { name: 'Contact', kind: 'form_submit' } })],
+    [page({ forms: [{ purpose: 'contact', action: '/x', rect }, { purpose: 'signup', action: '/y', rect: other }] as never })],
+  );
+  check('rect: two forms with nothing to tell them apart stay unringed', forms2[0].rect === undefined);
+
+  // An element the collector could not measure (the layout-less path) is not invented.
+  const noRect = attachRects(
+    [sug({ trigger: { name: 'Email', kind: 'link_click', clickUrlValue: 'mailto:' } })],
+    [page({ elements: [{ page: '/contact', kind: 'email', text: 'hi', href: 'mailto:a@b.com' }] as never })],
+  );
+  check('rect: an unmeasured element yields no rectangle', noRect[0].rect === undefined);
+}
+
+// Page discovery: reading a site's own list of pages, and scanning only the chosen ones.
+{
+  const SITEMAP = `<?xml version="1.0"?><urlset>
+    <url><loc>https://example.com/</loc></url>
+    <url><loc>https://example.com/contact</loc></url>
+    <url><loc> https://example.com/pricing </loc></url>
+  </urlset>`;
+  const INDEX = `<?xml version="1.0"?><sitemapindex>
+    <sitemap><loc>https://example.com/sitemap-pages.xml</loc></sitemap>
+    <sitemap><loc>https://evil.test/sitemap.xml</loc></sitemap>
+  </sitemapindex>`;
+
+  const flat = parseSitemapLocs(SITEMAP);
+  check('sitemap: urls are read and trimmed', flat.locs.length === 3 && flat.locs[2] === 'https://example.com/pricing');
+  check('sitemap: a urlset is not an index', flat.isIndex === false);
+
+  const index = parseSitemapLocs(INDEX);
+  check('sitemap: an index is recognised as one', index.isIndex === true && index.locs.length === 2);
+  // The follow is same-site filtered in collectSitemap; the parser reports what it saw.
+  check('sitemap: an off-site child is still parsed, to be refused later', index.locs[1].includes('evil.test'));
+
+  check('sitemap: an empty body yields nothing rather than throwing', parseSitemapLocs('').locs.length === 0);
+
+  const robots = sitemapsInRobots(
+    'User-agent: *\nDisallow: /admin\nSitemap: https://example.com/sm1.xml\n sitemap:https://example.com/sm2.xml\n',
+  );
+  check('robots: every Sitemap line is read, case and spacing insensitive', robots.length === 2);
+  check('robots: a Disallow line is not mistaken for a sitemap', !robots.some((r) => r.includes('admin')));
+
+  const links = extractLinks(
+    '<a href="/contact">c</a><a href="https://example.com/pricing">p</a><a href="https://other.test/x">o</a><a href="/logo.png">i</a>',
+    'https://example.com/',
+    'https://example.com/',
+  );
+  check('links: same-site hrefs are kept, absolute and relative', links.length === 2);
+  check('links: an off-site link is dropped', !links.some((l) => l.includes('other.test')));
+  check('links: an asset is dropped', !links.some((l) => l.includes('logo.png')));
+
+  const ordered = prioritize([
+    'https://example.com/blog/a',
+    'https://example.com/about',
+    'https://example.com/contact',
+  ]);
+  check('order: a form-likely page leads', ordered[0].endsWith('/contact'));
+  check('order: everything else keeps its original order', ordered[1].endsWith('/blog/a') && ordered[2].endsWith('/about'));
+
+  // The entry page scores zero on the form heuristic, so without pinning it sinks below every
+  // /services page. On a real 226-page site it landed past the 25 that get pre-ticked, which would
+  // have dropped the footer email and phone links the homepage is scanned for.
+  const withEntry = prioritize(
+    ['https://example.com/services', 'https://example.com/', 'https://example.com/contact'],
+    'https://example.com/',
+  );
+  check('order: the entry page is pinned first', withEntry[0] === 'https://example.com/');
+  check('order: pinning does not duplicate it', withEntry.length === 3);
+  check('order: form-likely pages still lead the rest', withEntry[1].endsWith('/services') || withEntry[1].endsWith('/contact'));
+  check(
+    'order: an entry not in the list is not invented',
+    prioritize(['https://example.com/a'], 'https://example.com/').length === 1,
+  );
+
+  check('path: the root reads as "/"', pathOf('https://example.com/') === '/');
+  check('path: a trailing slash is dropped', pathOf('https://example.com/contact/') === '/contact');
+
+  // resolvePageList is the check that stops the scanner being a general URL fetcher.
+  const START = 'https://example.com/';
+  const list = resolvePageList(
+    START,
+    ['/contact', 'https://example.com/pricing', 'https://other.test/steal', 'mailto:a@b.com', '/contact'],
+    25,
+  );
+  check('pages: a relative and an absolute same-site page are both accepted', list.targets.length === 2);
+  check('pages: the order given is kept', list.targets[0].url.endsWith('/contact'));
+  check('pages: a duplicate is collapsed silently', !list.rejected.some((r) => r.url.endsWith('/contact')));
+  check(
+    'pages: an off-site URL is refused and SAID so',
+    list.rejected.some((r) => r.url.includes('other.test') && /same site/i.test(r.reason)),
+  );
+  check('pages: a non-page URL is refused', list.rejected.some((r) => r.url.startsWith('mailto:')));
+
+  const overBudget = resolvePageList(START, ['/a', '/b', '/c'], 2);
+  check('pages: the budget is applied', overBudget.targets.length === 2);
+  check(
+    'pages: what the budget cut is named rather than silently trimmed',
+    overBudget.rejected.length === 1 && /budget/i.test(overBudget.rejected[0].reason),
+  );
+
+  const privateHost = resolvePageList('http://localhost/', ['http://localhost/admin'], 25);
+  check('pages: the URL guard still applies to a chosen page', privateHost.targets.length === 0);
+
+  check('pages: an empty entry is ignored, not reported as an error', resolvePageList(START, ['', '  '], 25).rejected.length === 0);
+
+  // The blog pattern is shared between the crawl's exclude and the page list's marker. One pattern,
+  // or the "skip blogs" button hides a different set than the crawl would have.
+  check('blog: a post path is editorial', isBlogLike('https://example.com/blog/why-tags'));
+  check('blog: a dated path is editorial', isBlogLike('https://example.com/2026/08/launch'));
+  check('blog: a category path is editorial', isBlogLike('https://example.com/category/seo'));
+  check('blog: a contact page is not', !isBlogLike('https://example.com/contact'));
+  check(
+    'blog: a query string cannot smuggle the word in',
+    !isBlogLike('https://example.com/pricing?ref=blog'),
+  );
+  const exclude = buildExclude({ skipBlog: true });
+  check(
+    'blog: the crawl filter and the list marker agree',
+    ['https://example.com/blog/a', 'https://example.com/contact', 'https://example.com/2026/01/x'].every(
+      (u) => Boolean(exclude?.(u)) === isBlogLike(u),
+    ),
+  );
+}
+
+// A chosen list is not a crawl budget.
+{
+  // The bug: scanPages fell back to maxPages, whose default is 10, so ticking 25 pages in the
+  // picker scanned 10 and reported the other 15 as over a budget the user never set.
+  const chosen = Array.from({ length: 40 }, (_, i) => `https://example.com/p${i}`);
+  const wide = resolvePageList('https://example.com/', chosen, 300);
+  check('chosen: a list of 40 is not clamped to a crawl budget', wide.targets.length === 40);
+  check('chosen: nothing is reported over budget', wide.rejected.length === 0);
+
+  const capped = resolvePageList('https://example.com/', chosen, 25);
+  check('chosen: a real ceiling still applies', capped.targets.length === 25);
+  check('chosen: and the pages it cut are named', capped.rejected.length === 15);
+}
+
+console.log(`web-audit tests: ${passed} passed, ${failed} failed`);
+if (failed > 0) {
+  for (const f of failures) console.error(f);
+  process.exit(1);
+}
+if (passed < 60) {
+  console.error(`expected at least 60 checks to run, got ${passed}`);
+  process.exit(1);
+}

@@ -1,0 +1,160 @@
+{
+  "$comment": "Machine-readable companion to docs/PRODUCTION_CUTOVER_RUNBOOK.md. Tracks the phased rollout from foundation-only to a durable production deployment. No secrets here: env vars are listed by NAME only, classified secret vs non-secret. Update `status` as phases complete. This file is descriptive — nothing reads it at runtime.",
+  "version": 1,
+  "generatedFor": "samarth-analytics-mcp",
+  "currentState": "foundation-only",
+  "runbook": "docs/PRODUCTION_CUTOVER_RUNBOOK.md",
+  "guardrails": [
+    "Read-only by default: GTM_MCP_ENABLE_WRITES/PUBLISH/DELETES stay false.",
+    "No token bytes in Postgres or repo; bytes only in the vault via token_ref.",
+    "api/** import-safe: node:* + import type only at module load; clients lazy-load after auth.",
+    "Consent Mode v2 suite stays 170/170 (npm run test:consent).",
+    "Portal stays responsive on mobile/tablet/desktop."
+  ],
+  "phases": [
+    {
+      "id": 1,
+      "name": "Postgres / Supabase schema deploy + read-only probe",
+      "status": "not-started",
+      "goal": "Provision DB, apply schema, flip persistence readiness to ready. No app reads/writes yet.",
+      "providerExamples": ["Supabase", "Neon", "RDS/Cloud SQL"],
+      "env": {
+        "secret": ["DATABASE_URL", "PORTAL_DATABASE_URL"],
+        "nonSecret": ["DATABASE_SSL", "DATABASE_POOL_MAX", "DATABASE_STATEMENT_TIMEOUT_MS"]
+      },
+      "validate": [
+        "psql \"$DATABASE_URL\" -f infra/database/0001_init.sql",
+        "psql \"$DATABASE_URL\" -c \"\\dt\"",
+        "GET /api/system/capabilities -> readiness.persistence == ready"
+      ],
+      "successCriteria": [
+        "capabilities.database == true, sessionMode == database",
+        "all tables present, RLS enabled (not forced) on tenant-scoped tables",
+        "no application writes have occurred"
+      ],
+      "rollback": "Unset DATABASE_URL/PORTAL_DATABASE_URL and redeploy; stateless path resumes.",
+      "security": ["least-privilege app role", "connection string is a platform secret", "no oauth_connections rows yet"]
+    },
+    {
+      "id": 2,
+      "name": "Token vault integration + dual-read/dual-write",
+      "status": "not-started",
+      "goal": "Move OAuth token bytes out of the cookie into a secret manager; v2 session-id cookie with v1 fallback.",
+      "providerExamples": ["Supabase Vault", "GCP Secret Manager/KMS", "AWS Secrets Manager/KMS", "HashiCorp Vault"],
+      "env": {
+        "secret": ["SUPABASE_SERVICE_ROLE_KEY"],
+        "nonSecret": ["SUPABASE_VAULT_URL", "GCP_KMS_KEY", "GOOGLE_CLOUD_PROJECT", "AWS_KMS_KEY_ID", "AWS_SECRETS_MANAGER_REGION", "VAULT_ADDR"],
+        "devTestOnly": ["TOKEN_VAULT_ALLOW_MEMORY"]
+      },
+      "validate": [
+        "curl -s $BASE_URL/api/system/capabilities | jq '.readiness.tokenVault'",
+        "psql \"$DATABASE_URL\" -c \"SELECT token_ref, scopes, has_refresh FROM oauth_connections LIMIT 5;\""
+      ],
+      "successCriteria": [
+        "fresh login mints v2 cookie with no token bytes",
+        "existing v1 sessions keep working (no forced re-consent)",
+        "refresh writes bytes to vault, never to Postgres/cookie"
+      ],
+      "rollback": "Stop minting v2, keep v1 acceptance; unset vault vars.",
+      "security": ["no token bytes in DB", "vault-only resolution by backend identity", "TOKEN_VAULT_ALLOW_MEMORY absent in prod"]
+    },
+    {
+      "id": 3,
+      "name": "Redis / Upstash cache (read-through + SWR)",
+      "status": "not-started",
+      "goal": "Hot cache for discovery lists (SWR) + short-TTL status lookups.",
+      "providerExamples": ["Upstash Redis REST", "Vercel KV", "self-hosted/Elasticache Redis"],
+      "env": {
+        "secret": ["UPSTASH_REDIS_REST_TOKEN", "KV_REST_API_TOKEN", "REDIS_URL"],
+        "nonSecret": ["UPSTASH_REDIS_REST_URL", "KV_REST_API_URL", "GTM_PORTAL_CACHE"]
+      },
+      "validate": [
+        "npm run test:cache",
+        "curl -s $BASE_URL/api/system/capabilities | jq '.readiness.cache'"
+      ],
+      "successCriteria": [
+        "capabilities.cache == true, readiness.cache == ready",
+        "repeated discovery call shows a cache hit",
+        "status endpoints never served stale; reflect terminal state within one TTL"
+      ],
+      "rollback": "Unset cache vars or set GTM_PORTAL_CACHE off a live backend; CacheStore no-ops.",
+      "security": ["NEVER_CACHE holds (no tokens/cookies/secrets/raw captures)", "tenant-scoped keys (sa:v1:{orgId}:...)"]
+    },
+    {
+      "id": 4,
+      "name": "Async job queue (shadow mode)",
+      "status": "not-started",
+      "goal": "Enqueue + process audits/captures in shadow; client response unchanged until 202-poll variant is opted in.",
+      "providerExamples": ["Postgres SKIP LOCKED (default)", "Upstash QStash", "AWS SQS"],
+      "env": {
+        "secret": ["QSTASH_TOKEN"],
+        "nonSecret": ["JOB_QUEUE_PROVIDER", "GTM_PORTAL_JOB_QUEUE", "AWS_SQS_QUEUE_URL"]
+      },
+      "validate": [
+        "npm run test:jobs",
+        "psql \"$DATABASE_URL\" -c \"SELECT status, count(*) FROM worker_jobs GROUP BY status;\""
+      ],
+      "successCriteria": [
+        "every audit/capture enqueues a worker_jobs row reaching a terminal state",
+        "client response byte-identical to pre-shadow synchronous response",
+        "queue metrics emit (sa_worker_queue_depth, sa_worker_job_age_seconds)"
+      ],
+      "rollback": "No-op the JobQueue / unset JOB_QUEUE_PROVIDER; synchronous path is the only path.",
+      "security": ["org-scoped payloads", "no token bytes in payloads", "worker upload uses bearer token not session"]
+    },
+    {
+      "id": 5,
+      "name": "Runtime worker deployment (behind the queue)",
+      "status": "not-started",
+      "goal": "Deploy headless-Chromium worker on a real browser host; switch to queue mode.",
+      "providerExamples": ["Render", "Fly.io", "Railway"],
+      "env": {
+        "secret": ["RUNTIME_WORKER_TOKEN"],
+        "nonSecret": ["RUNTIME_WORKER_MODE", "RUNTIME_WORKER_ALLOWLIST", "RUNTIME_WORKER_MAX_URLS", "RUNTIME_WORKER_MAX_WAIT", "RUNTIME_WORKER_TIMEOUT", "PORTAL_RUNTIME_WORKER_URL"]
+      },
+      "validate": [
+        "npm --prefix apps/runtime-worker run check",
+        "RUNTIME_WORKER_MODE=queue node apps/runtime-worker/queue-consumer.mjs --demo"
+      ],
+      "successCriteria": [
+        "HTTP mode returns a redacted artifact within timeout",
+        "queue mode leases + processes a seeded job to succeeded; artifact has expires_at",
+        "capabilities.runtimeWorker == true; no-runtime-worker caveat gone"
+      ],
+      "rollback": "Scale worker to 0; unset PORTAL_RUNTIME_WORKER_URL. Config-only audits unaffected.",
+      "security": ["allowlist enforced (no SSRF)", "artifacts redacted/encrypted + expires_at (30d)", "bearer-token upload"]
+    },
+    {
+      "id": 6,
+      "name": "Observability exporter + alert activation",
+      "status": "not-started",
+      "goal": "Wire metrics exporter to the sa_* contract; activate alert thresholds. Logs already emit.",
+      "providerExamples": ["Sentry", "Grafana/Prometheus", "Datadog", "OTel collector"],
+      "env": {
+        "secret": ["SENTRY_DSN", "OTEL_EXPORTER_OTLP_HEADERS", "DD_API_KEY"],
+        "nonSecret": ["LOG_LEVEL", "OBSERVABILITY_PROVIDER", "METRICS_ENABLED", "OTEL_EXPORTER_OTLP_ENDPOINT"]
+      },
+      "validate": [
+        "npm run test:observability",
+        "force a synthetic 5xx and confirm the alert fires + resolves"
+      ],
+      "successCriteria": [
+        "structured logs in sink carry traceId/orgId but no token bytes/emails/raw captures",
+        "sa_* metrics + derived rates render in the backend",
+        "high-severity alerts fire on synthetic trigger"
+      ],
+      "rollback": "METRICS_ENABLED=false / unset OBSERVABILITY_PROVIDER; structured logs keep flowing.",
+      "security": ["redact() on every field; low-cardinality labels only", "DSN/API keys are platform secrets"]
+    }
+  ],
+  "crossPhaseSecurityChecklist": [
+    "No token bytes in Postgres (only token_ref + metadata).",
+    "Vault-only byte resolution via backend service identity; TOKEN_VAULT_ALLOW_MEMORY unset in prod.",
+    "No secrets in repo or shared cache; NEVER_CACHE holds.",
+    "Runtime captures redacted/encrypted, expires_at (30d), never logged raw or served unredacted.",
+    "RBAC: viewer read-only; no portal-grantable *:publish; cross-tenant denied before role (-> 404).",
+    "Read-only defaults intact; publish stays MCP-guardrailed even after approval:decide.",
+    "api/** import safety preserved.",
+    "Consent v2 suite 170/170."
+  ]
+}

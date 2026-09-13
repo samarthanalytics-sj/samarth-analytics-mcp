@@ -1,0 +1,39 @@
+{
+  "name": "samarth-chat-orchestrator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "GTM/GA4 AI chat orchestrator: bridges the AI Tag Manager web app to the Samarth GTM MCP server and OpenAI.",
+  "main": "dist/chat-orchestrator/src/index.js",
+  "scripts": {
+    "build": "tsc",
+    "check": "tsc --noEmit",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/chat-orchestrator/src/index.js",
+    "models": "node scripts/check-model.mjs",
+    "smoke": "node scripts/smoke.mjs",
+    "test": "tsx src/__tests__/tools.test.ts && tsx src/__tests__/prompts.test.ts && tsx src/__tests__/identity.test.ts && tsx src/__tests__/auth.test.ts && tsx src/__tests__/redact.test.ts && tsx src/__tests__/approvals.test.ts && tsx src/__tests__/resources.test.ts && tsx src/__tests__/writeTiers.test.ts && tsx src/__tests__/audit.test.ts && tsx src/__tests__/usage.test.ts && tsx src/__tests__/auditFix.test.ts && tsx --test src/__tests__/attachments.test.ts && tsx --test src/__tests__/integrations.test.ts && tsx --test src/__tests__/toolGroups.test.ts && tsx --test src/__tests__/deadline.test.ts && tsx --test src/__tests__/openaiErrors.test.ts && tsx --test src/__tests__/workspaceSnapshot.test.ts && tsx --test src/__tests__/promptToolNames.test.ts && tsx --test src/__tests__/logTime.test.ts && tsx --test src/__tests__/suggestions.test.ts && tsx --test src/__tests__/siteTools.test.ts && tsx --test src/__tests__/logs.test.ts && tsx --test src/__tests__/events.test.ts && tsx --test src/__tests__/lifecycle.test.ts && tsx --test src/__tests__/explain.test.ts",
+    "test:build": "npm run build && tsx src/__tests__/build.test.ts",
+    "supervise": "node scripts/supervise.mjs",
+    "restart": "node scripts/restart.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.4",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "exceljs": "^4.4.0",
+    "express": "^4.18.2",
+    "mammoth": "^1.12.1",
+    "pdf-parse": "^2.4.5"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.11.24",
+    "tsx": "^4.7.1",
+    "typescript": "^5.4.5"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

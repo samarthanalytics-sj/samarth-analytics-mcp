@@ -1,0 +1,72 @@
+# electron-builder packaging config. The app is built by electron-vite into
+# `out/`; electron-builder wraps that + the production node_modules (the
+# externalized google libs) into installers.
+#
+# Build on the TARGET OS: macOS .dmg must be built on a Mac; Windows .exe on
+# Windows. No native modules, so no rebuild is needed (npmRebuild: false).
+appId: com.samarthanalytics.desktop
+productName: Samarth Desktop
+copyright: Copyright © 2026 Samarth Analytics
+
+directories:
+  output: dist
+  buildResources: build
+
+# All-negative list: include everything (out/ + production node_modules) EXCEPT
+# source/config. electron-builder auto-prunes devDependencies from node_modules.
+files:
+  - '!src/**/*'
+  - '!build/**/*'
+  - '!electron.vite.config.{js,ts,mjs,cjs}'
+  - '!electron-builder.yml'
+  - '!tsconfig*.json'
+  - '!**/*.map'
+  - '!**/*.ts'
+
+asar: true
+npmRebuild: false
+
+mac:
+  target:
+    - target: dmg
+      arch:
+        - arm64
+        - x64
+  category: public.app-category.developer-tools
+  # Unsigned build. First launch shows a Gatekeeper warning — right-click → Open,
+  # or run: xattr -dr com.apple.quarantine "/Applications/Samarth Desktop.app".
+  #
+  # To SIGN + NOTARIZE for distribution (see docs/RELEASE.md):
+  #   1. Remove `identity: null` (or set it to your "Developer ID Application: …").
+  #   2. Set `hardenedRuntime: true` and `notarize: true` (below).
+  #   3. Export CSC_LINK / CSC_KEY_PASSWORD (the Developer ID cert) and
+  #      APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID in the build shell.
+  # notarize: true
+  identity: null
+  hardenedRuntime: false
+
+dmg:
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  # Unsigned by default → SmartScreen warning. To SIGN (see docs/RELEASE.md),
+  # export the cert via env vars (NEVER commit them) and rebuild:
+  #   CSC_LINK=path-or-base64-of.pfx  CSC_KEY_PASSWORD=…   npm run dist:win
+  # For cloud/HSM (Azure Trusted Signing, DigiCert KeyLocker) certs that can't be
+  # a .pfx, sign dist/*.exe as a post-build step with the provider's signtool.
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  artifactName: ${productName}-${version}-setup.${ext}
+
+linux:
+  target:
+    - AppImage
+  category: Development
+  artifactName: ${productName}-${version}.${ext}

@@ -1,0 +1,133 @@
+{
+  "name": "samarth-gtm-mcp",
+  "version": "1.494.0",
+  "description": "Production-ready MCP server for Google Tag Manager API v2 — Samarth Analytics",
+  "type": "module",
+  "bin": {
+    "samarth-gtm-mcp": "./dist/index.js",
+    "samarth-gtm-auth": "./dist/scripts/auth-google.js"
+  },
+  "main": "./dist/index.js",
+  "files": [
+    "dist",
+    "README.md",
+    ".env.example"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "build:watch": "tsc --watch",
+    "typecheck": "tsc --noEmit",
+    "start": "node dist/index.js",
+    "start:http": "GTM_MCP_TRANSPORT=http node dist/index.js",
+    "dev": "tsx --watch src/index.ts",
+    "dev:http": "GTM_MCP_TRANSPORT=http tsx src/index.ts",
+    "auth:google": "tsx src/scripts/auth-google.ts",
+    "oauth:setup": "tsx src/scripts/oauth-setup.ts",
+    "test": "node src/__tests__/guardrails.node.test.mjs && node src/__tests__/guardrailMode.node.test.mjs && node src/__tests__/serverInstructions.node.test.mjs && node src/__tests__/auth.node.test.mjs && node src/__tests__/tokenSource.node.test.mjs && node src/__tests__/oauthSetup.node.test.mjs && node src/__tests__/stytchTokenValidator.node.test.mjs && node src/__tests__/googleIdentityResolver.node.test.mjs && node src/__tests__/pagination.node.test.mjs && node src/__tests__/listPagination.node.test.mjs && node src/__tests__/exportCompleteness.node.test.mjs && node src/__tests__/ga4Admin.node.test.mjs && node src/__tests__/ga4AdminWrite.node.test.mjs && node src/__tests__/triggers.node.test.mjs && node src/__tests__/toolContracts.node.test.mjs && node src/__tests__/typedBuilders.node.test.mjs && node src/__tests__/audit.node.test.mjs && node src/__tests__/ga4Data.node.test.mjs && node src/__tests__/apiRetry.node.test.mjs && node src/__tests__/httpBinding.node.test.mjs && node src/__tests__/mcpSession.node.test.mjs && node src/__tests__/workspaces.node.test.mjs && node src/__tests__/folders.node.test.mjs && tsx src/__tests__/reference.test.ts && tsx src/__tests__/templateFields.test.ts && tsx src/__tests__/templateTagType.test.ts && tsx src/__tests__/tag-params.test.ts && tsx src/__tests__/prompts.test.ts && tsx src/__tests__/builtInVariables.test.ts && tsx src/__tests__/environments.test.ts && tsx src/__tests__/gtmBuilders.test.ts && tsx src/__tests__/publish.test.ts && tsx src/__tests__/writeDiagnostics.test.ts && node apps/portal/shared/__tests__/cache-keys.node.test.mjs && node apps/portal/shared/__tests__/cache.node.test.mjs && node apps/portal/shared/__tests__/jobs.node.test.mjs && node apps/portal/shared/__tests__/observability.node.test.mjs && node apps/portal/shared/__tests__/metrics.node.test.mjs && npm run test:consent && npm run test:audit && npm run test:snapshot && npm run test:rbac && npm run test:retention && npm run test:storage && npm run test:webaudit && npm run test:tagsuggest && npm run test:webreport && npm run test:verify",
+    "test:consent": "tsx apps/portal/shared/__tests__/consent-audit.node.test.ts",
+    "test:audit": "tsx apps/portal/shared/__tests__/audit-accuracy.node.test.ts",
+    "test:snapshot": "tsx apps/portal/shared/__tests__/audit-snapshot.node.test.ts",
+    "test:rbac": "tsx apps/portal/shared/__tests__/rbac.node.test.ts",
+    "test:retention": "tsx apps/portal/shared/__tests__/retention.node.test.ts",
+    "test:storage": "tsx apps/portal/shared/__tests__/storage.node.test.ts",
+    "test:webaudit": "tsx apps/web-audit-mcp/src/__tests__/web-audit.node.test.ts",
+    "test:tagsuggest": "tsx apps/web-audit-mcp/src/agent/__tests__/pending-embeds.node.test.ts && tsx apps/web-audit-mcp/src/agent/tag-suggest/__tests__/form-id-stability.node.test.ts && tsx apps/web-audit-mcp/src/agent/tag-suggest/__tests__/suggest.node.test.ts && tsx apps/web-audit-mcp/src/agent/tag-suggest/__tests__/trigger-strategy.node.test.ts && tsx apps/web-audit-mcp/src/agent/tag-suggest/__tests__/element-signals.node.test.ts && tsx apps/web-audit-mcp/src/agent/tag-suggest/__tests__/collect.node.test.ts && tsx apps/web-audit-mcp/src/agent/tag-suggest/__tests__/scan.node.test.ts && tsx apps/web-audit-mcp/src/agent/tag-suggest/__tests__/install-plan.node.test.ts && tsx apps/web-audit-mcp/src/agent/tag-suggest/__tests__/existing-tracking.node.test.ts",
+    "test:webreport": "tsx apps/portal/shared/__tests__/web-audit-report.node.test.ts",
+    "test:verify": "tsx apps/web-audit-mcp/src/verify/__tests__/ga4-hits.node.test.ts && tsx apps/web-audit-mcp/src/verify/__tests__/consent-signals.node.test.ts && tsx apps/web-audit-mcp/src/verify/__tests__/spec-schema.node.test.ts && tsx apps/web-audit-mcp/src/verify/__tests__/assert-engine.node.test.ts && tsx apps/web-audit-mcp/src/verify/__tests__/report.node.test.ts && tsx apps/web-audit-mcp/src/verify/__tests__/determinism.node.test.ts",
+    "webaudit:check": "tsc --noEmit -p apps/web-audit-mcp",
+    "webaudit:build": "tsc -p apps/web-audit-mcp",
+    "test:jest": "node --experimental-vm-modules node_modules/.bin/jest",
+    "test:watch": "jest --watch",
+    "smoke": "node scripts/smoke-test.mjs",
+    "smoke:all": "node scripts/smoke-all-tools.mjs",
+    "inspector": "npx @modelcontextprotocol/inspector dist/index.js",
+    "portal:install": "npm --prefix apps/portal install",
+    "portal:dev": "npm --prefix apps/portal run dev",
+    "portal:build": "npm --prefix apps/portal run build",
+    "portal:check": "npm --prefix apps/portal run check",
+    "portal:start": "npm --prefix apps/portal start",
+    "chat:install": "npm --prefix apps/chat-orchestrator install",
+    "chat:dev": "npm --prefix apps/chat-orchestrator run dev",
+    "chat:build": "npm --prefix apps/chat-orchestrator run build",
+    "chat:check": "npm --prefix apps/chat-orchestrator run check",
+    "chat:models": "npm --prefix apps/chat-orchestrator run models",
+    "chat:smoke": "npm --prefix apps/chat-orchestrator run smoke",
+    "test:chat": "npm --prefix apps/chat-orchestrator test",
+    "desktop:install": "npm --prefix apps/desktop install",
+    "desktop:dev": "npm --prefix apps/desktop run dev",
+    "desktop:build": "npm --prefix apps/desktop run build",
+    "desktop:check": "npm --prefix apps/desktop run typecheck",
+    "desktop:test": "npm --prefix apps/desktop test",
+    "desktop:smoke": "npm --prefix apps/desktop run smoke",
+    "prepublishOnly": "npm run build",
+    "semantic-release": "semantic-release"
+  },
+  "keywords": [
+    "mcp",
+    "google-tag-manager",
+    "gtm",
+    "model-context-protocol",
+    "analytics",
+    "tag-management"
+  ],
+  "author": "Samarth Analytics",
+  "license": "MIT",
+  "mcpName": "io.github.samarthanalytics-sj/samarth-gtm-mcp",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/samarthanalytics-sj/samarth-analytics-mcp.git"
+  },
+  "homepage": "https://github.com/samarthanalytics-sj/samarth-analytics-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.4",
+    "express": "^4.18.2",
+    "google-auth-library": "^9.14.0",
+    "googleapis": "^140.0.0",
+    "zod": "^3.23.8",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.11.24",
+    "jest": "^29.7.0",
+    "@jest/globals": "^29.7.0",
+    "ts-jest": "^29.1.5",
+    "tsx": "^4.7.1",
+    "typescript": "^5.4.5",
+    "semantic-release": "^25.0.9",
+    "@semantic-release/changelog": "^6.0.3",
+    "@semantic-release/commit-analyzer": "^13.0.0",
+    "@semantic-release/git": "^10.0.1",
+    "@semantic-release/github": "^11.0.0",
+    "@semantic-release/npm": "^13.1.5",
+    "@semantic-release/release-notes-generator": "^14.0.1",
+    "conventional-changelog-conventionalcommits": "^8.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "jest": {
+    "preset": "ts-jest/presets/default-esm",
+    "extensionsToTreatAsEsm": [
+      ".ts"
+    ],
+    "moduleNameMapper": {
+      "^(\\.{1,2}/.*)\\.js$": "$1"
+    },
+    "transform": {
+      "^.+\\.tsx?$": [
+        "ts-jest",
+        {
+          "useESM": true
+        }
+      ]
+    }
+  }
+}

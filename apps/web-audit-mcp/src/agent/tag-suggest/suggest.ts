@@ -1,0 +1,2055 @@
+// The suggestion mapper: detected forms + elements → SuggestedTag[]. PURE +
+// unit-tested. Encodes the "what GTM tag should exist for this?" rules, including
+// the key nuance that GA4 Enhanced Measurement already auto-tracks some of these
+// (outbound clicks, file downloads) — those are FLAGGED, not blindly pushed, so
+// we don't suggest redundant tags. Output is directly creatable via the existing
+// create_gtm_tracking_tag tool.
+
+import type { DetectedForm, DetectedElement, SuggestInput, SuggestedTag, SuggestPlatform, FormProvider, VideoEmbed, TriggerKind, CtaIntent } from './types.js';
+import { formIdScope, ephemeralFormIdNote, stableFormKey, looksEphemeralFormId } from './form-id-stability.js';
+import { groupFormIdentity, type ProviderFormIdentity, type FormIdCondition } from './provider-form-id.js';
+import { CTA_BY_INTENT, classifyCtaIntent } from './cta-intents.js';
+import { buildSocialUrlPattern } from './social.js';
+import { buildFormInstallPlan, buildTriggerInstallPlan, type FormMechanism, type InstallRequirement } from './install-plan.js';
+import { chooseClickConditions } from './trigger-strategy.js';
+
+const GA4_VAR = '{{GA4 Measurement ID}}';
+// Event-parameter VALUES are GTM built-in variables, so the tag captures the
+// actual clicked link / submitted form at runtime (not a value baked in at scan
+// time). The create flow enables whichever of these the parameters reference.
+const CLICK_URL = '{{Click URL}}';
+const CLICK_TEXT = '{{Click Text}}';
+const FORM_ID = '{{Form ID}}';
+// Page context on every suggested event. GA4 already auto-collects page_location + page_title, so we
+// send the full page URL and the referrer ("previous page") for convenient reporting.
+const PAGE_PARAMS = [
+  { name: 'page_url', value: '{{Page URL}}' },
+  { name: 'previous_page', value: '{{Referrer}}' },
+];
+/** Standard GA4 click params — what was clicked, its text, and page context.
+ *  (click_url / click_text are the corpus-dominant names — 1090/1117 vs the GA4
+ *  defaults link_url/link_text at 796/855.) */
+const CLICK_PARAMS = [
+  { name: 'click_text', value: CLICK_TEXT },
+  { name: 'click_url', value: CLICK_URL },
+  ...PAGE_PARAMS,
+];
+// Standard GA4 video params, valued by GTM's "Video" built-in variables (the
+// YouTube Video trigger surfaces them). Corpus-dominant names + refs (video_title/
+// _url/_provider/_percent/_duration/_current_time = {{Video …}}). The create flow
+// auto-enables the built-ins the trigger declares.
+const VIDEO_PARAMS = [
+  { name: 'video_title', value: '{{Video Title}}' },
+  { name: 'video_url', value: '{{Video URL}}' },
+  { name: 'video_provider', value: '{{Video Provider}}' },
+  { name: 'video_percent', value: '{{Video Percent}}' },
+  { name: 'video_duration', value: '{{Video Duration}}' },
+  { name: 'video_current_time', value: '{{Video Current Time}}' },
+  ...PAGE_PARAMS,
+];
+// One event whose name resolves at runtime to GA4's recommended video_start /
+// video_progress / video_complete via the {{Video Status}} built-in (start /
+// progress / complete) — corpus-idiomatic (video_{{…status}} appears 60+×).
+const YT_VIDEO_EVENT = 'video_{{Video Status}}';
+// Single source of truth for "what's a downloadable file" — the collector's
+// detection regex and this GTM trigger filter are both built from it, so a
+// detected download always matches the tag we suggest for it.
+export const DOWNLOAD_EXT = 'pdf|zip|docx?|xlsx?|pptx?|csv|dmg|exe|rar|7z|mp4|mp3|pkg|apk';
+/** A download URL's file extension (lower-case, no dot), ignoring any ?query / #fragment — used to
+ *  name the tag ("PDF Download") and build a readable "{{Click URL}} contains .<ext>" trigger.
+ *  null when there's no clear extension → the trigger falls back to the multi-extension regex. */
+const fileExt = (href?: string): string | null => {
+  const path = (href ?? '').split(/[?#]/)[0];
+  const m = /\.([a-z0-9]{1,5})$/i.exec(path);
+  return m ? m[1].toLowerCase() : null;
+};
+const cap = (s: string): string => (s ? s[0].toUpperCase() + s.slice(1) : s);
+
+// GTM rejects some characters in resource names (notably ":"), which fails tag
+// creation ("name contains invalid character"). Strip them so a name built from
+// scraped page text (a CTA label) is always creatable. Mirrors gtm-builders
+// sanitizeName (defence-in-depth at the create boundary).
+const clean = (s: string): string => s.replace(/[<>:]/g, ' ').replace(/\s{2,}/g, ' ').trim();
+// Title-case a label for tag/trigger names, preserving acronyms (PDF/CTA/FAQ/GA4…) and known
+// mixed-case brands (YouTube/LinkedIn/WhatsApp). e.g. "talk to our experts" → "Talk To Our Experts".
+const TITLE_ACRONYMS = new Set(['ga4', 'cta', 'faq', 'pdf', 'aov', 'roas', 'ai', 'seo', 'sms', 'url', 'api', 'b2b', 'b2c', 'crm', 'ppc', 'roi']);
+const TITLE_MIXED: Record<string, string> = { youtube: 'YouTube', linkedin: 'LinkedIn', whatsapp: 'WhatsApp', github: 'GitHub', tiktok: 'TikTok', paypal: 'PayPal' };
+const titleCase = (s: string): string =>
+  clean(s)
+    .split(/\s+/)
+    .map((w) => {
+      const lw = w.toLowerCase();
+      if (TITLE_ACRONYMS.has(lw)) return w.toUpperCase();
+      if (TITLE_MIXED[lw]) return TITLE_MIXED[lw];
+      if (/^[A-Z0-9][A-Z0-9]+$/.test(w)) return w; // already an acronym (PDF, ZIP)
+      if (/[a-z]/.test(w) && /[A-Z]/.test(w.slice(1))) return w; // keep intercaps (iOS, eBook, iPhone, macOS, SaaS)
+      return w ? w[0].toUpperCase() + w.slice(1).toLowerCase() : w;
+    })
+    .join(' ');
+
+// Naming convention: tags read "GA4 - Event - <Event Name in Title Case>[ Click| Form] Tag"; triggers
+// read "<Event Name>[ Click| Form] Trigger". The Click/Form word reflects the trigger KIND (a click vs
+// a form submit) and is omitted for other kinds (video/pageview/custom event); it is never doubled up
+// when the label already ends in it (e.g. "Newsletter Form", "Email Click"). tagNameOf + trigNameOf
+// share this so a tag and its trigger always carry the SAME kind word.
+const kindWord = (d: string, kind: TriggerKind): string => {
+  // Skip the "Form" suffix when the label already CONTAINS a form-word — either at the end ("Newsletter
+  // Form") or before a trailing qualifier/index ("Contact Form 2", the Fix-A disambiguator) — so it is
+  // never doubled into "Contact Form 2 Form".
+  if (kind === 'form_submit') return /\bform(s)?\b/i.test(d) || /submission/i.test(d) ? d : `${d} Form`;
+  if (kind === 'link_click' || kind === 'all_clicks') return /\bclick$/i.test(d) ? d : `${d} Click`;
+  return d; // youtube_video / pageview / custom_event — neither click nor form
+};
+export const tagNameOf = (label: string, kind: TriggerKind): string => clean(`GA4 - Event - ${kindWord(titleCase(label), kind)} Tag`);
+export const trigNameOf = (label: string, kind: TriggerKind): string => clean(`${kindWord(titleCase(label), kind)} Trigger`);
+
+// Human-readable label for a GA4 event name, used in tag names (elements only —
+// forms use FORM_LABEL, CTAs use their intent label).
+const EVENT_LABEL: Record<string, string> = {
+  email_click: 'Email Click',
+  phone_click: 'Phone Click',
+  file_download: 'File Download',
+  outbound_click: 'Outbound Click',
+  social_click: 'Social Media Click',
+  cta_click: 'CTA Click',
+};
+const eventLabel = (e: string): string => EVENT_LABEL[e] ?? e.split('_').map(cap).join(' ');
+
+/** A GA4-valid event name derived from a tag label so the event MATCHES the tag name (a per-item tag
+ *  gets its own event, not a shared generic one). Lowercased snake_case (letters/digits/underscore),
+ *  MUST start with a letter, capped at GA4's 40-char event-name limit (trimmed at a word boundary).
+ *  An optional kind suffix (e.g. "click") is appended unless the label already ends with it. */
+export function eventFromLabel(label: string, suffix = ''): string {
+  let base = label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  if (suffix && !base.endsWith(suffix)) base = base ? `${base}_${suffix}` : suffix;
+  base = base.replace(/^[^a-z]+/, ''); // GA4 event names must start with a letter
+  // GA4 SILENTLY DROPS events whose name starts with a reserved prefix (ga_, google_, firebase_) —
+  // strip the offending leading segment(s), then re-ensure a letter start.
+  while (/^(ga|google|firebase)_/.test(base)) base = base.replace(/^(ga|google|firebase)_/, '');
+  base = base.replace(/^[^a-z]+/, '');
+  if (!base) base = suffix || 'event';
+  if (base.length > 40) base = base.slice(0, 40).replace(/_[^_]*$/, '') || base.slice(0, 40);
+  return base;
+}
+
+// Form purpose → human tag/trigger label ("Contact Form", "Newsletter Form").
+const FORM_LABEL: Record<string, string> = {
+  contact: 'Contact Form',
+  signup: 'Signup Form',
+  newsletter: 'Newsletter Form',
+  login: 'Login Form',
+  search: 'Search Form',
+};
+
+// djb2 → base36; stable, no crypto dependency.
+function hashId(s: string): string {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36);
+}
+
+// Form purpose → GA4 event. Descriptive, form-specific event names.
+const FORM_EVENT: Record<string, string> = {
+  contact: 'contact_form',
+  signup: 'signup_form',
+  newsletter: 'newsletter_form',
+  login: 'login', // GA4 recommended event (a login-form submit)
+  search: 'search', // GA4 recommended event (a search-form submit)
+};
+
+// Providers whose form submits inside an iframe / via AJAX — GTM's NATIVE Form
+// Submission trigger won't fire for these; they need a Custom Event listener.
+const EMBED_PROVIDERS = new Set<FormProvider>([
+  'hubspot', 'paperform', 'typeform', 'marketo', 'pardot',
+  'calendly', 'jotform', 'formstack', 'tally', 'googleforms', 'wufoo',
+]);
+// On-page WordPress form plugins that submit via AJAX (they preventDefault the native submit). Like the
+// embed providers, GTM's NATIVE Form Submission trigger usually won't fire for these — the reliable
+// route (per the AnalyticsMania recipes) is a Custom HTML listener on the plugin's own JS/DOM event
+// that dataLayer.pushes a Custom Event the tag fires on. Unlike embeds these are real on-page <form>s
+// (we still see the Form ID), so the note also offers the Form-ID fallback for non-AJAX configs.
+const AJAX_FORM_PROVIDERS = new Set<FormProvider>([
+  'contactform7', 'gravityforms', 'ninjaforms', 'wpforms', 'elementor',
+]);
+const PROVIDER_EVENT_HINT: Partial<Record<FormProvider, string>> = {
+  hubspot: 'HubSpot fires a global submit callback (hsFormCallback / window message)',
+  paperform: 'Paperform posts a window message on submit',
+  typeform: 'Typeform posts a window message on submit',
+  marketo: 'Marketo fires MktoForms2().onSuccess',
+  pardot: 'Pardot redirects to a thank-you/completion URL on submit',
+  calendly: 'Calendly posts a window message on booking (event_scheduled)',
+  jotform: 'JotForm posts a window message on submit',
+  formstack: 'Formstack submits inside its embed (window message / redirect)',
+  tally: 'Tally posts a window message on submit',
+  googleforms: 'Google Forms submits inside a cross-origin iframe — track the click into the form, or use server-side',
+  wufoo: 'Wufoo submits inside its embed (confirmation redirect)',
+  // WordPress AJAX plugins — the DOM/jQuery event each fires on a successful submit.
+  contactform7: 'Contact Form 7 fires the wpcf7mailsent DOM event on a successful submit — listen for it',
+  gravityforms: 'Gravity Forms fires the gform_confirmation_loaded jQuery event on AJAX (non-redirect) forms — listen for it (needs jQuery)',
+  ninjaforms: 'Ninja Forms fires the nfFormSubmitResponse jQuery event on submit — listen for it',
+  wpforms: 'WPForms (AJAX) shows a .wpforms-confirmation-container success message — use Element Visibility on it, or emit a custom event from a listener',
+  elementor: 'Elementor Pro fires the submit_success jQuery event on submit — listen for it',
+};
+// The dataLayer EVENT the suggested Custom Event trigger fires on, per provider — from the corpus of
+// real form triggers ("hubspot-form-success" 15×; the generic "form_submit" 213× is the default) and
+// the AnalyticsMania form recipes (cf7submission etc.). The push itself comes from the listener
+// described in PROVIDER_EVENT_HINT.
+const PROVIDER_DL_EVENT: Partial<Record<FormProvider, string>> = {
+  hubspot: 'hubspot-form-success',
+  contactform7: 'cf7submission',
+  gravityforms: 'gravityFormSubmission',
+  ninjaforms: 'ninjaFormSubmission',
+  wpforms: 'wpformsSubmission',
+  elementor: 'elementorFormSubmission',
+};
+
+// Framework/wrapper classes shared by EVERY form of a stack — useless (harmful)
+// for scoping a trigger to ONE form. Never used as a {{Form Classes}} filter.
+const GENERIC_FORM_CLASS = /^(form|form-(wrapper|container|inner|inline|horizontal|vertical|group|control|row|inputs?|fields?|signin|signup|stacked)|wpforms-(form|container|validate)|wpcf7(-form)?|gform_wrapper|hs-form|hbspt-form|mc4wp-form|mc-field-group|needs-validation|was-validated|elementor-form|nf-form|frm-show-form|et_pb_contact_form)$/i;
+
+/** A class that reliably scopes to ONE form — i.e. a form-ish class carrying a
+ *  numeric instance id (gform_1, mktoForm_521, form-42). Bare/wrapper classes are
+ *  rejected (they're shared across all forms of a stack → would over-fire).
+ *  Returns null if none → the caller warns "fires on every form". */
+function pickFormClass(classes?: string): string | null {
+  if (!classes) return null;
+  for (const c of classes.split(/\s+/).filter(Boolean)) {
+    if (GENERIC_FORM_CLASS.test(c)) continue;
+    if (/form/i.test(c) && /\d/.test(c) && c.length >= 5) return c;
+  }
+  return null;
+}
+
+/** Stable per-form signature (purpose + field shape + action). Two forms with the SAME id but
+ *  different signatures are DIFFERENT forms sharing a non-unique id, so that id can't scope a
+ *  trigger. NEVER includes entered values.
+ *
+ *  Routed through stableFormKey because embedded providers put a PER-RENDER token inside a field
+ *  NAME (HubSpot emits `<instanceGuid>-<epochMs>-input`). Without that normalization, one form read
+ *  twice produced two signatures, which both split its page group and poisoned nonUniqueIds by
+ *  making one form look like two forms sharing an id. */
+function formSignature(f: DetectedForm): string {
+  const fields = (f.fields ?? [])
+    .map((x) => `${x.type}:${x.name}`)
+    .sort()
+    .join(',');
+  return stableFormKey(`${f.purpose}|${fields}|${f.action}`);
+}
+
+interface FormScopeCtx {
+  nonUniqueIds: Set<string>;
+  nonUniqueClasses: Set<string>;
+  /** signature → the single page it lives on (for page-scoping a form with no usable id/class), or
+   *  null when the same form appears on >1 page (site-wide → leave unscoped, the catch-all covers it). */
+  pageBySignature: Map<string, string | null>;
+  /** signature → EVERY page the form was seen on (drives the per-page form_name Lookup Table for a
+   *  multi-page form: ONE tag whose form_name reflects which page it fired on). */
+  pagesBySignature: Map<string, Set<string>>;
+  /** lowercased display label → EVERY page the SAME-named form was seen on. Groups multi-page
+   *  instances of one form into ONE tag (a {{Page Path}} form_name lookup + an all-pages trigger)
+   *  even when their signatures differ (e.g. a per-page form action). Case-insensitive. */
+  pagesByLabel: Map<string, Set<string>>;
+  /** lowercased label → the canonical (first-seen) display label, so case variants share one tag. */
+  canonicalLabel: Map<string, string>;
+  /** lowercased label → the DISTINCT unique {{Form ID}}s to scope by (one tag firing on ^(id1|id2)$),
+   *  but ONLY when EVERY instance of the group has a unique id (else null → scope by the page RegEx). */
+  formIdsByLabel: Map<string, string[] | null>;
+  /** lowercased label → the {{Form Classes}} value, same group-uniform rule as formIdByLabel. */
+  formClassByLabel: Map<string, string | null>;
+  /** lowercased label → EVERY distinct id the group's instances carried, whether or not the group
+   *  could be scoped by them. Lets the ephemeral-id explanation be produced even when the id ladder
+   *  collapsed, so an id is never dropped in silence. */
+  allFormIdsByLabel: Map<string, string[]>;
+  /** lowercased label → true when at least one instance of the group carried NO id (the "mixed
+   *  group" case that forces the whole group off {{Form ID}} scoping). */
+  idGapByLabel: Map<string, boolean>;
+  /** lowercased label → the providerFormId shared by every instance that exposes one, else null.
+   *  A single durable provider id is what rescues a group whose DOM ids are minted per render. */
+  providerFormIdByLabel: Map<string, string | null>;
+  /** lowercased label → the VENDOR's durable identity agreed by every instance of the group (or a
+   *  unanimous "this vendor exposes nothing durable", which carries the reason). */
+  durableIdByLabel: Map<string, ProviderFormIdentity | null>;
+  /** lowercased label → true when that identity's {{Form ID}} condition is one GTM could really
+   *  match on EVERY instance of the group, so it is safe to ship on a native Form Submission
+   *  trigger. False when the vendor id lives somewhere other than the <form> element's own id. */
+  durableFormIdOkByLabel: Map<string, boolean>;
+  /** For UNTITLED forms only: `${purpose}|${fieldSig}` → a 1-based, first-seen index disambiguating
+   *  STRUCTURALLY-DIFFERENT untitled forms that share a purpose (so two field-different "contact" forms
+   *  on a page become "Contact Form" + "Contact Form 2" instead of collapsing to one). The SAME form
+   *  across pages shares one signature → one index → still collapses site-wide. Index 1 is the common
+   *  single-form case and gets NO suffix (behaves exactly as before). */
+  untitledFormIndex: Map<string, number>;
+}
+
+/** Stable field signature of a form STRUCTURE (never values): the sorted list of each field's name (or,
+ *  when unnamed, its type), lowercased. Identical for the same form across pages; different for
+ *  structurally-different forms. Drives the untitled same-purpose disambiguator. */
+function fieldSignature(f: DetectedForm): string {
+  return (f.fields ?? [])
+    .map((x) => (x.name || x.type || '').toLowerCase())
+    .sort()
+    .join(',');
+}
+
+/** True when a form has no usable heading/title (empty or whitespace) — the only forms the untitled
+ *  disambiguator applies to. */
+function isUntitledForm(f: DetectedForm): boolean {
+  return !(f.title ?? '').replace(/\s+/g, ' ').trim();
+}
+
+/** Title-Case the last meaningful segment of a page path into a form title (Fix C): '/get-a-quote' →
+ *  'Get A Quote'. Returns '' for the home page or a path with no usable segment, so a signal-less
+ *  untitled "other" form on '/' still yields no tag. PURE. */
+function pagePathTitle(page: string): string {
+  const seg = (page || '')
+    .split('/')
+    .filter(Boolean)
+    .pop();
+  if (!seg) return '';
+  return seg
+    .replace(/[-_]+/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w))
+    .join(' ');
+}
+
+/** The EFFECTIVE title a form is named/scoped by — the single source of truth shared by the pre-pass
+ *  (grouping) and formSuggestion (emission) so they never diverge:
+ *   - a real heading/title is used verbatim;
+ *   - an UNTITLED same-purpose form whose disambiguator index is >1 gets a synthesized
+ *     `${FORM_LABEL[purpose]} ${index}` title ("Contact Form 2") so it runs the titled path (distinct
+ *     label + event + tagName), while index 1 keeps NO title (the common single-form case, unchanged);
+ *   - an untitled "other" form with no heading falls back to a page-path-derived title (Fix C), but only
+ *     on a NAMED page and only when it has >=2 fields — else '' (still dropped).
+ *  Returns '' when there is no usable title. */
+function effectiveTitle(f: DetectedForm, ctx: Pick<FormScopeCtx, 'untitledFormIndex'>): string {
+  const titleText = (f.title ?? '').replace(/\s+/g, ' ').trim();
+  if (titleText) return titleText;
+  if (isUntitledForm(f) && f.purpose !== 'other') {
+    const idx = ctx.untitledFormIndex.get(`${f.purpose}|${fieldSignature(f)}`);
+    if (idx && idx > 1) return `${FORM_LABEL[f.purpose] ?? 'Form'} ${idx}`;
+  }
+  // Fix C: an untitled "other" form on a NAMED page with >=2 fields → a page-path-derived title.
+  if (f.purpose === 'other' && (f.fields?.length ?? 0) >= 2) {
+    return pagePathTitle(f.page);
+  }
+  return '';
+}
+
+/** The tag-identifying display label for a form — drives its tagName + event, and is the SAME across
+ *  every page the same form appears on (so it groups multi-page instances into one tag). Returns '' for
+ *  an untitled "other" form with no derivable title, which yields no tag. Mirrors the logic in
+ *  formSuggestion (both go through effectiveTitle). */
+function formDisplayLabel(f: DetectedForm, ctx: Pick<FormScopeCtx, 'untitledFormIndex'>): string {
+  if (f.purpose === 'search' || f.purpose === 'checkout') return '';
+  const titleText = effectiveTitle(f, ctx);
+  if (f.purpose === 'other' && !titleText) return '';
+  return titleText ? (/\bforms?\b/i.test(titleText) ? titleText : `${titleText} Form`) : (FORM_LABEL[f.purpose] ?? 'Form Submission');
+}
+
+const escRe = (t: string): string => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** Would GTM's {{Form ID}} (the <form> element's own id, exactly as scanned) satisfy this condition? */
+function formIdSatisfies(scannedId: string | undefined, c: FormIdCondition): boolean {
+  const id = String(scannedId ?? '');
+  if (!id) return false; // no id on the element → {{Form ID}} resolves to '' and matches nothing
+  return c.operator === 'equals' ? id === c.value : id.includes(c.value);
+}
+
+/**
+ * Would a NATIVE Form Submission trigger built on this vendor identity actually match every scanned
+ * instance of the group?
+ *
+ * A vendor rule reads its id from the whole scanned haystack (the DOM id, the provider attribute,
+ * the classes, the action), but GTM's {{Form ID}} only ever reads the <form> element's own id. A
+ * rule that resolves its number from a wrapper class or a container id (Unbounce names the wrapper
+ * lp-pom-form-<n> while the inner <form> is named generically), or a group instance rendered with no
+ * id at all, therefore yields a condition GTM accepts and never matches.
+ *
+ * Judged over the WHOLE group, never per instance: letting some instances keep the id scope while
+ * others fall through would emit two same-named tags for one form, which collides at create.
+ *
+ * Only consulted on the native route. On the pushed-event route the condition is deleted before it
+ * ships, so there the identity still marks "the vendor pinned this form" and keeps the trigger off a
+ * page-path scope it does not need.
+ */
+function durableFormIdMatchesGroup(dur: ProviderFormIdentity | null, group: DetectedForm[]): boolean {
+  const c = dur?.formIdCondition;
+  if (!c) return false;
+  return group.every((f) => formIdSatisfies(f.formId, c));
+}
+
+function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null {
+  // Skip: search/login submits aren't conversions; checkout is ECOMMERCE — it
+  // needs the dataLayer (begin_checkout/purchase), not a form-submit tag, so it's
+  // deferred to the v3 ecommerce phase rather than mis-suggested here.
+  // checkout is ECOMMERCE — needs the dataLayer (begin_checkout/purchase), so it's
+  // deferred to the v3 ecommerce phase rather than a form-submit tag. Search/login
+  // forms ARE tracked now (→ GA4 search / login events).
+  if (f.purpose === 'checkout') return null;
+  // A SEARCH bar is almost always ONE site-wide component (usually the header). Track it once as GA4
+  // site search (view_search_results + search_term), NOT a per-page form-submit: a Form Submission
+  // trigger with no id/class cannot isolate the search box (it fires on any form). Every per-page
+  // search instance collapses to this one unscoped, site-wide suggestion via dedup. GA4 Enhanced
+  // Measurement already auto-tracks site search, so it is FLAGGED (not auto-selected).
+  if (f.purpose === 'search') {
+    // The RIGHT trigger depends on HOW search runs (collected during the crawl): a GET form reloads to
+    // a results URL carrying ?<key>=… → a Page View on {{Page URL}}; a JS/AJAX form does NOT reload →
+    // a "site_search" dataLayer Custom Event; a POST form → native Form Submission. Every per-page
+    // instance of the (site-wide) bar collapses to ONE tag via dedup. view_search_results is GA4's
+    // site-search event, which Enhanced Measurement may already track, so it is FLAGGED (not auto-selected).
+    const queryKey = (f.fields ?? []).map((x) => x.name || '').find((n) => /^(q|s|query|search|keyword|term)$/i.test(n)) || 'q';
+    const method = (f.method || 'get').toLowerCase();
+    let trigger: SuggestedTag['trigger'];
+    let note: string;
+    // Name is method-specific so a site with MIXED search mechanisms (e.g. a GET header search AND an
+    // AJAX widget) yields DISTINCT tags/triggers/ids instead of colliding (GTM rejects duplicate names).
+    let searchLabel: string;
+    // Only the GET case carries a resolvable search_term (a URL Query variable auto-created on create);
+    // js/post keep the note-guided setup (term is in the dataLayer / POST body, no URL to read).
+    let searchParams: Array<{ name: string; value: string }> = [...PAGE_PARAMS];
+    if (method === 'js') {
+      searchLabel = 'Site Search AJAX';
+      trigger = { name: trigNameOf(searchLabel, 'custom_event'), kind: 'custom_event', eventName: 'site_search' };
+      note = `AJAX/SPA search (no page reload). This fires on a "site_search" Custom Event — have the site push dataLayer.push({event:"site_search", search_term:"<term>"}) on each search, then add a search_term parameter from a Data Layer Variable reading "search_term". GA4 Enhanced Measurement may already track site search.`;
+    } else if (method === 'post') {
+      searchLabel = 'Site Search Form';
+      trigger = { name: trigNameOf(searchLabel, 'custom_event'), kind: 'form_submit' };
+      note = `POST search form. It fires on Form Submission, but that cannot isolate the search box (it fires on any form) and the term is in the POST body, not the URL. Prefer firing view_search_results on the results URL (a Page View where {{Page URL}} contains "?${queryKey}="), or add search_term from a Custom JavaScript / Data Layer Variable reading the "${queryKey}" field. GA4 Enhanced Measurement may already track site search.`;
+    } else {
+      searchLabel = 'Site Search';
+      trigger = { name: trigNameOf(searchLabel, 'pageview'), kind: 'pageview', pageUrlValue: `?${queryKey}=`, pageUrlOperator: 'contains' };
+      searchParams = [{ name: 'search_term', value: `{{URL - ${queryKey}}}` }, ...PAGE_PARAMS];
+      note = `GET search bar: submitting reloads to a results URL carrying "?${queryKey}=<term>", so this fires on a Page View where {{Page URL}} contains "?${queryKey}=". search_term is read by {{URL - ${queryKey}}} — a URL Query variable on the "${queryKey}" key that is created automatically when this tag is created. GA4 Enhanced Measurement may already track site search.`;
+    }
+    return {
+      // id keyed by trigger kind so mixed-method search variants stay distinct (and same-method
+      // instances across pages still collapse to one via dedup).
+      id: hashId(`form|site-search|${trigger.kind}`),
+      page: f.page,
+      label: 'Site search → GA4 "view_search_results"',
+      evidence: `search bar; method=${method}; query key="${queryKey}"; provider=${f.provider.vendor}`,
+      note,
+      confidence: 'medium',
+      enhancedMeasurementOverlap: true,
+      platform: 'ga4_event',
+      tagName: tagNameOf(searchLabel, 'custom_event'),
+      measurementId: GA4_VAR,
+      eventName: 'view_search_results',
+      // GET ships search_term = {{URL - <key>}} (the create flow auto-provisions that URL Query
+      // variable); js/post keep only resolvable built-ins and guide search_term in the note.
+      eventParameters: searchParams,
+      trigger,
+    };
+  }
+  const formLabel = FORM_LABEL[f.purpose] ?? 'Form Submission';
+  const prov = f.provider.vendor !== 'unknown' ? ` (${f.provider.vendor})` : '';
+
+  // Name the tag for the form's actual heading when we captured one — e.g.
+  // "Get a Free Consultation" → "Get a Free Consultation Form Tag" — falling back
+  // to the purpose label. (Don't double up "Form" if the title already says it.)
+  // effectiveTitle also supplies the SYNTHESIZED title for a disambiguated untitled same-purpose form
+  // ("Contact Form 2" — Fix A) and the page-path-derived title for an untitled "other" form on a named
+  // page (Fix C); both then run this SAME titled path (distinct label + event + tagName).
+  const titleText = effectiveTitle(f, ctx);
+  // An unrecognized form with no heading AND no page-path signal has no meaningful event or scope — do
+  // NOT emit a generic "Form Submission" tag (that catch-all was removed by design). A TITLED "other"
+  // form (real heading or page-path-derived) still gets its title-derived tag.
+  if (f.purpose === 'other' && !titleText) return null;
+  const rawLabel = titleText ? (/\bforms?\b/i.test(titleText) ? titleText : `${titleText} Form`) : formLabel;
+  // Use the GROUP's canonical (first-seen) casing so case variants of the same form share ONE tag.
+  const labelKey = rawLabel.toLowerCase();
+  const displayLabel = ctx.canonicalLabel.get(labelKey) ?? rawLabel;
+  // A TITLED form gets a distinct event from its title so the event matches the tag name (e.g.
+  // "Download Form" → download_form) instead of a shared purpose event; an untitled form keeps its
+  // purpose event (contact_form / login / …, which is already GA4-appropriate and stays recommended).
+  const eventName = titleText ? eventFromLabel(displayLabel) : (FORM_EVENT[f.purpose] ?? 'form_submission');
+
+  // EVERY page this same-named form was found on (its tag-identity group). >=2 means the SAME form
+  // spans multiple pages, so it becomes ONE tag firing on all of them (not N page-scoped duplicates).
+  const labelPages = [...(ctx.pagesByLabel.get(labelKey) ?? new Set([f.page]))].filter(Boolean).sort();
+  const multiPage = labelPages.length >= 2 && labelPages.length <= 50;
+
+  // Scope the trigger to THIS form. GROUP-LEVEL id/class (every instance of the same-named form shares
+  // the SAME unique one) is preferred; a MIXED group (id on some pages, not others) must NOT scope by
+  // that id — it would split the group into an id-tag + a page-regex tag with the SAME name (a
+  // duplicate-name collision at create) — so it falls through to the page RegEx (one tag for the group).
+  const trigger: SuggestedTag['trigger'] = { name: trigNameOf(displayLabel, 'form_submit'), kind: 'form_submit' };
+  // HOW this form submits is decided BEFORE the scope ladder, because it decides whether a
+  // {{Form ID}} condition can reach the trigger at all: on the pushed-event route below every
+  // {{Form ID}}/{{Form Classes}} condition is deleted (those built-ins do not resolve on a dataLayer
+  // push), so there the ladder's id rung is only a marker for "the vendor pinned this form", while
+  // on the native route the same condition really ships and must be provably matchable.
+  // Pardot's form-HANDLER mode is a native <form> POST the native trigger handles
+  // (only its iframe-embed mode, method 'js' or no native form, needs a listener).
+  const isEmbed =
+    EMBED_PROVIDERS.has(f.provider.vendor) &&
+    !(f.provider.vendor === 'pardot' && (f.method === 'post' || f.method === 'get'));
+  // On-page WordPress AJAX plugin (CF7 / Gravity / Ninja / WPForms / Elementor): the native trigger
+  // usually won't fire either, so it takes the same Custom Event route (but keeps the Form-ID fallback).
+  const isAjaxPlugin = AJAX_FORM_PROVIDERS.has(f.provider.vendor);
+  // AJAX/embed + JS/div forms: the native Form Submission trigger usually never fires there, and the
+  // corpus' dominant ("Best"-rated) route is a CUSTOM EVENT trigger, so suggest THAT trigger, fired
+  // by the provider listener / submit-handler push described in the note. The {{Form ID}}/{{Form
+  // Classes}} built-ins do NOT resolve on a pushed event, so drop them; instead, when the form has an
+  // id, scope by {{dlv - form_id}} equals <id>, a Data Layer Variable reading the `form_id` the
+  // install-plan listener pushes (belt-and-suspenders with the page-path scope kept below).
+  const dlEvent = isEmbed || isAjaxPlugin || f.method === 'js' ? (PROVIDER_DL_EVENT[f.provider.vendor] ?? 'form_submit') : null;
+  const rawClass = pickFormClass(f.formClasses);
+  const groupIds = ctx.formIdsByLabel.get(labelKey) ?? null;
+  const groupClass = ctx.formClassByLabel.get(labelKey) ?? null;
+  const idUnique = !!f.formId && !ctx.nonUniqueIds.has(f.formId);
+  const classUnique = !!rawClass && !ctx.nonUniqueClasses.has(rawClass);
+  let usedClass: string | null = null;
+  let usedPage: string | null = null;
+  // Scope by {{Form ID}} — one id → equals; several distinct ids in the group → ^(id1|id2)$ matchRegex
+  // (fires on exactly those forms, wherever they appear, with no page over-fire).
+  //
+  // EXCEPT when the id is minted per page load, which embedded providers do (HubSpot joins a
+  // per-render instance GUID to the real form GUID). Matching such an id exactly produces a tag GTM
+  // accepts and which can never fire again. formIdScope() keeps the durable fragment when several
+  // samples prove one, and otherwise refuses the id so the ladder falls through to class/page —
+  // firing too widely is recoverable, firing never is not.
+  // The ids the group ACTUALLY carried, and the provider id shared across it. Both are read from
+  // the group, not from this one instance, so the explanation matches the trigger that ships.
+  const groupAllIds = ctx.allFormIdsByLabel.get(labelKey) ?? (f.formId ? [f.formId] : []);
+  const sharedProviderId = ctx.providerFormIdByLabel.get(labelKey) ?? f.providerFormId;
+  const durable = ctx.durableIdByLabel.get(labelKey) ?? null;
+  const durableFormIdOk = ctx.durableFormIdOkByLabel.get(labelKey) ?? false;
+  const idGap = ctx.idGapByLabel.get(labelKey) ?? false;
+  const idScope = groupIds && groupIds.length ? formIdScope(groupIds, sharedProviderId) : null;
+  // NOT gated on groupIds: an id that was REFUSED (ephemeral, or dropped because one instance of the
+  // group lacked one) is exactly the case the operator most needs explained. Gating the explanation
+  // behind the same condition that suppressed the id meant the reason was never shown at all.
+  const idRefusedNote = groupAllIds.length ? ephemeralFormIdNote(groupAllIds, sharedProviderId) : null;
+  let usedDurable: ProviderFormIdentity | null = null;
+  if (idScope) {
+    trigger.formIdValue = idScope.value;
+    trigger.formIdOperator = idScope.operator;
+  } else if (durable?.formIdCondition && (dlEvent || durableFormIdOk)) {
+    // DEGRADE, do not collapse. The group could not be scoped by its DOM ids, but the vendor's own
+    // durable identity still pins the trigger to this form (HubSpot's form GUID, Gravity's gform_<n>,
+    // Contact Form 7's wpcf7-f<id> without the placement ordinal). A page-path scope would fire for
+    // every other form on those pages, so this is strictly tighter and still fires.
+    //
+    // On the NATIVE route the condition really ships, so it is taken only when GTM could match it on
+    // every instance of the group (durableFormIdOk); otherwise the ladder falls through to class or
+    // page, which over-fires but fires. On the pushed-event route it is deleted below either way,
+    // and taking this rung is what keeps that trigger off a page-path scope it does not need.
+    trigger.formIdValue = durable.formIdCondition.value;
+    trigger.formIdOperator = durable.formIdCondition.operator;
+    usedDurable = durable;
+  } else if (groupClass) {
+    trigger.formClassesValue = groupClass;
+    trigger.formClassesOperator = 'contains';
+    usedClass = groupClass;
+  } else if (multiPage) {
+    // Same form, no id/class, on a HANDFUL of pages → ONE tag firing on a submit on ANY of those pages
+    // via a {{Page Path}} RegEx (^(/a|/b|…)/?$). This scopes it to exactly its pages (not the site-wide
+    // "every form submit" catch-all), and every per-page instance dedups to this one tag.
+    trigger.pagePathValue = `^(${labelPages.map(escRe).join('|')})/?$`;
+    trigger.pagePathOperator = 'matchRegex';
+    usedPage = `${labelPages.length} pages`;
+  } else if (labelPages.length === 1) {
+    // No usable id/class, ONE page → scope the trigger to that page via {{Page Path}} so it gets its
+    // OWN tag (instead of folding into the All-Forms catch-all).
+    const onePage = labelPages[0];
+    trigger.pagePathValue = onePage;
+    // Prefer "contains" so the trigger still matches with a trailing slash / query string / locale
+    // prefix; fall back to "equals" for a root or very short path, where "contains" would match
+    // essentially every page.
+    trigger.pagePathOperator = onePage.replace(/[^a-z0-9]/gi, '').length >= 3 ? 'contains' : 'equals';
+    usedPage = onePage;
+  }
+  // else: the form is on MORE than 50 pages (effectively site-wide) → a page RegEx would be unwieldy,
+  // so leave the trigger unscoped (fires on every form submit); the note below warns about that.
+
+  // Build the install plan FIRST — it is the single source of truth for what the paired listener actually
+  // pushes. A custom_event trigger can only scope by {{dlv - <key>}} if the listener REALLY pushes that
+  // key=value; the install plan sets `dlvScope` only when it does (the generic submit delegate, which
+  // pushes form_id = this form's own DOM id). A provider listener pushes its OWN internal id under its own
+  // key (hs_form_id/marketo_form_id/a plugin number/none) that would never equal the DOM id — so no scope.
+  const mechanism: FormMechanism = isEmbed ? 'embed' : isAjaxPlugin ? 'ajax' : f.method === 'js' ? 'js' : 'native';
+  const formHasNativeForm = mechanism === 'native' || mechanism === 'ajax' || (mechanism === 'js' && !!f.formId);
+  const install = buildFormInstallPlan({
+    provider: f.provider.vendor,
+    mechanism,
+    dlEvent,
+    formId: f.formId,
+    // Prefer a {{Form ID}}-style selector when we have one, else fall through to the generic 'form'.
+    selector: f.formId ? `#${f.formId}` : undefined,
+    formHasNativeForm,
+    // The vendor's DURABLE id, which is the value its own listener pushes (HubSpot's hs_form_id is
+    // the form GUID, Contact Form 7's form_id is the post id). Supplying it is what turns the
+    // provider listener from "fires, but page-wide" into a trigger scoped to THIS form. Only the
+    // GROUP-agreed identity is passed: if the instances disagree, there is no one form to scope to.
+    providerFormId: durable?.value ?? undefined,
+  });
+  const dlvScope = install.requires.find(
+    (r): r is Extract<InstallRequirement, { kind: 'listener-tag' }> => r.kind === 'listener-tag' && !!r.dlvScope,
+  )?.dlvScope;
+  if (dlEvent) {
+    trigger.kind = 'custom_event';
+    trigger.eventName = dlEvent;
+    delete trigger.formIdValue;
+    delete trigger.formIdOperator;
+    delete trigger.formClassesValue;
+    delete trigger.formClassesOperator;
+    // Scope to THIS form ONLY when the paired listener provably pushes a matching key/value: the
+    // generic submit delegate (form_id = the DOM id) or a VENDOR listener whose pushed key is
+    // declared in LISTENER_DLV_KEY and whose value is the vendor's durable form id (hs_form_id =
+    // the HubSpot form GUID, form_id = the Contact Form 7 post id). Otherwise the page-path scope
+    // kept above carries the trigger: it still fires, just page-wide, which is recoverable, while a
+    // condition on a key nobody pushes never fires at all.
+    if (dlvScope) {
+      trigger.dataLayerConditions = [{ key: dlvScope.key, value: dlvScope.value, operator: 'equals' }];
+    }
+  }
+  let note: string | undefined;
+  // The id this note may hand to a developer. An id carrying a per-render token is NOT one: telling
+  // the site to push it, or to match it, reproduces the tag-that-cannot-fire in the site's own code,
+  // one layer below where the engine can see it. When the id is ephemeral the advice is to add a
+  // stable one instead, which is the only thing that actually works.
+  const stableId = f.formId && !looksEphemeralFormId(f.formId) ? f.formId : '';
+  // Once a real dlv scope exists, a second id in the push is noise that contradicts it.
+  const pushIdHint = !dlvScope && stableId ? `, form_id: "${stableId}"` : '';
+  // The "if the plugin is NOT set to AJAX" fallback, which really is a native Form Submission
+  // trigger. It has to be stated with the VENDOR's durable condition wherever one exists, and only
+  // when GTM could match it: naming the raw DOM id here handed the operator
+  // {{Form ID}} equals "wpcf7-f34-p9-o1", an exact match on Contact Form 7's placement ordinal that
+  // stops matching as soon as a second CF7 form is added above it. Same dead trigger, arrived at by
+  // following the advice instead of by clicking create.
+  const nativeFallbackCond =
+    durable?.formIdCondition && durableFormIdOk
+      ? `${durable.formIdCondition.operator} "${durable.formIdCondition.value}"`
+      : stableId
+        ? `equals "${stableId}"`
+        : '';
+  const nativeFallbackClause = nativeFallbackCond
+    ? ` (If the plugin is set to NON-AJAX submit, a Form Submission trigger on {{Form ID}} ${nativeFallbackCond} also works.)`
+    : '';
+  // How this pushed-event tag is scoped to THIS form. With a stable form id, {{dlv - form_id}} equals
+  // "<id>" (a Data Layer Variable reading the form_id the listener pushes); {{Form ID}} does not
+  // resolve on a pushed event. Without one, the page-only scope carries over (+ what to change).
+  const dlvScopeClause = dlvScope
+    ? ` Scoped to this form via {{dlv - ${dlvScope.key}}} equals "${dlvScope.value}" (a Data Layer Variable reading the ${dlvScope.key} the auto-created listener pushes), because {{Form ID}} does not resolve on a pushed event.`
+    : stableId
+      ? ` The provider's own listener pushes its internal submit id (not this form's DOM id), so the tag stays page-scoped ({{Form ID}} does not resolve on a pushed event); for form-specific scoping, have the push also carry form_id: "${stableId}" and AND {{dlv - form_id}} equals "${stableId}".`
+      : f.formId
+        ? ` Only the page scope carries over ({{Form ID}} does not resolve on a pushed event), and this form's DOM id is generated per page load, so matching it would never fire either: give the <form> a stable unique id, push it as form_id, and scope on {{dlv - form_id}}.`
+        : ` Only the page scope carries over ({{Form ID}} does not resolve on a pushed event); add a unique id to the <form> so a generic listener can push form_id and the trigger can scope via {{dlv - form_id}}.`;
+  if (isEmbed) {
+    note = `${cap(f.provider.vendor)} submits in an iframe / via AJAX, so GTM's native Form Submission trigger usually won't fire and this tag fires on a "${dlEvent}" Custom Event. Add the push: ${PROVIDER_EVENT_HINT[f.provider.vendor] ?? 'listen for the provider submit event'} → dataLayer.push({event: "${dlEvent}"${pushIdHint}}).${dlvScopeClause} Fallback: an Element Visibility trigger on the thank-you message.`;
+  } else if (isAjaxPlugin) {
+    note = `${cap(f.provider.vendor)} submits via AJAX (it preventDefaults the native submit), so GTM's Form Submission trigger usually won't fire and this tag fires on a "${dlEvent}" Custom Event instead. Add a Custom HTML listener: ${PROVIDER_EVENT_HINT[f.provider.vendor] ?? 'listen for the plugin submit event'} → dataLayer.push({event: "${dlEvent}"${pushIdHint}}).${dlvScopeClause} AnalyticsMania publishes an importable recipe for this.${nativeFallbackClause}`;
+  } else if (f.method === 'js') {
+    note = `JS/div form (no native <form> submit), so GTM's Form Submission trigger may not fire and this tag fires on a "${dlEvent}" Custom Event; push dataLayer.push({event: "${dlEvent}"${pushIdHint}}) from the form's submit handler.${dlvScopeClause} Fallbacks: an All-Clicks trigger on the submit button, or an Element Visibility trigger on the thank-you message.`;
+  } else if (trigger.pagePathOperator === 'matchRegex') {
+    // The multi-page consolidated case: ONE tag scoped by a {{Page Path}} RegEx over the group's pages.
+    // A Page-Path-only Form Submission trigger fires on EVERY form submit on those pages, so warn that
+    // a DIFFERENT form co-located on any of them would also fire this tag (and be double-counted).
+    note = `Forms sharing this name/heading appear on ${labelPages.length} pages, so they are ONE tag firing when a form is submitted on any of them ({{Page Path}} matches the ${labelPages.length}-page RegEx). Because it is scoped by page (not by the form), ANOTHER form on one of those pages would also fire this tag — give the <form> a shared unique id and switch to a {{Form ID}} trigger to fire on this form only.`;
+  } else if (trigger.pagePathValue) {
+    // Page-scoped (single page) takes precedence over the shared-id warning below: even when the
+    // form carries a NON-unique id, {{Page Path}} equals <page> scopes it precisely, so there is no
+    // real collision to warn about (warning here would contradict the tag's own page scope).
+    note = `This form has no unique id/class, so it is scoped to submits on ${trigger.pagePathValue} (the only page it was found on). A Page-Path-only trigger fires on any form submit on that page — add a unique id to the <form> for a form-specific {{Form ID}} trigger.`;
+  } else if ((f.formId && !idUnique) || (rawClass && !classUnique)) {
+    const what = f.formId && !idUnique ? `id "#${f.formId}"` : `class ".${rawClass}"`;
+    note = `Another form on the site shares this ${what}, so this trigger will also fire for that form (double-counting). Give each <form> a unique id to scope it.`;
+  } else if (!trigger.formIdValue && !trigger.formClassesValue) {
+    note = `This form has no id or unique class and appears on multiple pages, so the trigger fires on EVERY form submit. Add an id to each <form> to scope it.`;
+  }
+
+  // (The STRUCTURED install plan `install` is built above — it drove `dlvScope`, which gated the
+  // trigger's dataLayerConditions so the {{dlv - form_id}} scope only appears when a listener really
+  // pushes it. It is attached to the returned suggestion below.)
+
+  // form_name is a SINGLE reusable {{Form Name}} Custom JavaScript variable (GTM has no built-in
+  // {{Form Name}}) — every form tag references the same one, resolved at submit time from the form
+  // element (name → id → aria-label → nearest heading). Auto-created with the tag (see FORM_NAME_JS in
+  // the desktop builder). NOTE: for embed/AJAX forms that fire on a dataLayer Custom Event (not a
+  // native form submit), {{Form Element}} isn't set, so it falls back to "form".
+  // How this trigger came to be scoped the way it is. Every decision that DROPPED or REPLACED an id
+  // has to say so: a scope chosen in silence is indistinguishable from a scope that never fires.
+  // Ordered most-actionable first, and prepended so it leads the note.
+  // A {{Form ID}} explanation is only true while a {{Form ID}} condition survived: the dataLayer
+  // branch above DELETES it (that built-in does not resolve on a pushed event), and its own scope is
+  // explained by dlvScopeClause.
+  const idScopeSurvived = !!trigger.formIdValue;
+  const dlScoped = !!trigger.dataLayerConditions?.length;
+  const scopeNotes: string[] = [];
+  if (idScopeSurvived && idScope?.stabilized && idScope.note) scopeNotes.push(idScope.note);
+  if (idScopeSurvived && usedDurable?.note) scopeNotes.push(usedDurable.note);
+  // Only a PARTIAL gap is worth this note: it explains ids that exist and were still not used. A
+  // group where NO instance has an id has nothing to explain here, and the "add a unique id" advice
+  // in the branches below already covers it.
+  if (idGap && groupAllIds.length > 0 && !idScope && !dlScoped) {
+    const gapLead = 'An instance of this form in the group had no id, so the ids of the instances that DO have one were not used (that would split one form into two same-named tags).';
+    scopeNotes.push(
+      trigger.formIdValue
+        ? `${gapLead} It is scoped by the provider's durable form id instead${usedDurable?.partial ? ', which covers the instances that expose that id; the instance without one may not fire until it carries the same id' : ''}.`
+        : `${gapLead} Give every copy of the <form> the SAME unique id to scope it by {{Form ID}}.`,
+    );
+  }
+  if (!idScopeSurvived && !dlScoped && idRefusedNote) scopeNotes.push(idRefusedNote);
+  // A vendor we RECOGNISE that exposes nothing durable, on a trigger that ended up with no
+  // form-level scope at all: say which vendor and why, rather than leaving a page-wide trigger
+  // looking deliberate.
+  if (!usedDurable && durable && !durable.value && durable.note && !idScopeSurvived && !trigger.formClassesValue && !dlScoped) {
+    scopeNotes.push(durable.note);
+  }
+  if (scopeNotes.length) {
+    const lead = scopeNotes.join(' ');
+    note = note ? `${lead} ${note}` : lead;
+  }
+
+  const formNameValue = '{{Form Name}}';
+
+  // Field signature (type/name only — never values) for the evidence line.
+  const sig = (f.fields ?? [])
+    .filter((x) => !['checkbox', 'radio', 'select', 'hidden'].includes(x.type))
+    .map((x) => x.name || x.type)
+    .filter(Boolean)
+    .slice(0, 8);
+
+  return {
+    id: hashId('form|' + f.page + '|' + f.purpose + '|' + (f.formId || f.action)),
+    page: f.page,
+    label: `${cap(f.purpose)} form${prov} → GA4 "${eventName}" on form submit`,
+    evidence:
+      `form purpose=${f.purpose}; provider=${f.provider.vendor} (${f.provider.evidence})` +
+      (usedDurable?.value ? `; ${usedDurable.source}=${usedDurable.value}` : '') +
+      (trigger.formIdValue && !usedDurable ? `; id=#${f.formId}` : usedClass ? `; class=.${usedClass}` : usedPage ? `; page=${usedPage}` : '') +
+      (sig.length ? `; fields: ${sig.join(', ')}` : '') +
+      (f.hidden ? '; hidden at page load — typically opens in a modal/popup or tab (e.g. a "Book a demo" overlay)' : ''),
+    ...(note ? { note } : {}),
+    install,
+    confidence: 'high',
+    // GA4 EM "form interactions" is limited/generic; a dedicated lead event is valuable.
+    enhancedMeasurementOverlap: false,
+    platform: 'ga4_event',
+    tagName: tagNameOf(displayLabel, 'form_submit'),
+    measurementId: GA4_VAR,
+    eventName,
+    // form_id is the runtime {{Form ID}}; form_name is the shared {{Form Name}} Custom JS variable
+    // (auto-created on tag create), so every form tag reports a name consistently from ONE variable.
+    eventParameters: [
+      { name: 'form_id', value: FORM_ID },
+      { name: 'form_name', value: formNameValue },
+      ...PAGE_PARAMS,
+    ],
+    trigger,
+  };
+}
+
+/** Find form ids / classes that are shared by DIFFERENT forms (different
+ *  signatures) — those can't scope a trigger to one form. */
+function nonUniqueFormScopes(forms: DetectedForm[]): FormScopeCtx {
+  const idSigs = new Map<string, Set<string>>();
+  const classSigs = new Map<string, Set<string>>();
+  const sigPages = new Map<string, Set<string>>();
+  // PRE-PASS (Fix A): disambiguate STRUCTURALLY-DIFFERENT untitled forms of the SAME purpose. Group
+  // untitled forms by purpose, and give each DISTINCT field-signature within a purpose a 1-based index
+  // in first-seen order (iterate in input order). The SAME form across pages shares one signature → one
+  // index → still collapses site-wide; two field-different untitled "contact" forms get indexes 1 and 2,
+  // so #2 is later named/scoped as "Contact Form 2" (distinct label+event+tagName → both survive dedup).
+  const untitledFormIndex = new Map<string, number>();
+  const untitledSeenPerPurpose = new Map<string, number>(); // purpose → count of distinct signatures seen
+  for (const f of forms) {
+    if (!isUntitledForm(f) || f.purpose === 'other' || f.purpose === 'search' || f.purpose === 'checkout') continue;
+    const key = `${f.purpose}|${fieldSignature(f)}`;
+    if (untitledFormIndex.has(key)) continue;
+    const next = (untitledSeenPerPurpose.get(f.purpose) ?? 0) + 1;
+    untitledSeenPerPurpose.set(f.purpose, next);
+    untitledFormIndex.set(key, next);
+  }
+  const idxCtx = { untitledFormIndex };
+  // Grouping is CASE-INSENSITIVE on the display label ("Get a Free Audit" and "GET A FREE AUDIT" are
+  // the same form) — key on the lowercased label, keep the first-seen casing as canonical.
+  const labelPages = new Map<string, Set<string>>();
+  const canonicalLabel = new Map<string, string>();
+  const labelForms = new Map<string, DetectedForm[]>();
+  for (const f of forms) {
+    const label = formDisplayLabel(f, idxCtx);
+    if (label) {
+      const key = label.toLowerCase();
+      if (!canonicalLabel.has(key)) canonicalLabel.set(key, label);
+      if (!labelPages.has(key)) labelPages.set(key, new Set());
+      labelPages.get(key)!.add(f.page);
+      if (!labelForms.has(key)) labelForms.set(key, []);
+      labelForms.get(key)!.push(f);
+    }
+    const s = formSignature(f);
+    if (!sigPages.has(s)) sigPages.set(s, new Set());
+    sigPages.get(s)!.add(f.page);
+    if (f.formId) {
+      if (!idSigs.has(f.formId)) idSigs.set(f.formId, new Set());
+      idSigs.get(f.formId)!.add(s);
+    }
+    const c = pickFormClass(f.formClasses);
+    if (c) {
+      if (!classSigs.has(c)) classSigs.set(c, new Set());
+      classSigs.get(c)!.add(s);
+    }
+  }
+  const nonUniqueIds = new Set([...idSigs].filter(([, s]) => s.size > 1).map(([k]) => k));
+  const nonUniqueClasses = new Set([...classSigs].filter(([, s]) => s.size > 1).map(([k]) => k));
+  // A form unique to ONE page can be page-scoped; one seen on several pages is site-wide (null).
+  const pageBySignature = new Map<string, string | null>();
+  for (const [sig, pages] of sigPages) pageBySignature.set(sig, pages.size === 1 ? [...pages][0] : null);
+  // Per-label GROUP-LEVEL id/class scope, computed so the WHOLE same-named group becomes ONE tag with
+  // ONE trigger (never split into an id-tag + a page-regex tag with the same name → a duplicate-name
+  // collision at create). {{Form ID}} scope is usable ONLY if EVERY instance carries a UNIQUE id — then
+  // scope by the distinct ids ({{Form ID}} matches ^(id1|id2)$), firing on exactly those forms. A MIXED
+  // group (id on some pages, not others) falls through to the page RegEx.
+  const formIdsByLabel = new Map<string, string[] | null>();
+  const formClassByLabel = new Map<string, string | null>();
+  const allFormIdsByLabel = new Map<string, string[]>();
+  const idGapByLabel = new Map<string, boolean>();
+  const providerFormIdByLabel = new Map<string, string | null>();
+  const durableIdByLabel = new Map<string, ProviderFormIdentity | null>();
+  const durableFormIdOkByLabel = new Map<string, boolean>();
+  for (const [key, group] of labelForms) {
+    const allIds = [...new Set(group.map((f) => (f.formId ?? '').trim()).filter(Boolean))].sort();
+    allFormIdsByLabel.set(key, allIds);
+    idGapByLabel.set(key, group.some((f) => !(f.formId ?? '').trim()));
+    // ONE provider id shared by every instance that has one. Two different provider ids under one
+    // label are two different forms, so neither may scope the group.
+    const provIds = new Set(group.map((f) => (f.providerFormId ?? '').trim()).filter(Boolean));
+    providerFormIdByLabel.set(key, provIds.size === 1 ? [...provIds][0] : null);
+    // The VENDOR's own durable identity, which does not care whether every instance carried a DOM
+    // id. This is what lets the ladder DEGRADE (to the identity that survives a re-render) instead
+    // of COLLAPSING all the way to a page-path scope the moment one instance lacks an id.
+    const durable = groupFormIdentity(
+      group.map((f) => ({
+        vendor: f.provider.vendor,
+        formId: f.formId,
+        providerFormId: f.providerFormId,
+        formClasses: f.formClasses,
+        action: f.action,
+      })),
+    );
+    durableIdByLabel.set(key, durable);
+    // Whether that identity may become a real {{Form ID}} condition (see durableFormIdMatchesGroup).
+    durableFormIdOkByLabel.set(key, durableFormIdMatchesGroup(durable, group));
+    const allUniqueId = group.every((f) => !!f.formId && !nonUniqueIds.has(f.formId));
+    formIdsByLabel.set(key, allUniqueId ? allIds : null);
+    const classes = new Set(group.map((f) => pickFormClass(f.formClasses) ?? ''));
+    const uniformClass = !allUniqueId && classes.size === 1 && !classes.has('') && !nonUniqueClasses.has([...classes][0]) ? [...classes][0] : null;
+    formClassByLabel.set(key, uniformClass);
+  }
+  return {
+    nonUniqueIds,
+    nonUniqueClasses,
+    pageBySignature,
+    pagesBySignature: sigPages,
+    pagesByLabel: labelPages,
+    canonicalLabel,
+    formIdsByLabel,
+    formClassByLabel,
+    allFormIdsByLabel,
+    idGapByLabel,
+    providerFormIdByLabel,
+    durableIdByLabel,
+    durableFormIdOkByLabel,
+    untitledFormIndex,
+  };
+}
+
+function elementSuggestion(el: DetectedElement, socialPattern: string): SuggestedTag | null {
+  const base = (eventName: string, conf: SuggestedTag['confidence'], em: boolean) => ({
+    id: hashId(el.kind + '|' + el.page + '|' + (el.href ?? el.text ?? '')),
+    page: el.page,
+    confidence: conf,
+    enhancedMeasurementOverlap: em,
+    platform: 'ga4_event' as const,
+    tagName: tagNameOf(eventLabel(eventName), 'link_click'),
+    measurementId: GA4_VAR,
+    eventName,
+  });
+  // A contact element with NO href (a <div class="dealer-phone">, an address block) cannot be
+  // triggered on a tel:/mailto: scheme, so the ladder keys it on its class instead. Returns null
+  // when the class carries nothing durable, in which case no tag is offered at all.
+  const classTrigger = (label: string): SuggestedTag['trigger'] | null => {
+    const r = chooseClickConditions({ triggerKind: 'all_clicks', classes: el.className, id: el.elementId, text: el.text, page: el.page });
+    // Only an id or a semantic class is accepted here. The ladder's text rung is a reasonable last
+    // resort for a CTA, whose label IS the thing being tracked, but not for a contact block: the
+    // text is a phone number or a street address that differs on every instance, so a text-keyed
+    // trigger would fire for exactly one dealer and look like it covered them all.
+    if (r.signal !== 'clickId' && r.signal !== 'clickClasses') return null;
+    const t: SuggestedTag['trigger'] = { name: trigNameOf(label, 'all_clicks'), kind: 'all_clicks' };
+    for (const c of r.conditions) {
+      if (c.variable === '{{Click Element}}') { t.clickElementValue = c.value; t.clickElementOperator = 'cssSelector'; }
+      else if (c.variable === '{{Click Classes}}') { t.clickClassesValue = c.value; t.clickClassesOperator = c.operator as 'matchRegex'; }
+      else if (c.variable === '{{Click ID}}') { t.clickIdValue = c.value; t.clickIdOperator = 'equals'; }
+      else if (c.variable === '{{Click Text}}') { t.clickTextValue = c.value; t.clickTextOperator = 'equals'; }
+      else if (c.variable === '{{Page Path}}') { t.pagePathValue = c.value; t.pagePathOperator = c.operator as 'contains' | 'equals'; }
+    }
+    return t;
+  };
+  switch (el.kind) {
+    case 'email': {
+      const hasHref = /^mailto:/i.test(el.href ?? '');
+      const trigger = hasHref
+        ? { name: trigNameOf('Email', 'link_click'), kind: 'link_click' as const, clickUrlValue: 'mailto:', clickUrlOperator: 'startsWith' as const }
+        : classTrigger('Email');
+      if (!trigger) return null;
+      return {
+        ...base('email_click', 'high', false),
+        label: 'Email link (mailto) → GA4 "email_click"',
+        evidence: hasHref ? `mailto link${el.region ? ' in ' + el.region : ''}` : `email block with no mailto href${el.region ? ' in ' + el.region : ''}, tracked by its class`,
+        eventParameters: CLICK_PARAMS,
+        trigger,
+      };
+    }
+    case 'phone': {
+      const hasHref = /^tel:/i.test(el.href ?? '');
+      const trigger = hasHref
+        ? { name: trigNameOf('Phone', 'link_click'), kind: 'link_click' as const, clickUrlValue: 'tel:', clickUrlOperator: 'startsWith' as const }
+        : classTrigger('Phone');
+      if (!trigger) return null;
+      return {
+        ...base('phone_click', 'high', false),
+        label: 'Phone link (tel) → GA4 "phone_click"',
+        evidence: hasHref ? `tel link${el.region ? ' in ' + el.region : ''}` : `phone block with no tel href${el.region ? ' in ' + el.region : ''}, tracked by its class`,
+        eventParameters: CLICK_PARAMS,
+        trigger,
+      };
+    }
+    case 'address': {
+      // Two shapes: an <a> opening a map/directions view, and a non-link address block. The maps
+      // link is keyed on its destination (durable, and it is what makes it an address click); the
+      // block falls to the class ladder.
+      const mapsLink = /^https?:/i.test(el.href ?? '');
+      const trigger = mapsLink
+        ? { name: trigNameOf('Address', 'link_click'), kind: 'link_click' as const, clickUrlValue: '(google\\.[a-z.]+/maps|maps\\.(google|apple)\\.|goo\\.gl/maps|waze\\.com|bing\\.com/maps|openstreetmap\\.org)', clickUrlOperator: 'matchRegex' as const, clickUrlIgnoreCase: true }
+        : classTrigger('Address');
+      if (!trigger) return null;
+      return {
+        ...base('address_click', 'high', false),
+        label: 'Address / directions → GA4 "address_click"',
+        evidence: mapsLink ? `link opening a map or directions view${el.region ? ' in ' + el.region : ''}` : `address block with no link${el.region ? ' in ' + el.region : ''}, tracked by its class`,
+        eventParameters: CLICK_PARAMS,
+        trigger,
+      };
+    }
+    case 'download': {
+      // A download link with a MEANINGFUL label ("Download brochure", "Datasheet") surfaces as its OWN
+      // selectable suggestion, scoped to its {{Click Text}}, instead of folding into the generic
+      // extension tag — so a named brochure/datasheet download is visible + selectable in the list. It
+      // stays flagged as EM-overlap (GA4 auto-tracks file downloads), so it is de-selected until the
+      // user opts in. A bare/icon-only "Download" (or no descriptive text) falls through to the generic.
+      // Gate on a clear DOWNLOAD-CTA label ("Download brochure", "Datasheet", "Whitepaper") via the
+      // shared download intent — a generic file label ("Guide", "Bundle", a bare filename) has no
+      // download intent and stays in the generic extension tag below.
+      const dlText = el.text.replace(/\s+/g, ' ').trim();
+      const labeled = dlText.length >= 3 && dlText.length <= 48 && classifyCtaIntent(dlText) === 'download';
+      if (labeled) {
+        const dlLabel = dlText.slice(0, 60);
+        return {
+          ...base('file_download', 'medium', true), // EM already auto-tracks downloads → de-selected, but visible
+          tagName: tagNameOf(dlLabel, 'link_click'),
+          label: `"${dlLabel}" download → GA4 "file_download"  ⚠ Enhanced Measurement already covers this`,
+          evidence: `download link "${el.text}" → ${el.href ?? ''}`.trim(),
+          eventParameters: CLICK_PARAMS,
+          trigger: { name: trigNameOf(dlLabel, 'link_click'), kind: 'link_click', clickTextValue: dlText, clickTextOperator: 'equals' },
+        };
+      }
+      // Name + scope the tag for the ACTUAL file type ("PDF Download") with a plain
+      // "{{Click URL}} ends with .pdf" condition instead of a multi-extension regex. "ends with"
+      // anchors at the end of the URL, so it never false-fires on a mid-string match (a /our-services
+      // .pdf-guide nav link, ?ref=brochure.pdf) and ".doc" can't match ".docx". Same extension on many
+      // pages collapses (dedup key is the click-URL value). The trade-off is a download URL carrying a
+      // ?query/#fragment after the extension; those are rare, and no clear extension (e.g. a
+      // /download?file= route) → the multi-ext regex fallback, the only place a regex remains.
+      const ext = fileExt(el.href);
+      const extLabel = ext ? ext.toUpperCase() : 'File';
+      return {
+        ...base('file_download', 'medium', true), // EM already auto-tracks downloads
+        tagName: tagNameOf(`${extLabel} Download`, 'link_click'),
+        label: `${extLabel} download → GA4 "file_download"  ⚠ Enhanced Measurement already covers this`,
+        evidence: `download link ${el.href ?? ''}`.trim(),
+        eventParameters: CLICK_PARAMS,
+        trigger: ext
+          ? { name: trigNameOf(`${extLabel} Download`, 'link_click'), kind: 'link_click', clickUrlValue: `.${ext}`, clickUrlOperator: 'endsWith' }
+          // Plain regex + the condition-level ignore-case flag — gtm.js evaluates web matchRegex with
+          // the browser's JS RegExp, which cannot parse an inline (?i) (SyntaxError → never fires).
+          : { name: trigNameOf('File Download', 'link_click'), kind: 'link_click', clickUrlValue: `\\.(${DOWNLOAD_EXT})(\\?|#|$)`, clickUrlOperator: 'matchRegex', clickUrlIgnoreCase: true },
+      };
+    }
+    case 'outbound':
+      return {
+        ...base('outbound_click', 'medium', true), // EM already auto-tracks outbound
+        label: 'Outbound link → GA4 "outbound_click"  ⚠ Enhanced Measurement already covers this',
+        evidence: `outbound link ${el.href ?? ''}`.trim(),
+        eventParameters: CLICK_PARAMS,
+        trigger: { name: trigNameOf('Outbound', 'link_click'), kind: 'link_click' },
+      };
+    case 'social':
+      return {
+        ...base('social_click', 'medium', false),
+        label: 'Social media link → GA4 "social_click"',
+        // A social link IS outbound, so EM's outbound_click also fires — but this
+        // dedicated, named event (with the link captured) is what's usually wanted.
+        evidence: `social media link ${el.href ?? ''}`.trim() + ' (note: EM also tracks this as an outbound click)',
+        eventParameters: CLICK_PARAMS,
+        // Fires ONLY on the social networks actually found on the site.
+        trigger: { name: trigNameOf('Social Media', 'link_click'), kind: 'link_click', clickUrlValue: socialPattern, clickUrlOperator: 'matchRegex' },
+      };
+    case 'share':
+      // Share controls are aggregated into ONE `share` tag by extractShareControls (a widget needs 2+
+      // controls to be a share widget), and those elements are consumed before reaching here. A lone,
+      // unconsumed share control is not a widget → no per-element tag.
+      return null;
+    case 'cta': {
+      const def = CTA_BY_INTENT[el.intent ?? 'generic'];
+      const isSpecific = def.intent !== 'generic';
+      // Trigger TYPE follows the element. A true <a href> link → "Click - Just Links" (link_click):
+      // GTM bubbles a click on any child (icon/image/span) up to the link and evaluates the condition
+      // on the link, giving a clean, consistent link-level signal (and reliable {{Click URL}}). A
+      // non-link control — a <button>, a div/span/icon, or a JS-routed <a> with no href — → "Click -
+      // All Elements" (all_clicks), the ONLY type that fires on non-link elements (Just Links can't
+      // cover a <button>). el.href is set by the collector ONLY for real anchors (buttons carry ''),
+      // so it is the authoritative link test. This picks the tightest correct trigger for each: All
+      // Elements over-captures for links, Just Links can't fire on buttons.
+      const isLink = typeof el.href === 'string' && el.href.length > 0;
+      const kind: 'link_click' | 'all_clicks' = isLink ? 'link_click' : 'all_clicks';
+      // Fire on the EXACT text the user sees with "{{Click Text}} equals <text>" — a precise, readable
+      // condition (the label from the page, e.g. "Get a Quote") rather than a broad "contains" (which
+      // also fires on "Get a Quote Now") or an intent regex. Works on BOTH trigger types: Just Links
+      // exposes the link's {{Click Text}}, All Elements the clicked element's. NOTE: on an All-Elements
+      // trigger a <button> wrapping an icon / hidden a11y span may have a runtime text that differs from
+      // the scraped label, in which case this exact match needs widening to "contains"; a Just-Links
+      // trigger avoids that because the text always bubbles to the link. The intent still selects the
+      // semantic GA4 event (book_demo_click, …) + confidence; a CTA with different text becomes its OWN
+      // tag, and the SAME text+type on multiple pages still collapses site-wide (dedup key includes the
+      // click-text value and the kind).
+      const ctaText = el.text.replace(/\s+/g, ' ').trim();
+      const displayLabel = ctaText.slice(0, 60) || def.label;
+      // An author-given id OUTRANKS the click text (trigger-strategy.ts rung 1): the id survives the
+      // copy edits that silently break a text-keyed trigger. Safe to substitute here even though the
+      // tag/event name still comes from the text, because an HTML id is unique within the document -
+      // so this cannot merge two differently-labelled CTAs the way a shared CLASS would. That is why
+      // classes are deliberately NOT substituted on this path: `.hero-cta` on five different CTAs
+      // would collapse them into one tag whose name claims to be just one of them.
+      const idStrategy = el.elementId ? chooseClickConditions({ triggerKind: kind, id: el.elementId }) : null;
+      const idCond = idStrategy?.signal === 'clickId' ? idStrategy.conditions[0] : null;
+      const trigger: SuggestedTag['trigger'] = {
+        name: trigNameOf(displayLabel, kind),
+        kind,
+        ...(idCond
+          ? idCond.variable === '{{Click ID}}'
+            ? { clickIdValue: idCond.value, clickIdOperator: 'equals' as const }
+            : { clickElementValue: idCond.value, clickElementOperator: 'cssSelector' as const }
+          : { clickTextValue: ctaText || def.label, clickTextOperator: 'equals' as const }),
+      };
+      // Event matches the tag name (both derived from the button text), e.g. "Buy Now" → buy_now_click,
+      // instead of a shared generic cta_click. The intent still sets confidence (isSpecific).
+      const ctaEvent = eventFromLabel(displayLabel, 'click');
+      return {
+        ...base(ctaEvent, isSpecific ? 'medium' : 'low', false),
+        tagName: tagNameOf(displayLabel, kind),
+        label: `"${displayLabel}" → GA4 "${ctaEvent}"`,
+        evidence: `${isLink ? 'link' : 'button'} text "${el.text}"` + (isSpecific ? ` (intent: ${el.intent})` : ''),
+        // Carry the classified intent so the platform derivations map by intent (authoritative for
+        // CTAs) instead of the event-name text — a CTA whose event name lacks a keyword still gets its
+        // correct Meta/Ads/etc. counterpart.
+        ctaIntent: el.intent ?? 'generic',
+        // Standard click params: click_text ({{Click Text}}) is the dynamic clicked label, click_url
+        // the href when the CTA is a link, plus page context.
+        eventParameters: CLICK_PARAMS,
+        trigger,
+      };
+    }
+  }
+}
+
+// An embedded YouTube player → one GA4 video tag firing on GTM's built-in YouTube
+// Video trigger. EM "Video engagement" can also auto-track YouTube, so it's FLAGGED
+// (like downloads/outbound) — the explicit tag adds the standard video_* params and
+// works even when EM video is off.
+function videoSuggestion(embeds: VideoEmbed[]): SuggestedTag | null {
+  const pages = [...new Set(embeds.filter((e) => e.provider === 'youtube').map((e) => e.page))];
+  if (!pages.length) return null;
+  return {
+    id: hashId('video|youtube'),
+    page: pages.length === 1 ? pages[0] : 'site-wide',
+    confidence: 'medium',
+    enhancedMeasurementOverlap: true,
+    platform: 'ga4_event',
+    tagName: tagNameOf('YouTube Video', 'youtube_video'),
+    measurementId: GA4_VAR,
+    eventName: YT_VIDEO_EVENT,
+    label: 'YouTube video → GA4 "video_start / video_progress / video_complete"  ⚠ Enhanced Measurement may already cover this',
+    evidence: `embedded YouTube player on ${pages.join(', ')} (note: GA4 EM "Video engagement" also tracks this when enabled)`,
+    eventParameters: VIDEO_PARAMS,
+    trigger: { name: trigNameOf('YouTube Video', 'youtube_video'), kind: 'youtube_video' },
+  };
+}
+
+// GA4's recommended scroll parameter, valued from the GTM built-in Scroll Depth variable (auto-enabled
+// when the scroll_depth trigger is created). percent_scrolled reports 25/50/75/90 as the visitor crosses
+// each vertical threshold.
+const SCROLL_PARAMS = [{ name: 'percent_scrolled', value: '{{Scroll Depth Threshold}}' }] as const;
+const SCROLL_EVENT = 'scroll';
+
+// One site-wide GA4 scroll-depth tag firing on GTM's built-in Scroll Depth trigger at 25/50/75/90%. This
+// has no on-page signal (scroll applies to every page), so it's emitted on every scan rather than derived
+// from a detected element — and, like YouTube video, it's FLAGGED for Enhanced Measurement overlap: GA4 EM
+// already sends a single `scroll` at 90%, so this earns its place only for the shallower 25/50/75%
+// milestones. LOW confidence so it ranks dead last and the operator opts in. The trigger carries no
+// thresholds, so buildTrigger applies its 25/50/75/90 default.
+function scrollSuggestion(): SuggestedTag {
+  return {
+    id: hashId('scroll|depth'),
+    page: 'site-wide',
+    confidence: 'low',
+    enhancedMeasurementOverlap: true,
+    platform: 'ga4_event',
+    tagName: tagNameOf('Scroll Depth', 'scroll_depth'),
+    measurementId: GA4_VAR,
+    eventName: SCROLL_EVENT,
+    label: 'Scroll depth → GA4 "scroll" at 25/50/75/90%  ⚠ Enhanced Measurement already sends scroll at 90%',
+    evidence:
+      'granular scroll-depth milestones (25/50/75/90%). GA4 Enhanced Measurement auto-tracks only a single ' +
+      'scroll at 90% — create this for the shallower milestones, and turn OFF EM "Scrolls" to avoid a ' +
+      'duplicate 90% event',
+    eventParameters: [...SCROLL_PARAMS],
+    trigger: { name: trigNameOf('Scroll Depth', 'scroll_depth'), kind: 'scroll_depth' },
+  };
+}
+
+// ── eCommerce funnel suggestions (only when the site is detected as a store) ──
+// The GA4 recommended ecommerce funnel, in funnel order. Each becomes a GA4 event tag with the EXPLICIT
+// event parameters GA4 recommends for that event (items/value/currency/…), each valued from an
+// {{Ecommerce X}} Data Layer variable the create flow auto-provisions (reading ecommerce.<param>). This
+// is the explicit-config alternative to the "Send Ecommerce data" toggle, so the Parameters column is
+// populated. They fire on a Custom Event trigger matching the same dataLayer event name.
+const ECOMMERCE_EVENTS = [
+  'view_item_list', 'select_item', 'view_item', 'add_to_cart', 'remove_from_cart', 'view_cart',
+  'begin_checkout', 'add_shipping_info', 'add_payment_info', 'purchase',
+] as const;
+// A human label per ecommerce event, for the tag/trigger name ("GA4 - Event - Add To Cart (Ecommerce) …").
+const ECOMMERCE_EVENT_LABEL: Record<string, string> = {
+  view_item_list: 'View Item List',
+  select_item: 'Select Item',
+  view_item: 'View Item',
+  add_to_cart: 'Add To Cart',
+  remove_from_cart: 'Remove From Cart',
+  view_cart: 'View Cart',
+  begin_checkout: 'Begin Checkout',
+  add_shipping_info: 'Add Shipping Info',
+  add_payment_info: 'Add Payment Info',
+  purchase: 'Purchase',
+};
+// GA4 ecommerce event → its recommended event parameters (the GA4 ecommerce reference), in order. Each
+// param's value is the matching {{Ecommerce X}} Data Layer variable (see ecommerceParamVar).
+const GA4_ECOMMERCE_PARAMS: Record<string, readonly string[]> = {
+  view_item_list: ['items', 'item_list_id', 'item_list_name'],
+  select_item: ['items', 'item_list_id', 'item_list_name'],
+  view_item: ['items', 'value', 'currency'],
+  add_to_cart: ['items', 'value', 'currency'],
+  remove_from_cart: ['items', 'value', 'currency'],
+  view_cart: ['items', 'value', 'currency'],
+  begin_checkout: ['items', 'value', 'currency', 'coupon'],
+  add_shipping_info: ['items', 'value', 'currency', 'coupon', 'shipping_tier'],
+  add_payment_info: ['items', 'value', 'currency', 'coupon', 'payment_type'],
+  purchase: ['items', 'value', 'currency', 'transaction_id', 'coupon', 'shipping', 'tax'],
+};
+
+/** A GA4 ecommerce param (snake_case, e.g. item_list_id) → its Data Layer variable NAME
+ *  ("Ecommerce Item List ID"). The create flow provisions a matching Data Layer variable that reads
+ *  ecommerce.<param>. Kept in lockstep with the desktop provisioner's reverse derivation
+ *  ("Ecommerce Item List ID" → ecommerce.item_list_id). PURE. */
+export function ecommerceParamVar(param: string): string {
+  const words = param
+    .split('_')
+    .map((w) => (w === 'id' ? 'ID' : w.charAt(0).toUpperCase() + w.slice(1)))
+    .join(' ');
+  return `Ecommerce ${words}`;
+}
+
+/** The GA4 ecommerce funnel event tags — emitted only for a detected ecommerce site (else []). Each
+ *  tag carries the EXPLICIT GA4 event parameters for its event (items/value/currency/…), valued from
+ *  {{Ecommerce X}} Data Layer variables the create flow auto-provisions, and fires on a Custom Event
+ *  trigger matching its dataLayer event name. These flow through the SAME dedup/rank AND the SAME
+ *  per-platform derivation as every other suggestion (Meta/etc. counterparts come for free). PURE. */
+export function ecommerceSuggestions(isEcommerce: boolean): SuggestedTag[] {
+  if (!isEcommerce) return [];
+  return ECOMMERCE_EVENTS.map((event) => {
+    const human = ECOMMERCE_EVENT_LABEL[event];
+    const params = GA4_ECOMMERCE_PARAMS[event] ?? [];
+    return {
+      id: hashId(`ecommerce|${event}`),
+      // These fire on the dataLayer event regardless of page, so they are site-wide.
+      page: 'site-wide',
+      label: `Ecommerce ${human} → GA4 "${event}"`,
+      evidence: `detected ecommerce site — GA4 ${event} funnel event`,
+      note: `Fires on a "${event}" Custom Event. Have the store push dataLayer.push({event:"${event}", ecommerce:{${params.filter((p) => p !== 'items').map((p) => `${p}:…`).join(', ')}${params.length > 1 ? ', ' : ''}items:[…]}}). Its ${params.length} event parameter(s) read the {{Ecommerce …}} Data Layer variables (auto-created on create).`,
+      confidence: 'high',
+      enhancedMeasurementOverlap: false,
+      platform: 'ga4_event',
+      tagName: `GA4 - Event - ${human} (Ecommerce) Tag`,
+      measurementId: GA4_VAR,
+      eventName: event,
+      // Explicit GA4 ecommerce parameters (items/value/currency/…), each from an {{Ecommerce X}} DLV.
+      eventParameters: params.map((p) => ({ name: p, value: `{{${ecommerceParamVar(p)}}}` })),
+      // Custom Event trigger matching the dataLayer event name (name uses a stable "(dataLayer)" suffix).
+      trigger: { name: `${human} (dataLayer) Trigger`, kind: 'custom_event', eventName: event },
+    };
+  });
+}
+
+// ── Always-/conditionally-offered tags (independent of which exact elements were
+//    found) — only emitted in `full` mode so the existing scan output is unchanged.
+
+/** The base "Google tag" (the GA4 Configuration that loads GA4 on every page).
+ *  Created via the google_tag platform — tagId is the Measurement-ID variable. The
+ *  desktop marks it "already exists" when the container already has a GA4 base tag. */
+/** Default Measurement ID for the GA4 Configuration tag — a valid-shaped placeholder
+ *  the user can keep or edit. Creating the tag makes a "GA4 Measurement ID" Constant
+ *  with this value (changeable in GTM afterwards); only an all-X / empty id is blocked. */
+export const GA4_MID_PLACEHOLDER = 'G-1234567890';
+
+export function ga4ConfigSuggestion(): SuggestedTag {
+  return {
+    id: 'ga4-config',
+    page: 'site-wide',
+    label: 'GA4 Configuration (Google tag) — loads GA4 on every page',
+    evidence: 'the base Google tag every GA4 setup needs; fires on All Pages',
+    note: `Creates a "GA4 Measurement ID" Constant variable (= ${GA4_MID_PLACEHOLDER}) and a Google tag using {{GA4 Measurement ID}}. Edit the Measurement ID here (or change the variable's value in GTM) to your real G-XXXXXXXXXX.`,
+    confidence: 'high',
+    enhancedMeasurementOverlap: false,
+    platform: 'google_tag',
+    tagName: 'GA4 Configuration',
+    // measurementId is the real id the user supplies (default = placeholder); tagId
+    // references the variable provisioned from it, so config + event tags share one id.
+    measurementId: GA4_MID_PLACEHOLDER,
+    tagId: GA4_VAR,
+    eventName: '',
+    trigger: { name: 'All Pages', kind: 'pageview' },
+  };
+}
+
+const CONF = { high: 0, medium: 1, low: 2 } as const;
+
+// ── FAQ accordion grouping ───────────────────────────────────────────────────
+// Question rows (CTA text ending in "?") are ONE FAQ, tracked by a SINGLE tag — never per-question
+// tags. The trigger follows the corpus of real FAQ triggers: PREFER a distinctive shared accordion
+// class → {{Click Element}} matches CSS "<sel>, <sel> *" (fires on the question text, the row padding,
+// OR the arrow icon); else the corpus-dominant {{Click Text}} ends with "?". Either way, when every
+// question lives on ONE page the trigger ALSO carries a {{Page Path}} condition (multiple ANDed
+// conditions in one trigger, as real containers do); a multi-page FAQ stays site-wide.
+const FAQ_UTILITY_RE = /^(flex|grid|block|inline|inline-block|hidden|relative|absolute|fixed|sticky|static|container|row|col|w|h|min|max|p[xytblr]?|m[xytblr]?|gap|space|items|justify|content|self|text|font|leading|tracking|bg|border|rounded|shadow|cursor|group|transition|duration|ease|transform|active|open|show|collapsed?)([-:].*)?$/i;
+const FAQ_ACCORDION_RE = /(accordion|faq|question|toggle|collaps|expand|disclos|panel|__item|__header|__trigger|__button|__title|__q)/i;
+// Runtime STATE tokens (Bootstrap "collapsed", SMACSS "is-open") — toggled as the accordion opens, so
+// they must never scope the trigger. Matches the trailing token so prefixed forms are caught too.
+const FAQ_STATE_RE = /(^|[-_])(collapsed?|collapsing|open(ed)?|closed?|active|expanded|show(n)?)$/i;
+// Generic component/wrapper classes that are NOT accordion-specific — a SHARED one of these (btn, card,
+// elementor-widget, …) would scope the trigger to every button/card on the site. So the fallback must
+// reject them; only a clearly accordion-ish token (matched first) or a distinctive class is allowed.
+const FAQ_GENERIC_CLASS_RE = /^(btn|button|card|cta|link|box|tile|wrap|wrapper|widget|module|component|block|content|section|nav|menu|header|footer|elementor|col|row|container|list|item|entry|node|field|group|wpb|vc|e|el|ui)([-_].*)?$/i;
+
+/** A CSS class shared by ALL the FAQ question rows to scope the accordion trigger to. Prefers a clearly
+ *  accordion-ish token; else a DISTINCTIVE shared class (>=4 chars, not a layout utility, not a generic
+ *  component/wrapper). Returns null when nothing usable is shared — so unrelated "?" buttons that merely
+ *  share a generic ".btn"/".card" wrapper are NOT grouped into a bogus, page-wide-firing tag. */
+function faqSharedClass(questions: DetectedElement[]): string | null {
+  const sets = questions.map((q) => new Set((q.className ?? '').split(/\s+/).filter(Boolean)));
+  if (!sets.length || sets.some((s) => s.size === 0)) return null;
+  // Tokens shared by EVERY question row, longest-first then alpha so the pick is deterministic.
+  const shared = [...sets[0]].filter((t) => sets.every((s) => s.has(t))).sort((a, b) => b.length - a.length || a.localeCompare(b));
+  if (!shared.length) return null;
+  // A STATE class (Bootstrap-style "collapsed"/"is-open" — toggled as the accordion opens) must never
+  // scope the trigger: it disappears from the open row, so half the clicks wouldn't fire. It can look
+  // accordion-ish ("collapsed"/"is-collapsed" match "collaps"), so BOTH picks reject utility/state
+  // tokens — leaving a stable structural class (e.g. "acc-tog") for the distinctive fallback.
+  // The token must ALSO be a plain CSS class identifier: a Tailwind arbitrary-variant class like
+  // `[&[data-state=open]>svg]:rotate-180` (Radix/shadcn accordions) is a valid ATTRIBUTE value but NOT a
+  // usable `.class` selector — `.[&…]` throws in querySelector, breaking BOTH the proof-shot locate and
+  // the created GTM tag's {{Click Element}} matchCssSelector. Reject it → fall back to Click-Text-"?" only.
+  const isCssIdent = (t: string): boolean => /^-?[A-Za-z_][A-Za-z0-9_-]*$/.test(t);
+  return (
+    shared.find((t) => isCssIdent(t) && FAQ_ACCORDION_RE.test(t) && !FAQ_UTILITY_RE.test(t) && !FAQ_STATE_RE.test(t)) ??
+    shared.find((t) => isCssIdent(t) && t.length >= 4 && !FAQ_UTILITY_RE.test(t) && !FAQ_GENERIC_CLASS_RE.test(t) && !FAQ_STATE_RE.test(t)) ??
+    null
+  );
+}
+
+function faqTagFor(questions: DetectedElement[]): SuggestedTag {
+  const pages = [...new Set(questions.map((q) => q.page))];
+  const onePage = pages.length === 1 ? pages[0] : null;
+  const distinct = new Set(questions.map((q) => q.text.replace(/\s+/g, ' ').trim().toLowerCase())).size;
+  const cls = faqSharedClass(questions);
+  // {{Click Text}} ends with "?" is the PRIMARY FAQ condition (the corpus-dominant signal) and is
+  // ALWAYS present. When a stable shared class exists it is ANDed with the {{Click Element}} CSS
+  // selector — the corpus combines them the same way ("Click Text ENDS_WITH ? AND Click Classes
+  // CONTAINS <accordion class>"), so the tag never fires on a non-question element that merely sits
+  // inside the accordion, and never on a "?" text outside it.
+  const trigger: SuggestedTag['trigger'] = {
+    name: trigNameOf('FAQ', 'all_clicks'),
+    kind: 'all_clicks',
+    clickTextValue: '?',
+    clickTextOperator: 'endsWith',
+    ...(cls ? { clickElementValue: `.${cls}, .${cls} *`, clickElementOperator: 'cssSelector' as const } : {}),
+  };
+  if (onePage) {
+    // ANDed condition scoping the trigger to the FAQ's page. Same operator guard as the
+    // form path: "contains" survives trailing slash/locale prefixes; a root/short path uses equals.
+    trigger.pagePathValue = onePage;
+    trigger.pagePathOperator = onePage.replace(/[^a-z0-9]/gi, '').length >= 3 ? 'contains' : 'equals';
+  }
+  const how = cls
+    ? `share class ".${cls}" — ONE tag fires when the clicked text ends with "?" inside the accordion (.${cls})`
+    : `are tracked by ONE tag firing when the clicked text ends with "?"`;
+  return {
+    id: hashId(`cta|faq|${cls ?? 'text'}|${onePage ?? 'site-wide'}`),
+    page: onePage ?? 'site-wide',
+    label: `FAQ accordion (${distinct} questions) → GA4 "faq_click"`,
+    evidence: `${distinct} FAQ question rows ${how}${onePage ? `; scoped to ${onePage} via {{Page Path}}` : ''}`,
+    note: 'The {{Click Text}} ends-with-"?" condition fires on a click of the question text or the row; a click landing exactly on a bare arrow icon (no text of its own) is not counted.',
+    confidence: 'medium',
+    enhancedMeasurementOverlap: false,
+    platform: 'ga4_event',
+    tagName: tagNameOf('FAQ', 'all_clicks'),
+    measurementId: GA4_VAR,
+    eventName: 'faq_click',
+    eventParameters: CLICK_PARAMS,
+    trigger,
+  };
+}
+
+/** Group FAQ question rows into ONE tag, consuming them — grouped questions are never ALSO emitted as
+ *  individual per-question CTAs. Guarded against over-folding: only GENERIC-intent "?" CTAs qualify
+ *  (an intent CTA like "Want to book a demo?" keeps its intent tag), and grouping needs ACCORDION
+ *  EVIDENCE — a page with >=2 DISTINCT question texts (accordion rows co-locate). A stray "?" CTA on
+ *  another page stays an individual CTA (so it cannot strip the class route / page scoping off a real
+ *  accordion), and a repeated identical "Questions?" button across pages never fabricates a group. */
+function extractFaqGroups(elements: DetectedElement[]): { faqTags: SuggestedTag[]; consumed: Set<DetectedElement> } {
+  const consumed = new Set<DetectedElement>();
+  const candidates = elements.filter((e) => e.kind === 'cta' && (e.intent ?? 'generic') === 'generic' && /\?\s*$/.test(e.text || ''));
+  const byPage = new Map<string, DetectedElement[]>();
+  for (const e of candidates) {
+    const list = byPage.get(e.page) ?? [];
+    list.push(e);
+    byPage.set(e.page, list);
+  }
+  const anchorPages = new Set(
+    [...byPage.entries()].filter(([, list]) => new Set(list.map((e) => e.text.replace(/\s+/g, ' ').trim().toLowerCase())).size >= 2).map(([p]) => p),
+  );
+  if (!anchorPages.size) return { faqTags: [], consumed };
+  const grouped = candidates.filter((e) => anchorPages.has(e.page));
+  for (const q of grouped) consumed.add(q);
+  return { faqTags: [faqTagFor(grouped)], consumed };
+}
+
+// ── CTA intent → conversion meaning → per-platform event ─────────────────────
+// For a CTA-derived tag the classified intent is AUTHORITATIVE (the scan already knows what the button
+// does), so each platform deriver maps by intent rather than by the coincidental keywords in the event
+// NAME (e.g. "Schedule Strategy Call" → Lead via book_demo, not Contact via the substring 'call'). The
+// intent resolves to a conversion MEANING, then each platform maps that meaning to its own event.
+type ConvMeaning = 'lead' | 'contact' | 'subscribe' | 'search' | 'add_to_cart' | 'download';
+// A CTA intent → the conversion MEANING worth a marketing-platform tag. Intents NOT here (login,
+// learn_more, faq) are NOT conversions → no platform counterpart.
+const CTA_INTENT_MEANING: Partial<Record<CtaIntent, ConvMeaning>> = {
+  book_demo: 'lead', request_quote: 'lead', get_started: 'lead', generic: 'lead',
+  contact: 'contact', contact_sales: 'contact',
+  subscribe: 'subscribe', add_to_cart: 'add_to_cart', download: 'download', search: 'search',
+};
+// Per-platform: a conversion meaning → that platform's event (undefined = skip that meaning for that
+// platform). Google Ads is handled inline in toGoogleAdsSuggestion (meaning → conversion or skip).
+const META_MEANING: Partial<Record<ConvMeaning, string>> = { lead: 'Lead', contact: 'Contact', subscribe: 'Subscribe', search: 'Search', add_to_cart: 'AddToCart', download: 'Download' };
+const PINTEREST_MEANING: Partial<Record<ConvMeaning, string>> = { lead: 'lead', contact: 'lead', subscribe: 'signup', search: 'search', add_to_cart: 'addtocart' };
+const TIKTOK_MEANING: Partial<Record<ConvMeaning, string>> = { lead: 'SubmitForm', contact: 'Contact', subscribe: 'Subscribe', search: 'Search', add_to_cart: 'AddToCart', download: 'Download' };
+const REDDIT_MEANING: Partial<Record<ConvMeaning, string>> = { lead: 'Lead', contact: 'Lead', subscribe: 'SignUp', search: 'Search', add_to_cart: 'AddToCart' };
+// Google Ads treats these meanings as conversions; search/download are NOT (→ null).
+const GOOGLE_ADS_CONVERSION_MEANINGS = new Set<ConvMeaning>(['lead', 'contact', 'subscribe', 'add_to_cart']);
+/** The conversion MEANING for a CTA-derived tag, or null when the CTA carries no ctaIntent (non-CTA
+ *  tags) or its intent is not a conversion (login/learn_more/faq → no platform counterpart). */
+const ctaMeaning = (ga4: SuggestedTag): ConvMeaning | null =>
+  ga4.ctaIntent ? (CTA_INTENT_MEANING[ga4.ctaIntent] ?? null) : null;
+
+// ── Meta (Facebook) Pixel suggestions ────────────────────────────────────────
+// Meta suggestions are DERIVED from the GA4 ones so a Meta tag REUSES its GA4 source's trigger name —
+// on create, the shared trigger create/reuse-by-name path attaches one trigger to both (GA4 + Meta).
+// A Meta suggestion reuses the SuggestedTag fields exactly like GA4: `measurementId` holds the Meta
+// Pixel ID (default {{Meta Pixel ID}}), `eventName` is the Meta event, no eventParameters.
+const META_PIXEL_VAR = '{{Meta Pixel ID}}';
+
+// The Meta standard events that are ECOMMERCE — their Object Properties are sourced from the ecommerce
+// dataLayer variables (value/currency/items) so the Meta tag ships with its conversion value. Non-
+// ecommerce Meta events (Lead/Contact/Subscribe/CompleteRegistration/PageView) get NO eventParameters,
+// so a form Lead is never mislabelled with a value/currency it doesn't have.
+const ECOMMERCE_META_EVENTS = new Set(['ViewContent', 'AddToCart', 'InitiateCheckout', 'AddPaymentInfo', 'Purchase', 'AddToWishlist']);
+// The Meta Object Properties for an ecommerce event — ONLY the safe 1:1 bindings value + currency
+// (from the `dlv - ecommerce.*` variables the create flow provisions). content_ids/contents are
+// intentionally omitted: Meta's `contents` expects [{id, quantity, item_price}] but the GA4 dataLayer
+// ecommerce.items array is [{item_id, item_name, price, quantity}], so a raw {{dlv - ecommerce.items}}
+// would send malformed data (this mirrors the repo's META_WEB_OBJECT_PROP_BINDING decision). The user
+// wires content_ids/contents themselves once the items array is reshaped.
+const ECOMMERCE_META_OBJECT_PROPS: Array<{ name: string; value: string }> = [
+  { name: 'value', value: '{{dlv - ecommerce.value}}' },
+  { name: 'currency', value: '{{dlv - ecommerce.currency}}' },
+];
+
+/** Map a GA4 SuggestedTag to its Meta (Facebook) Pixel counterpart, or null when there is no sensible
+ *  Meta event (generic outbound/social/video/faq/learn-more clicks). PURE. The base google_tag becomes
+ *  the Meta base PageView pixel; a ga4_event picks the Meta standard/custom event from the GA4 event
+ *  name by normalized keyword (forms with no keyword default to Lead). */
+export function toMetaSuggestion(ga4: SuggestedTag): SuggestedTag | null {
+  const clone = { ...ga4 };
+  if (ga4.platform === 'google_tag') {
+    // The GA4 base (Google tag) → the Meta BASE pixel: PageView on all pages, no object properties.
+    return {
+      ...clone,
+      platform: 'meta_pixel',
+      eventName: 'PageView',
+      measurementId: META_PIXEL_VAR,
+      tagName: 'Meta Pixel - Base Code',
+      tagId: undefined,
+      configSettings: undefined,
+      eventParameters: undefined,
+      eventParamLookups: undefined,
+      enhancedMeasurementOverlap: false,
+      id: 'meta-' + ga4.id,
+      label: 'Meta Pixel base code (PageView on all pages)',
+      trigger: ga4.trigger,
+    };
+  }
+  // ga4_event → pick the Meta event. For a CTA the classified INTENT is authoritative (map by meaning,
+  // NOT the event-name keywords — so "Schedule Strategy Call" → Lead via book_demo, not Contact via the
+  // coincidental 'call' substring); a non-conversion intent (learn_more/login/faq) → null. Every non-CTA
+  // tag (email/phone/ecommerce/form) keeps the existing event-name keyword chain unchanged.
+  let metaEvent: string | null = null;
+  const meaning = ctaMeaning(ga4);
+  if (ga4.ctaIntent) {
+    metaEvent = meaning ? (META_MEANING[meaning] ?? null) : null;
+    if (!metaEvent) return null;
+  } else {
+    const key = ga4.eventName.toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (key.includes('purchase')) metaEvent = 'Purchase';
+    // add_payment_info → AddPaymentInfo — MUST be checked before the generic add/cart branch so it
+    // doesn't accidentally fall through (it has no 'cart' token, but keep it explicit and first).
+    else if (key.includes('paymentinfo') || key.includes('addpaymentinfo')) metaEvent = 'AddPaymentInfo';
+    else if (key.includes('wishlist')) metaEvent = 'AddToWishlist';
+    else if (key.includes('addtocart') || (key.includes('add') && key.includes('cart'))) metaEvent = 'AddToCart';
+    else if (key.includes('checkout') || key.includes('initiatecheckout')) metaEvent = 'InitiateCheckout';
+    else if (key.includes('viewitem') || key.includes('viewcontent')) metaEvent = 'ViewContent';
+    else if (key.includes('search')) metaEvent = 'Search';
+    else if (key.includes('subscribe') || key.includes('newsletter')) metaEvent = 'Subscribe';
+    else if (key.includes('signup') || key.includes('register')) metaEvent = 'CompleteRegistration';
+    else if (key.includes('lead') || key.includes('contact') || key.includes('quote') || key.includes('demo') || key.includes('getstarted')) metaEvent = 'Lead';
+    else if (key.includes('email')) metaEvent = 'Contact';
+    else if (key.includes('phone') || key.includes('call')) metaEvent = 'Contact';
+    else if (key.includes('download')) metaEvent = 'Download';
+    else if (ga4.trigger.kind === 'form_submit') metaEvent = 'Lead'; // forms default to Lead
+    else return null; // no Meta counterpart — skip generic clicks (outbound/social/video/faq/learn_more)
+  }
+  // ECOMMERCE Meta events carry Object Properties sourced from the ecommerce dlv variables (value/
+  // currency/contents); every other Meta event keeps eventParameters undefined (a form Lead must NOT
+  // gain a value/currency it doesn't have).
+  const eventParameters = ECOMMERCE_META_EVENTS.has(metaEvent) ? ECOMMERCE_META_OBJECT_PROPS : undefined;
+  return {
+    ...clone,
+    platform: 'meta_pixel',
+    eventName: metaEvent,
+    measurementId: META_PIXEL_VAR,
+    tagName: 'Meta - ' + metaEvent + ' - ' + ga4.tagName.replace(/^GA4 - (Event - )?/, ''),
+    id: 'meta-' + ga4.id,
+    label: 'Meta ' + metaEvent + ': ' + ga4.label,
+    evidence: ga4.evidence,
+    note: ga4.note,
+    enhancedMeasurementOverlap: false,
+    eventParameters,
+    eventParamLookups: undefined,
+    tagId: undefined,
+    configSettings: undefined,
+    trigger: ga4.trigger,
+  };
+}
+
+// ── Additional ad-platform suggestions (Pinterest / TikTok / LinkedIn / Reddit / Google Ads) ──
+// Each mirrors toMetaSuggestion: DERIVE from a GA4 SuggestedTag and REUSE its trigger (ga4.trigger),
+// so on create the shared trigger create/reuse-by-name path attaches ONE trigger to both. Each returns
+// SuggestedTag | null (null = no sensible mapping for that GA4 event). measurementId holds the
+// platform's ID variable, eventName the platform's event, eventParameters undefined (event-only — no
+// object properties yet, matching non-ecommerce Meta). These new pixels have no built-in consent, like
+// meta_pixel; the container audit already flags ungated ones, so we do NOT auto-gate here.
+
+const PINTEREST_TAG_VAR = '{{Pinterest Tag ID}}';
+const TIKTOK_PIXEL_VAR = '{{TikTok Pixel ID}}';
+const LINKEDIN_PARTNER_VAR = '{{LinkedIn Partner ID}}';
+const REDDIT_PIXEL_VAR = '{{Reddit Pixel ID}}';
+const GOOGLE_ADS_CONVERSION_ID_VAR = '{{Google Ads Conversion ID}}';
+const GOOGLE_ADS_CONVERSION_LABEL_VAR = '{{Google Ads Conversion Label}}';
+
+/** The GA4-event-name keyword (lowercased, non-alphanumerics stripped) used to pick a platform event. */
+const ga4Key = (ga4: SuggestedTag): string => ga4.eventName.toLowerCase().replace(/[^a-z0-9]/g, '');
+/** Tag-name suffix shared across platforms: the GA4 tag name minus the "GA4 - [Event - ]" prefix. */
+const ga4Suffix = (ga4: SuggestedTag): string => ga4.tagName.replace(/^GA4 - (Event - )?/, '');
+
+/** Map a GA4 SuggestedTag → its Pinterest tag counterpart, or null. The base google_tag → the Pinterest
+ *  base tag (eventName 'pagevisit', All Pages); a ga4_event → the Pinterest event for its keyword. PURE. */
+export function toPinterestSuggestion(ga4: SuggestedTag): SuggestedTag | null {
+  const clone = { ...ga4 };
+  if (ga4.platform === 'google_tag') {
+    return {
+      ...clone,
+      platform: 'pinterest_tag',
+      eventName: 'pagevisit',
+      measurementId: PINTEREST_TAG_VAR,
+      tagName: 'Pinterest - Base Tag',
+      tagId: undefined,
+      configSettings: undefined,
+      eventParameters: undefined,
+      eventParamLookups: undefined,
+      conversionLabel: undefined,
+      enhancedMeasurementOverlap: false,
+      id: 'pinterest-' + ga4.id,
+      label: 'Pinterest base tag (PageVisit on all pages)',
+      trigger: ga4.trigger,
+    };
+  }
+  // A CTA maps by its classified INTENT (authoritative); every non-CTA tag keeps the event-name keyword
+  // chain. A non-conversion CTA intent (or a meaning Pinterest doesn't support) → null.
+  let event: string | null = null;
+  if (ga4.ctaIntent) {
+    const meaning = ctaMeaning(ga4);
+    event = meaning ? (PINTEREST_MEANING[meaning] ?? null) : null;
+    if (!event) return null;
+  } else {
+    const key = ga4Key(ga4);
+    if (key.includes('viewitem') || key.includes('viewcontent')) event = 'viewcontent';
+    else if (key.includes('addtocart') || (key.includes('add') && key.includes('cart'))) event = 'addtocart';
+    else if (key.includes('purchase') || key.includes('checkout')) event = 'checkout';
+    else if (key.includes('signup') || key.includes('register')) event = 'signup';
+    else if (key.includes('generatelead') || key.includes('lead') || key.includes('contact')) event = 'lead';
+    else if (key.includes('search')) event = 'search';
+    else return null;
+  }
+  return {
+    ...clone,
+    platform: 'pinterest_tag',
+    eventName: event,
+    measurementId: PINTEREST_TAG_VAR,
+    tagName: 'Pinterest - ' + event + ' - ' + ga4Suffix(ga4),
+    id: 'pinterest-' + ga4.id,
+    label: 'Pinterest ' + event + ': ' + ga4.label,
+    evidence: ga4.evidence,
+    note: ga4.note,
+    enhancedMeasurementOverlap: false,
+    eventParameters: undefined,
+    eventParamLookups: undefined,
+    tagId: undefined,
+    configSettings: undefined,
+    conversionLabel: undefined,
+    trigger: ga4.trigger,
+  };
+}
+
+/** Map a GA4 SuggestedTag → its TikTok Pixel counterpart, or null. Base google_tag → TikTok base tag
+ *  (eventName 'Pageview', All Pages); a ga4_event → the TikTok standard event for its keyword. PURE. */
+export function toTikTokSuggestion(ga4: SuggestedTag): SuggestedTag | null {
+  const clone = { ...ga4 };
+  if (ga4.platform === 'google_tag') {
+    return {
+      ...clone,
+      platform: 'tiktok_pixel',
+      eventName: 'Pageview',
+      measurementId: TIKTOK_PIXEL_VAR,
+      tagName: 'TikTok - Base Pixel',
+      tagId: undefined,
+      configSettings: undefined,
+      eventParameters: undefined,
+      eventParamLookups: undefined,
+      conversionLabel: undefined,
+      enhancedMeasurementOverlap: false,
+      id: 'tiktok-' + ga4.id,
+      label: 'TikTok base pixel (Pageview on all pages)',
+      trigger: ga4.trigger,
+    };
+  }
+  // A CTA maps by its classified INTENT (authoritative); every non-CTA tag keeps the event-name keyword
+  // chain. A non-conversion CTA intent → null.
+  let event: string | null = null;
+  if (ga4.ctaIntent) {
+    const meaning = ctaMeaning(ga4);
+    event = meaning ? (TIKTOK_MEANING[meaning] ?? null) : null;
+    if (!event) return null;
+  } else {
+    const key = ga4Key(ga4);
+    if (key.includes('viewitem') || key.includes('viewcontent')) event = 'ViewContent';
+    else if (key.includes('addtowishlist') || key.includes('wishlist')) event = 'AddToWishlist';
+    else if (key.includes('addtocart') || (key.includes('add') && key.includes('cart'))) event = 'AddToCart';
+    else if (key.includes('begincheckout') || key.includes('initiatecheckout') || key.includes('checkout')) event = 'InitiateCheckout';
+    else if (key.includes('purchase')) event = 'CompletePayment';
+    else if (key.includes('generatelead') || key.includes('lead')) event = 'SubmitForm';
+    else if (key.includes('signup') || key.includes('register')) event = 'CompleteRegistration';
+    else if (key.includes('search')) event = 'Search';
+    else if (key.includes('contact')) event = 'Contact';
+    else return null;
+  }
+  return {
+    ...clone,
+    platform: 'tiktok_pixel',
+    eventName: event,
+    measurementId: TIKTOK_PIXEL_VAR,
+    tagName: 'TikTok - ' + event + ' - ' + ga4Suffix(ga4),
+    id: 'tiktok-' + ga4.id,
+    label: 'TikTok ' + event + ': ' + ga4.label,
+    evidence: ga4.evidence,
+    note: ga4.note,
+    enhancedMeasurementOverlap: false,
+    eventParameters: undefined,
+    eventParamLookups: undefined,
+    tagId: undefined,
+    configSettings: undefined,
+    conversionLabel: undefined,
+    trigger: ga4.trigger,
+  };
+}
+
+/** Map a GA4 SuggestedTag → its LinkedIn Insight counterpart. LinkedIn per-event conversions are
+ *  defined Campaign-Manager-side, so we ONLY derive the BASE Insight Tag (from the base google_tag);
+ *  every ga4_event returns null. So LinkedIn contributes exactly ONE base tag. PURE. */
+export function toLinkedInSuggestion(ga4: SuggestedTag): SuggestedTag | null {
+  if (ga4.platform !== 'google_tag') return null;
+  return {
+    ...ga4,
+    platform: 'linkedin_insight',
+    eventName: '',
+    measurementId: LINKEDIN_PARTNER_VAR,
+    tagName: 'LinkedIn - Insight Tag',
+    tagId: undefined,
+    configSettings: undefined,
+    eventParameters: undefined,
+    eventParamLookups: undefined,
+    conversionLabel: undefined,
+    enhancedMeasurementOverlap: false,
+    id: 'linkedin-' + ga4.id,
+    label: 'LinkedIn Insight Tag (base, all pages)',
+    trigger: ga4.trigger,
+  };
+}
+
+/** Map a GA4 SuggestedTag → its Reddit Pixel counterpart, or null. Base google_tag → Reddit base tag
+ *  (eventName 'PageVisit', All Pages); a ga4_event → the Reddit event for its keyword. PURE. */
+export function toRedditSuggestion(ga4: SuggestedTag): SuggestedTag | null {
+  const clone = { ...ga4 };
+  if (ga4.platform === 'google_tag') {
+    return {
+      ...clone,
+      platform: 'reddit_pixel',
+      eventName: 'PageVisit',
+      measurementId: REDDIT_PIXEL_VAR,
+      tagName: 'Reddit - Base Pixel',
+      tagId: undefined,
+      configSettings: undefined,
+      eventParameters: undefined,
+      eventParamLookups: undefined,
+      conversionLabel: undefined,
+      enhancedMeasurementOverlap: false,
+      id: 'reddit-' + ga4.id,
+      label: 'Reddit base pixel (PageVisit on all pages)',
+      trigger: ga4.trigger,
+    };
+  }
+  // A CTA maps by its classified INTENT (authoritative); every non-CTA tag keeps the event-name keyword
+  // chain. A non-conversion CTA intent (or a meaning Reddit doesn't support, e.g. download) → null.
+  let event: string | null = null;
+  if (ga4.ctaIntent) {
+    const meaning = ctaMeaning(ga4);
+    event = meaning ? (REDDIT_MEANING[meaning] ?? null) : null;
+    if (!event) return null;
+  } else {
+    const key = ga4Key(ga4);
+    if (key.includes('viewitem') || key.includes('viewcontent')) event = 'ViewContent';
+    else if (key.includes('addtowishlist') || key.includes('wishlist')) event = 'AddToWishlist';
+    else if (key.includes('addtocart') || (key.includes('add') && key.includes('cart'))) event = 'AddToCart';
+    else if (key.includes('purchase')) event = 'Purchase';
+    else if (key.includes('generatelead') || key.includes('lead') || key.includes('contact')) event = 'Lead';
+    else if (key.includes('signup') || key.includes('register')) event = 'SignUp';
+    else if (key.includes('search')) event = 'Search';
+    else return null;
+  }
+  return {
+    ...clone,
+    platform: 'reddit_pixel',
+    eventName: event,
+    measurementId: REDDIT_PIXEL_VAR,
+    tagName: 'Reddit - ' + event + ' - ' + ga4Suffix(ga4),
+    id: 'reddit-' + ga4.id,
+    label: 'Reddit ' + event + ': ' + ga4.label,
+    evidence: ga4.evidence,
+    note: ga4.note,
+    enhancedMeasurementOverlap: false,
+    eventParameters: undefined,
+    eventParamLookups: undefined,
+    tagId: undefined,
+    configSettings: undefined,
+    conversionLabel: undefined,
+    trigger: ga4.trigger,
+  };
+}
+
+/** Map a GA4 SuggestedTag → its Google Ads counterpart, or null. The base google_tag → a Conversion
+ *  Linker (All Pages). A CONVERSION-worthy GA4 event (a form submit, or an event about lead/contact/
+ *  purchase/sign-up) → a Google Ads Conversion tag (measurementId = the Conversion ID, conversionLabel
+ *  = the Conversion Label). All other ga4_events return null (Ads is conversion-focused). PURE. */
+export function toGoogleAdsSuggestion(ga4: SuggestedTag): SuggestedTag | null {
+  if (ga4.platform === 'google_tag') {
+    return {
+      ...ga4,
+      platform: 'conversion_linker',
+      eventName: '',
+      measurementId: '',
+      tagName: 'Google Ads - Conversion Linker',
+      tagId: undefined,
+      configSettings: undefined,
+      eventParameters: undefined,
+      eventParamLookups: undefined,
+      conversionLabel: undefined,
+      enhancedMeasurementOverlap: false,
+      id: 'gads-' + ga4.id,
+      label: 'Google Ads Conversion Linker (all pages)',
+      trigger: ga4.trigger,
+    };
+  }
+  // A CTA maps by its classified INTENT (authoritative): it is a conversion only when the intent's
+  // meaning is a lead/contact/subscribe/add_to_cart (search/download/non-conversion → null). Every
+  // non-CTA tag keeps the existing keyword rule (form submit, or a lead/contact/purchase/sign-up event).
+  let isConversion: boolean;
+  if (ga4.ctaIntent) {
+    const meaning = ctaMeaning(ga4);
+    isConversion = !!meaning && GOOGLE_ADS_CONVERSION_MEANINGS.has(meaning);
+  } else {
+    const key = ga4Key(ga4);
+    isConversion =
+      ga4.trigger.kind === 'form_submit' ||
+      key.includes('generatelead') || key.includes('lead') || key.includes('contact') ||
+      key.includes('purchase') || key.includes('signup');
+  }
+  if (!isConversion) return null;
+  return {
+    ...ga4,
+    platform: 'google_ads_conversion',
+    eventName: ga4.eventName,
+    measurementId: GOOGLE_ADS_CONVERSION_ID_VAR,
+    conversionLabel: GOOGLE_ADS_CONVERSION_LABEL_VAR,
+    tagName: 'Google Ads - Conversion - ' + ga4Suffix(ga4),
+    id: 'gads-' + ga4.id,
+    label: 'Google Ads Conversion: ' + ga4.label,
+    evidence: ga4.evidence,
+    note: ga4.note,
+    enhancedMeasurementOverlap: false,
+    eventParameters: undefined,
+    eventParamLookups: undefined,
+    tagId: undefined,
+    configSettings: undefined,
+    trigger: ga4.trigger,
+  };
+}
+
+/** The non-GA4 platform → its derivation function. buildSuggestions loops this so every platform is
+ *  handled uniformly (Meta was the original special-case). */
+const PLATFORM_DERIVERS: Record<Exclude<SuggestPlatform, 'ga4'>, (ga4: SuggestedTag) => SuggestedTag | null> = {
+  meta: toMetaSuggestion,
+  pinterest: toPinterestSuggestion,
+  tiktok: toTikTokSuggestion,
+  linkedin: toLinkedInSuggestion,
+  reddit: toRedditSuggestion,
+  google_ads: toGoogleAdsSuggestion,
+};
+
+/** opts.full prepends the GA4 Configuration tag (always) so the review list is the COMPLETE set of
+ *  creatable tags — not only the scan-derived ones. opts.platforms (default ['ga4']) selects which
+ *  platforms to emit: 'ga4' returns the GA4 tags; every other selected platform returns its derived
+ *  counterparts (each reusing its GA4 source's trigger name, so the trigger is SHARED on create). A
+ *  non-'ga4' selection computes GA4 internally but does not return it. */
+/** Flag near-duplicate click tags: a shorter EQUALS click-text that appears as a whole phrase inside
+ *  another CTA's text (e.g. "Free Audit" inside "Get Free Audit"). The shorter tag may never fire (the
+ *  real button is the longer text) or may double-count — so it gets a note to verify the exact label.
+ *  Mutates the suggestions in place. PURE otherwise. */
+export function flagOverlappingClickTexts(suggestions: SuggestedTag[]): void {
+  const esc = (t: string): string => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const clicks = suggestions.filter(
+    (s) =>
+      (s.trigger.kind === 'link_click' || s.trigger.kind === 'all_clicks') &&
+      Boolean(s.trigger.clickTextValue) &&
+      (s.trigger.clickTextOperator ?? 'equals') === 'equals',
+  );
+  for (const a of clicks) {
+    const at = (a.trigger.clickTextValue ?? '').trim().toLowerCase();
+    if (at.length < 3) continue;
+    const inside = clicks.find((b) => {
+      if (b === a) return false;
+      const bt = (b.trigger.clickTextValue ?? '').trim().toLowerCase();
+      return bt.length > at.length && new RegExp(`(^|\\s)${esc(at)}(\\s|$)`).test(bt);
+    });
+    if (inside) {
+      const warn = `⚠ "${a.trigger.clickTextValue}" is contained in another CTA "${inside.trigger.clickTextValue}" — an "equals" Click Text trigger on the shorter text may NOT fire (if the real button is the longer one) or may double-count with it. Verify the exact button label, or use "contains".`;
+      a.note = a.note ? `${a.note} ${warn}` : warn;
+    }
+  }
+}
+
+/** The destination PATHNAME of a CTA link, normalized: lowercased, no query/hash, no trailing slash,
+ *  no file extension. Returns '' for the homepage or a path with no usable segment (→ keep the
+ *  per-text CTA identity). */
+function ctaDestPath(href: string): string {
+  let path: string;
+  try {
+    path = new URL(href, 'https://x.invalid').pathname;
+  } catch {
+    path = href.split(/[?#]/)[0];
+  }
+  path = path.toLowerCase().replace(/\/+$/, '').replace(/\.[a-z0-9]{1,5}$/, '');
+  return /[a-z0-9]/.test(path.replace(/^\//, '')) ? path : '';
+}
+
+/** A human label from a destination path's last segment ("/services/free-audit" → "free audit"). */
+function pathToLabel(path: string): string {
+  const tail = path.split('/').filter(Boolean).slice(-1)[0] ?? '';
+  return tail.replace(/[-_]+/g, ' ').trim();
+}
+
+/**
+ * Collapse "the same audit reached by different button wordings" into ONE tag. When 2+ recognized-intent
+ * LINK CTAs go to the SAME destination path but carry DIFFERENT visible text ("Get a Free Audit" /
+ * "Get Free Audit" / "Free Audit" all → /free-audit), the per-text builder would emit a separate tag for
+ * each — the "duplicate" users see. This groups them by (intent + destination) and emits ONE tag that
+ * fires on {{Click URL}} (so every wording is captured), named from the destination. Only fires for a
+ * genuine cluster (2+ DISTINCT wordings to one destination); a single wording — even across pages — and
+ * every button/hrefless/generic CTA fall through to the unchanged per-text path (so descriptive names
+ * like "View Size Chart" are never replaced by an uninformative path).
+ */
+function extractSameDestinationCtaGroups(
+  elements: DetectedElement[],
+): { ctaDestTags: SuggestedTag[]; consumed: Set<DetectedElement> } {
+  const consumed = new Set<DetectedElement>();
+  const ctaDestTags: SuggestedTag[] = [];
+  const groups = new Map<string, DetectedElement[]>();
+  for (const el of elements) {
+    if (el.kind !== 'cta') continue;
+    if (typeof el.href !== 'string' || el.href.length === 0) continue; // LINK CTAs only (buttons have no destination)
+    const intent = el.intent ?? 'generic';
+    if (intent === 'generic') continue; // recognized intents only — never group unrecognized "prominent buttons"
+    const dest = ctaDestPath(el.href);
+    if (!dest) continue; // needs a usable destination path
+    const key = `${intent}|${dest}`;
+    const arr = groups.get(key);
+    if (arr) arr.push(el);
+    else groups.set(key, [el]);
+  }
+  const normText = (t: string): string => t.replace(/\s+/g, ' ').trim();
+  for (const [key, els] of groups) {
+    const wordings = [...new Set(els.map((e) => normText(e.text)).filter(Boolean))];
+    if (wordings.length < 2) continue; // a single wording is not a duplicate — leave it per-text
+    els.forEach((e) => consumed.add(e));
+    const dest = key.slice(key.indexOf('|') + 1);
+    const pathLabel = pathToLabel(dest);
+    // Name from the destination when its last segment is descriptive; else the shortest wording
+    // (a short path like "/p" is a poor name; the button text reads better).
+    const shortest = [...wordings].sort((a, b) => a.length - b.length)[0];
+    const label = (pathLabel.replace(/[^a-z0-9]/gi, '').length >= 3 ? pathLabel : shortest).slice(0, 60);
+    const ev = eventFromLabel(label, 'click');
+    const pages = new Set(els.map((e) => e.page));
+    ctaDestTags.push({
+      id: hashId('cta-dest|' + key),
+      page: pages.size > 1 ? 'site-wide' : (els[0].page || 'site-wide'),
+      confidence: 'medium',
+      enhancedMeasurementOverlap: false,
+      platform: 'ga4_event',
+      tagName: tagNameOf(label, 'link_click'),
+      measurementId: GA4_VAR,
+      eventName: ev,
+      label: `Any click to ${dest} → GA4 "${ev}" (one tag for ${wordings.length} button wordings)`,
+      evidence: `${wordings.length} CTAs to ${dest}: ${wordings.map((w) => `"${w}"`).join(', ')} (intent: ${els[0].intent})`,
+      ctaIntent: els[0].intent ?? 'generic',
+      eventParameters: CLICK_PARAMS,
+      trigger: {
+        name: trigNameOf(label, 'link_click'),
+        kind: 'link_click',
+        clickUrlValue: dest,
+        clickUrlOperator: 'contains',
+      },
+    });
+  }
+  return { ctaDestTags, consumed };
+}
+
+/** A "Share this article" widget → ONE GA4 `share` tag. A share cluster mixes network SHARE links
+ *  (twitter/intent, facebook/sharer, linkedin/share-offsite) with a "Copy link" clipboard BUTTON. A
+ *  single {{Click Text}} Lookup Table fires one tag for every control, and a companion method Lookup maps
+ *  each control's visible text → the GA4 `share` `method` (twitter/linkedin/facebook/copy_link). Needs 2+
+ *  controls (a lone share/copy button isn't a widget). The consumed elements are not also emitted
+ *  per-element. Text-based, so an ICON-ONLY share bar (no visible label) is out of scope — noted on the
+ *  tag. PURE. */
+export function extractShareControls(elements: DetectedElement[]): { shareTags: SuggestedTag[]; consumed: Set<DetectedElement> } {
+  const consumed = new Set<DetectedElement>();
+  const shareEls = elements.filter((e) => e.kind === 'share' && (e.text ?? '').trim());
+  if (shareEls.length < 2) return { shareTags: [], consumed };
+  // Distinct control texts (case-insensitive), keeping the first-seen casing → the Lookup rows. Two
+  // controls with the same label collapse to one row (one method).
+  const byText = new Map<string, { text: string; method: string }>();
+  for (const e of shareEls) {
+    const text = e.text.replace(/\s+/g, ' ').trim().slice(0, 60);
+    const key = text.toLowerCase();
+    if (!byText.has(key)) byText.set(key, { text, method: e.shareMethod || 'other' });
+    consumed.add(e);
+  }
+  const controls = [...byText.values()];
+  if (controls.length < 2) return { shareTags: [], consumed: new Set() }; // all one label → not a real widget
+  const texts = controls.map((c) => c.text);
+  // Screenshot on a page that ACTUALLY has the widget (a blog post), not "site-wide" → homepage, which
+  // usually has no share bar. The tag itself is click-text scoped, so it fires on every page regardless.
+  const pages = [...new Set(shareEls.map((e) => e.page).filter(Boolean))];
+  const page = pages[0] || 'site-wide';
+  const tag: SuggestedTag = {
+    id: hashId('share|' + texts.slice().sort().join('|')),
+    page,
+    confidence: 'medium',
+    enhancedMeasurementOverlap: false,
+    platform: 'ga4_event',
+    tagName: tagNameOf('Social Share', 'all_clicks'),
+    measurementId: GA4_VAR,
+    eventName: 'share',
+    label: `Share buttons (${texts.join(', ')}) → GA4 "share"`,
+    evidence: `social-share widget with ${controls.length} controls (${texts.join(', ')}) → one GA4 "share" event; the "method" parameter is set to the control clicked`,
+    note: 'Fires on the visible TEXT of each share control (incl. "Copy link"). An icon-only share bar with no text label would instead need a {{Click URL}} share-endpoint trigger.',
+    eventParameters: [{ name: 'method', value: '{{Lookup - Share Method}}' }, ...PAGE_PARAMS],
+    eventParamLookups: [{ variableName: 'Lookup - Share Method', input: CLICK_TEXT, rows: controls.map((c) => ({ key: c.text, value: c.method })), defaultValue: 'other' }],
+    trigger: {
+      name: trigNameOf('Social Share', 'all_clicks'),
+      kind: 'all_clicks',
+      lookupTable: { name: 'Lookup - Share Control', texts },
+    },
+  };
+  return { shareTags: [tag], consumed };
+}
+
+export function buildSuggestions(
+  input: SuggestInput,
+  opts: { full?: boolean; platforms?: SuggestPlatform[] } = {},
+): SuggestedTag[] {
+  const scopeCtx = nonUniqueFormScopes(input.forms);
+  // Social trigger fires on ONLY the exact domains scraped from the site's links.
+  const presentDomains = new Set(
+    input.elements.filter((e) => e.kind === 'social' && e.socialDomain).map((e) => e.socialDomain as string),
+  );
+  const socialPattern = buildSocialUrlPattern(presentDomains);
+  // FAQ accordion rows (>=2 question CTAs sharing a class on a page) become ONE tag each; the consumed
+  // question elements are NOT also emitted as individual per-question CTAs.
+  const { faqTags, consumed } = extractFaqGroups(input.elements);
+  // Same-destination CTA collapse: 2+ recognized-intent link CTAs to the SAME destination but with
+  // DIFFERENT wording ("Get a Free Audit" / "Get Free Audit" / "Free Audit" → /free-audit) become ONE
+  // tag that fires on {{Click URL}}. The consumed elements are not also emitted per-text.
+  const { ctaDestTags, consumed: ctaConsumed } = extractSameDestinationCtaGroups(input.elements);
+  // "Share this article" widget → ONE GA4 `share` tag (twitter/linkedin/facebook/copy_link); the share
+  // controls are consumed so they aren't also emitted individually.
+  const { shareTags, consumed: shareConsumed } = extractShareControls(input.elements);
+  // A non-link contact block is chrome AROUND a real link as often as it is a standalone element:
+  // `<p class="dealer-phone-button"><a href="tel:…" class="dealer-phone">` yields both, and offering
+  // a class-keyed tag beside the tel: one is a duplicate of the same interaction. So a non-link block
+  // is kept ONLY when no real link of that kind exists on its page. Scoped per page, because a site
+  // can legitimately link phones on one page and render them as plain text on another.
+  const linkedContactKinds = new Set(
+    input.elements.filter((e) => !e.nonLink && e.href).map((e) => `${e.page}|${e.kind}`),
+  );
+  const redundantBlock = (e: DetectedElement): boolean => !!e.nonLink && linkedContactKinds.has(`${e.page}|${e.kind}`);
+  const skip = (e: DetectedElement): boolean => consumed.has(e) || ctaConsumed.has(e) || shareConsumed.has(e) || redundantBlock(e);
+  const raw: SuggestedTag[] = [
+    ...input.forms.map((f) => formSuggestion(f, scopeCtx)),
+    ...faqTags,
+    ...ctaDestTags,
+    ...shareTags,
+    ...input.elements.filter((e) => !skip(e)).map((e) => elementSuggestion(e, socialPattern)),
+    videoSuggestion(input.videoEmbeds ?? []),
+    // Site-wide scroll-depth tag. It has no on-page signal (scroll applies everywhere), so — like the
+    // GA4 Configuration tag — it's part of the COMPLETE list only (opts.full), not the lean MCP scan;
+    // that also keeps it off the default suggestion count. EM-flagged + low confidence, so it ranks last.
+    // Its Meta/etc. counterparts are NOT derived — scroll depth is a GA4-only engagement signal, so the
+    // platform derivers return null for it.
+    ...(opts.full ? [scrollSuggestion()] : []),
+    // eCommerce funnel event tags — only for a detected store. They flow through the SAME dedup/rank
+    // AND the SAME Meta derivation (toMetaSuggestion) below, so their Meta counterparts come for free.
+    ...ecommerceSuggestions(input.websiteType === 'ecommerce'),
+  ].filter((x): x is SuggestedTag => x !== null);
+
+  // Site-wide dedup: the same tag (event + trigger filter + kind) seen on multiple
+  // pages — e.g. a footer email link on every page — collapses to ONE suggestion
+  // marked "site-wide", instead of N copies.
+  const byKey = new Map<string, SuggestedTag>();
+  for (const s of raw) {
+    // CTAs are distinguished by their click-text filter, and downloads by their
+    // per-file-type click-URL filter (one PDF tag, one ZIP tag, …) — distinct ones
+    // stay distinct; everything else genuinely collapses to one tag (one mailto:,
+    // one outbound, etc.). The eventParameters are now all GTM-variable refs
+    // (identical across instances), so the trigger filter is the discriminator,
+    // not the parameter value.
+    const key = `${s.eventName}|${s.trigger.kind}|${s.trigger.clickUrlValue ?? ''}|${s.trigger.clickTextValue ?? ''}|${s.trigger.clickElementValue ?? ''}|${s.trigger.clickIdValue ?? ''}|${s.trigger.clickClassesValue ?? ''}|${s.trigger.formIdValue ?? ''}|${s.trigger.formClassesValue ?? ''}|${s.trigger.pagePathValue ?? ''}|${s.trigger.pageUrlValue ?? ''}`;
+    const seen = byKey.get(key);
+    if (!seen) byKey.set(key, { ...s });
+    else if (seen.page !== s.page) seen.page = 'site-wide';
+  }
+
+  // Rank: confidence (high→low), then real-value (non-EM-overlap first), then label.
+  const ranked = [...byKey.values()].sort(
+    (a, b) =>
+      CONF[a.confidence] - CONF[b.confidence] ||
+      Number(a.enhancedMeasurementOverlap) - Number(b.enhancedMeasurementOverlap) ||
+      a.label.localeCompare(b.label)
+  );
+  flagOverlappingClickTexts(ranked); // warn on near-duplicate click tags (one text inside another)
+  // The GA4 list (the base Google tag is prepended only in full mode).
+  const ga4Suggestions = opts.full ? [ga4ConfigSuggestion(), ...ranked] : ranked;
+
+  // GENERALIZED "How to install": every suggestion carries a structured install plan, so the panel is
+  // meaningful on all of them — not just forms. Forms already set `install` (buildFormInstallPlan in
+  // formSuggestion), so those are left untouched; every OTHER kind (clicks/pageview/timer/video → native
+  // "nothing to install"; a custom_event → the exact dataLayer push the site must add, incl. the GA4
+  // ecommerce shape) gets buildTriggerInstallPlan here in ONE place. Done on the GA4 list BEFORE the
+  // platform derivers run, so each derived Meta/Ads/etc. copy inherits `install` via its spread.
+  // Already-tracked awareness: the distinct dataLayer events the SITE already pushes (from the scan).
+  // A custom_event tag whose event is in this set needs NO new site code — the push already exists — so
+  // its generic "site-code" requirement is downgraded to "provider-native". Form install plans are built
+  // separately (buildFormInstallPlan) and are never touched here.
+  const alreadyPushed = new Set((input.dataLayerEvents ?? []).filter(Boolean));
+  for (const s of ga4Suggestions) {
+    // Forms already carry their own (richer) install plan from buildFormInstallPlan — NEVER override it,
+    // and never apply the already-tracked downgrade to a form: an unknown-vendor form's generic
+    // 'form_submit' dlEvent could coincidentally be in the load-time dataLayer and wrongly suppress the
+    // listener it truly needs. The downgrade is only ever safe for the GENERIC (non-form) plans below.
+    if (s.install) continue;
+    s.install = buildTriggerInstallPlan({ kind: s.trigger.kind, eventName: s.eventName, label: s.label });
+    if (s.trigger.kind === 'custom_event') {
+      const event = (s.trigger.eventName ?? s.eventName ?? '').trim();
+      // Only when the plan WOULD otherwise require site code AND the event is already pushed by the site.
+      const idx = s.install.requires.findIndex((r) => r.kind === 'site-code');
+      if (event && alreadyPushed.has(event) && idx >= 0) {
+        s.install.requires[idx] = {
+          kind: 'provider-native',
+          provider: 'site',
+          detail: `Your site already pushes the "${event}" dataLayer event, so no new site code is needed - just create this trigger + tag.`,
+        };
+        s.install.summary = 'Already pushed to the dataLayer - nothing to install.';
+      }
+    }
+  }
+
+  // Which platforms to emit (default GA4 only, so existing callers are unchanged). Every non-GA4
+  // platform's tags are DERIVED from the GA4 list so each reuses its GA4 source's trigger name (one
+  // shared trigger on create). A non-'ga4' selection computes GA4 internally but returns only its own.
+  const platforms = opts.platforms ?? ['ga4'];
+  const out: SuggestedTag[] = [];
+  if (platforms.includes('ga4')) out.push(...ga4Suggestions);
+  for (const platform of platforms) {
+    if (platform === 'ga4') continue;
+    const derive = PLATFORM_DERIVERS[platform];
+    out.push(...ga4Suggestions.map(derive).filter((x): x is SuggestedTag => x !== null));
+  }
+  return out;
+}
