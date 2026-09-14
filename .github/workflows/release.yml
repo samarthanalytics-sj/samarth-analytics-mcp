@@ -45,7 +45,12 @@ jobs:
         run: npm test
 
       - name: Semantic Release
+        # main is protected (pull request + green CI required). The built-in
+        # GITHUB_TOKEN cannot push the chore(release) commit past that rule, so
+        # set RELEASE_TOKEN to a fine-grained PAT of a repo admin (Contents,
+        # Issues, Pull requests: read/write). Falls back to GITHUB_TOKEN when
+        # unset, which works only while main is unprotected.
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npx semantic-release
