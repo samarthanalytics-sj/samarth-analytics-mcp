@@ -1,4 +1,5 @@
-import { useStytchMemberSession, StytchB2B, B2BIdentityProvider } from '@stytch/react/b2b';
+import { useStytchMemberSession, StytchB2B } from '@stytch/react/b2b';
+import { Consent } from './Consent';
 import {
   AuthFlowType,
   B2BProducts,
@@ -43,7 +44,7 @@ export function App() {
     sessionOptions: { sessionDurationMinutes: 60 },
   };
 
-  // Once the member is logged in, B2BIdentityProvider needs the original
+  // Once the member is logged in, the consent step needs the original
   // authorize request (client_id, code_challenge, state, redirect_uri, scope,
   // resource) in the URL. If the login round-trip dropped them, restore from
   // sessionStorage BEFORE the component mounts and reads window.location.
@@ -61,7 +62,7 @@ export function App() {
     <div className="wrap">
       <h1>Authorize access to your Google Tag Manager</h1>
       <div className="panel">
-        {session ? <B2BIdentityProvider /> : <StytchB2B config={loginConfig} />}
+        {session ? <Consent /> : <StytchB2B config={loginConfig} />}
       </div>
       <p className="hint">
         Sign in to grant an MCP client read access to your GTM &amp; GA4 via Samarth Analytics.
