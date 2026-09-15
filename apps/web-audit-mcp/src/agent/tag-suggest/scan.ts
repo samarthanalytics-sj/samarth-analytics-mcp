@@ -449,6 +449,16 @@ const MAX_TOTAL_IMAGE_BYTES = 45_000_000;
  * PlaywrightMissingError if no browser is installed; rejects the start URL via
  * the SSRF guard before launching. Read-only throughout.
  */
+/** The URL to actually navigate for a scan target. A start URL's #fragment can be what OPENS a page's
+ *  content — a hash-routed view or a modal (e.g. a "#start" that opens a signup wizard dialog) — but the
+ *  crawler strips fragments for dedup, so the ENTRY page would load with that content closed and its
+ *  forms/fields never render. So the entry page (and ONLY it, matched against the normalised start URL)
+ *  is navigated with the exact fragment the caller gave; every other page stays fragment-normalised so
+ *  crawl dedup is unaffected. No fragment on the start URL → returns the target unchanged. PURE. */
+export function entryNavUrl(targetUrl: string, startNormUrl: string | null, startHash: string): string {
+  return startHash && startNormUrl && targetUrl === startNormUrl ? targetUrl + startHash : targetUrl;
+}
+
 export async function scanSiteForTagSuggestions(
   startUrl: string,
   options: TagSuggestOptions = {},
@@ -476,6 +486,11 @@ export async function scanSiteForTagSuggestions(
   // Element presence only needs the DOM rendered; the operator's settle time is
   // tuned for tags firing (longer), so cap it here to keep per-page cost bounded.
   const settleMs = Math.min(config.settleMs, 3_000);
+  // Preserve the start URL's #fragment for the ENTRY page only (see entryNavUrl): a "#start"-style hash
+  // that opens a modal/hash-routed form would otherwise be stripped by the crawler and its fields never
+  // render, so the scan reports zero forms.
+  const startHash = (() => { try { return new URL(startUrl).hash; } catch { return ''; } })();
+  const startNormUrl = normalizeUrl(startUrl, startUrl);
 
   let siteHost = '';
   try {
@@ -568,7 +583,7 @@ export async function scanSiteForTagSuggestions(
         for (let target = claim(); target; target = claim()) {
           try {
             inst.markNavigationStart();
-            await page.goto(target.url, { waitUntil: 'domcontentloaded', timeout: config.navTimeoutMs });
+            await page.goto(entryNavUrl(target.url, startNormUrl, startHash), { waitUntil: 'domcontentloaded', timeout: config.navTimeoutMs });
             await page.waitForTimeout(settleMs);
             const raw = await collectPageRaw(page);
             const forms = await scanForms(page, page.url());

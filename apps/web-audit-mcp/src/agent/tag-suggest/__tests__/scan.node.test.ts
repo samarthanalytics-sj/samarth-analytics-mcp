@@ -2,7 +2,7 @@
  * Phase 3 orchestrator — pure report-building tests (no browser).
  * Run: tsx apps/web-audit-mcp/src/agent/tag-suggest/__tests__/scan.node.test.ts
  */
-import { pagePath, toPageScan, assembleTagReport, accountNotScanned, type AssembleArgs } from '../scan.js';
+import { pagePath, toPageScan, assembleTagReport, accountNotScanned, entryNavUrl, type AssembleArgs } from '../scan.js';
 import type { PageScan, PageScanRaw, RawElement } from '../collect.js';
 import type { PageSignals } from '../types.js';
 
@@ -142,6 +142,13 @@ const dbg = assembleTagReport({
   debug: { headless: true, navTimeoutMs: 30000, settleMs: 3000, consoleErrors: ['Uncaught TypeError: x'], pageErrors: [] },
 });
 check('report: debug surfaced when passed', dbg.debug?.consoleErrors[0] === 'Uncaught TypeError: x' && dbg.debug?.headless === true);
+
+// ── entryNavUrl: preserve the start URL's #fragment for the ENTRY page only ─────────────────────────
+const START = 'https://ex.example/free-trial/';
+check('entryNavUrl: entry page keeps the start #fragment', entryNavUrl(START, START, '#start') === START + '#start');
+check('entryNavUrl: a non-entry page is navigated unchanged (no fragment leak)', entryNavUrl('https://ex.example/about/', START, '#start') === 'https://ex.example/about/');
+check('entryNavUrl: no start fragment → entry unchanged', entryNavUrl(START, START, '') === START);
+check('entryNavUrl: null normalised start → unchanged', entryNavUrl(START, null, '#start') === START);
 
 console.log(`\nTag-scan: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }
