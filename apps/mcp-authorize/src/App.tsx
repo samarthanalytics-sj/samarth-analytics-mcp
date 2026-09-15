@@ -1,10 +1,9 @@
 import { useStytchMemberSession, StytchB2B, B2BIdentityProvider } from '@stytch/react/b2b';
-// Stytch 6.x exports the B2B surface from the /b2b subpath only.
 import {
   AuthFlowType,
   B2BProducts,
   type StytchB2BUIConfig,
-} from '@stytch/vanilla-js/b2b';
+} from '@stytch/vanilla-js';
 
 // GTM + GA4 scopes brokered through Google. These must match the consent-screen
 // + the resolver's expectations (see docs/PHASE3_IMPLEMENTATION_SPEC.md).

@@ -1,8 +1,12 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
-// createStytchB2BUIClient returns the client type StytchB2BProvider expects;
-// constructing StytchB2BUIClient directly no longer type-checks with Stytch 6.
-import { StytchB2BProvider, createStytchB2BUIClient } from '@stytch/react/b2b';
+// Stay on @stytch/react 19.x / @stytch/vanilla-js 5.x. The 20.x / 6.x line
+// renders its prebuilt OAuth button with a React element shape that neither
+// React 18 nor 19 accepts here (React errors #284 / #525 inside GoogleIcon),
+// which leaves /oauth/authorize blank. Verified 2026-09-15; re-test in a
+// headless browser before taking any Stytch major bump.
+import { StytchB2BProvider } from '@stytch/react/b2b';
+import { StytchB2BUIClient } from '@stytch/vanilla-js/b2b';
 import { App } from './App';
 
 // The publishable client token (safe in the browser). Injected at RUNTIME by
@@ -14,7 +18,7 @@ const runtimeCfg = (
 ).__MCP_AUTHORIZE_CONFIG__;
 const publicToken =
   runtimeCfg?.stytchPublicToken ?? import.meta.env.VITE_STYTCH_PUBLIC_TOKEN ?? '';
-const stytch = createStytchB2BUIClient(publicToken);
+const stytch = new StytchB2BUIClient(publicToken);
 
 // Stash the connected-app authorize request (client_id, code_challenge, state,
 // redirect_uri, scope, resource) the moment we arrive with it, BEFORE the login
