@@ -1,7 +1,8 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
-import { StytchB2BProvider } from '@stytch/react/b2b';
-import { StytchB2BUIClient } from '@stytch/vanilla-js/b2b';
+// createStytchB2BUIClient returns the client type StytchB2BProvider expects;
+// constructing StytchB2BUIClient directly no longer type-checks with Stytch 6.
+import { StytchB2BProvider, createStytchB2BUIClient } from '@stytch/react/b2b';
 import { App } from './App';
 
 // The publishable client token (safe in the browser). Injected at RUNTIME by
@@ -13,7 +14,7 @@ const runtimeCfg = (
 ).__MCP_AUTHORIZE_CONFIG__;
 const publicToken =
   runtimeCfg?.stytchPublicToken ?? import.meta.env.VITE_STYTCH_PUBLIC_TOKEN ?? '';
-const stytch = new StytchB2BUIClient(publicToken);
+const stytch = createStytchB2BUIClient(publicToken);
 
 // Stash the connected-app authorize request (client_id, code_challenge, state,
 // redirect_uri, scope, resource) the moment we arrive with it, BEFORE the login
