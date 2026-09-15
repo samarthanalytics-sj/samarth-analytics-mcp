@@ -1,12 +1,26 @@
-# Samarth GTM MCP Server
+# Samarth Analytics MCP
 
 [![CI](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/samarth-gtm-mcp)](https://www.npmjs.com/package/samarth-gtm-mcp)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
-A production-ready [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server for the **Google Tag Manager API v2**, built for Samarth Analytics.
+An open-source [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that lets AI assistants such as Claude Desktop, Claude Code and Cursor work with **Google Tag Manager** and **GA4**. It covers the full GTM API v2 surface (100+ tools, including server-side containers), the GA4 Admin and Data APIs, a built-in implementation audit, and a second server that crawls a website to check its tags and Consent Mode v2 setup. Built by [Samarth Analytics](https://samarthanalytics.com) for our own client work and released under the MIT license for the analytics community.
 
-Use it through **Samarth Desktop** - the local Electron app with a chat UI that embeds this server ([Quick Start](#quick-start)). Full, guarded access to GTM: read workspace contents, create/update tags/triggers/variables, audit implementations, publish versions, and more.
+**Read-only by default.** Creating, updating, publishing and deleting are each behind a separate environment flag, every write also requires `confirm=true`, and a dry-run mode simulates writes without touching the API. See [Guardrails](#guardrails).
 
-> **New: browser portal with live QC audit.** A white-label, browser-based customer experience lives in [`apps/portal/`](./apps/portal/README.md). Customers sign in with Google OAuth, pick a GTM account/container/workspace, and run a live, read-only QC audit. Publishes still require Samarth approval. See the portal README for OAuth setup; run with `npm run portal:dev`.
+> **Use it at your own risk, and start on a dummy container.** The server acts with your Google credentials, so every change it makes is yours. Try it first on a sandbox GTM container and a test GA4 property, keep the write flags off until you have watched how it behaves, and review the container's version history after any write session. We run it in production, but your setup is not ours.
+
+## Three ways to use it
+
+| | What you get | Where to start |
+|---|---|---|
+| **Hosted, no install** | Our community instance at `https://mcp.samarthanalytics.com/mcp`. Sign in with your own Google account; it only sees your containers and properties, and it is locked to read-only. Shared, best-effort, no uptime promise. | Add it to your MCP client with [mcp-remote](https://www.npmjs.com/package/mcp-remote):<br>`{"mcpServers":{"samarth-gtm":{"command":"npx","args":["mcp-remote@next","https://mcp.samarthanalytics.com/mcp"]}}}` |
+| **Local** | The server on your machine over stdio, with your own Google OAuth client, and the write flags under your control. | [Quick Start](#quick-start) and [Google Cloud OAuth Setup](#google-cloud-oauth-setup) |
+| **Self-hosted** | The MCP server, the web-audit server and the capture worker as one docker-compose stack behind your own token. | [docs/SELF_HOSTING_DOCKER.md](./docs/SELF_HOSTING_DOCKER.md) and [Cloud Deployment](#cloud-deployment) |
+
+The repo also ships **Samarth Desktop**, a local Electron app with a chat UI that embeds this server ([Quick Start](#quick-start)), and a browser-based customer portal in [`apps/portal/`](./apps/portal/README.md) that runs live, read-only QC audits.
+
+**Contributions are welcome.** Bug reports with a reproducible container setup are the most useful thing you can send. Read [CONTRIBUTING.md](./CONTRIBUTING.md) first; CI runs on every pull request.
 
 ---
 
