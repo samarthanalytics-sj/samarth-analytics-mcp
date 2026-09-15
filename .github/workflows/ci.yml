@@ -32,6 +32,18 @@ jobs:
       - name: Test
         run: npm test
 
+      # Authorize UI (Stytch login + consent page served by the hosted server).
+      # It is built inside the Docker image but was never checked here, so a
+      # dependency bump that broke its build only surfaced on the next deploy.
+      - name: Install authorize UI dependencies
+        run: npm ci --prefix apps/mcp-authorize
+
+      - name: Typecheck authorize UI
+        run: npm --prefix apps/mcp-authorize run check
+
+      - name: Build authorize UI
+        run: npm --prefix apps/mcp-authorize run build
+
       # Chat orchestrator. It has its OWN package and tsconfig, so the root typecheck above never
       # touched it, and a type error reached main because the only thing that had ever run its
       # code was tsx, which transpiles without checking. Build first, then test: the tests live

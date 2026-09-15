@@ -25,8 +25,10 @@ RUN npm run build
 # ── Stage 2: build the authorize React app (Stytch login + consent) ─────────
 FROM node:20-alpine AS authorize-build
 WORKDIR /app/authorize
-COPY apps/mcp-authorize/package.json apps/mcp-authorize/package-lock.json* ./
-RUN npm install --no-audit --no-fund
+COPY apps/mcp-authorize/package.json apps/mcp-authorize/package-lock.json ./
+# npm ci: install exactly the committed lockfile. `npm install` re-resolved on
+# every build and broke the moment a transitive peer range moved.
+RUN npm ci --no-audit --no-fund
 COPY apps/mcp-authorize/ ./
 RUN npm run build
 
