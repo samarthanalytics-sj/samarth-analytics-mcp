@@ -253,11 +253,31 @@ export function extractFormsInPage(): RawForm[] {
     }
   };
 
+  // Cookie-consent / CMP banners are built as <form>s or field clusters (accept/reject buttons, consent
+  // category toggles) but collect NO lead data, so they must never surface as a trackable form. Match the
+  // major CMPs by container id/class plus a generic cookie/consent id/class. `closest` (self-or-ancestor)
+  // so a <form id="fast-cmp-form"> or a cluster inside #onetrust-banner-sdk is skipped.
+  const CMP_SEL =
+    '#onetrust-banner-sdk, #onetrust-consent-sdk, #CybotCookiebotDialog, #usercentrics-root, #didomi-host, ' +
+    '#qc-cmp2-container, #truste-consent-track, .cmplz-cookiebanner, .cky-consent-container, #iubenda-cs-banner, ' +
+    '.osano-cm-window, #cmpbox, #BorlabsCookieBox, #fast-cmp-form, ' +
+    '[class*="cookie" i], [id*="cookie" i], [class*="consent" i], [id*="consent" i]';
+  const inCmp = (el: Element): boolean => {
+    try {
+      return !!el.closest(CMP_SEL);
+    } catch {
+      return false;
+    }
+  };
+
   const scanDoc = (doc: Document): void => {
-    // 1. Real <form> elements.
+    // 1. Real <form> elements — but not a cookie-consent/CMP form, and not one with no fillable field
+    //    (a consent/search-toggle/logout control is a <form> with only buttons — nothing to collect).
     for (const form of Array.from(doc.querySelectorAll('form')).slice(0, MAX_FORMS)) {
       if (out.length >= MAX_FORMS) break;
+      if (inCmp(form)) continue;
       const fields = fieldsIn(form);
+      if (fields.length === 0) continue;
       let action = '';
       try {
         action = new URL(form.getAttribute('action') || '', (doc.location || location).href).href;
@@ -308,6 +328,7 @@ export function extractFormsInPage(): RawForm[] {
         }
       }
       if (!host || host.closest('form')) continue;
+      if (inCmp(host)) continue; // a consent banner's accept/reject cluster is not a lead form
       // Skip overlapping hosts (nested clusters resolving to the same widget).
       if (seen.some((h) => h.contains(host!) || host!.contains(h))) continue;
       const fields = fieldsOutsideForm(host);
@@ -351,6 +372,7 @@ export function extractFormsInPage(): RawForm[] {
         }
       }
       if (!host || host.closest('form')) continue;
+      if (inCmp(host)) continue; // a consent banner's category-toggle cluster is not a lead form
       if (seen.some((h) => h.contains(host!) || host!.contains(h))) continue;
       const fields = fieldsOutsideForm(host);
       const textish = fields.filter((f) => TEXTISH.has(f.type));
