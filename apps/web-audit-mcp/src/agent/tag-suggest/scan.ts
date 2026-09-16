@@ -20,6 +20,7 @@
 import { loadPlaywright, PlaywrightMissingError, openInstrumentedPage } from '../browser.js';
 import { crawlSite, normalizeUrl, sameSite, type CrawledPage } from '../crawler.js';
 import { scanForms } from '../forms.js';
+import { discoverInteractiveForms } from './interactive-forms.js';
 import { loadConfig, clampOpt } from '../../utils/config.js';
 import { urlAllowed } from '../../utils/urlGuard.js';
 import {
@@ -294,6 +295,13 @@ export interface TagSuggestOptions {
   /** Include a SuggestDebug block (browser console/page errors + run mode) for troubleshooting. */
   debug?: boolean;
   /**
+   * Interactive form discovery: click "open-a-form" CTAs to reveal popup/modal forms that only exist in
+   * the DOM after a click. Departs from the read-only default (it clicks — safely — on the live page), so
+   * it's opt-in. Undefined falls back to the WEB_AUDIT_ENABLE_INTERACTIVE_FORMS server flag; true/false
+   * overrides it for this scan.
+   */
+  interactiveForms?: boolean;
+  /**
    * Which ad platforms to build tags for (default ['ga4']).
    *
    * buildSuggestions has taken this since it was written; the option simply had no way in from a
@@ -491,6 +499,9 @@ export async function scanSiteForTagSuggestions(
   // render, so the scan reports zero forms.
   const startHash = (() => { try { return new URL(startUrl).hash; } catch { return ''; } })();
   const startNormUrl = normalizeUrl(startUrl, startUrl);
+  // Interactive form discovery is opt-in (per-scan option, else the server flag) because it clicks the
+  // live page; the default scan stays read-only.
+  const discoverInteractive = options.interactiveForms ?? config.interactiveFormsEnabled;
 
   let siteHost = '';
   try {
@@ -587,6 +598,12 @@ export async function scanSiteForTagSuggestions(
             await page.waitForTimeout(settleMs);
             const raw = await collectPageRaw(page);
             const forms = await scanForms(page, page.url());
+            // Opt-in: reveal popup/modal forms that only exist after clicking an "open-a-form" CTA. Runs
+            // AFTER the read-only element/form collection so it can't disturb them; best-effort + bounded.
+            if (discoverInteractive) {
+              const revealed = await discoverInteractiveForms(page, page.url(), forms).catch(() => null);
+              if (revealed && revealed.forms.length) forms.push(...revealed.forms);
+            }
             if (options.captureImages && totalImageBytes < MAX_TOTAL_IMAGE_BYTES) {
               // After the collect, never before: the screenshot must show the page the suggestions
               // were read from, including anything the settle time brought in.
