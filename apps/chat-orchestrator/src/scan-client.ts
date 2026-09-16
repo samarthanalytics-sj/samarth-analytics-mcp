@@ -203,9 +203,16 @@ export class SiteScanner {
           transport: 'stdio',
           command,
           args: [entry],
-          // Deliberately empty. This child gets no Google credentials of any kind: it only ever
+          // Deliberately near-empty. This child gets no Google credentials of any kind: it only ever
           // fetches public pages, and the guardrail flags that gate GTM writes are meaningless here.
-          env: {},
+          // The ONE thing forwarded is the interactive-form-discovery feature flag (a toggle, never a
+          // credential): when the operator sets WEB_AUDIT_ENABLE_INTERACTIVE_FORMS on the orchestrator,
+          // the scanner may click "open-a-form" CTAs to reveal popup/modal forms.
+          env: {
+            ...(process.env.WEB_AUDIT_ENABLE_INTERACTIVE_FORMS
+              ? { WEB_AUDIT_ENABLE_INTERACTIVE_FORMS: process.env.WEB_AUDIT_ENABLE_INTERACTIVE_FORMS }
+              : {}),
+          },
         },
       });
       try {
