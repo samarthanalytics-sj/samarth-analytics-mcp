@@ -28,6 +28,12 @@ export interface WebAuditConfig {
    * (incl. real form submits) on the target page. WEB_AUDIT_ENABLE_VERIFY=true.
    */
   verifyEnabled: boolean;
+  /**
+   * Interactive form discovery: click "open-a-form" CTAs to reveal popup/modal forms whose markup is only
+   * injected on click. OFF by default — unlike the read-only scan it clicks controls on the live page
+   * (navigation is neutralised first, nothing is submitted). WEB_AUDIT_ENABLE_INTERACTIVE_FORMS=true.
+   */
+  interactiveFormsEnabled: boolean;
   /** verify: stop capturing after this many ms with no new GA4 collect. */
   settleQuietMs: number;
   /** verify: hard cap on capture time (ms). */
@@ -63,6 +69,7 @@ export function loadConfig(): WebAuditConfig {
     interactionEnabled: process.env.WEB_AUDIT_DISABLE_INTERACTION !== 'true',
     headless: process.env.WEB_AUDIT_HEADED !== 'true',
     verifyEnabled: process.env.WEB_AUDIT_ENABLE_VERIFY === 'true',
+    interactiveFormsEnabled: process.env.WEB_AUDIT_ENABLE_INTERACTIVE_FORMS === 'true',
     settleQuietMs: intEnv('WEB_AUDIT_VERIFY_SETTLE_QUIET', 2_000, 10_000),
     settleMaxMs: intEnv('WEB_AUDIT_VERIFY_SETTLE_MAX', 10_000, 30_000),
   };
