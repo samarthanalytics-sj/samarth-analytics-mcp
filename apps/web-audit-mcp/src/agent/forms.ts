@@ -269,13 +269,26 @@ export function extractFormsInPage(): RawForm[] {
       return false;
     }
   };
+  // A lead/contact form does not live inside site NAVIGATION. A "form" found there is a search box, a
+  // filter/mega-menu widget, or a menu holding a "Sign Up" link near a filter input — never a real
+  // data-collection form (which sits in the page body). Skipping nav also drops the low-value,
+  // EM-overlapping in-nav site-search box. A form is skipped only when it is INSIDE nav, not when it
+  // merely contains a nav.
+  const inNav = (el: Element): boolean => {
+    try {
+      return !!el.closest('nav, [role="navigation"], [role="menubar"]');
+    } catch {
+      return false;
+    }
+  };
+  const excluded = (el: Element): boolean => inCmp(el) || inNav(el);
 
   const scanDoc = (doc: Document): void => {
     // 1. Real <form> elements — but not a cookie-consent/CMP form, and not one with no fillable field
     //    (a consent/search-toggle/logout control is a <form> with only buttons — nothing to collect).
     for (const form of Array.from(doc.querySelectorAll('form')).slice(0, MAX_FORMS)) {
       if (out.length >= MAX_FORMS) break;
-      if (inCmp(form)) continue;
+      if (excluded(form)) continue;
       const fields = fieldsIn(form);
       if (fields.length === 0) continue;
       let action = '';
@@ -311,6 +324,14 @@ export function extractFormsInPage(): RawForm[] {
     for (const btn of Array.from(doc.querySelectorAll('button, [role="button"], a, [onclick], input[type="submit"], input[type="button"]'))) {
       if (out.length >= MAX_FORMS) break;
       if (btn.closest('form')) continue;
+      // A nav/CTA <a> that navigates to a real URL is a LINK, not a form-submit control. Anchoring a
+      // "form" on it turns a nav menu (a "Sign Up"/"Get Started" link sitting near a search/filter box)
+      // into a phantom form. Only a JS anchor — no href, "#", or javascript: — can be an in-page submit;
+      // a real destination means the form, if any, lives on the PAGE THAT LINK OPENS (the crawler gets it).
+      if (btn.tagName === 'A') {
+        const h = btn.getAttribute('href') || '';
+        if (h && h !== '#' && !h.startsWith('#') && !h.startsWith('javascript:')) continue;
+      }
       // Include aria-label + title, not just text/value: a footer "Stay Updated" / newsletter subscribe
       // control is often an ICON/arrow button whose intent lives in aria-label ("Subscribe"), so the
       // text-only label was empty and the widget was never anchored → its form tag stayed untested.
@@ -328,7 +349,7 @@ export function extractFormsInPage(): RawForm[] {
         }
       }
       if (!host || host.closest('form')) continue;
-      if (inCmp(host)) continue; // a consent banner's accept/reject cluster is not a lead form
+      if (excluded(host)) continue; // a consent banner or nav/menu cluster is not a lead form
       // Skip overlapping hosts (nested clusters resolving to the same widget).
       if (seen.some((h) => h.contains(host!) || host!.contains(h))) continue;
       const fields = fieldsOutsideForm(host);
@@ -372,7 +393,7 @@ export function extractFormsInPage(): RawForm[] {
         }
       }
       if (!host || host.closest('form')) continue;
-      if (inCmp(host)) continue; // a consent banner's category-toggle cluster is not a lead form
+      if (excluded(host)) continue; // a consent banner or nav/menu cluster is not a lead form
       if (seen.some((h) => h.contains(host!) || host!.contains(h))) continue;
       const fields = fieldsOutsideForm(host);
       const textish = fields.filter((f) => TEXTISH.has(f.type));
