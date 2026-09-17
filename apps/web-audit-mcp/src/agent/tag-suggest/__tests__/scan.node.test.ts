@@ -91,6 +91,7 @@ check('report: notScanned + notes carried through', report.notScanned.length ===
     { url: 'https://acme.com/err', httpStatus: 500 },                               // http error
     { url: 'https://acme.com/blog', httpStatus: 200 },                              // over budget (ok, not a target)
     { url: 'https://acme.com/dead', httpStatus: null, note: 'navigation failed: timeout' }, // crawl note
+    { url: 'https://acme.com/wall', httpStatus: 403, note: 'blocked by Cloudflare bot challenge' }, // WAF challenge: note wins over http 403
   ];
   const skipped = [{ url: 'https://acme.com/admin', reason: 'private network' }];
   const collectFailures = [{ url: 'https://acme.com/contact', reason: 'scan failed: boom' }]; // a target that died mid-collect
@@ -104,6 +105,7 @@ check('report: notScanned + notes carried through', report.notScanned.length ===
   check('accountNotScanned: crawl-noted page carries its note', /timeout/.test(reasonFor('https://acme.com/dead')[0]?.reason ?? ''));
   check('accountNotScanned: SSRF-skipped page carried through', reasonFor('https://acme.com/admin')[0]?.reason === 'private network');
   check('accountNotScanned: scanned-success pages are NOT listed', reasonFor('https://acme.com/').length === 0);
+  check('accountNotScanned: a bot-blocked page carries the classified reason, not "http 403"', reasonFor('https://acme.com/wall')[0]?.reason === 'blocked by Cloudflare bot challenge');
   check('accountNotScanned: a target that failed mid-collect is listed once (scan failed), not duplicated',
     reasonFor('https://acme.com/contact').length === 1 && reasonFor('https://acme.com/contact')[0].reason.startsWith('scan failed'));
 }

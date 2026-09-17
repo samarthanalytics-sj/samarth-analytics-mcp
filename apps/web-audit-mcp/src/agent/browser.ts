@@ -13,6 +13,8 @@ import { urlAllowed } from '../utils/urlGuard.js';
 
 export interface PwResponse {
   status(): number;
+  /** Response headers, lower-cased keys (Playwright shape). Read to classify a WAF / bot-challenge page. */
+  headers(): Record<string, string>;
 }
 export interface PwRequest {
   url(): string;
