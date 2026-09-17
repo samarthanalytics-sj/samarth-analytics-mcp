@@ -29,7 +29,11 @@ import { resolveGa4MeasurementIds } from './gtm-ga4-check';
 export type CoveragePlatform =
   | 'ga4' | 'meta' | 'tiktok' | 'linkedin' | 'pinterest'
   | 'snapchat' | 'microsoft' | 'reddit' | 'amazon' | 'stackadapt' | 'x'
-  | 'quora' | 'adroll' | 'nextdoor' | 'yelp' | 'spotify' | 'lineyahoo' | 'rtbhouse';
+  | 'quora' | 'adroll' | 'nextdoor' | 'yelp' | 'spotify' | 'lineyahoo' | 'rtbhouse'
+  // Phase C analytics + Phase D affiliates: generic gallery-template migrations (no typed builder).
+  | 'mixpanel' | 'matomo' | 'piwikpro' | 'piano' | 'plausible' | 'umami' | 'pirsch' | 'snowplow' | 'klaviyo'
+  | 'awin' | 'cj' | 'impact' | 'rakuten' | 'shareasale' | 'tradedoubler' | 'webgains' | 'admitad'
+  | 'adtraction' | 'affiliatefuture' | 'effinity' | 'refersion' | 'tapfiliate' | 'everflow' | 'voluum';
 
 export interface ServerCoverageRow {
   platform: CoveragePlatform;
@@ -106,6 +110,32 @@ const PIXEL_SIGNS: Array<{ platform: Exclude<CoveragePlatform, 'ga4'>; nameRe: R
   { platform: 'spotify', nameRe: /spotify/i, bodyRe: /pixel\.spotify|ads\.spotify|spotify\.com\/pixel/i },
   { platform: 'lineyahoo', nameRe: /line[\s_-]?yahoo|yahoo[\s_-]?(ads|conversion)|\byjtag\b/i, bodyRe: /yjtag|s\.yimg\.jp\/wi\/ytag|yahoo_retargeting_id/i },
   { platform: 'rtbhouse', nameRe: /rtb\s*house|rtbhouse/i, bodyRe: /creativecdn\.com/i },
+  // Phase C analytics (generic gallery-template migrations). Piwik PRO precedes Matomo: Matomo's old name is Piwik.
+  { platform: 'piwikpro', nameRe: /piwik[\s_-]?pro/i, bodyRe: /containers\.piwik\.pro|piwik\.pro/i },
+  { platform: 'matomo', nameRe: /matomo|piwik/i, bodyRe: /matomo|\b_paq\b|piwik\.(js|php)/i },
+  { platform: 'mixpanel', nameRe: /mixpanel/i, bodyRe: /mixpanel/i },
+  { platform: 'piano', nameRe: /piano\s*analytics|at[\s_-]?internet/i, bodyRe: /pa\.setConfigurations|pa-cd\.com|piano-analytics/i },
+  { platform: 'plausible', nameRe: /plausible/i, bodyRe: /plausible\.io|data-domain=/i },
+  { platform: 'umami', nameRe: /umami/i, bodyRe: /umami|data-website-id=/i },
+  { platform: 'pirsch', nameRe: /pirsch/i, bodyRe: /pirsch\.io/i },
+  { platform: 'snowplow', nameRe: /snowplow/i, bodyRe: /snowplow|newTracker\s*\(/i },
+  { platform: 'klaviyo', nameRe: /klaviyo/i, bodyRe: /klaviyo\.com/i },
+  // Phase D affiliate networks (generic).
+  { platform: 'awin', nameRe: /\bawin\b/i, bodyRe: /dwin1\.com|awin1\.com/i },
+  { platform: 'cj', nameRe: /commission\s*junction|\bcj\s*(tag|affiliate|pixel)/i, bodyRe: /mczbf\.com|emjcd\.com/i },
+  { platform: 'impact', nameRe: /impact\s*radius|\bimpact\s*(affiliate|conversion|tag|pixel)/i, bodyRe: /impactcdn\.com|impactradius/i },
+  { platform: 'rakuten', nameRe: /rakuten|linksynergy/i, bodyRe: /linksynergy|ranMID|rm_trans/i },
+  { platform: 'shareasale', nameRe: /shareasale/i, bodyRe: /shareasale/i },
+  { platform: 'tradedoubler', nameRe: /tradedoubler/i, bodyRe: /tradedoubler/i },
+  { platform: 'webgains', nameRe: /webgains/i, bodyRe: /webgains|ITCVRQ/i },
+  { platform: 'admitad', nameRe: /admitad/i, bodyRe: /admitad/i },
+  { platform: 'adtraction', nameRe: /adtraction/i, bodyRe: /adtraction|ADT\.Tag/i },
+  { platform: 'affiliatefuture', nameRe: /affiliate\s*future/i, bodyRe: /affiliatefuture/i },
+  { platform: 'effinity', nameRe: /effinity|effiliation/i, bodyRe: /effiliation|effinity/i },
+  { platform: 'refersion', nameRe: /refersion/i, bodyRe: /refersion|_rfsn/i },
+  { platform: 'tapfiliate', nameRe: /tapfiliate/i, bodyRe: /tapfiliate/i },
+  { platform: 'everflow', nameRe: /everflow/i, bodyRe: /everflow|\bEF\.(conversion|click)|_ef_transaction_id/i },
+  { platform: 'voluum', nameRe: /voluum/i, bodyRe: /voluum/i },
 ];
 
 /** Platform of a WEB tag: GA4 event tags by type; the built-in Microsoft UET (baut) and LinkedIn
@@ -167,6 +197,31 @@ const CAPI_TOOL: Record<Exclude<CoveragePlatform, 'ga4'>, string> = {
   spotify: 'create_spotify_capi_server_tag',
   lineyahoo: 'create_line_yahoo_capi_server_tag',
   rtbhouse: 'create_rtb_house_server_tag',
+  // Generic gallery-template migrations (Phase C analytics + Phase D affiliates): no typed builder.
+  mixpanel: 'import_gallery_template (stape-io/mixpanel-tag) + create_tag',
+  matomo: 'import_gallery_template (stape-io/matomo-advanced-tag) + create_tag',
+  piwikpro: 'import_gallery_template (stape-io/piwik-pro-tag) + create_tag',
+  piano: 'import_gallery_template (stape-io/piano-tag) + create_tag',
+  plausible: 'import_gallery_template (stape-io/plausible-analytics-tag-server) + create_tag',
+  umami: 'import_gallery_template (stape-io/umami-tag-server) + create_tag',
+  pirsch: 'import_gallery_template (stape-io/pirsch-tag-server) + create_tag',
+  snowplow: 'import_gallery_template (stape-io/snowplow-gtm-server-side-tag) + create_tag',
+  klaviyo: 'import_gallery_template (stape-io/klaviyo-tag) + create_tag',
+  awin: 'import_gallery_template (stape-io/awin-conversion-api-tag) + create_tag',
+  cj: 'import_gallery_template (stape-io/cj-tag) + create_tag',
+  impact: 'import_gallery_template (stape-io/impact-tag) + create_tag',
+  rakuten: 'import_gallery_template (stape-io/rakuten-tag) + create_tag',
+  shareasale: 'import_gallery_template (stape-io/shareasale-tag) + create_tag',
+  tradedoubler: 'import_gallery_template (stape-io/tradedoubler-tag) + create_tag',
+  webgains: 'import_gallery_template (stape-io/webgains-tag) + create_tag',
+  admitad: 'import_gallery_template (stape-io/admitad-tag) + create_tag',
+  adtraction: 'import_gallery_template (stape-io/adtraction-tag) + create_tag',
+  affiliatefuture: 'import_gallery_template (stape-io/affiliate-future-server-tag) + create_tag',
+  effinity: 'import_gallery_template (stape-io/effinity-tag) + create_tag',
+  refersion: 'import_gallery_template (stape-io/refersion-tag) + create_tag',
+  tapfiliate: 'import_gallery_template (stape-io/tapfiliate-tag) + create_tag',
+  everflow: 'import_gallery_template (stape-io/everflow-tag) + create_tag',
+  voluum: 'import_gallery_template (stape-io/voluum-tag) + create_tag',
 };
 
 /** Configuration subscore from audit severity counts - the STATED formula (100 - 25/critical -

@@ -4048,6 +4048,74 @@ test('planWebToServerMigration: the Tier-1 pixels are planned to their typed too
   assert.equal(plan.summary.typedTool, 8);
 });
 
+test('planWebToServerMigration: analytics + affiliate web tags become GENERIC gallery-import items with the template fields and public ids carried', () => {
+  const P = (key: string, value: string) => ({ type: 'template', key, value });
+  const H = (id: string, name: string, html: string) => ({ tagId: id, name, type: 'html', parameter: [P('html', html)] });
+  const plan = planWebToServerMigration({
+    triggers: [], variables: [],
+    tags: [
+      H('1', 'Mixpanel', "<script>mixpanel.init('tok_123', {debug:false});</script>"),
+      H('2', 'Matomo', "<script>var _paq = window._paq || []; (function(){ var u=\"https://stats.example.com/\"; _paq.push(['setTrackerUrl', u+'matomo.php']); _paq.push(['setSiteId', '7']); })();</script>"),
+      H('3', 'Piwik PRO', '<script src="https://acme.containers.piwik.pro/containers/0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b.js"></script>'),
+      H('4', 'Piano Analytics', "<script>pa.setConfigurations({site: 654321, collectDomain: 'https://acme.pa-cd.com'});</script>"),
+      H('5', 'Plausible', '<script defer data-domain="example.com" src="https://plausible.io/js/script.js"></script>'),
+      H('6', 'Umami', '<script defer src="https://cloud.umami.is/script.js" data-website-id="9d3c-uuid"></script>'),
+      H('7', 'Pirsch', '<script defer src="https://api.pirsch.io/pa.js" data-code="abc"></script>'),
+      H('8', 'Snowplow', "<script>snowplow('newTracker', 'sp', 'https://collector.example.com', {appId: 'web'});</script>"),
+      H('9', 'Klaviyo', '<script src="https://static.klaviyo.com/onsite/js/klaviyo.js?company_id=PUB123"></script>'),
+      H('10', 'Awin MasterTag', '<script src="https://www.dwin1.com/12345.js"></script>'),
+      H('11', 'CJ conversion', '<script>cj.order = {enterpriseId: 1234567, orderId: "x"}</script><script src="https://www.mczbf.com/tags/1/tag.js"></script>'),
+      H('12', 'Impact conversion', '<script src="https://utt.impactcdn.com/A123.js"></script>'),
+      H('13', 'Rakuten', '<script src="https://tag.rmp.rakuten.com/123.ct.js?ranMID=45678"></script>'),
+      H('14', 'ShareASale', '<img src="https://www.shareasale.com/sale.cfm?merchantID=9876&amount=1">'),
+      H('15', 'Tradedoubler', '<img src="https://tbs.tradedoubler.com/report?organization=2222&event=333&orderNumber=1">'),
+      H('16', 'Webgains', "<script>ITCVRQ('set', 'cvr.programId', 5555);</script>"),
+      H('17', 'Admitad', "<script>ADMITAD.Invoice.campaign_code = 'abcdef01';</script>"),
+      H('18', 'Adtraction', '<script>ADT.Tag.tp = 1001; ADT.Tag.c = "SEK";</script><script src="https://adtraction.com/js/adtraction_conv.js"></script>'),
+      H('19', 'Affiliate Future', '<script src="https://scripts.affiliatefuture.com/AFFunctions.js"></script>'),
+      H('20', 'Effinity', '<img src="https://track.effiliation.com/servlet/effi.track?effi_id=EF77&type=sale">'),
+      H('21', 'Refersion', '<script>r.src = "https://acme.refersion.com/tracker/v3/pub_abc123.js";</script>'),
+      H('22', 'Tapfiliate', "<script>tap('create', '1234-abcd', { integration: 'javascript' });</script>"),
+      H('23', 'Everflow', '<script>EF.conversion({aid: 1, oid: 2});</script>'),
+      H('24', 'Voluum', '<img src="https://trk.example.com/postback?cid=REPLACE">'),
+    ],
+  } as unknown as TContainerSnapshot);
+  const by = (dest: string) => plan.items.find((i) => i.destination === dest);
+  assert.equal(plan.items.length, 24, 'every analytics/affiliate tag is planned');
+  assert.equal(plan.summary.generic, 24, 'all of them are generic gallery imports');
+  assert.equal(plan.summary.typedTool, 0);
+  for (const it of plan.items) assert.ok(/templates_import_from_gallery \(stape-io\/[a-z0-9-]+\) \+ tags_create/.test(it.serverTool ?? ''), it.serverTool ?? 'no serverTool');
+  // Analytics: public ids come off the snippet; secrets stay in `requires`.
+  assert.deepEqual(by('Mixpanel')?.derived, { token: 'tok_123' });
+  assert.deepEqual(by('Mixpanel')?.requires, []);
+  assert.deepEqual(by('Matomo')?.derived, { siteId: '7', trackingUrl: 'https://stats.example.com/' });
+  assert.deepEqual(by('Matomo')?.requires, ['tokenAuth']);
+  assert.deepEqual(by('Piwik PRO')?.derived, { siteId: '0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b' }, 'Piwik PRO wins over Matomo for a piwik.pro container');
+  assert.deepEqual(by('Piano Analytics')?.derived, { siteId: '654321', collectionDomain: 'https://acme.pa-cd.com' });
+  assert.deepEqual(by('Plausible')?.derived, { domain: 'example.com' });
+  assert.deepEqual(by('Umami')?.derived, { websiteId: '9d3c-uuid' });
+  assert.deepEqual(by('Pirsch')?.requires, ['token'], 'the web data-code is not the server access token');
+  assert.deepEqual(by('Snowplow')?.derived, { collectorUrl: 'https://collector.example.com' });
+  assert.deepEqual(by('Klaviyo')?.requires, ['apiKey'], 'company_id is the public key, the server tag needs the private one');
+  // Affiliates.
+  assert.deepEqual(by('Awin')?.derived, { advertiserId: '12345' });
+  assert.deepEqual(by('Awin')?.requires, ['apiKey']);
+  assert.deepEqual(by('CJ')?.derived, { cid: '1234567' });
+  assert.deepEqual(by('Impact')?.requires, ['accountSID', 'authToken', 'eventTypeId', 'campaignId']);
+  assert.deepEqual(by('Rakuten Advertising')?.derived, { mid: '45678' });
+  assert.deepEqual(by('ShareASale')?.derived, { merchantID: '9876' });
+  assert.deepEqual(by('Tradedoubler')?.derived, { organizationId: '2222' });
+  assert.deepEqual(by('Webgains')?.derived, { programId: '5555' });
+  assert.deepEqual(by('Admitad')?.derived, { campaignCode: 'abcdef01' });
+  assert.deepEqual(by('Adtraction')?.derived, { transactionTypeId: '1001' });
+  assert.deepEqual(by('Affiliate Future')?.requires, ['merchantId']);
+  assert.deepEqual(by('Effinity')?.derived, { effinityId: 'EF77' });
+  assert.deepEqual(by('Refersion')?.derived, { publicKey: 'pub_abc123' });
+  assert.deepEqual(by('Tapfiliate')?.requires, ['apiKey']);
+  assert.deepEqual(by('Everflow')?.requires, ['postbackUrl']);
+  assert.deepEqual(by('Voluum')?.requires, ['postbackDomain', 'clickIdKey']);
+});
+
 test('buildStapeDataTag + buildStapeDataClient: web posts identity to <server>/data, server client claims /data', () => {
   // WEB Data Tag: All Pages, posts to the server, full dataLayer + common + consent.
   const tag = buildStapeDataTag('cvt_DT01', 'Data Tag - All Pages', 'https://sgtm.example.com');
