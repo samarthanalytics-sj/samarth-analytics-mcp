@@ -4,10 +4,10 @@
 // config values it needs (with what was auto-detected), and whether it is selected by default.
 // The executor (data-service.applyServerPlan) applies ONLY the selected items, idempotently.
 //
-// Honest boundaries: config-plane only (GTM API data). Meta + TikTok CAPI items are fully
-// executable (their Stape-template builders auto-provision variables); LinkedIn / Pinterest items
-// are PLANNED but marked chat-only (their builders need per-destination fields this form does not
-// collect). Deep payload work (parameter mapping, transformations, consent mapping) is out of
+// Honest boundaries: config-plane only (GTM API data). Every CAPI item (Meta / TikTok / LinkedIn /
+// Pinterest) is executable by the app, each gated on its OWN credentials; Meta + TikTok also
+// auto-provision their match-quality variables, LinkedIn / Pinterest templates auto-map user data
+// themselves. Deep payload work (parameter mapping, transformations, consent mapping) is out of
 // scope here and stays with the audit's findings.
 
 import type { AuditTag, AuditTrigger, ContainerSnapshot, ServerContainerSnapshot } from './gtm-builders';
