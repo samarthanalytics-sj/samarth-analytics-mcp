@@ -2378,6 +2378,57 @@ export function isMicrosoftCapiServerTag(t: AuditTag): boolean {
   return keys.has('uetTagId') && keys.has('authToken');
 }
 
+/** Parameter-key set of a cvt_ template tag (empty for any other type) — the shape every CAPI
+ *  recogniser below reads. PURE. */
+function cvtParamKeys(t: AuditTag): Set<string> {
+  if (!t.type.startsWith('cvt_')) return new Set();
+  return new Set((Array.isArray(t.parameter) ? t.parameter : []).map((p) => (p as { key?: string }).key ?? ''));
+}
+
+/** The Stape LinkedIn CAPI server template fires on `conversionRuleUrn` with an `accessToken` — no
+ *  other server template carries a conversion-rule URN, so that pair identifies it. PURE. */
+export function isLinkedInCapiServerTag(t: AuditTag): boolean {
+  const keys = cvtParamKeys(t);
+  return keys.has('accessToken') && keys.has('conversionRuleUrn');
+}
+
+/** Pinterest's official server template stores `advertiserId` + `apiAccessToken`. Snapchat also uses
+ *  `apiAccessToken` but keys on `pixelId`, so `advertiserId` is the discriminator. PURE. */
+export function isPinterestCapiServerTag(t: AuditTag): boolean {
+  const keys = cvtParamKeys(t);
+  return keys.has('advertiserId') && keys.has('apiAccessToken');
+}
+
+/** The Stape Reddit CAPI server template stores `accountId` + `accessToken`; Quora's Stape template
+ *  uses the same pair, so a Reddit-only field (actionSource / testId / its auto-map toggle) is also
+ *  required. PURE. */
+export function isRedditCapiServerTag(t: AuditTag): boolean {
+  const keys = cvtParamKeys(t);
+  if (!(keys.has('accountId') && keys.has('accessToken'))) return false;
+  return keys.has('actionSource') || keys.has('testId') || keys.has('autoMapServerEventData');
+}
+
+/** The Stape Amazon Ads server template is the only one keyed by an ad `tagRegion` (NA/EU) alongside
+ *  its tag-id list / advanced-matching fields. PURE. */
+export function isAmazonCapiServerTag(t: AuditTag): boolean {
+  const keys = cvtParamKeys(t);
+  return keys.has('tagRegion') && (keys.has('tagIdsList') || keys.has('matchId') || keys.has('enableAdvancedMatching'));
+}
+
+/** StackAdapt's server pixel template stores `pixelID` (capital ID — distinct from every `pixelId`
+ *  template) + `pixelType`. PURE. */
+export function isStackAdaptServerTag(t: AuditTag): boolean {
+  const keys = cvtParamKeys(t);
+  return keys.has('pixelID') && keys.has('pixelType');
+}
+
+/** Any recognised CAPI / server-pixel template tag, regardless of vendor. Used where the audit needs
+ *  "is this a server destination" without caring which (PII flow, coverage). PURE. */
+export function isAnyCapiServerTag(t: AuditTag): boolean {
+  return isMetaCapiServerTag(t) || isTikTokCapiServerTag(t) || isSnapchatCapiServerTag(t) || isMicrosoftCapiServerTag(t)
+    || isLinkedInCapiServerTag(t) || isPinterestCapiServerTag(t) || isRedditCapiServerTag(t) || isAmazonCapiServerTag(t) || isStackAdaptServerTag(t);
+}
+
 /** The string value of a named row inside a CAPI list param ('' when absent), e.g. the Snapchat
  *  serverParameters test_event_code row. PURE. */
 function capiListRowValue(t: AuditTag, listKey: string, rowName: string): string {
@@ -3003,8 +3054,10 @@ export function auditServerContainer(s: ServerContainerSnapshot): AuditReport {
   if (s.transformations.length === 0) {
     const PII_VAR = /email|phone|first.?name|last.?name|full.?name|address|zip|postal/i;
     const piiVars = (s.variables ?? []).filter((v) => PII_VAR.test(v.name));
+    // Every recognised CAPI template by SHAPE (Meta/TikTok/Snap/Microsoft/LinkedIn/Pinterest/Reddit/
+    // Amazon/StackAdapt), plus a name fallback for a vendor template no recogniser knows yet.
     const capiTags = s.tags.filter(
-      (t) => !t.paused && (isMetaCapiServerTag(t) || isTikTokCapiServerTag(t) || /linkedin|pinterest|snap|capi|conversions?\s*api/i.test(t.name)),
+      (t) => !t.paused && (isAnyCapiServerTag(t) || /linkedin|pinterest|snap|reddit|amazon|stackadapt|capi|conversions?\s*api/i.test(t.name)),
     );
     const flowing = piiVars.filter((v) => capiTags.some((t) => JSON.stringify(t.parameter ?? []).includes(`{{${v.name}}}`)));
     if (flowing.length) {
@@ -4678,17 +4731,47 @@ export interface ServerMigrationPlan {
 }
 
 /** Name/snippet heuristics for template-based (cvt_) or Custom HTML pixels, mapped to their typed
- *  server CAPI tool. Access tokens are never in the web container, so they are listed in `requires`. */
+ *  server CAPI tool. Access tokens are never in the web container, so they are listed in `requires`.
+ *
+ *  `derivedKey` is the SERVER field the web pixel's public id feeds, `idKeys` the gallery-template
+ *  params that hold it (our own web builders' keys, e.g. TikTok `pixel_code`, Snap `pixel_id`) and
+ *  `snippetRe` its position inside the vendor's Custom HTML init call. When the id is found the plan
+ *  carries it in `derived`, so the server tag is created pre-filled and only the secret is left to type.
+ *
+ *  ORDER MATTERS (first hit wins): LinkedIn precedes Snapchat because a LinkedIn Custom HTML snippet
+ *  loads from snap.licdn.com, which `/snap/` would otherwise claim. */
 const SERVER_MIGRATION_HEURISTICS: ReadonlyArray<{
   re: RegExp; destination: string; serverTool: string; requires: string[]; note: string;
+  derivedKey: string; idKeys: string[]; snippetRe: RegExp; status?: ServerMigrationItem['status'];
 }> = [
-  { re: /tiktok|ttq\s*\(/i, destination: 'TikTok', serverTool: 'create_tiktok_capi_server_tag', requires: ['accessToken'], note: 'TikTok Events API server tag.' },
-  { re: /linkedin|_linkedin_partner_id/i, destination: 'LinkedIn', serverTool: 'create_linkedin_capi_server_tag', requires: ['accessToken'], note: 'LinkedIn CAPI server tag.' },
-  { re: /pinterest|pintrk\s*\(/i, destination: 'Pinterest', serverTool: 'create_pinterest_capi_server_tag', requires: ['accessToken'], note: 'Pinterest CAPI server tag.' },
-  { re: /reddit|rdt\s*\(/i, destination: 'Reddit', serverTool: 'create_reddit_capi_server_tag', requires: ['accessToken'], note: 'Reddit CAPI server tag.' },
-  { re: /snap(chat)?|snaptr\s*\(/i, destination: 'Snapchat', serverTool: 'create_snapchat_capi_server_tag', requires: ['apiAccessToken'], note: 'Snapchat CAPI server tag.' },
-  { re: /microsoft|bing|\buet\b/i, destination: 'Microsoft Ads', serverTool: 'create_microsoft_capi_server_tag', requires: ['authToken'], note: 'Microsoft Ads CAPI; REQUIRES MSCLKID forwarded from the web side.' },
+  { re: /tiktok|ttq\s*\(/i, destination: 'TikTok', serverTool: 'create_tiktok_capi_server_tag', requires: ['accessToken'], note: 'TikTok Events API server tag.',
+    derivedKey: 'pixelId', idKeys: ['pixel_code', 'pixelCode', 'pixelId'], snippetRe: /ttq\.load\s*\(\s*['"]([^'"]+)['"]/i },
+  { re: /linkedin|_linkedin_partner_id|lintrk|licdn\.com/i, destination: 'LinkedIn', serverTool: 'create_linkedin_capi_server_tag', requires: ['accessToken', 'conversionRuleUrn'],
+    note: 'LinkedIn CAPI server tag. The web Partner ID is informational: the server tag fires on a Conversion Rule URN, which the caller must supply.',
+    derivedKey: 'partnerId', idKeys: ['partnerId', 'id'], snippetRe: /_linkedin_partner_id\s*=\s*['"]([^'"]+)['"]/i },
+  { re: /pinterest|pintrk\s*\(/i, destination: 'Pinterest', serverTool: 'create_pinterest_capi_server_tag', requires: ['apiAccessToken'], note: 'Pinterest CAPI server tag.',
+    derivedKey: 'advertiserId', idKeys: ['tagId', 'advertiserId'], snippetRe: /pintrk\s*\(\s*['"]load['"]\s*,\s*['"]([^'"]+)['"]/i },
+  { re: /reddit|rdt\s*\(/i, destination: 'Reddit', serverTool: 'create_reddit_capi_server_tag', requires: ['accessToken'], note: 'Reddit CAPI server tag.',
+    derivedKey: 'accountId', idKeys: ['accountId', 'pixelId'], snippetRe: /rdt\s*\(\s*['"]init['"]\s*,\s*['"]([^'"]+)['"]/i },
+  { re: /snap(chat)?|snaptr\s*\(/i, destination: 'Snapchat', serverTool: 'create_snapchat_capi_server_tag', requires: ['apiAccessToken'], note: 'Snapchat CAPI server tag.',
+    derivedKey: 'pixelId', idKeys: ['pixel_id', 'pixelId'], snippetRe: /snaptr\s*\(\s*['"]init['"]\s*,\s*['"]([^'"]+)['"]/i },
+  { re: /microsoft|bing|\buet\b|uetq/i, destination: 'Microsoft Ads', serverTool: 'create_microsoft_capi_server_tag', requires: ['authToken'], note: 'Microsoft Ads CAPI; REQUIRES MSCLKID forwarded from the web side.',
+    derivedKey: 'uetTagId', idKeys: ['tagId', 'uetTagId'], snippetRe: /\bti\s*:\s*['"]([^'"]+)['"]/i },
+  // Builders + typed tools already exist for these two; they were simply never planned.
+  { re: /amazon[\s_-]?(ads?|pixel|tag)|amzn\s*\(|amazon-adsystem/i, destination: 'Amazon Ads', serverTool: 'create_amazon_capi_server_tag', requires: [], note: 'Amazon Ads CAPI server tag (region defaults to NA; pass tagRegion for EU).',
+    derivedKey: 'tagId', idKeys: ['tagId'], snippetRe: /amzn\s*\(\s*['"]addTag['"]\s*,\s*['"]([^'"]+)['"]/i },
+  { re: /stackadapt|\bsaq\s*\(|srv\.stackadapt/i, destination: 'StackAdapt', serverTool: 'create_stackadapt_server_tag', requires: [], note: 'StackAdapt server-side pixel.',
+    derivedKey: 'pixelID', idKeys: ['pixelID', 'pixelId'], snippetRe: /saq\s*\(\s*['"]ts['"]\s*,\s*['"]([^'"]+)['"]/i },
+  // X (Twitter) has a Stape server template (stape-io/twitter-tag) but no typed builder yet, so it takes
+  // the generic import-template + tags_create path, like Floodlight.
+  { re: /\btwitter\b|\bx[\s_-]?pixel\b|twq\s*\(|static\.ads-twitter/i, destination: 'X (Twitter)', serverTool: 'templates_import_from_gallery (stape-io/twitter-tag) + tags_create', requires: ['pixelAccessToken'],
+    note: 'X Conversion API via the Stape twitter-tag template; no typed builder yet, so map the fields via the generic path.', status: 'generic',
+    derivedKey: 'pixelId', idKeys: ['pixelId'], snippetRe: /twq\s*\(\s*['"]config['"]\s*,\s*['"]([^'"]+)['"]/i },
 ];
+
+/** Meta's public Pixel ID on the web side: the gallery template's `pixelId` param, or the id inside
+ *  fbq('init', '<id>') in a Custom HTML snippet. '' when absent. PURE. */
+const META_INIT_RE = /fbq\s*\(\s*['"]init['"]\s*,\s*['"]([^'"]+)['"]/i;
 
 /**
  * Plan the port of a WEB container's conversion tags to a SERVER container: for each recognised
@@ -4714,9 +4797,15 @@ export function planWebToServerMigration(snapshot: ContainerSnapshot): ServerMig
       if (/^G-/i.test(mid)) measurementIds.add(mid);
       continue;
     }
-    // Meta (detected by fbq/name/snippet) → Meta CAPI.
+    // Meta (detected by fbq/name/snippet) → Meta CAPI. The Pixel ID is public and on the web tag
+    // (template param or fbq('init', …)), so carry it; only the access token is left to supply.
     if (metaIds.has(t.tagId)) {
-      items.push({ webTag: t.name, destination: 'Meta', detectedBy: 'name', serverTool: 'create_meta_capi_server_tag', derived: {}, requires: ['pixelId', 'accessToken'], note: 'Meta Conversions API server tag; auto-imports stape-io/facebook-tag.', status: 'typed-tool' });
+      const pixelId = pv(t, 'pixelId') || (META_INIT_RE.exec(pv(t, 'html'))?.[1] ?? '').trim();
+      items.push({
+        webTag: t.name, destination: 'Meta', detectedBy: 'name', serverTool: 'create_meta_capi_server_tag',
+        derived: pixelId ? { pixelId } : {}, requires: pixelId ? ['accessToken'] : ['pixelId', 'accessToken'],
+        note: 'Meta Conversions API server tag; auto-imports stape-io/facebook-tag.', status: 'typed-tool',
+      });
       continue;
     }
     // Native Google/Floodlight conversion types (authoritative).
@@ -4740,12 +4829,29 @@ export function planWebToServerMigration(snapshot: ContainerSnapshot): ServerMig
       items.push({ webTag: t.name, destination: 'Conversion Linker', detectedBy: 'native-type', serverTool: null, derived: {}, requires: [], note: 'Not needed server-side: the server GA4 client + FPID cookies handle linking.', status: 'skip' });
       continue;
     }
-    // Template/Custom-HTML pixels by name or snippet.
+    // Native vendor types (authoritative — no name guessing). GTM's built-in Microsoft UET tag stores
+    // the UET id as `tagId`; the built-in LinkedIn Insight tag stores the Partner ID as `id` (both
+    // verified against the 562-container corpus). The same server tools apply as for the pixels'
+    // template/Custom-HTML forms below.
+    if (type === 'baut') {
+      const uetTagId = pv(t, 'tagId');
+      items.push({ webTag: t.name, destination: 'Microsoft Ads', detectedBy: 'native-type', serverTool: 'create_microsoft_capi_server_tag', derived: uetTagId ? { uetTagId } : {}, requires: ['authToken'], note: 'Microsoft Ads CAPI; REQUIRES MSCLKID forwarded from the web side.', status: 'typed-tool' });
+      continue;
+    }
+    if (type === 'bzi') {
+      const partnerId = pv(t, 'id');
+      items.push({ webTag: t.name, destination: 'LinkedIn', detectedBy: 'native-type', serverTool: 'create_linkedin_capi_server_tag', derived: partnerId ? { partnerId } : {}, requires: ['accessToken', 'conversionRuleUrn'], note: 'LinkedIn CAPI server tag. The web Partner ID is informational: the server tag fires on a Conversion Rule URN, which the caller must supply.', status: 'typed-tool' });
+      continue;
+    }
+    // Template/Custom-HTML pixels by name or snippet. The vendor's public id is read off the template
+    // param (idKeys) or the init call in the snippet (snippetRe) and carried as `derived`, so the server
+    // tag is created pre-filled; it is never a secret, so it is never in `requires`.
     const html = pv(t, 'html');
     const hay = `${t.name} ${type} ${html}`;
     const hit = SERVER_MIGRATION_HEURISTICS.find((h) => h.re.test(hay));
     if (hit) {
-      items.push({ webTag: t.name, destination: hit.destination, detectedBy: 'name', serverTool: hit.serverTool, derived: {}, requires: hit.requires, note: hit.note, status: 'typed-tool' });
+      const id = hit.idKeys.map((k) => pv(t, k)).find(Boolean) || (hit.snippetRe.exec(html)?.[1] ?? '').trim();
+      items.push({ webTag: t.name, destination: hit.destination, detectedBy: 'name', serverTool: hit.serverTool, derived: id ? { [hit.derivedKey]: id } : {}, requires: hit.requires, note: hit.note, status: hit.status ?? 'typed-tool' });
     }
   }
 

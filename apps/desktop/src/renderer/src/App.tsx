@@ -9887,6 +9887,8 @@ function ServerContainerPanel({
                 .filter((i) => i && (i.requires.some((k) => !value(k).trim()) || i.dependsOn.some((d) => byId.get(d)?.status === 'missing' && !sel[d])));
               const anyMeta = plan.items.some((i) => i.id.startsWith('meta_capi:') && i.status === 'missing');
               const anyTikTok = plan.items.some((i) => i.id.startsWith('tiktok_capi:') && i.status === 'missing');
+              const anyLinkedIn = plan.items.some((i) => i.id.startsWith('linkedin_capi:') && i.status === 'missing');
+              const anyPinterest = plan.items.some((i) => i.id.startsWith('pinterest_capi:') && i.status === 'missing');
               const CAT_COLOR: Record<string, string> = { critical: 'var(--c-red)', high: 'var(--c-red)', medium: 'var(--c-amber)', low: 'var(--text-muted)' };
               const setAll = (on: boolean): void => {
                 const next: Record<string, boolean> = {};
@@ -9931,7 +9933,7 @@ function ServerContainerPanel({
                       Already in place: {existing.map((i) => i.name).join(' · ')}
                     </div>
                   )}
-                  {(missingValueKeys.length > 0 || anyMeta || anyTikTok) && (
+                  {(missingValueKeys.length > 0 || anyMeta || anyTikTok || anyLinkedIn || anyPinterest) && (
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', borderTop: '1px dashed var(--border)', paddingTop: 10 }}>
                       {missingValueKeys.includes('measurementId') && (
                         <input style={{ ...styles.input, flex: '1 1 170px' }} placeholder="GA4 Measurement ID (G-…)" value={vals.measurementId ?? ''} onChange={(e) => setVals((v) => ({ ...v, measurementId: e.target.value }))} />
@@ -9949,6 +9951,19 @@ function ServerContainerPanel({
                         <>
                           <input style={{ ...styles.input, flex: '1 1 150px' }} placeholder="TikTok Pixel ID" value={vals.tiktokPixelId ?? ''} onChange={(e) => setVals((v) => ({ ...v, tiktokPixelId: e.target.value }))} />
                           <input style={{ ...styles.input, flex: '1 1 190px' }} type="password" placeholder="TikTok access token" value={vals.tiktokAccessToken ?? ''} onChange={(e) => setVals((v) => ({ ...v, tiktokAccessToken: e.target.value }))} />
+                        </>
+                      )}
+                      {anyLinkedIn && (
+                        <>
+                          {/* LinkedIn CAPI fires on a Conversion Rule URN (urn:lla:llaPartnerConversion:…), not the web Partner ID. */}
+                          <input style={{ ...styles.input, flex: '1 1 230px' }} placeholder="LinkedIn conversion rule URN" value={vals.linkedinConversionRuleUrn ?? ''} onChange={(e) => setVals((v) => ({ ...v, linkedinConversionRuleUrn: e.target.value }))} />
+                          <input style={{ ...styles.input, flex: '1 1 190px' }} type="password" placeholder="LinkedIn access token" value={vals.linkedinAccessToken ?? ''} onChange={(e) => setVals((v) => ({ ...v, linkedinAccessToken: e.target.value }))} />
+                        </>
+                      )}
+                      {anyPinterest && (
+                        <>
+                          <input style={{ ...styles.input, flex: '1 1 150px' }} placeholder="Pinterest Advertiser ID" value={vals.pinterestAdvertiserId ?? ''} onChange={(e) => setVals((v) => ({ ...v, pinterestAdvertiserId: e.target.value }))} />
+                          <input style={{ ...styles.input, flex: '1 1 190px' }} type="password" placeholder="Pinterest API access token" value={vals.pinterestAccessToken ?? ''} onChange={(e) => setVals((v) => ({ ...v, pinterestAccessToken: e.target.value }))} />
                         </>
                       )}
                     </div>
@@ -10081,7 +10096,11 @@ function ServerAuditSection({
     if (!row.template || !containerId || !workspaceId) return;
     setRowCreate((m) => ({ ...m, [i]: { state: 'creating' } }));
     try {
-      const platformLabel = row.platform === 'meta' ? 'Meta' : row.platform === 'tiktok' ? 'TikTok' : row.platform === 'linkedin' ? 'LinkedIn' : row.platform === 'pinterest' ? 'Pinterest' : row.platform;
+      const COVERAGE_PLATFORM_LABEL: Record<string, string> = {
+        ga4: 'GA4', meta: 'Meta', tiktok: 'TikTok', linkedin: 'LinkedIn', pinterest: 'Pinterest',
+        snapchat: 'Snapchat', microsoft: 'Microsoft Ads', reddit: 'Reddit', amazon: 'Amazon Ads', stackadapt: 'StackAdapt', x: 'X (Twitter)',
+      };
+      const platformLabel = COVERAGE_PLATFORM_LABEL[row.platform] ?? row.platform;
       const r = await window.desktop.gtm.createServerTagForEvent(accountId, containerId, workspaceId, row.template.tagId, row.event, `${platformLabel} CAPI - ${row.event}`);
       setRowCreate((m) => ({ ...m, [i]: { state: 'done', msg: `✓ Created draft "${r.name}" on trigger "${r.triggerName}"${r.triggerReused ? ' (reused)' : ''} - review its outgoing event-name field in GTM, then publish.` } }));
     } catch (e) {
