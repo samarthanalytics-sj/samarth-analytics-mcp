@@ -15,10 +15,18 @@
 // Google tag not pointing at the tagging server at all, and web/server GA4 Measurement ID mismatch.
 
 import type { AuditTag, AuditTrigger, ContainerSnapshot, ServerContainerSnapshot } from './gtm-builders';
-import { serverTagParam, isMetaCapiServerTag, isTikTokCapiServerTag, googleTagConfigValue } from './gtm-builders';
+import {
+  serverTagParam, googleTagConfigValue,
+  isMetaCapiServerTag, isTikTokCapiServerTag, isSnapchatCapiServerTag, isMicrosoftCapiServerTag,
+  isLinkedInCapiServerTag, isPinterestCapiServerTag, isRedditCapiServerTag, isAmazonCapiServerTag, isStackAdaptServerTag,
+} from './gtm-builders';
 import { resolveGa4MeasurementIds } from './gtm-ga4-check';
 
-export type CoveragePlatform = 'ga4' | 'meta' | 'tiktok' | 'linkedin' | 'pinterest';
+/** Every web-pixel platform the migration planner can port. Kept in step with SERVER_MIGRATION_HEURISTICS
+ *  (gtm-builders) so a platform the planner offers is also one coverage can score. */
+export type CoveragePlatform =
+  | 'ga4' | 'meta' | 'tiktok' | 'linkedin' | 'pinterest'
+  | 'snapchat' | 'microsoft' | 'reddit' | 'amazon' | 'stackadapt' | 'x';
 
 export interface ServerCoverageRow {
   platform: CoveragePlatform;
@@ -75,17 +83,29 @@ function eventOfTrigger(tr: AuditTrigger | undefined): string | null {
   return null;
 }
 
+// ORDER MATTERS (first match wins): linkedin precedes snapchat because a LinkedIn Custom HTML snippet
+// loads from snap.licdn.com, which a bare /snap/ would otherwise claim.
 const PIXEL_SIGNS: Array<{ platform: Exclude<CoveragePlatform, 'ga4'>; nameRe: RegExp; bodyRe: RegExp }> = [
   { platform: 'meta', nameRe: /\bmeta\b|facebook|fb[\s_-]?pixel/i, bodyRe: /fbq\(|connect\.facebook\.net/i },
   { platform: 'tiktok', nameRe: /tiktok/i, bodyRe: /ttq\.|analytics\.tiktok\.com/i },
   { platform: 'linkedin', nameRe: /linkedin/i, bodyRe: /lintrk|snap\.licdn\.com/i },
   { platform: 'pinterest', nameRe: /pinterest/i, bodyRe: /pintrk/i },
+  { platform: 'reddit', nameRe: /reddit/i, bodyRe: /rdt\(|redditstatic\.com/i },
+  { platform: 'snapchat', nameRe: /snap(chat)?\b/i, bodyRe: /snaptr\(|sc-static\.net/i },
+  { platform: 'microsoft', nameRe: /microsoft|bing|\buet\b/i, bodyRe: /bat\.bing\.com|uetq/i },
+  { platform: 'amazon', nameRe: /amazon[\s_-]?(ads?|pixel|tag)/i, bodyRe: /amzn\(|amazon-adsystem/i },
+  { platform: 'stackadapt', nameRe: /stackadapt/i, bodyRe: /saq\(|srv\.stackadapt/i },
+  { platform: 'x', nameRe: /\btwitter\b|\bx[\s_-]?pixel\b/i, bodyRe: /twq\(|static\.ads-twitter/i },
 ];
 
-/** Platform of a WEB tag: GA4 event tags by type; vendor pixels by name or (for Custom HTML) body. */
+/** Platform of a WEB tag: GA4 event tags by type; the built-in Microsoft UET (baut) and LinkedIn
+ *  Insight (bzi) tags by their native type (authoritative); other vendor pixels by name or (for Custom
+ *  HTML) body. */
 function webPlatformOf(t: AuditTag): CoveragePlatform | null {
   if (t.type === 'gaawe') return 'ga4';
   if (t.type === 'gaawc' || t.type === 'googtag') return null; // config tags aren't events
+  if (t.type === 'baut') return 'microsoft';
+  if (t.type === 'bzi') return 'linkedin';
   const body = t.type === 'html' ? JSON.stringify(t.parameter ?? []) : '';
   for (const sign of PIXEL_SIGNS) {
     if (sign.nameRe.test(t.name) || (body && sign.bodyRe.test(body))) return sign.platform;
@@ -93,20 +113,36 @@ function webPlatformOf(t: AuditTag): CoveragePlatform | null {
   return null;
 }
 
-/** Platform of a SERVER tag: GA4 relay by type, CAPI templates by shape, else by name. */
+/** Platform of a SERVER tag: GA4 relay by type, CAPI templates by SHAPE (every recogniser the server
+ *  audit has), else by name. */
 function serverPlatformOf(t: AuditTag): CoveragePlatform | null {
   if (t.type === 'sgtmgaaw') return 'ga4';
   if (isMetaCapiServerTag(t)) return 'meta';
   if (isTikTokCapiServerTag(t)) return 'tiktok';
+  if (isLinkedInCapiServerTag(t)) return 'linkedin';
+  if (isPinterestCapiServerTag(t)) return 'pinterest';
+  if (isRedditCapiServerTag(t)) return 'reddit';
+  if (isSnapchatCapiServerTag(t)) return 'snapchat';
+  if (isMicrosoftCapiServerTag(t)) return 'microsoft';
+  if (isAmazonCapiServerTag(t)) return 'amazon';
+  if (isStackAdaptServerTag(t)) return 'stackadapt';
   for (const sign of PIXEL_SIGNS) if (sign.nameRe.test(t.name)) return sign.platform;
   return null;
 }
 
+/** The chat tool that builds each platform's server tag. X has no typed builder yet: it goes through
+ *  the generic gallery import of stape-io/twitter-tag. */
 const CAPI_TOOL: Record<Exclude<CoveragePlatform, 'ga4'>, string> = {
   meta: 'create_meta_capi_server_tag',
   tiktok: 'create_tiktok_capi_server_tag',
   linkedin: 'create_linkedin_capi_server_tag',
   pinterest: 'create_pinterest_capi_server_tag',
+  reddit: 'create_reddit_capi_server_tag',
+  snapchat: 'create_snapchat_capi_server_tag',
+  microsoft: 'create_microsoft_capi_server_tag',
+  amazon: 'create_amazon_capi_server_tag',
+  stackadapt: 'create_stackadapt_server_tag',
+  x: 'import_gallery_template (stape-io/twitter-tag) + create_gtm_tag',
 };
 
 /** Configuration subscore from audit severity counts - the STATED formula (100 - 25/critical -

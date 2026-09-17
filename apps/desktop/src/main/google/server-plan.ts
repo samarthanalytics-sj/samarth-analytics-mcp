@@ -4,10 +4,10 @@
 // config values it needs (with what was auto-detected), and whether it is selected by default.
 // The executor (data-service.applyServerPlan) applies ONLY the selected items, idempotently.
 //
-// Honest boundaries: config-plane only (GTM API data). Meta + TikTok CAPI items are fully
-// executable (their Stape-template builders auto-provision variables); LinkedIn / Pinterest items
-// are PLANNED but marked chat-only (their builders need per-destination fields this form does not
-// collect). Deep payload work (parameter mapping, transformations, consent mapping) is out of
+// Honest boundaries: config-plane only (GTM API data). Every CAPI item (Meta / TikTok / LinkedIn /
+// Pinterest) is executable by the app, each gated on its OWN credentials; Meta + TikTok also
+// auto-provision their match-quality variables, LinkedIn / Pinterest templates auto-map user data
+// themselves. Deep payload work (parameter mapping, transformations, consent mapping) is out of
 // scope here and stays with the audit's findings.
 
 import type { AuditTag, AuditTrigger, ContainerSnapshot, ServerContainerSnapshot } from './gtm-builders';
@@ -43,6 +43,11 @@ export interface ServerPlanValues {
   metaAccessToken?: string;
   tiktokPixelId?: string;
   tiktokAccessToken?: string;
+  /** LinkedIn CAPI fires on a Conversion Rule URN (urn:lla:llaPartnerConversion:…), not the web Partner ID. */
+  linkedinAccessToken?: string;
+  linkedinConversionRuleUrn?: string;
+  pinterestAdvertiserId?: string;
+  pinterestAccessToken?: string;
 }
 
 export interface ServerPlan {
@@ -120,6 +125,7 @@ const PIXEL_SIGNS: Array<{ platform: 'meta' | 'tiktok' | 'linkedin' | 'pinterest
 
 function webPixelPlatform(t: AuditTag): 'meta' | 'tiktok' | 'linkedin' | 'pinterest' | null {
   if (t.type === 'gaawe' || t.type === 'gaawc' || t.type === 'googtag') return null;
+  if (t.type === 'bzi') return 'linkedin'; // GTM's built-in LinkedIn Insight tag: native type is authoritative
   const body = t.type === 'html' ? JSON.stringify(t.parameter ?? []) : '';
   for (const sign of PIXEL_SIGNS) if (sign.nameRe.test(t.name) || (body && sign.bodyRe.test(body))) return sign.platform;
   return null;
@@ -297,9 +303,16 @@ export function buildServerPlan(input: ServerPlanInput): ServerPlan {
     if (seen.has(key)) continue;
     seen.add(key);
     const covered = srvHandled.get(platform)?.has(norm(event)) ?? false;
-    const executable = platform === 'meta' || platform === 'tiktok';
-    const requires = platform === 'meta' ? ['metaPixelId', 'metaAccessToken'] : platform === 'tiktok' ? ['tiktokPixelId', 'tiktokAccessToken'] : [];
-    const label = platform === 'meta' ? 'Meta CAPI' : platform === 'tiktok' ? 'TikTok Events API' : platform === 'linkedin' ? 'LinkedIn CAPI' : 'Pinterest CAPI';
+    // All four platforms are applied by the app itself (applyServerPlan), each gated on its own
+    // credentials. Meta/TikTok also auto-provision their match-quality (EMQ) variables; the LinkedIn and
+    // Pinterest templates auto-map user data from the event themselves, so they need no extra step.
+    const CAPI: Record<typeof platform, { label: string; requires: string[]; extra: string }> = {
+      meta: { label: 'Meta CAPI', requires: ['metaPixelId', 'metaAccessToken'], extra: ' Auto-provisions its match-quality variables.' },
+      tiktok: { label: 'TikTok Events API', requires: ['tiktokPixelId', 'tiktokAccessToken'], extra: ' Auto-provisions its match-quality variables.' },
+      linkedin: { label: 'LinkedIn CAPI', requires: ['linkedinAccessToken', 'linkedinConversionRuleUrn'], extra: ' Fires on the Conversion Rule URN you supply; user data is auto-mapped by the template.' },
+      pinterest: { label: 'Pinterest CAPI', requires: ['pinterestAdvertiserId', 'pinterestAccessToken'], extra: ' User data is auto-mapped by the template.' },
+    };
+    const { label, requires, extra } = CAPI[platform];
     push({
       id: `${platform}_capi:${event}`,
       category: covered ? 'info' : 'medium',
@@ -308,13 +321,11 @@ export function buildServerPlan(input: ServerPlanInput): ServerPlan {
       name: `${label} - ${event}`,
       description: covered
         ? 'A server tag already handles this event.'
-        : executable
-          ? `Server-side ${label} tag for "${event}" (web tag: "${t.name}"). Auto-provisions its match-quality variables.`
-          : `Server-side ${label} tag for "${event}" - created via the chat (${platform === 'linkedin' ? 'create_linkedin_capi_server_tag' : 'create_pinterest_capi_server_tag'}), which collects this destination's own fields.`,
+        : `Server-side ${label} tag for "${event}" (web tag: "${t.name}").${extra}`,
       dependsOn: ['ga4_client'],
       requires: covered ? [] : requires,
       defaultSelected: false, // credential-gated: never pre-checked
-      executable: executable && !covered,
+      executable: !covered,
     });
   }
 

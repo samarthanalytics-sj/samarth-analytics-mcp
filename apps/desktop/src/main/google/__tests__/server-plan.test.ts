@@ -61,7 +61,7 @@ test('blank container: every baseline item missing, sensible categories, relay n
   assert.ok(byId.get('ga4_client')!.defaultSelected && byId.get('ga4_relay')!.defaultSelected, 'baseline pre-checked');
 });
 
-test('CAPI items: per web pixel event; Meta/TikTok executable with credential requires; Pinterest chat-only', () => {
+test('CAPI items: per web pixel event; every platform executable by the app, each gated on its OWN credentials', () => {
   const plan = buildServerPlan(emptyInput());
   const meta = plan.items.find((i) => i.id === 'meta_capi:generate_lead')!;
   assert.deepEqual(meta.requires, ['metaPixelId', 'metaAccessToken']);
@@ -69,9 +69,32 @@ test('CAPI items: per web pixel event; Meta/TikTok executable with credential re
   assert.equal(meta.defaultSelected, false, 'credential-gated items never pre-checked');
   const tiktok = plan.items.find((i) => i.id === 'tiktok_capi:generate_lead')!;
   assert.equal(tiktok.executable, true);
+  // Pinterest used to be "planned but chat-only" even though its builder existed; it is applied by the
+  // app now, gated on the Pinterest advertiser id + API token (never the Meta/TikTok values).
   const pin = plan.items.find((i) => i.id === 'pinterest_capi:generate_lead')!;
-  assert.equal(pin.executable, false, 'Pinterest planned but chat-only');
-  assert.ok(/create_pinterest_capi_server_tag/.test(pin.description));
+  assert.equal(pin.executable, true, 'Pinterest is applied by the app');
+  assert.deepEqual(pin.requires, ['pinterestAdvertiserId', 'pinterestAccessToken']);
+  assert.equal(pin.defaultSelected, false);
+  assert.ok(/auto-mapped by the template/.test(pin.description), pin.description);
+  const capi = plan.items.filter((i) => /_capi:/.test(i.id) && i.status === 'missing');
+  assert.ok(capi.length >= 3);
+  assert.ok(capi.every((i) => i.executable), 'no CAPI platform is left chat-only');
+  assert.ok(capi.every((i) => i.requires.length === 2), 'each CAPI item requires exactly its own id + secret');
+  const linkedin = plan.items.find((i) => i.id.startsWith('linkedin_capi:'));
+  if (linkedin) assert.deepEqual(linkedin.requires, ['linkedinAccessToken', 'linkedinConversionRuleUrn'], 'LinkedIn fires on a conversion rule URN, not the web partner id');
+});
+
+test('CAPI items: GTM built-in LinkedIn Insight tag (bzi) is recognised by its native type, not by name', () => {
+  const input = emptyInput();
+  input.web = {
+    ...(input.web ?? { tags: [], triggers: [], variables: [] }),
+    tags: [tag({ tagId: 'li', name: 'Insight', type: 'bzi', firingTriggerId: ['9'], parameter: [{ key: 'id', value: '6850978' }] })],
+    triggers: [evTrigger('9', 'sign_up')],
+  } as ContainerSnapshot;
+  const plan = buildServerPlan(input);
+  const li = plan.items.find((i) => i.id === 'linkedin_capi:sign_up');
+  assert.ok(li, 'a bzi tag named without "linkedin" still plans a LinkedIn CAPI item');
+  assert.equal(li!.executable, true);
 });
 
 test('complete container: baseline items existing (info) and unchecked; detected values filled', () => {
