@@ -3,9 +3,10 @@
  *
  * Registered as an MCP prompt (prompts/list) so it shows in the client's "prompts" tab. Unlike the
  * desktop chat brain's system prompt, an MCP prompt is a user-selectable template the client injects.
- * The MCP server exposes only GENERIC create tools (containers_create, clients_create, variables_create,
- * triggers_create, tags_create, built_in_variables_enable) — no typed server builders — so this prompt
+ * For the RAW resources (container, clients, variables, triggers, the GA4/Ads server tags) this prompt
  * hands the assistant the ordered recipe PLUS the exact resource shapes (types + parameter arrays).
+ * Typed builders exist too (src/tools/serverMigration.ts): create_server_tag for the native Google
+ * server tags and create_*_capi_server_tag for every third-party CAPI - the recipe points at them.
  * Shapes corpus-validated against real server containers.
  */
 
