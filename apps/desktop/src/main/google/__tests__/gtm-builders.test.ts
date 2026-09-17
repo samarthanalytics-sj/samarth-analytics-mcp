@@ -103,6 +103,14 @@ import {
   findGa4BaseTag,
   ga4VariablePlan,
   planTriggerRetarget,
+  isMetaCapiServerTag,
+  isSnapchatCapiServerTag,
+  isLinkedInCapiServerTag,
+  isPinterestCapiServerTag,
+  isRedditCapiServerTag,
+  isAmazonCapiServerTag,
+  isStackAdaptServerTag,
+  isAnyCapiServerTag,
 } from '../gtm-builders';
 import type { AuditTag as TAuditTag, ContainerSnapshot as TContainerSnapshot, ServerContainerSnapshot as TServerContainerSnapshot } from '../gtm-builders';
 import { buildGoogleTagEventSettingsVariable, ga4TagFields, readGa4EventParameters } from '../gtm-builders';
@@ -3737,8 +3745,19 @@ test('planWebToServerMigration: classifies GA4/Ads/Floodlight/Linker natives + M
       { tagId: '6', name: 'Floodlight Sale', type: 'flc', parameter: [P('advertiserId', '555'), P('groupTag', 'grp'), P('activityTag', 'act')] },
       { tagId: '7', name: 'Conversion Linker', type: 'gclidw', parameter: [] },
       { tagId: '8', name: 'Meta Pixel', type: 'html', parameter: [P('html', "<script>fbq('init','111')</script>")] },
-      { tagId: '9', name: 'TikTok Pixel', type: 'cvt_TT01', parameter: [] },
+      { tagId: '9', name: 'TikTok Pixel', type: 'cvt_TT01', parameter: [P('pixel_code', 'C7TK')] },
       { tagId: '10', name: 'Some analytics thing', type: 'html', parameter: [P('html', '<script>console.log(1)</script>')] },
+      // Native vendor types (corpus-verified keys): UET stores the id as tagId, LinkedIn Insight as id.
+      { tagId: '11', name: 'Bing UET', type: 'baut', parameter: [P('tagId', '25015051'), P('eventType', 'PAGE_LOAD')] },
+      { tagId: '12', name: 'LinkedIn Insight', type: 'bzi', parameter: [P('id', '6850978')] },
+      // A LinkedIn Custom HTML snippet with NO "linkedin" in the name: it loads from snap.licdn.com, which
+      // must classify as LinkedIn, never as Snapchat.
+      { tagId: '13', name: 'Site pixel', type: 'html', parameter: [P('html', '<script src="https://snap.licdn.com/li.lms-analytics/insight.min.js"></script><script>_linkedin_partner_id = "777";</script>')] },
+      { tagId: '14', name: 'Snap Pixel', type: 'html', parameter: [P('html', "<script>snaptr('init','ab12-cd34')</script>")] },
+      { tagId: '15', name: 'Amazon Ads pixel', type: 'html', parameter: [P('html', "<script>amzn('addTag','tag-987')</script>")] },
+      { tagId: '16', name: 'StackAdapt', type: 'html', parameter: [P('html', "<script>saq('ts','SA-55')</script>")] },
+      { tagId: '17', name: 'X pixel', type: 'html', parameter: [P('html', "<script>twq('config','o1abc')</script>")] },
+      { tagId: '18', name: 'Pinterest Tag', type: 'cvt_PIN1', parameter: [P('tagId', '2613')] },
     ],
   } as unknown as TContainerSnapshot;
 
@@ -3758,16 +3777,66 @@ test('planWebToServerMigration: classifies GA4/Ads/Floodlight/Linker natives + M
   assert.equal(by('Floodlight')?.status, 'generic');
   assert.equal(by('Conversion Linker')?.status, 'skip');
 
+  // The public pixel id is read off the web tag and carried as `derived`, so only the SECRET is required.
   assert.equal(by('Meta')?.serverTool, 'create_meta_capi_server_tag');
-  assert.deepEqual(by('Meta')?.requires, ['pixelId', 'accessToken']);
+  assert.deepEqual(by('Meta')?.derived, { pixelId: '111' }, 'Meta Pixel ID read from fbq(init)');
+  assert.deepEqual(by('Meta')?.requires, ['accessToken'], 'pixel id known -> only the token is left');
   assert.equal(by('TikTok')?.serverTool, 'create_tiktok_capi_server_tag');
+  assert.deepEqual(by('TikTok')?.derived, { pixelId: 'C7TK' }, 'TikTok pixel id read from the template pixel_code param');
   assert.deepEqual(by('TikTok')?.requires, ['accessToken']);
+  assert.deepEqual(by('Pinterest')?.derived, { advertiserId: '2613' });
+  assert.deepEqual(by('Pinterest')?.requires, ['apiAccessToken'], 'matches the builder param name');
+  assert.deepEqual(by('Snapchat')?.derived, { pixelId: 'ab12-cd34' });
+
+  // Native types are authoritative (no name guessing) and carry their corpus-verified id keys.
+  assert.equal(by('Microsoft Ads')?.detectedBy, 'native-type');
+  assert.deepEqual(by('Microsoft Ads')?.derived, { uetTagId: '25015051' });
+  assert.deepEqual(by('Microsoft Ads')?.requires, ['authToken']);
+  const linkedIn = plan.items.filter((i) => i.destination === 'LinkedIn');
+  assert.equal(linkedIn.length, 2, 'the native bzi tag AND the licdn snippet both plan as LinkedIn');
+  assert.deepEqual(linkedIn.find((i) => i.detectedBy === 'native-type')?.derived, { partnerId: '6850978' });
+  assert.deepEqual(linkedIn.find((i) => i.webTag === 'Site pixel')?.derived, { partnerId: '777' }, 'snap.licdn.com snippet is LinkedIn, not Snapchat');
+  assert.deepEqual(linkedIn[0].requires, ['accessToken', 'conversionRuleUrn'], 'LinkedIn CAPI needs the conversion rule URN, which is not on the web tag');
+  assert.equal(plan.items.filter((i) => i.destination === 'Snapchat').length, 1, 'the licdn snippet did not also become a Snapchat item');
+
+  // Builders that existed but were never planned, and the X generic path.
+  assert.equal(by('Amazon Ads')?.serverTool, 'create_amazon_capi_server_tag');
+  assert.deepEqual(by('Amazon Ads')?.derived, { tagId: 'tag-987' });
+  assert.deepEqual(by('Amazon Ads')?.requires, []);
+  assert.equal(by('StackAdapt')?.serverTool, 'create_stackadapt_server_tag');
+  assert.deepEqual(by('StackAdapt')?.derived, { pixelID: 'SA-55' });
+  assert.equal(by('X (Twitter)')?.status, 'generic', 'no typed builder yet -> generic import path');
+  assert.ok(/stape-io\/twitter-tag/.test(by('X (Twitter)')?.serverTool ?? ''));
+  assert.deepEqual(by('X (Twitter)')?.derived, { pixelId: 'o1abc' });
+  assert.deepEqual(by('X (Twitter)')?.requires, ['pixelAccessToken']);
 
   assert.equal(plan.items.some((i) => i.webTag === 'Some analytics thing'), false, 'an unrecognised tag is not in the plan');
   assert.equal(plan.summary.total, plan.items.length);
   assert.equal(plan.summary.auto, 1, 'GA4 relay counts as one auto port');
+  assert.equal(plan.summary.generic, 2, 'Floodlight + X');
   assert.equal(plan.summary.manual, 1);
   assert.equal(plan.summary.skipped, 1);
+});
+
+test('CAPI server-tag recognisers: each vendor template is identified by its parameter SHAPE, and shared key pairs do not collide', () => {
+  type T = Parameters<typeof isLinkedInCapiServerTag>[0];
+  const st = (type: string, keys: string[]): T =>
+    ({ tagId: 'x', name: 'server tag', type, paused: false, firingTriggerId: ['1'], blockingTriggerId: [], consentSettings: null,
+      parameter: keys.map((key) => ({ type: 'template', key, value: 'v' })) }) as unknown as T;
+
+  assert.equal(isLinkedInCapiServerTag(st('cvt_1', ['accessToken', 'conversionRuleUrn', 'type'])), true);
+  assert.equal(isPinterestCapiServerTag(st('cvt_1', ['advertiserId', 'apiAccessToken', 'eventName'])), true);
+  assert.equal(isPinterestCapiServerTag(st('cvt_1', ['pixelId', 'apiAccessToken'])), false, 'pixelId + apiAccessToken is Snapchat, not Pinterest');
+  assert.equal(isSnapchatCapiServerTag(st('cvt_1', ['pixelId', 'apiAccessToken'])), true);
+  assert.equal(isRedditCapiServerTag(st('cvt_1', ['accountId', 'accessToken', 'actionSource'])), true);
+  assert.equal(isRedditCapiServerTag(st('cvt_1', ['accountId', 'accessToken', 'conversionDataList'])), false, 'accountId + accessToken alone could be Quora; a Reddit-only field is required');
+  assert.equal(isAmazonCapiServerTag(st('cvt_1', ['tagRegion', 'tagIdsList', 'eventType'])), true);
+  assert.equal(isStackAdaptServerTag(st('cvt_1', ['pixelID', 'pixelType'])), true);
+  assert.equal(isStackAdaptServerTag(st('cvt_1', ['pixelId', 'pixelType'])), false, 'StackAdapt is keyed by the capital-ID pixelID');
+  assert.equal(isMetaCapiServerTag(st('cvt_1', ['pixelId', 'accessToken', 'generateFbp'])), true);
+  assert.equal(isLinkedInCapiServerTag(st('html', ['accessToken', 'conversionRuleUrn'])), false, 'only cvt_ template tags qualify');
+  assert.equal(isAnyCapiServerTag(st('cvt_1', ['tagRegion', 'matchId'])), true, 'the umbrella recogniser covers every vendor');
+  assert.equal(isAnyCapiServerTag(st('cvt_1', ['someOtherKey'])), false);
 });
 
 test('buildStapeDataTag + buildStapeDataClient: web posts identity to <server>/data, server client claims /data', () => {

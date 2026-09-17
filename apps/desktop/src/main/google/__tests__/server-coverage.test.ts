@@ -148,5 +148,54 @@ test('measurement-id mismatch is reported, and the health score reflects audit f
   assert.equal(r.score.configuration, 100 - 25 - 10 - 6 - 3);
 });
 
+// ── Platforms beyond the original four: native types, shape-recognised server tags, ordering ──
+test('native Microsoft UET (baut) and LinkedIn Insight (bzi) web tags are classified by TYPE, and X / Snap / Reddit pixels by snippet', () => {
+  const w = web({
+    tags: [
+      tag({ tagId: 'w1', name: 'Bing UET', type: 'baut', firingTriggerId: ['1'], parameter: [{ type: 'template', key: 'tagId', value: '25015051' }] }),
+      tag({ tagId: 'w2', name: 'Insight', type: 'bzi', firingTriggerId: ['2'], parameter: [{ type: 'template', key: 'id', value: '6850978' }] }),
+      // No "linkedin" in the name; loads from snap.licdn.com -> must be LinkedIn, never Snapchat.
+      tag({ tagId: 'w3', name: 'Site pixel', type: 'html', firingTriggerId: ['3'], parameter: [{ type: 'template', key: 'html', value: '<script src="https://snap.licdn.com/li.lms-analytics/insight.min.js"></script>' }] }),
+      tag({ tagId: 'w4', name: 'X pixel', type: 'html', firingTriggerId: ['4'], parameter: [{ type: 'template', key: 'html', value: "<script>twq('config','o1abc')</script>" }] }),
+      tag({ tagId: 'w5', name: 'Snap Pixel', type: 'html', firingTriggerId: ['5'], parameter: [{ type: 'template', key: 'html', value: "<script>snaptr('init','ab12')</script>" }] }),
+      tag({ tagId: 'w6', name: 'Reddit Pixel', type: 'html', firingTriggerId: ['6'], parameter: [{ type: 'template', key: 'html', value: "<script>rdt('init','t2_x')</script>" }] }),
+    ],
+    triggers: [evTrigger('1', 'purchase'), evTrigger('2', 'sign_up'), evTrigger('3', 'generate_lead'), evTrigger('4', 'purchase'), evTrigger('5', 'purchase'), evTrigger('6', 'sign_up')],
+  });
+  const r = buildServerCoverage(w, server(), AUDIT_OK);
+  const platformOf = (webTag: string) => r.rows.find((x) => x.webTag === webTag)?.platform;
+  assert.equal(platformOf('Bing UET'), 'microsoft');
+  assert.equal(platformOf('Insight'), 'linkedin');
+  assert.equal(platformOf('Site pixel'), 'linkedin', 'snap.licdn.com is LinkedIn, not Snapchat');
+  assert.equal(platformOf('X pixel'), 'x');
+  assert.equal(platformOf('Snap Pixel'), 'snapchat');
+  assert.equal(platformOf('Reddit Pixel'), 'reddit');
+  // With no server handler, each row is missing and recommends the platform's own tool.
+  const uet = r.rows.find((x) => x.webTag === 'Bing UET')!;
+  assert.equal(uet.status, 'missing');
+  assert.ok(/create_microsoft_capi_server_tag/.test(uet.recommendation ?? ''), uet.recommendation);
+  const xrow = r.rows.find((x) => x.webTag === 'X pixel')!;
+  assert.ok(/stape-io\/twitter-tag/.test(xrow.recommendation ?? ''), 'X has no typed builder: the generic gallery import is recommended');
+});
+
+test('a server CAPI tag is matched to its platform by parameter SHAPE (Reddit template), so an unnamed server tag still covers the web event', () => {
+  const w = web({
+    tags: [tag({ tagId: 'w6', name: 'Reddit Pixel', type: 'html', firingTriggerId: ['6'], parameter: [{ type: 'template', key: 'html', value: "<script>rdt('init','t2_x')</script>" }] })],
+    triggers: [evTrigger('6', 'sign_up')],
+  });
+  const srv = server({
+    // Deliberately NOT named "Reddit": only its accountId + accessToken + actionSource shape says so.
+    tags: [tag({ tagId: 's9', name: 'Server conversions', type: 'cvt_R1', firingTriggerId: ['91'], parameter: [
+      { type: 'template', key: 'accountId', value: 't2_x' }, { type: 'template', key: 'accessToken', value: 'tok' }, { type: 'template', key: 'actionSource', value: 'WEBSITE' },
+    ] })],
+    triggers: [evTrigger('91', 'sign_up')],
+  });
+  const r = buildServerCoverage(w, srv, AUDIT_OK);
+  const row = r.rows.find((x) => x.webTag === 'Reddit Pixel')!;
+  assert.equal(row.platform, 'reddit');
+  assert.equal(row.status, 'covered', 'the shape-recognised server tag covers the event');
+  assert.ok(/Server conversions/.test(row.by ?? ''), row.by);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
