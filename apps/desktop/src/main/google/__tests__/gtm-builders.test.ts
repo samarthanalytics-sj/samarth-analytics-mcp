@@ -105,12 +105,23 @@ import {
   planTriggerRetarget,
   isMetaCapiServerTag,
   isSnapchatCapiServerTag,
+  isMicrosoftCapiServerTag,
   isLinkedInCapiServerTag,
   isPinterestCapiServerTag,
   isRedditCapiServerTag,
   isAmazonCapiServerTag,
   isStackAdaptServerTag,
   isAnyCapiServerTag,
+  buildXCapiServerTag,
+  buildQuoraCapiServerTag, quoraServerEvent,
+  buildAdRollCapiServerTag, adrollServerEvent,
+  buildNextdoorCapiServerTag, nextdoorServerEvent,
+  buildYelpCapiServerTag, yelpServerEvent,
+  buildSpotifyCapiServerTag, spotifyServerEvent,
+  buildLineYahooCapiServerTag, lineYahooServerEvent,
+  buildRtbHouseServerTag, rtbHouseServerEvent,
+  isXCapiServerTag, isQuoraCapiServerTag, isAdRollCapiServerTag, isNextdoorCapiServerTag,
+  isYelpCapiServerTag, isSpotifyCapiServerTag, isLineYahooCapiServerTag, isRtbHouseServerTag,
 } from '../gtm-builders';
 import type { AuditTag as TAuditTag, ContainerSnapshot as TContainerSnapshot, ServerContainerSnapshot as TServerContainerSnapshot } from '../gtm-builders';
 import { buildGoogleTagEventSettingsVariable, ga4TagFields, readGa4EventParameters } from '../gtm-builders';
@@ -3805,15 +3816,15 @@ test('planWebToServerMigration: classifies GA4/Ads/Floodlight/Linker natives + M
   assert.deepEqual(by('Amazon Ads')?.requires, []);
   assert.equal(by('StackAdapt')?.serverTool, 'create_stackadapt_server_tag');
   assert.deepEqual(by('StackAdapt')?.derived, { pixelID: 'SA-55' });
-  assert.equal(by('X (Twitter)')?.status, 'generic', 'no typed builder yet -> generic import path');
-  assert.ok(/stape-io\/twitter-tag/.test(by('X (Twitter)')?.serverTool ?? ''));
+  assert.equal(by('X (Twitter)')?.status, 'typed-tool', 'X has a typed builder (Tier-1)');
+  assert.equal(by('X (Twitter)')?.serverTool, 'create_x_capi_server_tag');
   assert.deepEqual(by('X (Twitter)')?.derived, { pixelId: 'o1abc' });
-  assert.deepEqual(by('X (Twitter)')?.requires, ['pixelAccessToken']);
+  assert.deepEqual(by('X (Twitter)')?.requires, ['eventId', 'pixelAccessToken'], 'the X Event ID (tw-…) is per conversion event and never on the web tag');
 
   assert.equal(plan.items.some((i) => i.webTag === 'Some analytics thing'), false, 'an unrecognised tag is not in the plan');
   assert.equal(plan.summary.total, plan.items.length);
   assert.equal(plan.summary.auto, 1, 'GA4 relay counts as one auto port');
-  assert.equal(plan.summary.generic, 2, 'Floodlight + X');
+  assert.equal(plan.summary.generic, 1, 'Floodlight only: X is typed now');
   assert.equal(plan.summary.manual, 1);
   assert.equal(plan.summary.skipped, 1);
 });
@@ -3837,6 +3848,204 @@ test('CAPI server-tag recognisers: each vendor template is identified by its par
   assert.equal(isLinkedInCapiServerTag(st('html', ['accessToken', 'conversionRuleUrn'])), false, 'only cvt_ template tags qualify');
   assert.equal(isAnyCapiServerTag(st('cvt_1', ['tagRegion', 'matchId'])), true, 'the umbrella recogniser covers every vendor');
   assert.equal(isAnyCapiServerTag(st('cvt_1', ['someOtherKey'])), false);
+});
+
+// ── Tier-1 CAPI builders (X / Quora / AdRoll / Nextdoor / Yelp / Spotify / LINE Yahoo / RTB House) ──
+// Field keys asserted here are the ones in each vendor's Stape template.tpl.
+test('X CAPI builder: eventId is the X conversion Event ID; auth switches between Pixel Access Token and OAuth; conversion_id dedup row', () => {
+  const t = buildXCapiServerTag('cvt_X1', 'X CAPI', '{{X Pixel}}', 'tw-abc-123', { pixelAccessToken: '{{X Token}}' }, { conversionId: '{{Event ID}}', firingTriggerId: ['7'] });
+  assert.equal(t.type, 'cvt_X1');
+  assert.equal(paramVal(t, 'pixelId'), '{{X Pixel}}');
+  assert.equal(paramVal(t, 'eventId'), 'tw-abc-123');
+  assert.equal(paramVal(t, 'authMethod'), 'accessToken');
+  assert.equal(paramVal(t, 'pixelAccessToken'), '{{X Token}}');
+  assert.equal(paramVal(t, 'consumerKey'), undefined, 'OAuth fields absent under token auth');
+  assert.equal(paramVal(t, 'autoMapServerEventData'), 'true');
+  assert.equal(paramVal(t, 'autoMapUserData'), 'true');
+  assert.deepEqual(listRows(t, 'serverEventDataList'), [['conversion_id', '{{Event ID}}']]);
+  assert.equal(paramVal(t, 'adStorageConsent'), 'optional');
+  assert.deepEqual(t.firingTriggerId, ['7']);
+  const o = buildXCapiServerTag('cvt_X1', 'x', 'P', 'tw-1', { consumerKey: 'ck', consumerSecret: 'cs', oauthToken: 'ot', oauthTokenSecret: 'os' }, { requireConsent: true, autoMap: false });
+  assert.equal(paramVal(o, 'authMethod'), 'oAuth');
+  assert.equal(paramVal(o, 'oauthTokenSecret'), 'os');
+  assert.equal(paramVal(o, 'pixelAccessToken'), undefined);
+  assert.equal(paramVal(o, 'autoMapUserData'), 'false');
+  assert.equal(paramVal(o, 'adStorageConsent'), 'required');
+});
+
+test('Quora CAPI builder: pixel id lives in accountId; GA4 names map to Quora standard events, unknown -> Generic; inherit by default', () => {
+  assert.equal(quoraServerEvent('purchase'), 'Purchase');
+  assert.equal(quoraServerEvent('sign_up'), 'CompleteRegistration');
+  assert.equal(quoraServerEvent('begin_checkout'), 'InitiateCheckout');
+  assert.equal(quoraServerEvent('whatever'), 'Generic', 'Quora has no custom event');
+  const t = buildQuoraCapiServerTag('cvt_Q1', 'Quora', '{{Quora Pixel}}', '{{Quora Token}}', { eventId: '{{Event ID}}' });
+  assert.equal(paramVal(t, 'eventType'), 'inherit');
+  assert.equal(paramVal(t, 'accountId'), '{{Quora Pixel}}');
+  assert.equal(paramVal(t, 'accessToken'), '{{Quora Token}}');
+  assert.deepEqual(listRows(t, 'conversionDataList'), [['event_id', '{{Event ID}}']]);
+  const s2 = buildQuoraCapiServerTag('cvt_Q1', 'q', 'A', 'T', { event: 'generate_lead' });
+  assert.equal(paramVal(s2, 'eventType'), 'standard');
+  assert.equal(paramVal(s2, 'eventName'), 'GenerateLead');
+});
+
+test('AdRoll builder: advertisable + pixel ids + token; standard/custom/inherit event modes; testMode is a SELECT string', () => {
+  assert.equal(adrollServerEvent('view_search_results'), 'productSearch');
+  assert.equal(adrollServerEvent('add_to_cart'), 'addToCart');
+  assert.equal(adrollServerEvent('subscribe'), null);
+  const t = buildAdRollCapiServerTag('cvt_AR1', 'AdRoll', 'ADV1', 'PIX1', '{{AdRoll Token}}', { event: 'purchase', testMode: true, cookieDomain: 'example.com' });
+  assert.equal(paramVal(t, 'eventType'), 'standard');
+  assert.equal(paramVal(t, 'eventNameStandard'), 'purchase');
+  assert.equal(paramVal(t, 'advertisableId'), 'ADV1');
+  assert.equal(paramVal(t, 'pixelId'), 'PIX1');
+  assert.equal(paramVal(t, 'testMode'), 'true');
+  assert.equal(paramVal(t, 'overrideCookieDomain'), 'true');
+  assert.equal(paramVal(t, 'overridenCookieDomain'), 'example.com');
+  const c = buildAdRollCapiServerTag('cvt_AR1', 'a', 'A', 'P', 'T', { event: 'newsletter_signup' });
+  assert.equal(paramVal(c, 'eventType'), 'custom');
+  assert.equal(paramVal(c, 'eventNameCustom'), 'newsletter_signup');
+  assert.equal(paramVal(buildAdRollCapiServerTag('cvt_AR1', 'a', 'A', 'P', 'T'), 'eventType'), 'inherit');
+});
+
+test('Nextdoor CAPI builder: pixel + client + token; custom_conversion_N is a standard event; appId only for app conversions; event_id dedup', () => {
+  assert.equal(nextdoorServerEvent('generate_lead'), 'lead');
+  assert.equal(nextdoorServerEvent('custom_conversion_7'), 'custom_conversion_7');
+  const t = buildNextdoorCapiServerTag('cvt_ND1', 'Nextdoor', 'PX', 'CL', '{{ND Token}}', { event: 'sign_up', eventId: '{{Event ID}}', appId: 'APP' });
+  assert.equal(paramVal(t, 'eventNameStandard'), 'sign_up');
+  assert.equal(paramVal(t, 'eventConversionType'), 'website');
+  assert.equal(paramVal(t, 'pixelId'), 'PX');
+  assert.equal(paramVal(t, 'clientId'), 'CL');
+  assert.equal(paramVal(t, 'appId'), undefined, 'appId is only emitted for app conversions');
+  assert.deepEqual(listRows(t, 'serverDataList'), [['event_id', '{{Event ID}}']]);
+  const app = buildNextdoorCapiServerTag('cvt_ND1', 'n', 'PX', 'CL', 'T', { conversionType: 'app', appId: 'APP' });
+  assert.equal(paramVal(app, 'eventConversionType'), 'app');
+  assert.equal(paramVal(app, 'appId'), 'APP');
+});
+
+test('Yelp CAPI builder: token only (no pixel id); GA4 aliases; validate + event_id dedup', () => {
+  assert.equal(yelpServerEvent('begin_checkout'), 'checkout');
+  assert.equal(yelpServerEvent('view_item'), 'view_content');
+  assert.equal(yelpServerEvent('view_item_list'), 'view_category');
+  const t = buildYelpCapiServerTag('cvt_Y1', 'Yelp', '{{Yelp Token}}', { event: 'sign_up', eventId: '{{Event ID}}', validate: true });
+  assert.equal(paramVal(t, 'eventNameStandard'), 'signup');
+  assert.equal(paramVal(t, 'accessToken'), '{{Yelp Token}}');
+  assert.equal(paramVal(t, 'validate'), 'true');
+  assert.equal(paramVal(t, 'eventConversionType'), 'website');
+  assert.deepEqual(listRows(t, 'serverDataList'), [['event_id', '{{Event ID}}']]);
+});
+
+test('Spotify CAPI builder: token + connection; standard SELECT, the five Custom_Event_N slots, and inherit for anything else; optimistic/opt-out are SELECT strings', () => {
+  assert.deepEqual(spotifyServerEvent('view_item'), { kind: 'standard', value: 'View_Product' });
+  assert.deepEqual(spotifyServerEvent('custom_event_3'), { kind: 'custom', value: 'Custom_Event_3' });
+  assert.equal(spotifyServerEvent('newsletter'), null, 'no free-text custom event on Spotify');
+  const t = buildSpotifyCapiServerTag('cvt_SP1', 'Spotify', '{{Spotify Token}}', 'CONN', { event: 'purchase', eventId: '{{Event ID}}', optOutTargeting: true });
+  assert.equal(paramVal(t, 'eventNameStandard'), 'Purchase');
+  assert.equal(paramVal(t, 'authToken'), '{{Spotify Token}}');
+  assert.equal(paramVal(t, 'connectionId'), 'CONN');
+  assert.equal(paramVal(t, 'actionSource'), 'WEB');
+  assert.equal(paramVal(t, 'optOutTargeting'), 'true');
+  assert.equal(paramVal(t, 'useOptimisticScenario'), 'false');
+  assert.equal(paramVal(t, 'generateDeviceIdCookie'), 'true');
+  assert.deepEqual(listRows(t, 'serverEventDataList'), [['event_id', '{{Event ID}}']]);
+  assert.equal(paramVal(buildSpotifyCapiServerTag('cvt_SP1', 's', 'T', 'C', { event: 'custom_event_5' }), 'eventNameCustom'), 'Custom_Event_5');
+  assert.equal(paramVal(buildSpotifyCapiServerTag('cvt_SP1', 's', 'T', 'C', { event: 'not_a_spotify_event' }), 'eventType'), 'inherit');
+});
+
+test('LINE Yahoo CAPI builder: tag + token + channel; GA4 aliases; no custom events (unknown inherits); eventSnippetId + transaction_id dedup', () => {
+  assert.equal(lineYahooServerEvent('add_to_cart'), 'add_cart');
+  assert.equal(lineYahooServerEvent('view_item_list'), 'view_listing');
+  assert.equal(lineYahooServerEvent('something_else'), null);
+  const t = buildLineYahooCapiServerTag('cvt_LY1', 'Yahoo', 'TAG1', '{{Yahoo Token}}', 'CH1', { event: 'purchase', eventSnippetId: 'SNIP9', transactionId: '{{Transaction ID}}' });
+  assert.equal(paramVal(t, 'eventType'), 'standard');
+  assert.equal(paramVal(t, 'eventTypeStandard'), 'purchase');
+  assert.equal(paramVal(t, 'tagId'), 'TAG1');
+  assert.equal(paramVal(t, 'channelId'), 'CH1');
+  assert.equal(paramVal(t, 'actionSource'), 'web');
+  assert.equal(paramVal(t, 'eventSnippetId'), 'SNIP9');
+  assert.equal(paramVal(t, 'setClickIdCookie'), 'true');
+  assert.deepEqual(listRows(t, 'serverEventDataList'), [['transaction_id', '{{Transaction ID}}']]);
+  assert.equal(paramVal(buildLineYahooCapiServerTag('cvt_LY1', 'y', 'T', 'K', 'C', { event: 'made_up' }), 'eventType'), 'inherit');
+});
+
+test('RTB House builder: tagging hash + partner key, no token; GA4 names map to PAGE TYPES; per-type fields only when given', () => {
+  assert.equal(rtbHouseServerEvent('page_view'), 'home');
+  assert.equal(rtbHouseServerEvent('view_item'), 'offer');
+  assert.equal(rtbHouseServerEvent('add_to_cart'), 'basketadd');
+  assert.equal(rtbHouseServerEvent('purchase'), 'conversion_order');
+  assert.equal(rtbHouseServerEvent('generate_lead'), 'conversion');
+  const t = buildRtbHouseServerTag('cvt_RH1', 'RTB', 'pr_hash', '{{RTB Key}}', { event: 'purchase', orderId: '{{Transaction ID}}', orderValue: '{{Value}}' });
+  assert.equal(paramVal(t, 'eventNameSetup'), 'standard');
+  assert.equal(paramVal(t, 'eventNameStandard'), 'conversion_order');
+  assert.equal(paramVal(t, 'taggingHash'), 'pr_hash');
+  assert.equal(paramVal(t, 'partnerKey'), '{{RTB Key}}');
+  assert.equal(paramVal(t, 'region'), 'us');
+  assert.equal(paramVal(t, 'identifierType'), 'aid');
+  assert.equal(paramVal(t, 'setAnonymousIdCookie'), 'true');
+  assert.equal(paramVal(t, 'orderId'), '{{Transaction ID}}');
+  assert.equal(paramVal(t, 'orderValue'), '{{Value}}');
+  assert.equal(paramVal(t, 'conversionId'), undefined, 'conversion fields absent for an order event');
+  const c = buildRtbHouseServerTag('cvt_RH1', 'r', 'h', 'k', { event: 'my_custom', customEventValue: '5' });
+  assert.equal(paramVal(c, 'eventNameSetup'), 'custom');
+  assert.equal(paramVal(c, 'eventNameCustom'), 'my_custom');
+  assert.equal(paramVal(c, 'customEventValue'), '5');
+  assert.equal(paramVal(buildRtbHouseServerTag('cvt_RH1', 'r', 'h', 'k'), 'eventNameStandard'), 'home', 'defaults to the home page type');
+});
+
+test('Tier-1 recognisers: each vendor by its template shape; the Quora/Reddit and Nextdoor/Yelp key overlaps do not collide', () => {
+  type T = Parameters<typeof isXCapiServerTag>[0];
+  const st = (type: string, keys: string[]): T =>
+    ({ tagId: 'x', name: 'server tag', type, paused: false, firingTriggerId: ['1'], blockingTriggerId: [], consentSettings: null,
+      parameter: keys.map((key) => ({ type: 'template', key, value: 'v' })) }) as unknown as T;
+  assert.equal(isXCapiServerTag(st('cvt_1', ['pixelId', 'eventId', 'authMethod', 'pixelAccessToken'])), true);
+  assert.equal(isXCapiServerTag(st('cvt_1', ['pixelId', 'accessToken', 'generateFbp'])), false, 'Meta is not X');
+  assert.equal(isQuoraCapiServerTag(st('cvt_1', ['accountId', 'accessToken', 'conversionDataList'])), true);
+  assert.equal(isQuoraCapiServerTag(st('cvt_1', ['accountId', 'accessToken', 'actionSource', 'testId'])), false, 'that shape is Reddit');
+  assert.equal(isRedditCapiServerTag(st('cvt_1', ['accountId', 'accessToken', 'conversionDataList'])), false, 'and Reddit does not claim Quora');
+  assert.equal(isAdRollCapiServerTag(st('cvt_1', ['advertisableId', 'pixelId', 'accessToken'])), true);
+  assert.equal(isNextdoorCapiServerTag(st('cvt_1', ['pixelId', 'clientId', 'accessToken', 'eventConversionType'])), true);
+  assert.equal(isYelpCapiServerTag(st('cvt_1', ['pixelId', 'clientId', 'accessToken', 'eventConversionType', 'validate'])), false, 'a pixelId means Nextdoor, not Yelp');
+  assert.equal(isYelpCapiServerTag(st('cvt_1', ['accessToken', 'eventConversionType', 'validate'])), true);
+  assert.equal(isSpotifyCapiServerTag(st('cvt_1', ['authToken', 'connectionId'])), true);
+  assert.equal(isLineYahooCapiServerTag(st('cvt_1', ['tagId', 'accessToken', 'channelId'])), true);
+  assert.equal(isMicrosoftCapiServerTag(st('cvt_1', ['tagId', 'accessToken', 'channelId'])), false, 'Microsoft is uetTagId + authToken, not tagId + channelId');
+  assert.equal(isRtbHouseServerTag(st('cvt_1', ['taggingHash', 'partnerKey', 'region'])), true);
+  for (const keys of [['pixelId', 'authMethod'], ['accountId', 'accessToken', 'deviceEventDataList'], ['advertisableId', 'pixelId'], ['pixelId', 'clientId', 'accessToken'], ['accessToken', 'validate'], ['authToken', 'connectionId'], ['tagId', 'channelId'], ['taggingHash', 'partnerKey']]) {
+    assert.equal(isAnyCapiServerTag(st('cvt_1', keys)), true, `umbrella covers ${keys.join('+')}`);
+  }
+});
+
+test('planWebToServerMigration: the Tier-1 pixels are planned to their typed tools with public ids carried (X is typed now, not generic)', () => {
+  const P = (key: string, value: string) => ({ type: 'template', key, value });
+  const H = (id: string, name: string, html: string) => ({ tagId: id, name, type: 'html', parameter: [P('html', html)] });
+  const plan = planWebToServerMigration({
+    triggers: [], variables: [],
+    tags: [
+      H('1', 'X pixel', "<script>twq('config','o1abc');</script>"),
+      H('2', 'Quora Pixel', "<script>qp('init', 'QP123');</script>"),
+      H('3', 'AdRoll', "<script>adroll_adv_id = \"ADV9\"; adroll_pix_id = \"PIX9\";</script>"),
+      H('4', 'Nextdoor', "<script>ndp('init','NDP77');</script>"),
+      H('5', 'Yelp conversion', '<script src="https://www.yelp.com/ads/pixel.js"></script>'),
+      H('6', 'Spotify Ads', '<script src="https://pixel.spotify.com/v1/sp.js"></script>'),
+      H('7', 'Yahoo Ads conversion', "<script>var yahoo_retargeting_id = 'YJ55';</script>"),
+      H('8', 'RTB House', '<script src="https://creativecdn.com/tags?id=pr_abc123"></script>'),
+    ],
+  } as unknown as TContainerSnapshot);
+  const by = (dest: string) => plan.items.find((i) => i.destination === dest);
+  assert.equal(by('X (Twitter)')?.serverTool, 'create_x_capi_server_tag');
+  assert.equal(by('X (Twitter)')?.status, 'typed-tool', 'X has a typed builder now');
+  assert.deepEqual(by('X (Twitter)')?.derived, { pixelId: 'o1abc' });
+  assert.deepEqual(by('X (Twitter)')?.requires, ['eventId', 'pixelAccessToken']);
+  assert.deepEqual(by('Quora')?.derived, { accountId: 'QP123' });
+  assert.deepEqual(by('AdRoll')?.derived, { advertisableId: 'ADV9', pixelId: 'PIX9' }, 'both AdRoll ids come off the snippet');
+  assert.deepEqual(by('Nextdoor')?.derived, { pixelId: 'NDP77' });
+  assert.deepEqual(by('Nextdoor')?.requires, ['clientId', 'accessToken']);
+  assert.deepEqual(by('Yelp')?.derived, {}, 'Yelp has no public id');
+  assert.deepEqual(by('Yelp')?.requires, ['accessToken']);
+  assert.deepEqual(by('Spotify Ads')?.requires, ['authToken', 'connectionId']);
+  assert.deepEqual(by('LINE Yahoo')?.derived, { tagId: 'YJ55' });
+  assert.deepEqual(by('RTB House')?.derived, { taggingHash: 'pr_abc123' });
+  assert.deepEqual(by('RTB House')?.requires, ['partnerKey']);
+  assert.equal(plan.summary.generic, 0, 'no generic items: every Tier-1 destination is typed');
+  assert.equal(plan.summary.typedTool, 8);
 });
 
 test('buildStapeDataTag + buildStapeDataClient: web posts identity to <server>/data, server client claims /data', () => {

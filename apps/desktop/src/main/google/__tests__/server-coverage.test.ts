@@ -175,7 +175,7 @@ test('native Microsoft UET (baut) and LinkedIn Insight (bzi) web tags are classi
   assert.equal(uet.status, 'missing');
   assert.ok(/create_microsoft_capi_server_tag/.test(uet.recommendation ?? ''), uet.recommendation);
   const xrow = r.rows.find((x) => x.webTag === 'X pixel')!;
-  assert.ok(/stape-io\/twitter-tag/.test(xrow.recommendation ?? ''), 'X has no typed builder: the generic gallery import is recommended');
+  assert.ok(/create_x_capi_server_tag/.test(xrow.recommendation ?? ''), 'X has a typed builder (Tier-1): its tool is recommended');
 });
 
 test('a server CAPI tag is matched to its platform by parameter SHAPE (Reddit template), so an unnamed server tag still covers the web event', () => {
@@ -195,6 +195,45 @@ test('a server CAPI tag is matched to its platform by parameter SHAPE (Reddit te
   assert.equal(row.platform, 'reddit');
   assert.equal(row.status, 'covered', 'the shape-recognised server tag covers the event');
   assert.ok(/Server conversions/.test(row.by ?? ''), row.by);
+});
+
+test('Tier-1 platforms: web pixels classified by name/snippet, a shape-matched Spotify server tag covers its event, X recommends its typed tool', () => {
+  const H = (id: string, name: string, trig: string, html: string) =>
+    tag({ tagId: id, name, type: 'html', firingTriggerId: [trig], parameter: [{ type: 'template', key: 'html', value: html }] });
+  const w = web({
+    tags: [
+      H('w1', 'X pixel', '1', "<script>twq('config','o1abc')</script>"),
+      H('w2', 'Quora Pixel', '2', "<script>qp('init','QP1')</script>"),
+      H('w3', 'AdRoll', '3', '<script>adroll_adv_id = "A"; adroll_pix_id = "P";</script>'),
+      H('w4', 'Nextdoor', '4', "<script>ndp('init','N')</script>"),
+      H('w5', 'Yelp conversion', '5', '<script src="https://www.yelp.com/ads/pixel.js"></script>'),
+      H('w6', 'Spotify Ads', '6', '<script src="https://pixel.spotify.com/v1/sp.js"></script>'),
+      H('w7', 'Yahoo Ads conversion', '7', "<script>var yahoo_retargeting_id = 'Y';</script>"),
+      H('w8', 'RTB House', '8', '<script src="https://creativecdn.com/tags?id=pr_x"></script>'),
+    ],
+    triggers: [evTrigger('1', 'purchase'), evTrigger('2', 'purchase'), evTrigger('3', 'purchase'), evTrigger('4', 'purchase'), evTrigger('5', 'purchase'), evTrigger('6', 'purchase'), evTrigger('7', 'purchase'), evTrigger('8', 'purchase')],
+  });
+  const srv = server({
+    // Unnamed Spotify server tag: only authToken + connectionId say what it is.
+    tags: [tag({ tagId: 's1', name: 'Server conversions', type: 'cvt_S1', firingTriggerId: ['91'], parameter: [
+      { type: 'template', key: 'authToken', value: 't' }, { type: 'template', key: 'connectionId', value: 'c' },
+    ] })],
+    triggers: [evTrigger('91', 'purchase')],
+  });
+  const r = buildServerCoverage(w, srv, AUDIT_OK);
+  const row = (webTag: string) => r.rows.find((x) => x.webTag === webTag)!;
+  assert.equal(row('X pixel').platform, 'x');
+  assert.equal(row('Quora Pixel').platform, 'quora');
+  assert.equal(row('AdRoll').platform, 'adroll');
+  assert.equal(row('Nextdoor').platform, 'nextdoor');
+  assert.equal(row('Yelp conversion').platform, 'yelp');
+  assert.equal(row('Spotify Ads').platform, 'spotify');
+  assert.equal(row('Yahoo Ads conversion').platform, 'lineyahoo');
+  assert.equal(row('RTB House').platform, 'rtbhouse');
+  assert.equal(row('Spotify Ads').status, 'covered', 'the shape-recognised Spotify server tag covers the web event');
+  assert.equal(row('X pixel').status, 'missing');
+  assert.ok(/create_x_capi_server_tag/.test(row('X pixel').recommendation ?? ''), row('X pixel').recommendation);
+  assert.ok(/create_rtb_house_server_tag/.test(row('RTB House').recommendation ?? ''), row('RTB House').recommendation);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

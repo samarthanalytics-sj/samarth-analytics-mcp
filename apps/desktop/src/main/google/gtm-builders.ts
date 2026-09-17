@@ -2422,11 +2422,63 @@ export function isStackAdaptServerTag(t: AuditTag): boolean {
   return keys.has('pixelID') && keys.has('pixelType');
 }
 
+/** The Stape X (Twitter) CAPI template is keyed by `pixelId` plus its X-only auth fields: either the
+ *  Pixel Access Token or the OAuth 1.0a consumer/token quartet (authMethod). PURE. */
+export function isXCapiServerTag(t: AuditTag): boolean {
+  const keys = cvtParamKeys(t);
+  return keys.has('pixelId') && (keys.has('pixelAccessToken') || keys.has('consumerKey') || keys.has('authMethod'));
+}
+
+/** Quora's Stape template shares Reddit's `accountId` + `accessToken` pair; its own conversion /
+ *  device-event tables are the discriminator (Reddit has neither). PURE. */
+export function isQuoraCapiServerTag(t: AuditTag): boolean {
+  const keys = cvtParamKeys(t);
+  return keys.has('accountId') && keys.has('accessToken') && (keys.has('conversionDataList') || keys.has('deviceEventDataList'));
+}
+
+/** AdRoll is the only server template keyed by an `advertisableId` alongside its `pixelId`. PURE. */
+export function isAdRollCapiServerTag(t: AuditTag): boolean {
+  const keys = cvtParamKeys(t);
+  return keys.has('advertisableId') && keys.has('pixelId');
+}
+
+/** Nextdoor stores `pixelId` + `clientId` + `accessToken` (the clientId beside a pixelId is unique to it). PURE. */
+export function isNextdoorCapiServerTag(t: AuditTag): boolean {
+  const keys = cvtParamKeys(t);
+  return keys.has('pixelId') && keys.has('clientId') && keys.has('accessToken');
+}
+
+/** Yelp's template has no pixel id at all: an `accessToken` with its own `validate` toggle. PURE. */
+export function isYelpCapiServerTag(t: AuditTag): boolean {
+  const keys = cvtParamKeys(t);
+  return keys.has('accessToken') && keys.has('validate') && !keys.has('pixelId');
+}
+
+/** Spotify Ads is keyed by `authToken` + `connectionId`. PURE. */
+export function isSpotifyCapiServerTag(t: AuditTag): boolean {
+  const keys = cvtParamKeys(t);
+  return keys.has('authToken') && keys.has('connectionId');
+}
+
+/** LINE Yahoo (Yahoo! JAPAN Ads) is keyed by a Yahoo `tagId` + `channelId`. PURE. */
+export function isLineYahooCapiServerTag(t: AuditTag): boolean {
+  const keys = cvtParamKeys(t);
+  return keys.has('tagId') && keys.has('channelId');
+}
+
+/** RTB House has no token: its `taggingHash` + `partnerKey` pair identifies the retargeting tag. PURE. */
+export function isRtbHouseServerTag(t: AuditTag): boolean {
+  const keys = cvtParamKeys(t);
+  return keys.has('taggingHash') && keys.has('partnerKey');
+}
+
 /** Any recognised CAPI / server-pixel template tag, regardless of vendor. Used where the audit needs
  *  "is this a server destination" without caring which (PII flow, coverage). PURE. */
 export function isAnyCapiServerTag(t: AuditTag): boolean {
   return isMetaCapiServerTag(t) || isTikTokCapiServerTag(t) || isSnapchatCapiServerTag(t) || isMicrosoftCapiServerTag(t)
-    || isLinkedInCapiServerTag(t) || isPinterestCapiServerTag(t) || isRedditCapiServerTag(t) || isAmazonCapiServerTag(t) || isStackAdaptServerTag(t);
+    || isLinkedInCapiServerTag(t) || isPinterestCapiServerTag(t) || isRedditCapiServerTag(t) || isAmazonCapiServerTag(t) || isStackAdaptServerTag(t)
+    || isXCapiServerTag(t) || isQuoraCapiServerTag(t) || isAdRollCapiServerTag(t) || isNextdoorCapiServerTag(t) || isYelpCapiServerTag(t)
+    || isSpotifyCapiServerTag(t) || isLineYahooCapiServerTag(t) || isRtbHouseServerTag(t);
 }
 
 /** The string value of a named row inside a CAPI list param ('' when absent), e.g. the Snapchat
@@ -4599,6 +4651,284 @@ export function buildAmazonCapiServerTag(
   };
 }
 
+/* ───────────── Tier-1 CAPI server tags (X / Quora / AdRoll / Nextdoor / Yelp / Spotify / LINE Yahoo / RTB House) ─────────────
+ * Every field shape below was read from the vendor's Stape template.tpl (___TEMPLATE_PARAMETERS___), not
+ * guessed. Shared conventions: the event is INHERITED from the incoming client event unless `event` is
+ * given; a GA4 name is mapped to the platform's standard event where one exists; an unknown name becomes
+ * the platform's custom event when the template has one, else falls back to inherit (never invented).
+ * Auto-map toggles default ON so the template derives user/event data itself; explicit rows only override. */
+
+const normEvent = (e: string): string => (e ?? '').trim().toLowerCase().replace(/[\s_-]/g, '');
+/** Resolve `event` against a standard list (case/underscore-insensitive) or a GA4→platform alias map. */
+function resolveStd(event: string, standard: readonly string[], aliases: Record<string, string>): string | null {
+  const n = normEvent(event);
+  if (!n) return null;
+  for (const s of standard) if (normEvent(s) === n) return s;
+  return aliases[n] ?? null;
+}
+const consentParam = (required?: boolean): Param => tpl('adStorageConsent', required ? 'required' : 'optional');
+type NV = Array<{ name: string; value: string }>;
+/** Merge a dedup row (`key` = `value`) into explicit rows unless the caller already set that key. */
+function withDedupRow(rows: NV | undefined, key: string, value: string | undefined): NV {
+  const out = [...(rows ?? [])];
+  const v = (value ?? '').trim();
+  if (v && !out.some((r) => r.name === key)) out.push({ name: key, value: v });
+  return out;
+}
+const pushTable = (parameter: Param[], key: string, rows: NV | undefined): void => {
+  const t = nameValueTable(key, rows ?? []);
+  if (t) parameter.push(t);
+};
+const finish = (name: string, type: string, parameter: Param[], firingTriggerId?: string[]): GtmTagResource => ({
+  name: sanitizeName(name),
+  type,
+  ...(firingTriggerId && firingTriggerId.length ? { firingTriggerId } : {}),
+  parameter,
+});
+
+// ── X (Twitter) Conversion API — stape-io/twitter-tag ──
+/** serverEventDataList / userDataList name-column SELECT sets (template.tpl). */
+export const X_SERVER_EVENT_DATA_KEYS: string[] = ['conversion_time', 'conversion_timestamp', 'number_items', 'price_currency', 'value', 'conversion_id', 'description', 'contents', 'search_string'];
+export const X_USER_DATA_KEYS: string[] = ['hashed_email', 'hashed_phone_number', 'twclid', 'ip_address', 'user_agent'];
+/** X auth: the Pixel Access Token, OR the OAuth 1.0a quartet. The template's authMethod SELECT picks one. */
+export interface XCapiAuth { pixelAccessToken?: string; consumerKey?: string; consumerSecret?: string; oauthToken?: string; oauthTokenSecret?: string }
+/** Build an X (Twitter) Conversion API SERVER tag. The template has NO event-name field: `eventId` is the
+ *  per-conversion X "Event ID" (tw-…) from X Ads Events Manager, so one tag = one X conversion event and
+ *  the server trigger decides when it fires. Dedup with the X Pixel = the `conversion_id` row
+ *  (opts.conversionId). PURE. */
+export function buildXCapiServerTag(
+  type: string, name: string, pixelId: string, eventId: string, auth: XCapiAuth,
+  opts?: { conversionId?: string; serverEventData?: NV; userData?: NV; autoMap?: boolean; optimistic?: boolean; httpOnlyCookie?: boolean; requireConsent?: boolean; firingTriggerId?: string[] },
+): GtmTagResource {
+  const auto = opts?.autoMap !== false;
+  const p: Param[] = [tpl('pixelId', pixelId), tpl('eventId', eventId)];
+  if ((auth.pixelAccessToken ?? '').trim()) {
+    p.push(tpl('authMethod', 'accessToken'), tpl('pixelAccessToken', auth.pixelAccessToken!.trim()));
+  } else {
+    p.push(tpl('authMethod', 'oAuth'), tpl('consumerKey', auth.consumerKey ?? ''), tpl('consumerSecret', auth.consumerSecret ?? ''), tpl('oauthToken', auth.oauthToken ?? ''), tpl('oauthTokenSecret', auth.oauthTokenSecret ?? ''));
+  }
+  p.push(boolean('useHttpOnlyCookie', opts?.httpOnlyCookie ?? false), boolean('useOptimisticScenario', opts?.optimistic ?? false));
+  p.push(boolean('autoMapServerEventData', auto));
+  pushTable(p, 'serverEventDataList', withDedupRow(opts?.serverEventData, 'conversion_id', opts?.conversionId));
+  p.push(boolean('autoMapUserData', auto));
+  pushTable(p, 'userDataList', opts?.userData);
+  p.push(consentParam(opts?.requireConsent));
+  return finish(name, type, p, opts?.firingTriggerId);
+}
+
+// ── Quora Conversion API — stape-io/quora-tag ──
+export const QUORA_SERVER_EVENTS: string[] = ['Generic', 'Search', 'AddToCart', 'Purchase', 'GenerateLead', 'CompleteRegistration', 'AddToWishlist', 'AppInstall', 'InitiateCheckout'];
+const GA4_TO_QUORA: Record<string, string> = { viewsearchresults: 'Search', addtocart: 'AddToCart', purchase: 'Purchase', generatelead: 'GenerateLead', lead: 'GenerateLead', signup: 'CompleteRegistration', addtowishlist: 'AddToWishlist', begincheckout: 'InitiateCheckout', checkout: 'InitiateCheckout' };
+/** Quora standard event for `event`, else 'Generic' (the template has no custom event). PURE. */
+export function quoraServerEvent(event: string): string { return resolveStd(event, QUORA_SERVER_EVENTS, GA4_TO_QUORA) ?? 'Generic'; }
+export const QUORA_CONVERSION_DATA_KEYS: string[] = ['event_id', 'click_id', 'value', 'timestamp'];
+export const QUORA_USER_DATA_KEYS: string[] = ['ip', 'email', 'phone_number', 'country', 'region', 'city', 'postal_code', 'company_name', 'job_title', 'date_of_birth'];
+/** Build a Quora Conversion API SERVER tag: `accountId` (Quora pixel id) + `accessToken`. Event inherited
+ *  unless `event` is given (mapped to a Quora standard event, unknown → Generic). Dedup = `event_id` row. PURE. */
+export function buildQuoraCapiServerTag(
+  type: string, name: string, accountId: string, accessToken: string,
+  opts?: { event?: string; eventId?: string; conversionData?: NV; deviceEventData?: NV; userData?: NV; optimistic?: boolean; requireConsent?: boolean; firingTriggerId?: string[] },
+): GtmTagResource {
+  const p: Param[] = [];
+  const ev = opts?.event?.trim();
+  if (!ev) p.push(tpl('eventType', 'inherit'));
+  else p.push(tpl('eventType', 'standard'), tpl('eventName', quoraServerEvent(ev)));
+  p.push(tpl('accountId', accountId), tpl('accessToken', accessToken), boolean('useOptimisticScenario', opts?.optimistic ?? false));
+  pushTable(p, 'conversionDataList', withDedupRow(opts?.conversionData, 'event_id', opts?.eventId));
+  pushTable(p, 'deviceEventDataList', opts?.deviceEventData);
+  pushTable(p, 'userDataList', opts?.userData);
+  p.push(consentParam(opts?.requireConsent));
+  return finish(name, type, p, opts?.firingTriggerId);
+}
+
+// ── AdRoll — stape-io/adroll-tag ──
+export const ADROLL_SERVER_EVENTS: string[] = ['pageView', 'productSearch', 'addToCart', 'purchase'];
+const GA4_TO_ADROLL: Record<string, string> = { pageview: 'pageView', search: 'productSearch', viewsearchresults: 'productSearch', addtocart: 'addToCart', purchase: 'purchase' };
+export function adrollServerEvent(event: string): string | null { return resolveStd(event, ADROLL_SERVER_EVENTS, GA4_TO_ADROLL); }
+export const ADROLL_USER_DATA_KEYS: string[] = ['email', 'email_sha256', 'email_md5', 'device_id', 'first_party_cookie', 'adct', 'user_id', 'ip', 'user_agent'];
+export const ADROLL_CUSTOM_DATA_KEYS: string[] = ['conversion_value', 'currency', 'order_id', 'products', 'keywords', 'external_data'];
+/** Build an AdRoll SERVER tag: `advertisableId` + `pixelId` (both public, on the web snippet) + `accessToken`.
+ *  Event inherited unless given (standard pageView/productSearch/addToCart/purchase, else custom). PURE. */
+export function buildAdRollCapiServerTag(
+  type: string, name: string, advertisableId: string, pixelId: string, accessToken: string,
+  opts?: { event?: string; itemIdKey?: string; testMode?: boolean; cookieDomain?: string; serverData?: NV; userData?: NV; customData?: NV; optimistic?: boolean; requireConsent?: boolean; firingTriggerId?: string[] },
+): GtmTagResource {
+  const p: Param[] = [];
+  const ev = opts?.event?.trim();
+  if (!ev) p.push(tpl('eventType', 'inherit'));
+  else { const std = adrollServerEvent(ev); if (std) p.push(tpl('eventType', 'standard'), tpl('eventNameStandard', std)); else p.push(tpl('eventType', 'custom'), tpl('eventNameCustom', ev)); }
+  p.push(tpl('advertisableId', advertisableId), tpl('pixelId', pixelId), tpl('accessToken', accessToken));
+  if (opts?.itemIdKey?.trim()) p.push(tpl('itemIdKey', opts.itemIdKey.trim()));
+  p.push(tpl('testMode', opts?.testMode ? 'true' : 'false'), boolean('useOptimisticScenario', opts?.optimistic ?? false));
+  if (opts?.cookieDomain?.trim()) p.push(boolean('overrideCookieDomain', true), tpl('overridenCookieDomain', opts.cookieDomain.trim()));
+  pushTable(p, 'serverDataList', opts?.serverData);
+  pushTable(p, 'userDataList', opts?.userData);
+  pushTable(p, 'customDataList', opts?.customData);
+  p.push(consentParam(opts?.requireConsent));
+  return finish(name, type, p, opts?.firingTriggerId);
+}
+
+// ── Nextdoor Conversion API — stape-io/nextdoor-tag ──
+export const NEXTDOOR_SERVER_EVENTS: string[] = ['conversion', 'lead', 'purchase', 'sign_up', ...Array.from({ length: 10 }, (_, i) => `custom_conversion_${i + 1}`)];
+const GA4_TO_NEXTDOOR: Record<string, string> = { generatelead: 'lead', purchase: 'purchase', signup: 'sign_up', conversion: 'conversion' };
+export function nextdoorServerEvent(event: string): string | null { return resolveStd(event, NEXTDOOR_SERVER_EVENTS, GA4_TO_NEXTDOOR); }
+export const NEXTDOOR_USER_DATA_KEYS: string[] = ['email', 'phone_number', 'client_ip_address', 'client_user_agent', 'click_id', 'external_id', 'first_name', 'last_name', 'city', 'state', 'zip_code', 'country', 'street_address', 'date_of_birth', 'gender'];
+/** Build a Nextdoor Conversion API SERVER tag: `pixelId` (public) + `clientId` + `accessToken`.
+ *  conversionType defaults to website (appId only for app). Dedup = `event_id` row in serverDataList. PURE. */
+export function buildNextdoorCapiServerTag(
+  type: string, name: string, pixelId: string, clientId: string, accessToken: string,
+  opts?: { event?: string; eventId?: string; conversionType?: string; appId?: string; testEvent?: string; serverData?: NV; userData?: NV; customData?: NV; optimistic?: boolean; httpOnlyCookie?: boolean; requireConsent?: boolean; firingTriggerId?: string[] },
+): GtmTagResource {
+  const p: Param[] = [];
+  const ev = opts?.event?.trim();
+  if (!ev) p.push(tpl('eventType', 'inherit'));
+  else { const std = nextdoorServerEvent(ev); if (std) p.push(tpl('eventType', 'standard'), tpl('eventNameStandard', std)); else p.push(tpl('eventType', 'custom'), tpl('eventNameCustom', ev)); }
+  const ct = (opts?.conversionType ?? '').trim() || 'website';
+  p.push(tpl('eventConversionType', ct), tpl('pixelId', pixelId), tpl('clientId', clientId));
+  if (ct === 'app' && opts?.appId?.trim()) p.push(tpl('appId', opts.appId.trim()));
+  p.push(tpl('accessToken', accessToken));
+  if (opts?.testEvent?.trim()) p.push(tpl('testEvent', opts.testEvent.trim()));
+  p.push(boolean('useHttpOnlyCookie', opts?.httpOnlyCookie ?? false), boolean('useOptimisticScenario', opts?.optimistic ?? false), boolean('notSetClickID', false));
+  pushTable(p, 'serverDataList', withDedupRow(opts?.serverData, 'event_id', opts?.eventId));
+  pushTable(p, 'userDataList', opts?.userData);
+  pushTable(p, 'customDataList', opts?.customData);
+  p.push(consentParam(opts?.requireConsent));
+  return finish(name, type, p, opts?.firingTriggerId);
+}
+
+// ── Yelp Conversion API — stape-io/yelp-tag ──
+export const YELP_SERVER_EVENTS: string[] = ['purchase', 'add_payment_info', 'add_to_cart', 'add_to_wishlist', 'search', 'checkout', 'lead', 'view_content', 'view_category', 'signup', 'watch_video'];
+const GA4_TO_YELP: Record<string, string> = { begincheckout: 'checkout', generatelead: 'lead', signup: 'signup', viewitem: 'view_content', viewitemlist: 'view_category', viewsearchresults: 'search' };
+export function yelpServerEvent(event: string): string | null { return resolveStd(event, YELP_SERVER_EVENTS, GA4_TO_YELP); }
+export const YELP_USER_DATA_KEYS: string[] = ['em', 'ph', 'client_ip_address', 'madid', 'fn', 'ln', 'ct', 'st', 'zp', 'country', 'external_id', 'lead_id', 'client_user_agent', 'db', 'ge'];
+/** Build a Yelp Conversion API SERVER tag. Yelp has no pixel id: only the `accessToken`. Dedup = `event_id`
+ *  row in serverDataList; `validate` runs Yelp's payload validation. PURE. */
+export function buildYelpCapiServerTag(
+  type: string, name: string, accessToken: string,
+  opts?: { event?: string; eventId?: string; conversionType?: string; validate?: boolean; serverData?: NV; userData?: NV; customData?: NV; optimistic?: boolean; requireConsent?: boolean; firingTriggerId?: string[] },
+): GtmTagResource {
+  const p: Param[] = [];
+  const ev = opts?.event?.trim();
+  if (!ev) p.push(tpl('eventType', 'inherit'));
+  else { const std = yelpServerEvent(ev); if (std) p.push(tpl('eventType', 'standard'), tpl('eventNameStandard', std)); else p.push(tpl('eventType', 'custom'), tpl('eventNameCustom', ev)); }
+  p.push(tpl('eventConversionType', (opts?.conversionType ?? '').trim() || 'website'), tpl('accessToken', accessToken));
+  p.push(boolean('useOptimisticScenario', opts?.optimistic ?? false), boolean('validate', opts?.validate ?? false));
+  pushTable(p, 'serverDataList', withDedupRow(opts?.serverData, 'event_id', opts?.eventId));
+  pushTable(p, 'userDataList', opts?.userData);
+  pushTable(p, 'customDataList', opts?.customData);
+  p.push(consentParam(opts?.requireConsent));
+  return finish(name, type, p, opts?.firingTriggerId);
+}
+
+// ── Spotify Ads Conversion API — stape-io/spotify-tag ──
+export const SPOTIFY_SERVER_EVENTS: string[] = ['Page_View', 'Sign_Up', 'Lead', 'View_Product', 'Add_Cart', 'Start_Checkout', 'Purchase', 'Alias'];
+const GA4_TO_SPOTIFY: Record<string, string> = { pageview: 'Page_View', signup: 'Sign_Up', generatelead: 'Lead', lead: 'Lead', viewitem: 'View_Product', addtocart: 'Add_Cart', begincheckout: 'Start_Checkout', checkout: 'Start_Checkout', purchase: 'Purchase' };
+/** Spotify standard event, a `Custom_Event_N` (1-5) custom slot, or null (→ inherit; the template has no free-text event). PURE. */
+export function spotifyServerEvent(event: string): { kind: 'standard' | 'custom'; value: string } | null {
+  const std = resolveStd(event, SPOTIFY_SERVER_EVENTS, GA4_TO_SPOTIFY);
+  if (std) return { kind: 'standard', value: std };
+  const m = /^custom[\s_-]?event[\s_-]?([1-5])$/i.exec((event ?? '').trim());
+  return m ? { kind: 'custom', value: `Custom_Event_${m[1]}` } : null;
+}
+export const SPOTIFY_EVENT_DETAILS_KEYS: string[] = ['amount', 'currency', 'content_name', 'content_category'];
+export const SPOTIFY_USER_DATA_KEYS: string[] = ['ip_address', 'device_id', 'hashed_emails', 'hashed_phone_number'];
+/** Build a Spotify Ads Conversion API SERVER tag: `authToken` + `connectionId`. Note the template's
+ *  optimistic / opt-out / device-cookie switches are SELECTs ('true'|'false'), not checkboxes. PURE. */
+export function buildSpotifyCapiServerTag(
+  type: string, name: string, authToken: string, connectionId: string,
+  opts?: { event?: string; eventId?: string; actionSource?: string; optOutTargeting?: boolean; serverEventData?: NV; eventDetails?: NV; userData?: NV; autoMap?: boolean; optimistic?: boolean; generateDeviceIdCookie?: boolean; requireConsent?: boolean; firingTriggerId?: string[] },
+): GtmTagResource {
+  const auto = opts?.autoMap !== false;
+  const p: Param[] = [];
+  const r = opts?.event?.trim() ? spotifyServerEvent(opts.event) : null;
+  if (!r) p.push(tpl('eventType', 'inherit'));
+  else if (r.kind === 'standard') p.push(tpl('eventType', 'standard'), tpl('eventNameStandard', r.value));
+  else p.push(tpl('eventType', 'custom'), tpl('eventNameCustom', r.value));
+  p.push(tpl('authToken', authToken), tpl('connectionId', connectionId), tpl('actionSource', (opts?.actionSource ?? '').trim() || 'WEB'));
+  p.push(tpl('optOutTargeting', opts?.optOutTargeting ? 'true' : 'false'), tpl('useOptimisticScenario', opts?.optimistic ? 'true' : 'false'));
+  p.push(boolean('autoMapServerEventData', auto));
+  pushTable(p, 'serverEventDataList', withDedupRow(opts?.serverEventData, 'event_id', opts?.eventId));
+  p.push(boolean('autoMapEventDetailsParameters', auto));
+  pushTable(p, 'eventDetailsParametersList', opts?.eventDetails);
+  p.push(tpl('generateDeviceIdCookie', opts?.generateDeviceIdCookie === false ? 'false' : 'true'));
+  p.push(boolean('autoMapUserData', auto));
+  pushTable(p, 'userDataParametersList', opts?.userData);
+  p.push(consentParam(opts?.requireConsent));
+  return finish(name, type, p, opts?.firingTriggerId);
+}
+
+// ── LINE Yahoo (Yahoo! JAPAN Ads) Conversion API — stape-io/line-yahoo-tag ──
+export const LINE_YAHOO_SERVER_EVENTS: string[] = ['add_cart', 'add_wishlist', 'check_out', 'generate_lead', 'login', 'page_view', 'payment_info', 'purchase', 'reservation', 'search', 'sign_up', 'view_cart', 'view_listing', 'view_product'];
+const GA4_TO_LINE_YAHOO: Record<string, string> = { addtocart: 'add_cart', addtowishlist: 'add_wishlist', begincheckout: 'check_out', checkout: 'check_out', addpaymentinfo: 'payment_info', viewitem: 'view_product', viewitemlist: 'view_listing', viewsearchresults: 'search', lead: 'generate_lead' };
+/** LINE Yahoo standard event or null (→ inherit; the template has NO custom event). PURE. */
+export function lineYahooServerEvent(event: string): string | null { return resolveStd(event, LINE_YAHOO_SERVER_EVENTS, GA4_TO_LINE_YAHOO); }
+export const LINE_YAHOO_USER_IDENTIFIER_KEYS: string[] = ['hashed_email', 'hashed_phone_number', 'ly_su', 'ly_c', 'ly_r', 'ifa', 'line_uid'];
+/** Build a LINE Yahoo Conversion API SERVER tag: Yahoo `tagId` (public) + `accessToken` + `channelId`.
+ *  Every event other than page_view needs its own Event Snippet ID from Yahoo (`eventSnippetId`). Dedup =
+ *  `transaction_id` row in serverEventDataList. PURE. */
+export function buildLineYahooCapiServerTag(
+  type: string, name: string, tagId: string, accessToken: string, channelId: string,
+  opts?: { event?: string; eventSnippetId?: string; transactionId?: string; testMode?: boolean; itemIdKey?: string; serverEventData?: NV; userIdentifiers?: NV; webParameters?: NV; eventParameters?: NV; autoMap?: boolean; optimistic?: boolean; requireConsent?: boolean; firingTriggerId?: string[] },
+): GtmTagResource {
+  const auto = opts?.autoMap !== false;
+  const p: Param[] = [];
+  const std = opts?.event?.trim() ? lineYahooServerEvent(opts.event) : null;
+  if (!std) p.push(tpl('eventType', 'inherit'));
+  else p.push(tpl('eventType', 'standard'), tpl('eventTypeStandard', std));
+  p.push(tpl('tagId', tagId), tpl('accessToken', accessToken), tpl('channelId', channelId), tpl('actionSource', 'web'));
+  if (opts?.eventSnippetId?.trim()) p.push(tpl('eventSnippetId', opts.eventSnippetId.trim()));
+  p.push(tpl('testFlag', opts?.testMode ? 'true' : 'false'), boolean('useOptimisticScenario', opts?.optimistic ?? false));
+  p.push(boolean('setAnonymousIdCookie', true), boolean('setClickIdCookie', true), boolean('setComplementaryClickIdCookie', true));
+  p.push(boolean('autoMapServerEventDataParameters', auto));
+  pushTable(p, 'serverEventDataList', withDedupRow(opts?.serverEventData, 'transaction_id', opts?.transactionId));
+  p.push(boolean('autoMapUserIdentifiersParameters', auto));
+  pushTable(p, 'userIdentifiersParametersList', opts?.userIdentifiers);
+  p.push(boolean('autoMapWebParameters', auto));
+  pushTable(p, 'webParametersList', opts?.webParameters);
+  p.push(boolean('autoMapEventParameters', auto));
+  if (opts?.itemIdKey?.trim()) p.push(tpl('itemIdKey', opts.itemIdKey.trim()));
+  pushTable(p, 'eventParametersList', opts?.eventParameters);
+  p.push(consentParam(opts?.requireConsent));
+  return finish(name, type, p, opts?.firingTriggerId);
+}
+
+// ── RTB House — stape-io/rtb-house-tag ──
+/** RTB House events are PAGE TYPES, not conversions: home / listing / offer / basket / order. */
+export const RTB_HOUSE_SERVER_EVENTS: string[] = ['home', 'category2', 'sales', 'newoffers', 'offer', 'wishlist', 'size', 'offlinecheck', 'listing', 'basketadd', 'basket', 'basketstatus', 'startorder', 'conversion_order', 'conversion', 'placebo', 'cnst_ads_0'];
+const GA4_TO_RTB_HOUSE: Record<string, string> = { pageview: 'home', viewitemlist: 'listing', viewitem: 'offer', addtowishlist: 'wishlist', addtocart: 'basketadd', viewcart: 'basketstatus', begincheckout: 'startorder', checkout: 'startorder', purchase: 'conversion_order', generatelead: 'conversion', lead: 'conversion', signup: 'conversion' };
+export function rtbHouseServerEvent(event: string): string | null { return resolveStd(event, RTB_HOUSE_SERVER_EVENTS, GA4_TO_RTB_HOUSE); }
+/** Build an RTB House SERVER tag: `taggingHash` (public — it is the id in the pixel URL) + `partnerKey`.
+ *  No token. `event` maps a GA4 name to an RTB House page type (unknown → the template's custom event);
+ *  it defaults to `home`, so callers should pass the event for anything but a homepage view. Per-event
+ *  fields (orderId/orderValue for conversion_order, productIds, categoryId, conversionId/Value) are only
+ *  emitted when given; auto-map derives them from the event otherwise. PURE. */
+export function buildRtbHouseServerTag(
+  type: string, name: string, taggingHash: string, partnerKey: string,
+  opts?: { event?: string; customEventValue?: string; region?: string; identifierType?: string; identifierValue?: string; itemIdKey?: string; categoryId?: string; productIds?: string; orderId?: string; orderValue?: string; orderSubclass?: string; conversionId?: string; conversionValue?: string; conversionProductIds?: string; conversionClass?: string; serverEventData?: NV; autoMap?: boolean; optimistic?: boolean; requireConsent?: boolean; firingTriggerId?: string[] },
+): GtmTagResource {
+  const auto = opts?.autoMap !== false;
+  const p: Param[] = [];
+  const ev = opts?.event?.trim() || 'home';
+  const std = rtbHouseServerEvent(ev);
+  if (std) p.push(tpl('eventNameSetup', 'standard'), tpl('eventNameStandard', std));
+  else { p.push(tpl('eventNameSetup', 'custom'), tpl('eventNameCustom', ev)); if (opts?.customEventValue?.trim()) p.push(tpl('customEventValue', opts.customEventValue.trim())); }
+  p.push(tpl('taggingHash', taggingHash), tpl('partnerKey', partnerKey), tpl('region', (opts?.region ?? '').trim() || 'us'));
+  const idType = (opts?.identifierType ?? '').trim() || 'aid';
+  p.push(tpl('identifierType', idType), boolean('autoMapIdentifierType', auto));
+  if (opts?.identifierValue?.trim()) p.push(tpl('identifierValue', opts.identifierValue.trim()));
+  if (idType === 'aid') p.push(boolean('setAnonymousIdCookie', true));
+  p.push(boolean('useOptimisticScenario', opts?.optimistic ?? false), boolean('autoMapServerEventDataParameters', auto));
+  pushTable(p, 'serverEventDataParametersList', opts?.serverEventData);
+  p.push(boolean('autoMapEventParameters', auto));
+  if (opts?.itemIdKey?.trim()) p.push(tpl('itemIdKey', opts.itemIdKey.trim()));
+  const optTpl = (key: string, v?: string): void => { if (v?.trim()) p.push(tpl(key, v.trim())); };
+  optTpl('categoryId', opts?.categoryId); optTpl('productIds', opts?.productIds);
+  optTpl('orderId', opts?.orderId); optTpl('orderValue', opts?.orderValue); optTpl('orderSubclass', opts?.orderSubclass);
+  optTpl('conversionId', opts?.conversionId); optTpl('conversionValue', opts?.conversionValue); optTpl('conversionProductIds', opts?.conversionProductIds); optTpl('conversionClass', opts?.conversionClass);
+  p.push(consentParam(opts?.requireConsent));
+  return finish(name, type, p, opts?.firingTriggerId);
+}
+
 /* ───────────── Snap Pixel (web tag + Advanced Matching) ───────────── */
 
 /** The Snap snapchat-google-tag-manager `event_type` SELECT values (verified against corpus
@@ -4742,7 +5072,11 @@ export interface ServerMigrationPlan {
  *  loads from snap.licdn.com, which `/snap/` would otherwise claim. */
 const SERVER_MIGRATION_HEURISTICS: ReadonlyArray<{
   re: RegExp; destination: string; serverTool: string; requires: string[]; note: string;
-  derivedKey: string; idKeys: string[]; snippetRe: RegExp; status?: ServerMigrationItem['status'];
+  /** Omitted for a platform whose web tag carries no public id (Yelp, Spotify): nothing to derive. */
+  derivedKey?: string; idKeys?: string[]; snippetRe?: RegExp;
+  /** Further ids read off the snippet (AdRoll carries advertiser AND pixel ids). */
+  extra?: Array<{ key: string; re: RegExp }>;
+  status?: ServerMigrationItem['status'];
 }> = [
   { re: /tiktok|ttq\s*\(/i, destination: 'TikTok', serverTool: 'create_tiktok_capi_server_tag', requires: ['accessToken'], note: 'TikTok Events API server tag.',
     derivedKey: 'pixelId', idKeys: ['pixel_code', 'pixelCode', 'pixelId'], snippetRe: /ttq\.load\s*\(\s*['"]([^'"]+)['"]/i },
@@ -4762,11 +5096,28 @@ const SERVER_MIGRATION_HEURISTICS: ReadonlyArray<{
     derivedKey: 'tagId', idKeys: ['tagId'], snippetRe: /amzn\s*\(\s*['"]addTag['"]\s*,\s*['"]([^'"]+)['"]/i },
   { re: /stackadapt|\bsaq\s*\(|srv\.stackadapt/i, destination: 'StackAdapt', serverTool: 'create_stackadapt_server_tag', requires: [], note: 'StackAdapt server-side pixel.',
     derivedKey: 'pixelID', idKeys: ['pixelID', 'pixelId'], snippetRe: /saq\s*\(\s*['"]ts['"]\s*,\s*['"]([^'"]+)['"]/i },
-  // X (Twitter) has a Stape server template (stape-io/twitter-tag) but no typed builder yet, so it takes
-  // the generic import-template + tags_create path, like Floodlight.
-  { re: /\btwitter\b|\bx[\s_-]?pixel\b|twq\s*\(|static\.ads-twitter/i, destination: 'X (Twitter)', serverTool: 'templates_import_from_gallery (stape-io/twitter-tag) + tags_create', requires: ['pixelAccessToken'],
-    note: 'X Conversion API via the Stape twitter-tag template; no typed builder yet, so map the fields via the generic path.', status: 'generic',
+  // X (Twitter): the server tag needs the per-conversion X "Event ID" (tw-…) from X Ads Events Manager
+  // — a different thing from a dedup id — plus a Pixel Access Token (or OAuth 1.0a keys). Neither is
+  // on the web tag; only the Pixel ID is.
+  { re: /\btwitter\b|\bx[\s_-]?pixel\b|twq\s*\(|static\.ads-twitter/i, destination: 'X (Twitter)', serverTool: 'create_x_capi_server_tag', requires: ['eventId', 'pixelAccessToken'],
+    note: 'X Conversion API server tag (stape-io/twitter-tag). eventId = the X conversion Event ID (tw-…), one per conversion event.',
     derivedKey: 'pixelId', idKeys: ['pixelId'], snippetRe: /twq\s*\(\s*['"]config['"]\s*,\s*['"]([^'"]+)['"]/i },
+  { re: /quora|\bqp\s*\(/i, destination: 'Quora', serverTool: 'create_quora_capi_server_tag', requires: ['accessToken'], note: 'Quora Conversion API server tag (stape-io/quora-tag).',
+    derivedKey: 'accountId', idKeys: ['accountId', 'pixelId'], snippetRe: /qp\s*\(\s*['"]init['"]\s*,\s*['"]([^'"]+)['"]/i },
+  { re: /adroll|__adroll|adroll_adv_id/i, destination: 'AdRoll', serverTool: 'create_adroll_capi_server_tag', requires: ['accessToken'], note: 'AdRoll server tag (stape-io/adroll-tag); needs the advertisable id AND the pixel id, both public.',
+    derivedKey: 'advertisableId', idKeys: ['advertisableId'], snippetRe: /adroll_adv_id\s*=\s*['"]([^'"]+)['"]/i,
+    extra: [{ key: 'pixelId', re: /adroll_pix_id\s*=\s*['"]([^'"]+)['"]/i }] },
+  { re: /nextdoor|\bndp\s*\(/i, destination: 'Nextdoor', serverTool: 'create_nextdoor_capi_server_tag', requires: ['clientId', 'accessToken'], note: 'Nextdoor Conversion API server tag (stape-io/nextdoor-tag).',
+    derivedKey: 'pixelId', idKeys: ['pixelId'], snippetRe: /ndp\s*\(\s*['"]init['"]\s*,\s*['"]([^'"]+)['"]/i },
+  // Yelp and Spotify web tags carry no public id: only the secret(s) are needed.
+  { re: /\byelp\b/i, destination: 'Yelp', serverTool: 'create_yelp_capi_server_tag', requires: ['accessToken'], note: 'Yelp Conversion API server tag (stape-io/yelp-tag).' },
+  { re: /spotify/i, destination: 'Spotify Ads', serverTool: 'create_spotify_capi_server_tag', requires: ['authToken', 'connectionId'], note: 'Spotify Ads Conversion API server tag (stape-io/spotify-tag).' },
+  { re: /line[\s_-]?yahoo|yahoo[\s_-]?(ads|conversion|retargeting)|\byjtag\b|s\.yimg\.jp/i, destination: 'LINE Yahoo', serverTool: 'create_line_yahoo_capi_server_tag', requires: ['accessToken', 'channelId', 'eventSnippetId'],
+    note: 'LINE Yahoo (Yahoo! JAPAN Ads) Conversion API server tag (stape-io/line-yahoo-tag); every non-page_view event needs its own Event Snippet ID.',
+    derivedKey: 'tagId', idKeys: ['tagId'], snippetRe: /yahoo_retargeting_id\s*[:=]\s*['"]([^'"]+)['"]/i },
+  // RTB House is a retargeting tag with no token: the tagging hash (public, in the pixel URL) + partner key.
+  { re: /rtb\s*house|rtbhouse|creativecdn\.com/i, destination: 'RTB House', serverTool: 'create_rtb_house_server_tag', requires: ['partnerKey'], note: 'RTB House server tag (stape-io/rtb-house-tag); events are page types (home/offer/basket/order), mapped from GA4 names.',
+    derivedKey: 'taggingHash', idKeys: ['taggingHash'], snippetRe: /creativecdn\.com\/tags\?id=([A-Za-z0-9_-]+)/i },
 ];
 
 /** Meta's public Pixel ID on the web side: the gallery template's `pixelId` param, or the id inside
@@ -4850,8 +5201,16 @@ export function planWebToServerMigration(snapshot: ContainerSnapshot): ServerMig
     const hay = `${t.name} ${type} ${html}`;
     const hit = SERVER_MIGRATION_HEURISTICS.find((h) => h.re.test(hay));
     if (hit) {
-      const id = hit.idKeys.map((k) => pv(t, k)).find(Boolean) || (hit.snippetRe.exec(html)?.[1] ?? '').trim();
-      items.push({ webTag: t.name, destination: hit.destination, detectedBy: 'name', serverTool: hit.serverTool, derived: id ? { [hit.derivedKey]: id } : {}, requires: hit.requires, note: hit.note, status: hit.status ?? 'typed-tool' });
+      const derived: Record<string, string> = {};
+      if (hit.derivedKey) {
+        const id = (hit.idKeys ?? []).map((k) => pv(t, k)).find(Boolean) || (hit.snippetRe?.exec(html)?.[1] ?? '').trim();
+        if (id) derived[hit.derivedKey] = id;
+      }
+      for (const x of hit.extra ?? []) {
+        const v = (x.re.exec(html)?.[1] ?? '').trim();
+        if (v) derived[x.key] = v;
+      }
+      items.push({ webTag: t.name, destination: hit.destination, detectedBy: 'name', serverTool: hit.serverTool, derived, requires: hit.requires, note: hit.note, status: hit.status ?? 'typed-tool' });
     }
   }
 

@@ -19,6 +19,8 @@ import {
   serverTagParam, googleTagConfigValue,
   isMetaCapiServerTag, isTikTokCapiServerTag, isSnapchatCapiServerTag, isMicrosoftCapiServerTag,
   isLinkedInCapiServerTag, isPinterestCapiServerTag, isRedditCapiServerTag, isAmazonCapiServerTag, isStackAdaptServerTag,
+  isXCapiServerTag, isQuoraCapiServerTag, isAdRollCapiServerTag, isNextdoorCapiServerTag, isYelpCapiServerTag,
+  isSpotifyCapiServerTag, isLineYahooCapiServerTag, isRtbHouseServerTag,
 } from './gtm-builders';
 import { resolveGa4MeasurementIds } from './gtm-ga4-check';
 
@@ -26,7 +28,8 @@ import { resolveGa4MeasurementIds } from './gtm-ga4-check';
  *  (gtm-builders) so a platform the planner offers is also one coverage can score. */
 export type CoveragePlatform =
   | 'ga4' | 'meta' | 'tiktok' | 'linkedin' | 'pinterest'
-  | 'snapchat' | 'microsoft' | 'reddit' | 'amazon' | 'stackadapt' | 'x';
+  | 'snapchat' | 'microsoft' | 'reddit' | 'amazon' | 'stackadapt' | 'x'
+  | 'quora' | 'adroll' | 'nextdoor' | 'yelp' | 'spotify' | 'lineyahoo' | 'rtbhouse';
 
 export interface ServerCoverageRow {
   platform: CoveragePlatform;
@@ -96,6 +99,13 @@ const PIXEL_SIGNS: Array<{ platform: Exclude<CoveragePlatform, 'ga4'>; nameRe: R
   { platform: 'amazon', nameRe: /amazon[\s_-]?(ads?|pixel|tag)/i, bodyRe: /amzn\(|amazon-adsystem/i },
   { platform: 'stackadapt', nameRe: /stackadapt/i, bodyRe: /saq\(|srv\.stackadapt/i },
   { platform: 'x', nameRe: /\btwitter\b|\bx[\s_-]?pixel\b/i, bodyRe: /twq\(|static\.ads-twitter/i },
+  { platform: 'quora', nameRe: /quora/i, bodyRe: /\bqp\(|a\.quora\.com/i },
+  { platform: 'adroll', nameRe: /adroll/i, bodyRe: /__adroll|s\.adroll\.com|adroll_adv_id/i },
+  { platform: 'nextdoor', nameRe: /nextdoor/i, bodyRe: /\bndp\(|ads\.nextdoor\.com/i },
+  { platform: 'yelp', nameRe: /\byelp\b/i, bodyRe: /yelp\.com\/ads|yelpads/i },
+  { platform: 'spotify', nameRe: /spotify/i, bodyRe: /pixel\.spotify|ads\.spotify|spotify\.com\/pixel/i },
+  { platform: 'lineyahoo', nameRe: /line[\s_-]?yahoo|yahoo[\s_-]?(ads|conversion)|\byjtag\b/i, bodyRe: /yjtag|s\.yimg\.jp\/wi\/ytag|yahoo_retargeting_id/i },
+  { platform: 'rtbhouse', nameRe: /rtb\s*house|rtbhouse/i, bodyRe: /creativecdn\.com/i },
 ];
 
 /** Platform of a WEB tag: GA4 event tags by type; the built-in Microsoft UET (baut) and LinkedIn
@@ -126,12 +136,19 @@ function serverPlatformOf(t: AuditTag): CoveragePlatform | null {
   if (isMicrosoftCapiServerTag(t)) return 'microsoft';
   if (isAmazonCapiServerTag(t)) return 'amazon';
   if (isStackAdaptServerTag(t)) return 'stackadapt';
+  if (isXCapiServerTag(t)) return 'x';
+  if (isQuoraCapiServerTag(t)) return 'quora';
+  if (isAdRollCapiServerTag(t)) return 'adroll';
+  if (isNextdoorCapiServerTag(t)) return 'nextdoor'; // before Yelp: both carry eventConversionType, only Nextdoor has pixelId + clientId
+  if (isYelpCapiServerTag(t)) return 'yelp';
+  if (isSpotifyCapiServerTag(t)) return 'spotify';
+  if (isLineYahooCapiServerTag(t)) return 'lineyahoo';
+  if (isRtbHouseServerTag(t)) return 'rtbhouse';
   for (const sign of PIXEL_SIGNS) if (sign.nameRe.test(t.name)) return sign.platform;
   return null;
 }
 
-/** The chat tool that builds each platform's server tag. X has no typed builder yet: it goes through
- *  the generic gallery import of stape-io/twitter-tag. */
+/** The chat tool that builds each platform's server tag (every platform now has a typed builder). */
 const CAPI_TOOL: Record<Exclude<CoveragePlatform, 'ga4'>, string> = {
   meta: 'create_meta_capi_server_tag',
   tiktok: 'create_tiktok_capi_server_tag',
@@ -142,7 +159,14 @@ const CAPI_TOOL: Record<Exclude<CoveragePlatform, 'ga4'>, string> = {
   microsoft: 'create_microsoft_capi_server_tag',
   amazon: 'create_amazon_capi_server_tag',
   stackadapt: 'create_stackadapt_server_tag',
-  x: 'import_gallery_template (stape-io/twitter-tag) + create_gtm_tag',
+  x: 'create_x_capi_server_tag',
+  quora: 'create_quora_capi_server_tag',
+  adroll: 'create_adroll_capi_server_tag',
+  nextdoor: 'create_nextdoor_capi_server_tag',
+  yelp: 'create_yelp_capi_server_tag',
+  spotify: 'create_spotify_capi_server_tag',
+  lineyahoo: 'create_line_yahoo_capi_server_tag',
+  rtbhouse: 'create_rtb_house_server_tag',
 };
 
 /** Configuration subscore from audit severity counts - the STATED formula (100 - 25/critical -
