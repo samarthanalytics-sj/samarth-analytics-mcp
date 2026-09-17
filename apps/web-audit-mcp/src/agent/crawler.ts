@@ -8,6 +8,7 @@
 import type { PwBrowser } from './browser.js';
 import { openInstrumentedPage } from './browser.js';
 import { urlAllowed } from '../utils/urlGuard.js';
+import { botBlockReason } from './bot-block.js';
 
 export interface CrawlOptions {
   maxPages: number;
@@ -165,6 +166,8 @@ export async function crawlSite(
         inst.markNavigationStart();
         const resp = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: opts.navTimeoutMs });
         status = resp ? resp.status() : null;
+        // A bot-protection challenge (Cloudflare etc.) is an HTTP error with a NAME; carry it as the note.
+        if (resp && status !== null) note = botBlockReason(status, resp.headers()) ?? undefined;
         await page.waitForTimeout(500);
         scan = await page.evaluate<PageScan>(scanPageInBrowser);
       } catch (err) {

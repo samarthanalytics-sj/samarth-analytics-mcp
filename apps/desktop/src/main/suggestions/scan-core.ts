@@ -32,6 +32,7 @@ import {
 import { analyzeForms, type RawForm } from '../../../../web-audit-mcp/src/agent/forms.js';
 import type { SuggestedTag, SuggestPlatform } from '../../../../web-audit-mcp/src/agent/tag-suggest/types.js';
 import { urlAllowed } from '../../../../web-audit-mcp/src/utils/urlGuard.js';
+import { isBotBlockReason, blockedStartWarning } from '../../../../web-audit-mcp/src/agent/bot-block.js';
 import type { TagScanResult, ScanDebug } from '../../shared/ipc';
 import { suggestionDedupKey } from '../../shared/tag-template';
 
@@ -264,6 +265,18 @@ export function detectInstalled(texts: string[]): { containers: string[]; measur
   return { containers: [...containers], measurementIds: [...measurementIds] };
 }
 
+/**
+ * A scan that read ZERO pages because the site's bot protection blocked it must say so FIRST and
+ * loudly. Left as a quiet "Not scanned (1): http 403" under an empty list, it reads as "the scanner
+ * found nothing" and the user concludes form / element detection is broken (www.iff.com, Cloudflare
+ * challenge, 2026-09-17). pageScans empty + any bot-block reason = the whole scan was blocked.
+ */
+function warnIfStartBlocked(pageScans: PageScan[], notScanned: TagScanResult['notScanned'], warnings: string[]): void {
+  if (pageScans.length > 0) return;
+  const blocked = notScanned.find((n) => isBotBlockReason(n.reason));
+  if (blocked) warnings.unshift(blockedStartWarning(blocked.reason));
+}
+
 export function emptyResult(site: string, siteHost: string, warnings: string[]): TagScanResult {
   return {
     site,
@@ -298,7 +311,8 @@ async function scanTarget(
 ): Promise<{ page?: PageScan; links?: string[]; navLinks?: string[]; reason?: string; rawForms?: RawForm[] }> {
   const driven = await driver.open(url);
   if (!driven.ok) return { reason: driven.error ? `scan failed: ${driven.error}`.slice(0, 200) : 'navigation failed' };
-  if (driven.httpStatus !== null && driven.httpStatus >= 400) return { reason: `http ${driven.httpStatus}` };
+  // A WAF challenge page arrives as an HTTP error WITH a classified reason (electron-driver); name it.
+  if (driven.httpStatus !== null && driven.httpStatus >= 400) return { reason: isBotBlockReason(driven.error) ? driven.error! : `http ${driven.httpStatus}` };
   if (!driven.raw) return { reason: 'no page content' };
   const path = pagePath(url);
   const elements = classifyPageElements(driven.raw.elements, siteHost, path);
@@ -690,6 +704,7 @@ export async function crawlAndSuggest(
   } else if (queue.length > 0) {
     warnings.push(`${queue.length} more same-site page(s) were discovered but not scanned (page budget ${maxPages}).`);
   }
+  warnIfStartBlocked(pageScans, notScanned, warnings);
   return assembleResult(start, siteHost, pageScans, notScanned, warnings, opened, [], platforms, mergePoolDiagnostics(pool));
 }
 
@@ -787,5 +802,6 @@ export async function scanUrls(
         'These suggestions cover only the pages read before you stopped.',
     );
   }
+  warnIfStartBlocked(pageScans, notScanned, warnings);
   return assembleResult(start ?? list[0] ?? '', siteHost, pageScans, notScanned, warnings, opened, [], platforms, mergePoolDiagnostics(pool));
 }
