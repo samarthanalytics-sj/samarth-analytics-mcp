@@ -746,8 +746,13 @@ async function main(): Promise<void> {
     // plus the two read-only template-discovery tools describe_template_fields / profile_tag_types = 121,
     // plus the two CAPI server tags create_snapchat_capi_server_tag / create_microsoft_capi_server_tag = 123,
     // plus the read-only plan_server_migration_from_web = 124,
-    // plus the GTM write create_stape_data_pipeline = 125.
-    assert.equal(withWrites.list().length, 125 + 64, 'read + write registry has 125 GTM/GA4-read/context/write + 64 GA4-write tools');
+    // plus the GTM write create_stape_data_pipeline = 125,
+    // plus the eight Tier-1 CAPI server tags (X / Quora / AdRoll / Nextdoor / Yelp / Spotify / LINE Yahoo / RTB House) = 133.
+    assert.equal(withWrites.list().length, 133 + 64, 'read + write registry has 133 GTM/GA4-read/context/write + 64 GA4-write tools');
+    for (const n of ['create_x_capi_server_tag', 'create_quora_capi_server_tag', 'create_adroll_capi_server_tag', 'create_nextdoor_capi_server_tag', 'create_yelp_capi_server_tag', 'create_spotify_capi_server_tag', 'create_line_yahoo_capi_server_tag', 'create_rtb_house_server_tag']) {
+      assert.equal(withWrites.list().some((t) => t.name === n), true, `${n} present`);
+      assert.equal(withWrites.isWrite?.(n), true, `${n} is a write`);
+    }
     for (const n of ['update_gtm_environment', 'update_gtm_client', 'update_gtm_transformation']) {
       assert.equal(withWrites.list().some((t) => t.name === n), true, `${n} present`);
       assert.equal(withWrites.isWrite?.(n), true, `${n} is a write`);
@@ -2551,6 +2556,31 @@ async function main(): Promise<void> {
     assert.ok(fd.calls.includes('importTemplate:stape-io/amazon-tag'), 'imported the Stape Amazon server template');
     assert.ok(azapi.tagId, 'created an Amazon CAPI tag');
     await assert.rejects(() => reg.execute('create_amazon_capi_server_tag', { accountId: '1', containerId: '2', workspaceId: '3', tagIds: [], tagRegion: 'NA' }), /tagIds is required/);
+
+    // Tier-1 CAPI tools: each imports its Stape template, creates the tag, and refuses without its own credentials.
+    const base = { accountId: '1', containerId: '2', workspaceId: '3', firingTriggerId: ['5'] };
+    const createdCapi = async (tool: string, args: Record<string, unknown>, repo: string): Promise<void> => {
+      const out = JSON.parse(await reg.execute(tool, { ...base, ...args }));
+      assert.ok(fd.calls.includes(`importTemplate:stape-io/${repo}`), `${tool} imported stape-io/${repo}`);
+      assert.ok(out.tagId, `${tool} created a tag`);
+    };
+    await createdCapi('create_x_capi_server_tag', { pixelId: '{{X Pixel}}', eventId: 'tw-abc', pixelAccessToken: '{{X Token}}', conversionId: '{{Event ID}}' }, 'twitter-tag');
+    await assert.rejects(() => reg.execute('create_x_capi_server_tag', { ...base, pixelId: 'P', eventId: '', pixelAccessToken: 'T' }), /eventId is required/);
+    await assert.rejects(() => reg.execute('create_x_capi_server_tag', { ...base, pixelId: 'P', eventId: 'tw-1', consumerKey: 'ck' }), /Auth is required/, 'a partial OAuth quartet is refused');
+    await createdCapi('create_quora_capi_server_tag', { pixelId: '{{Quora Pixel}}', accessToken: '{{Quora Token}}', event: 'purchase', eventId: '{{Event ID}}' }, 'quora-tag');
+    await assert.rejects(() => reg.execute('create_quora_capi_server_tag', { ...base, pixelId: '', accessToken: 'T' }), /pixelId is required/);
+    await createdCapi('create_adroll_capi_server_tag', { advertisableId: 'ADV', pixelId: 'PIX', accessToken: '{{AdRoll Token}}', event: 'purchase' }, 'adroll-tag');
+    await assert.rejects(() => reg.execute('create_adroll_capi_server_tag', { ...base, advertisableId: ' ', pixelId: 'PIX', accessToken: 'T' }), /advertisableId is required/);
+    await createdCapi('create_nextdoor_capi_server_tag', { pixelId: 'PX', clientId: 'CL', accessToken: '{{ND Token}}', event: 'lead' }, 'nextdoor-tag');
+    await assert.rejects(() => reg.execute('create_nextdoor_capi_server_tag', { ...base, pixelId: 'PX', clientId: '', accessToken: 'T' }), /clientId is required/);
+    await createdCapi('create_yelp_capi_server_tag', { accessToken: '{{Yelp Token}}', event: 'signup', validate: true }, 'yelp-tag');
+    await assert.rejects(() => reg.execute('create_yelp_capi_server_tag', { ...base, accessToken: '' }), /accessToken is required/);
+    await createdCapi('create_spotify_capi_server_tag', { authToken: '{{Spotify Token}}', connectionId: 'CONN', event: 'purchase' }, 'spotify-tag');
+    await assert.rejects(() => reg.execute('create_spotify_capi_server_tag', { ...base, authToken: 'T', connectionId: ' ' }), /connectionId is required/);
+    await createdCapi('create_line_yahoo_capi_server_tag', { tagId: 'TAG', accessToken: '{{Yahoo Token}}', channelId: 'CH', event: 'purchase', eventSnippetId: 'SN' }, 'line-yahoo-tag');
+    await assert.rejects(() => reg.execute('create_line_yahoo_capi_server_tag', { ...base, tagId: 'TAG', accessToken: 'T', channelId: '' }), /channelId is required/);
+    await createdCapi('create_rtb_house_server_tag', { taggingHash: 'pr_x', partnerKey: '{{RTB Key}}', event: 'purchase', orderId: '{{Transaction ID}}' }, 'rtb-house-tag');
+    await assert.rejects(() => reg.execute('create_rtb_house_server_tag', { ...base, taggingHash: 'pr_x', partnerKey: 'k', event: '' }), /event is required/, 'RTB House events are page types and must be chosen');
 
     // update_gtm_trigger fixes a Custom Event trigger's Event name IN PLACE (no delete+recreate).
     const upd = JSON.parse(
