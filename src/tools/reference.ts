@@ -247,7 +247,9 @@ export const GALLERY_CATEGORIES: { category: string; examples: string[]; known?:
   },
   {
     category: 'Server-side (Stape and others)',
-    examples: ['Stape Facebook', 'Stape TikTok', 'Stape LinkedIn', 'Stape Reddit', 'Stape Amazon', 'StackAdapt'],
+    examples: ['Stape Facebook', 'Stape TikTok', 'Stape LinkedIn', 'Stape Reddit', 'Stape Amazon', 'StackAdapt', 'Pinterest CAPI', 'Snapchat CAPI', 'Stape Microsoft', 'Stape X (Twitter)'],
+    // Every repo here has a typed create_*_capi_server_tag tool (plan_server_migration_from_web names it), which
+    // imports the template itself - prefer that over templates_import_from_gallery + a hand-built tags_create.
     known: {
       'Stape Facebook': 'stape-io/facebook-tag',
       'Stape TikTok': 'stape-io/tiktok-tag',
@@ -255,6 +257,17 @@ export const GALLERY_CATEGORIES: { category: string; examples: string[]; known?:
       'Stape Reddit': 'stape-io/reddit-tag',
       'Stape Amazon': 'stape-io/amazon-tag',
       StackAdapt: 'StackAdapt/stackadapt-gtm-server-side-pixel',
+      'Pinterest CAPI': 'pinterest/ss-gtm-template',
+      'Snapchat CAPI': 'Snapchat/capi-google-tag-manager-serverside-tag',
+      'Stape Microsoft': 'stape-io/microsoft-capi-tag',
+      'Stape X (Twitter)': 'stape-io/twitter-tag',
+      'Stape Quora': 'stape-io/quora-tag',
+      'Stape AdRoll': 'stape-io/adroll-tag',
+      'Stape Nextdoor': 'stape-io/nextdoor-tag',
+      'Stape Yelp': 'stape-io/yelp-tag',
+      'Stape Spotify': 'stape-io/spotify-tag',
+      'Stape LINE Yahoo': 'stape-io/line-yahoo-tag',
+      'Stape RTB House': 'stape-io/rtb-house-tag',
     },
   },
 ];
