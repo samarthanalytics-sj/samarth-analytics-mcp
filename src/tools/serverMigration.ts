@@ -268,7 +268,11 @@ export function registerServerMigrationTools(server: McpServer, getClient: () =>
         'relay, or the setup_server_side_container prompt); Google Ads conversion (awct) / remarketing (sp) -> create_server_tag; ' +
         'Meta/TikTok/LinkedIn/Pinterest/Reddit/Snapchat/Microsoft/Amazon/StackAdapt/X/Quora/AdRoll/Nextdoor/Yelp/Spotify/' +
         'LINE Yahoo/RTB House pixels -> their typed tool (native Microsoft UET `baut` and LinkedIn Insight `bzi` tags are ' +
-        'recognised by type); Floodlight (flc) -> generic import path; Google Ads call conversion has no sGTM equivalent; ' +
+        'recognised by type); analytics (Mixpanel, Matomo, Piwik PRO, Piano, Plausible, Umami, Pirsch, Snowplow, Klaviyo) and ' +
+        'affiliate networks (Awin, CJ, Impact, Rakuten, ShareASale, Tradedoubler, Webgains, Admitad, Adtraction, Affiliate Future, ' +
+        'Effinity, Refersion, Tapfiliate, Everflow, Voluum) -> GENERIC items (status "generic"): templates_import_from_gallery the ' +
+        'named stape-io repo, then tags_create with the template fields listed in `requires` (secrets) + `derived` (public ids read ' +
+        'off the web snippet); Floodlight (flc) -> generic import path; Google Ads call conversion has no sGTM equivalent; ' +
         'Conversion Linker (gclidw) needs no server tag. Returns { ga4, items[], summary, truncated }.',
       inputSchema: wsBase,
     },

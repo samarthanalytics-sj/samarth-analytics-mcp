@@ -236,5 +236,48 @@ test('Tier-1 platforms: web pixels classified by name/snippet, a shape-matched S
   assert.ok(/create_rtb_house_server_tag/.test(row('RTB House').recommendation ?? ''), row('RTB House').recommendation);
 });
 
+test('analytics + affiliate web tags classify to their generic platforms (Piwik PRO before Matomo) and recommend the gallery import', () => {
+  const H = (id: string, name: string, trig: string, html: string) =>
+    tag({ tagId: id, name, type: 'html', firingTriggerId: [trig], parameter: [{ type: 'template', key: 'html', value: html }] });
+  const names: Array<[string, string, string]> = [
+    ['Mixpanel', "<script>mixpanel.init('t')</script>", 'mixpanel'],
+    ['Site analytics', "<script>var _paq = window._paq || []; _paq.push(['setSiteId', '1']);</script>", 'matomo'],
+    ['Piwik PRO', '<script src="https://a.containers.piwik.pro/containers/x.js"></script>', 'piwikpro'],
+    ['Piano Analytics', '<script>pa.setConfigurations({site: 1})</script>', 'piano'],
+    ['Plausible', '<script data-domain="e.com" src="https://plausible.io/js/script.js"></script>', 'plausible'],
+    ['Umami', '<script data-website-id="u" src="https://cloud.umami.is/script.js"></script>', 'umami'],
+    ['Pirsch', '<script src="https://api.pirsch.io/pa.js"></script>', 'pirsch'],
+    ['Snowplow', "<script>snowplow('newTracker','sp','https://c.example.com')</script>", 'snowplow'],
+    ['Klaviyo', '<script src="https://static.klaviyo.com/onsite/js/klaviyo.js?company_id=P"></script>', 'klaviyo'],
+    ['Awin', '<script src="https://www.dwin1.com/1.js"></script>', 'awin'],
+    ['Commission Junction', '<script src="https://www.mczbf.com/tags/1/tag.js"></script>', 'cj'],
+    ['Impact Radius', '<script src="https://utt.impactcdn.com/A1.js"></script>', 'impact'],
+    ['Rakuten', '<script src="https://tag.rmp.rakuten.com/1.ct.js?ranMID=1"></script>', 'rakuten'],
+    ['ShareASale', '<img src="https://www.shareasale.com/sale.cfm?merchantID=1">', 'shareasale'],
+    ['Tradedoubler', '<img src="https://tbs.tradedoubler.com/report?organization=1">', 'tradedoubler'],
+    ['Webgains', "<script>ITCVRQ('set','cvr.programId',1)</script>", 'webgains'],
+    ['Admitad', "<script>ADMITAD.Invoice.campaign_code='a'</script>", 'admitad'],
+    ['Adtraction', '<script>ADT.Tag.tp = 1</script>', 'adtraction'],
+    ['Affiliate Future', '<script src="https://scripts.affiliatefuture.com/AFFunctions.js"></script>', 'affiliatefuture'],
+    ['Effinity', '<img src="https://track.effiliation.com/servlet/effi.track?effi_id=1">', 'effinity'],
+    ['Refersion', '<script src="https://a.refersion.com/tracker/v3/pub_a.js"></script>', 'refersion'],
+    ['Tapfiliate', "<script>tap('create','1')</script>", 'tapfiliate'],
+    ['Everflow', '<script>EF.conversion({aid:1})</script>', 'everflow'],
+    ['Voluum', '<img src="https://trk.example.com/postback?cid=1">', 'voluum'],
+  ];
+  const w = web({
+    tags: names.map(([name, html], i) => H(`w${i}`, name, String(i + 1), html)),
+    triggers: names.map((_, i) => evTrigger(String(i + 1), 'purchase')),
+  });
+  const r = buildServerCoverage(w, server({ tags: [], triggers: [] }), AUDIT_OK);
+  for (const [name, , platform] of names) {
+    const row = r.rows.find((x) => x.webTag === name)!;
+    assert.ok(row, `row for ${name}`);
+    assert.equal(row.platform, platform, name);
+    assert.equal(row.status, 'missing', name);
+    assert.ok(/import_gallery_template \(stape-io\/[a-z0-9-]+\) \+ create_tag/.test(row.recommendation ?? ''), `${name}: ${row.recommendation}`);
+  }
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

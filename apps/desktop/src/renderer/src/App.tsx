@@ -10099,6 +10099,11 @@ function ServerAuditSection({
       const COVERAGE_PLATFORM_LABEL: Record<string, string> = {
         ga4: 'GA4', meta: 'Meta', tiktok: 'TikTok', linkedin: 'LinkedIn', pinterest: 'Pinterest',
         snapchat: 'Snapchat', microsoft: 'Microsoft Ads', reddit: 'Reddit', amazon: 'Amazon Ads', stackadapt: 'StackAdapt', x: 'X (Twitter)',
+        quora: 'Quora', adroll: 'AdRoll', nextdoor: 'Nextdoor', yelp: 'Yelp', spotify: 'Spotify Ads', lineyahoo: 'LINE Yahoo', rtbhouse: 'RTB House',
+        mixpanel: 'Mixpanel', matomo: 'Matomo', piwikpro: 'Piwik PRO', piano: 'Piano Analytics', plausible: 'Plausible', umami: 'Umami',
+        pirsch: 'Pirsch', snowplow: 'Snowplow', klaviyo: 'Klaviyo', awin: 'Awin', cj: 'CJ', impact: 'Impact', rakuten: 'Rakuten Advertising',
+        shareasale: 'ShareASale', tradedoubler: 'Tradedoubler', webgains: 'Webgains', admitad: 'Admitad', adtraction: 'Adtraction',
+        affiliatefuture: 'Affiliate Future', effinity: 'Effinity', refersion: 'Refersion', tapfiliate: 'Tapfiliate', everflow: 'Everflow', voluum: 'Voluum',
       };
       const platformLabel = COVERAGE_PLATFORM_LABEL[row.platform] ?? row.platform;
       const r = await window.desktop.gtm.createServerTagForEvent(accountId, containerId, workspaceId, row.template.tagId, row.event, `${platformLabel} CAPI - ${row.event}`);
