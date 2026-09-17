@@ -27,6 +27,7 @@ import { registerExportTools } from './export.js';
 import { registerEnvironmentTools } from './environments.js';
 import { registerUserPermissionTools } from './userPermissions.js';
 import { registerServerSideTools } from './serverSide.js';
+import { registerServerMigrationTools } from './serverMigration.js';
 import { registerGa4AdminTools } from './ga4Admin.js';
 import { registerGa4AdminWriteTools } from './ga4AdminWrite.js';
 import { registerGa4DataTools } from './ga4Data.js';
@@ -56,6 +57,9 @@ export function registerAllTools(
   registerEnvironmentTools(server, getClient);
   registerUserPermissionTools(server, getClient);
   registerServerSideTools(server, getClient);
+  // The web→server migration surface (planner + CAPI server-tag builders), shared with the desktop
+  // app via src/shared/server-migration.ts. Registered after the server-side primitives it composes.
+  registerServerMigrationTools(server, getClient);
   registerAuditTools(server, getClient);
   registerExportTools(server, getClient);
   registerGa4AdminTools(server, getGa4Client, getGa4AlphaClient);

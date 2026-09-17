@@ -3,9 +3,10 @@
  *
  * Registered as an MCP prompt (prompts/list) so it shows in the client's "prompts" tab. Unlike the
  * desktop chat brain's system prompt, an MCP prompt is a user-selectable template the client injects.
- * The MCP server exposes only GENERIC create tools (containers_create, clients_create, variables_create,
- * triggers_create, tags_create, built_in_variables_enable) — no typed server builders — so this prompt
+ * For the RAW resources (container, clients, variables, triggers, the GA4/Ads server tags) this prompt
  * hands the assistant the ordered recipe PLUS the exact resource shapes (types + parameter arrays).
+ * Typed builders exist too (src/tools/serverMigration.ts): create_server_tag for the native Google
+ * server tags and create_*_capi_server_tag for every third-party CAPI - the recipe points at them.
  * Shapes corpus-validated against real server containers.
  */
 
@@ -60,7 +61,7 @@ function buildRecipe(a: { accountId?: string; containerName?: string; measuremen
     '',
     '7. WIRE THE HOST (after the user deploys the tagging server) - record the URL on the SERVER container with containers_set_tagging_server_urls (serverUrls: ["https://…"]), then point the web container at it: FIRST tags_get the WEB container\'s Google tag and copy the rows already in its configSettingsTable, then tags_update with the FULL list, i.e. those existing rows PLUS {"type":"map","map":[{"type":"template","key":"parameter","value":"server_container_url"},{"type":"template","key":"parameterValue","value":"https://…"}]}. tags_update merges parameters BY TOP-LEVEL KEY, so any configSettingsTable you send REPLACES the whole list: send only the new row and every other config row (send_page_view "false", for example) is silently dropped and GA4 starts double-counting page_view. Confirm the host answers before relying on it.',
     '',
-    'THIRD-PARTY CAPI (Meta / TikTok / etc.) tags are gallery templates (type cvt_…) the user imports in the GTM UI — create their Event Data variables here, then map them into the imported tag.',
+    'THIRD-PARTY CAPI tags: do NOT hand-build them. Run plan_server_migration_from_web on the WEB container first — it lists every pixel that can move server-side, the tool that builds each, the public ids read off the web tag, and the secrets you must still ask for. Then call that typed tool (create_meta_capi_server_tag, create_tiktok_capi_server_tag, create_linkedin_capi_server_tag, create_pinterest_capi_server_tag, create_reddit_capi_server_tag, create_snapchat_capi_server_tag, create_microsoft_capi_server_tag, create_amazon_capi_server_tag, create_stackadapt_server_tag, create_x_capi_server_tag, create_quora_capi_server_tag, create_adroll_capi_server_tag, create_nextdoor_capi_server_tag, create_yelp_capi_server_tag, create_spotify_capi_server_tag, create_line_yahoo_capi_server_tag, create_rtb_house_server_tag): each imports its official Stape/vendor gallery template itself and builds the tag from the template\'s verified field schema. Native Google server tags (GA4 relay, Ads conversion / conversion linker / remarketing) use create_server_tag. Every server tag needs a SERVER trigger (triggers_create, type customEvent) - pass its id as firingTriggerId.',
     '',
     'Before finishing, verify the client claims requests and every server tag has a firing trigger (not paused). Read-only by default: nothing is written unless writes are enabled and you pass confirm=true.',
   ].join('\n');
