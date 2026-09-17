@@ -235,6 +235,35 @@ async function main(): Promise<void> {
     check('bad start URL → empty result + warning + driver closed', res.suggestions.length === 0 && res.warnings.length > 0 && fd.closes() === 1);
   }
 
+  // ── start page blocked by bot protection → honest reason + a LOUD warning, not "found nothing" ──
+  // The Electron driver reports a WAF challenge page as ok:true / http 403 with a classified `error`
+  // (www.iff.com behind a Cloudflare challenge, 2026-09-17). With zero pages read, the scan must say
+  // the SITE blocked it - a quiet "http 403" under an empty list reads as broken form detection.
+  {
+    const fd = fakeDriver({
+      'https://blocked.example/': { ok: true, httpStatus: 403, finalUrl: 'https://blocked.example/', error: 'blocked by Cloudflare bot challenge' },
+    });
+    const res = await crawlAndSuggest(fd.driver, 'https://blocked.example/', { maxPages: 5, maxDepth: 1 });
+    check('blocked start: notScanned carries the classified block reason, not "http 403"',
+      res.notScanned.length === 1 && res.notScanned[0].reason === 'blocked by Cloudflare bot challenge', JSON.stringify(res.notScanned));
+    // 0 pages read. buildSuggestions (full mode) still emits its SITE-AGNOSTIC defaults (GA4 Configuration,
+    // scroll depth) - nothing here was derived from a page. Whether a blocked scan should drop those too
+    // is a separate product call; this pins that no page-derived suggestion can appear.
+    check('blocked start: zero pages scanned; only site-agnostic defaults remain (nothing page-derived)',
+      res.summary.pagesScanned === 0 && res.suggestions.every((s) => s.platform === 'google_tag' || s.trigger.kind === 'scroll_depth'),
+      JSON.stringify(res.suggestions.map((s) => s.tagName)));
+    check('blocked start: FIRST warning says the site blocked the scanner and names the remedy',
+      /blocked the scanner/.test(res.warnings[0] ?? '') && /Cloudflare bot challenge/.test(res.warnings[0] ?? '') && /allowlist/.test(res.warnings[0] ?? ''), res.warnings[0]);
+    check('blocked start: driver closed', fd.closes() === 1);
+  }
+  // A plain origin 403 (no WAF markers) stays a plain "http 403" with NO bot-block warning.
+  {
+    const fd = fakeDriver({ 'https://plain403.example/': { ok: true, httpStatus: 403, finalUrl: 'https://plain403.example/' } });
+    const res = await crawlAndSuggest(fd.driver, 'https://plain403.example/', { maxPages: 5, maxDepth: 1 });
+    check('plain 403: reason stays "http 403"', res.notScanned[0]?.reason === 'http 403', JSON.stringify(res.notScanned));
+    check('plain 403: no bot-block warning', !res.warnings.some((w) => /blocked the scanner/.test(w)), JSON.stringify(res.warnings));
+  }
+
   // ── mergeDriven: union of engines, dedup doubles, keep uniques ─────────────
   {
     const mk = (els: RawElement[], forms: RawForm[]): DrivenPage => ({ ok: true, httpStatus: 200, finalUrl: 'x', raw: raw(els), rawForms: forms });

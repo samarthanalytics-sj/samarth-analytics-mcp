@@ -34,6 +34,7 @@ import { buildSuggestions } from './suggest.js';
 import { BLOG_RE } from './blog-paths.js';
 import { detectExistingTracking, type ExistingTracking } from './existing-tracking.js';
 import type { SuggestedTag, FormPurpose, SuggestPlatform } from './types.js';
+import { isBotBlockReason, blockedStartWarning } from '../bot-block.js';
 
 /** A page that was discovered but not turned into suggestions, with the reason. */
 export interface NotScanned {
@@ -675,6 +676,12 @@ export async function scanSiteForTagSuggestions(
       collectFailures,
     );
 
+    // A scan that read NO page because the site's bot protection blocked it must say so as a note, so
+    // the model relays "the site blocked the scanner" rather than "no forms found" (www.iff.com behind
+    // a Cloudflare challenge, 2026-09-17). Zero pages read + any bot-block reason = the scan was blocked.
+    const blockedStart = pageScans.length === 0 ? notScanned.find((n) => isBotBlockReason(n.reason)) : undefined;
+    const blockedStartNotes = blockedStart ? [blockedStartWarning(blockedStart.reason)] : [];
+
     return assembleTagReport({
       site: crawl.startUrl || startUrl,
       siteHost,
@@ -684,7 +691,7 @@ export async function scanSiteForTagSuggestions(
       pagesCrawled: chosen ? targets.length : crawl.pages.length,
       pageScans,
       notScanned,
-      notes: [CREATE_NOTE],
+      notes: [CREATE_NOTE, ...blockedStartNotes],
       ...(debugData ? { debug: debugData } : {}),
       ...(options.platforms?.length ? { platforms: options.platforms } : {}),
       ...(pageImages.length ? { pageImages } : {}),

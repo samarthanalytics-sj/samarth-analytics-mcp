@@ -21,6 +21,7 @@ import { collectPageInBrowser, type PageScanRaw } from '../../../../web-audit-mc
 import { extractFormsInPage, type RawForm } from '../../../../web-audit-mcp/src/agent/forms.js';
 import { stableFormKey } from '../../../../web-audit-mcp/src/agent/tag-suggest/form-id-stability.js';
 import { countPendingEmbedsInPage } from '../../../../web-audit-mcp/src/agent/pending-embeds.js';
+import { botBlockReason } from '../../../../web-audit-mcp/src/agent/bot-block.js';
 import { requestAllowed } from './ssrf';
 import type { PageDriver, DrivenPage } from './scan-core';
 import type { ScanDebug, ScanDebugPage } from '../../shared/ipc';
@@ -257,6 +258,16 @@ export function createElectronDriver(opts: ElectronDriverOptions = {}): PageDriv
     lastStatus = typeof httpResponseCode === 'number' ? httpResponseCode : null;
   });
 
+  // Main-frame response headers of the LAST navigation, so an HTTP-error page can be classified as a
+  // bot-protection block (Cloudflare challenge etc.) rather than reported as a bare "http 403". Only the
+  // main frame is kept: sub-resource headers are noise here. Electron allows ONE onHeadersReceived
+  // listener per session, and this driver's session is private, so registering it here is safe.
+  let lastHeaders: Record<string, string | string[]> | null = null;
+  ses.webRequest.onHeadersReceived((details, callback) => {
+    if (details.resourceType === 'mainFrame') lastHeaders = details.responseHeaders ?? null;
+    callback({});
+  });
+
   // ── Debug diagnostics (surfaced via diagnostics() for the UI "Show debug" toggle) ──
   const diagPages: ScanDebugPage[] = [];
   const consoleErrors: string[] = [];
@@ -295,6 +306,7 @@ export function createElectronDriver(opts: ElectronDriverOptions = {}): PageDriv
     async open(url: string): Promise<DrivenPage> {
       if (!win || win.isDestroyed()) return { ok: false, httpStatus: null, finalUrl: null, error: 'driver closed' };
       lastStatus = null;
+      lastHeaders = null;
       const wc = win.webContents;
       try {
         await withTimeout(wc.loadURL(url), navTimeoutMs, 'navigation', () => {
@@ -309,10 +321,13 @@ export function createElectronDriver(opts: ElectronDriverOptions = {}): PageDriv
         return { ok: false, httpStatus: lastStatus, finalUrl: null, error: errMsg(e) };
       }
 
-      // HTTP error pages: report the status, skip the (pointless) DOM read.
+      // HTTP error pages: report the status, skip the (pointless) DOM read. A bot-protection challenge
+      // (Cloudflare etc.) is such a page WITH a name — carry it as `error` so the scan can say the SITE
+      // blocked it instead of a bare "http 403" that reads as "nothing found".
       if (lastStatus !== null && lastStatus >= 400) {
-        diagPages.push({ url: wc.getURL() || url, httpStatus: lastStatus, error: `http ${lastStatus}` });
-        return { ok: true, httpStatus: lastStatus, finalUrl: wc.getURL() || url };
+        const blocked = botBlockReason(lastStatus, lastHeaders ?? {});
+        diagPages.push({ url: wc.getURL() || url, httpStatus: lastStatus, error: blocked ?? `http ${lastStatus}` });
+        return { ok: true, httpStatus: lastStatus, finalUrl: wc.getURL() || url, ...(blocked ? { error: blocked } : {}) };
       }
 
       if (autoSettle) await waitNetworkIdle(600, 700, Math.min(navTimeoutMs, 9_000));
