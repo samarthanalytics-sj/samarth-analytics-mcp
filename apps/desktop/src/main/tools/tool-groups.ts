@@ -199,6 +199,14 @@ const GROUP_MEMBERS: Record<ToolGroup, readonly string[]> = {
     'create_snapchat_capi_server_tag',
     'create_microsoft_capi_server_tag',
     'create_stackadapt_server_tag',
+    'create_x_capi_server_tag',
+    'create_quora_capi_server_tag',
+    'create_adroll_capi_server_tag',
+    'create_nextdoor_capi_server_tag',
+    'create_yelp_capi_server_tag',
+    'create_spotify_capi_server_tag',
+    'create_line_yahoo_capi_server_tag',
+    'create_rtb_house_server_tag',
   ],
 
   // ---- PIXELS: the WEB marketing pixel builders and the gallery-template import they depend on.

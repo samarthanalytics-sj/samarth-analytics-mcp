@@ -78,6 +78,14 @@ import {
   buildRedditCapiServerTag,
   buildAmazonCapiServerTag,
   buildSnapchatCapiServerTag,
+  buildXCapiServerTag,
+  buildQuoraCapiServerTag,
+  buildAdRollCapiServerTag,
+  buildNextdoorCapiServerTag,
+  buildYelpCapiServerTag,
+  buildSpotifyCapiServerTag,
+  buildLineYahooCapiServerTag,
+  buildRtbHouseServerTag,
   buildMicrosoftCapiServerTag,
   buildTikTokPixelTag,
   buildLinkedInInsightTag,
@@ -5304,6 +5312,338 @@ export function buildToolRegistry(
           defaultAttributes: rows(a.defaultAttributes),
           purchaseAttributes: rows(a.purchaseAttributes),
           customAttributes: rows(a.customAttributes),
+          firingTriggerId: Array.isArray(a.firingTriggerId) && a.firingTriggerId.length ? a.firingTriggerId.map(String) : undefined,
+        });
+        return data.createGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), tag as unknown as Record<string, unknown>);
+      },
+    },
+    // ── Tier-1 CAPI server tags (X / Quora / AdRoll / Nextdoor / Yelp / Spotify / LINE Yahoo / RTB House) ──
+    // Same shape as the Reddit/Amazon tools: import the Stape gallery template, build from its verified
+    // field schema, create in the DRAFT workspace. Each is gated on the platform's own credentials.
+    {
+      name: 'create_x_capi_server_tag',
+      description:
+        'Create an X (Twitter) Conversion API SERVER tag from the Stape template (stape-io / twitter-tag), imported automatically: the server counterpart of the X Pixel. containerId must be the SERVER container. The template has NO event-name field: `eventId` is the per-conversion X "Event ID" (tw-…) from X Ads > Events Manager, so one tag = one X conversion event and the server trigger decides when it fires. Auth is EITHER `pixelAccessToken` OR the OAuth 1.0a quartet (consumerKey/consumerSecret/oauthToken/oauthTokenSecret). autoMap (default true) derives event and user data from the incoming event; `conversionId` is the dedup row against the X Pixel. Override rows: serverEventData (conversion_time/number_items/price_currency/value/conversion_id/description/contents/search_string), userData (hashed_email/hashed_phone_number/twclid/ip_address/user_agent). Needs a SERVER trigger.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' }, containerId: { type: 'string' }, workspaceId: { type: 'string' },
+          name: { type: 'string', description: 'Optional, defaults to "X CAPI Tag".' },
+          pixelId: { type: 'string', description: 'X Pixel ID (public, on the web pixel).' },
+          eventId: { type: 'string', description: 'X conversion Event ID (tw-…), one per conversion event.' },
+          pixelAccessToken: { type: 'string', description: 'Pixel Access Token (simplest auth).' },
+          consumerKey: { type: 'string' }, consumerSecret: { type: 'string' }, oauthToken: { type: 'string' }, oauthTokenSecret: { type: 'string' },
+          conversionId: { type: 'string', description: 'Dedup id vs the X Pixel, sent as the conversion_id row.' },
+          serverEventData: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false } },
+          userData: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false } },
+          autoMap: { type: 'boolean' }, optimistic: { type: 'boolean' }, httpOnlyCookie: { type: 'boolean' }, requireConsent: { type: 'boolean' },
+          firingTriggerId: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'pixelId', 'eventId'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => `Create X CAPI server tag "${s(a.name).trim() || 'X CAPI Tag'}"`,
+      precheck: (a) => findExistingByName(data, a, s(a.name).trim() || 'X CAPI Tag', 'tag'),
+      handler: async (a) => {
+        if (!s(a.pixelId).trim()) throw new Error('pixelId is required (the X Pixel ID, usually a {{variable}}).');
+        if (!s(a.eventId).trim()) throw new Error('eventId is required (the X conversion Event ID, tw-…, from X Ads Events Manager).');
+        const auth = { pixelAccessToken: s(a.pixelAccessToken), consumerKey: s(a.consumerKey), consumerSecret: s(a.consumerSecret), oauthToken: s(a.oauthToken), oauthTokenSecret: s(a.oauthTokenSecret) };
+        const oauthComplete = [auth.consumerKey, auth.consumerSecret, auth.oauthToken, auth.oauthTokenSecret].every((v) => v.trim());
+        if (!auth.pixelAccessToken.trim() && !oauthComplete) throw new Error('Auth is required: pass pixelAccessToken, OR all four of consumerKey/consumerSecret/oauthToken/oauthTokenSecret.');
+        const tmpl = await data.importGalleryTemplate(s(a.accountId), s(a.containerId), s(a.workspaceId), 'stape-io', 'twitter-tag');
+        if (!tmpl.type || !tmpl.type.startsWith('cvt_')) throw new Error(`Could not resolve the Stape X template's tag type (got "${tmpl.type}"). Import stape-io/twitter-tag and check list_gtm_templates.`);
+        const rows = (v: unknown): Array<{ name: string; value: string }> | undefined =>
+          Array.isArray(v) ? v.map((p) => ({ name: s(obj(p).name), value: s(obj(p).value) })).filter((p) => p.name) : undefined;
+        const tag = buildXCapiServerTag(tmpl.type, s(a.name).trim() || 'X CAPI Tag', s(a.pixelId), s(a.eventId), auth, {
+          conversionId: a.conversionId != null ? s(a.conversionId) : undefined,
+          serverEventData: rows(a.serverEventData), userData: rows(a.userData),
+          autoMap: bln(a.autoMap), optimistic: bln(a.optimistic), httpOnlyCookie: bln(a.httpOnlyCookie), requireConsent: bln(a.requireConsent),
+          firingTriggerId: Array.isArray(a.firingTriggerId) && a.firingTriggerId.length ? a.firingTriggerId.map(String) : undefined,
+        });
+        return data.createGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), tag as unknown as Record<string, unknown>);
+      },
+    },
+    {
+      name: 'create_quora_capi_server_tag',
+      description:
+        'Create a Quora Conversion API SERVER tag from the Stape template (stape-io / quora-tag), imported automatically. containerId must be the SERVER container. `pixelId` is the Quora Pixel ID (stored in the template\'s accountId field), `accessToken` the Quora API access token. The event is INHERITED from the incoming event by default; pass `event` to force a Quora standard event (Generic/Search/AddToCart/Purchase/GenerateLead/CompleteRegistration/AddToWishlist/AppInstall/InitiateCheckout or a GA4 name; unknown names become Generic — Quora has no custom events). `eventId` is the dedup row. Override rows: conversionData (event_id/click_id/value/timestamp), deviceEventData (referrer/user_agent/language/mobile_device_id), userData (ip/email/phone_number/country/region/city/postal_code/company_name/job_title/date_of_birth). Needs a SERVER trigger.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' }, containerId: { type: 'string' }, workspaceId: { type: 'string' },
+          name: { type: 'string', description: 'Optional, defaults to "Quora CAPI Tag".' },
+          pixelId: { type: 'string', description: 'Quora Pixel ID (template accountId).' }, accessToken: { type: 'string' },
+          event: { type: 'string' }, eventId: { type: 'string' },
+          conversionData: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false } },
+          deviceEventData: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false } },
+          userData: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false } },
+          optimistic: { type: 'boolean' }, requireConsent: { type: 'boolean' },
+          firingTriggerId: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'pixelId', 'accessToken'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => `Create Quora CAPI server tag "${s(a.name).trim() || 'Quora CAPI Tag'}"`,
+      precheck: (a) => findExistingByName(data, a, s(a.name).trim() || 'Quora CAPI Tag', 'tag'),
+      handler: async (a) => {
+        if (!s(a.pixelId).trim()) throw new Error('pixelId is required (the Quora Pixel ID, usually a {{variable}}).');
+        if (!s(a.accessToken).trim()) throw new Error('accessToken is required (the Quora API access token, usually a {{variable}}).');
+        const tmpl = await data.importGalleryTemplate(s(a.accountId), s(a.containerId), s(a.workspaceId), 'stape-io', 'quora-tag');
+        if (!tmpl.type || !tmpl.type.startsWith('cvt_')) throw new Error(`Could not resolve the Stape Quora template's tag type (got "${tmpl.type}"). Import stape-io/quora-tag and check list_gtm_templates.`);
+        const rows = (v: unknown): Array<{ name: string; value: string }> | undefined =>
+          Array.isArray(v) ? v.map((p) => ({ name: s(obj(p).name), value: s(obj(p).value) })).filter((p) => p.name) : undefined;
+        const tag = buildQuoraCapiServerTag(tmpl.type, s(a.name).trim() || 'Quora CAPI Tag', s(a.pixelId), s(a.accessToken), {
+          event: a.event != null ? s(a.event) : undefined, eventId: a.eventId != null ? s(a.eventId) : undefined,
+          conversionData: rows(a.conversionData), deviceEventData: rows(a.deviceEventData), userData: rows(a.userData),
+          optimistic: bln(a.optimistic), requireConsent: bln(a.requireConsent),
+          firingTriggerId: Array.isArray(a.firingTriggerId) && a.firingTriggerId.length ? a.firingTriggerId.map(String) : undefined,
+        });
+        return data.createGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), tag as unknown as Record<string, unknown>);
+      },
+    },
+    {
+      name: 'create_adroll_capi_server_tag',
+      description:
+        'Create an AdRoll SERVER tag from the Stape template (stape-io / adroll-tag), imported automatically. containerId must be the SERVER container. Needs the AdRoll `advertisableId` and `pixelId` (both public, on the web snippet as adroll_adv_id / adroll_pix_id) plus an `accessToken`. The event is INHERITED by default; pass `event` to force pageView/productSearch/addToCart/purchase (or a GA4 name), anything else becomes a custom event. Override rows: serverData (page_location/timestamp), userData (email/email_sha256/email_md5/device_id/first_party_cookie/adct/user_id/ip/user_agent), customData (conversion_value/currency/order_id/products/keywords/external_data). Needs a SERVER trigger.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' }, containerId: { type: 'string' }, workspaceId: { type: 'string' },
+          name: { type: 'string', description: 'Optional, defaults to "AdRoll CAPI Tag".' },
+          advertisableId: { type: 'string' }, pixelId: { type: 'string' }, accessToken: { type: 'string' },
+          event: { type: 'string' }, itemIdKey: { type: 'string' }, testMode: { type: 'boolean' }, cookieDomain: { type: 'string' },
+          serverData: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false } },
+          userData: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false } },
+          customData: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false } },
+          optimistic: { type: 'boolean' }, requireConsent: { type: 'boolean' },
+          firingTriggerId: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'advertisableId', 'pixelId', 'accessToken'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => `Create AdRoll server tag "${s(a.name).trim() || 'AdRoll CAPI Tag'}"`,
+      precheck: (a) => findExistingByName(data, a, s(a.name).trim() || 'AdRoll CAPI Tag', 'tag'),
+      handler: async (a) => {
+        if (!s(a.advertisableId).trim()) throw new Error('advertisableId is required (AdRoll advertisable id, adroll_adv_id on the web snippet).');
+        if (!s(a.pixelId).trim()) throw new Error('pixelId is required (AdRoll pixel id, adroll_pix_id on the web snippet).');
+        if (!s(a.accessToken).trim()) throw new Error('accessToken is required (the AdRoll access token, usually a {{variable}}).');
+        const tmpl = await data.importGalleryTemplate(s(a.accountId), s(a.containerId), s(a.workspaceId), 'stape-io', 'adroll-tag');
+        if (!tmpl.type || !tmpl.type.startsWith('cvt_')) throw new Error(`Could not resolve the Stape AdRoll template's tag type (got "${tmpl.type}"). Import stape-io/adroll-tag and check list_gtm_templates.`);
+        const rows = (v: unknown): Array<{ name: string; value: string }> | undefined =>
+          Array.isArray(v) ? v.map((p) => ({ name: s(obj(p).name), value: s(obj(p).value) })).filter((p) => p.name) : undefined;
+        const tag = buildAdRollCapiServerTag(tmpl.type, s(a.name).trim() || 'AdRoll CAPI Tag', s(a.advertisableId), s(a.pixelId), s(a.accessToken), {
+          event: a.event != null ? s(a.event) : undefined, itemIdKey: a.itemIdKey != null ? s(a.itemIdKey) : undefined,
+          testMode: bln(a.testMode), cookieDomain: a.cookieDomain != null ? s(a.cookieDomain) : undefined,
+          serverData: rows(a.serverData), userData: rows(a.userData), customData: rows(a.customData),
+          optimistic: bln(a.optimistic), requireConsent: bln(a.requireConsent),
+          firingTriggerId: Array.isArray(a.firingTriggerId) && a.firingTriggerId.length ? a.firingTriggerId.map(String) : undefined,
+        });
+        return data.createGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), tag as unknown as Record<string, unknown>);
+      },
+    },
+    {
+      name: 'create_nextdoor_capi_server_tag',
+      description:
+        'Create a Nextdoor Conversion API SERVER tag from the Stape template (stape-io / nextdoor-tag), imported automatically. containerId must be the SERVER container. Needs the Nextdoor `pixelId` (public) plus `clientId` and `accessToken` from Nextdoor Ads. The event is INHERITED by default; pass `event` to force conversion/lead/purchase/sign_up/custom_conversion_1..10 (or a GA4 name), anything else becomes a custom event. conversionType defaults to website (app needs appId). `eventId` is the dedup row. Override rows: serverData (event_id/action_source_url/event_time/…), userData (email/phone_number/client_ip_address/client_user_agent/click_id/external_id/first_name/last_name/city/state/zip_code/country/street_address/date_of_birth/gender), customData. Needs a SERVER trigger.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' }, containerId: { type: 'string' }, workspaceId: { type: 'string' },
+          name: { type: 'string', description: 'Optional, defaults to "Nextdoor CAPI Tag".' },
+          pixelId: { type: 'string' }, clientId: { type: 'string' }, accessToken: { type: 'string' },
+          event: { type: 'string' }, eventId: { type: 'string' }, conversionType: { type: 'string', description: 'website (default) | app | email | phone_call | chat | physical_store | system_generated | other' }, appId: { type: 'string' }, testEvent: { type: 'string' },
+          serverData: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false } },
+          userData: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false } },
+          customData: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false } },
+          optimistic: { type: 'boolean' }, httpOnlyCookie: { type: 'boolean' }, requireConsent: { type: 'boolean' },
+          firingTriggerId: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'pixelId', 'clientId', 'accessToken'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => `Create Nextdoor CAPI server tag "${s(a.name).trim() || 'Nextdoor CAPI Tag'}"`,
+      precheck: (a) => findExistingByName(data, a, s(a.name).trim() || 'Nextdoor CAPI Tag', 'tag'),
+      handler: async (a) => {
+        if (!s(a.pixelId).trim()) throw new Error('pixelId is required (the Nextdoor Pixel ID, usually a {{variable}}).');
+        if (!s(a.clientId).trim()) throw new Error('clientId is required (the Nextdoor Client ID from Nextdoor Ads).');
+        if (!s(a.accessToken).trim()) throw new Error('accessToken is required (the Nextdoor access token, usually a {{variable}}).');
+        const tmpl = await data.importGalleryTemplate(s(a.accountId), s(a.containerId), s(a.workspaceId), 'stape-io', 'nextdoor-tag');
+        if (!tmpl.type || !tmpl.type.startsWith('cvt_')) throw new Error(`Could not resolve the Stape Nextdoor template's tag type (got "${tmpl.type}"). Import stape-io/nextdoor-tag and check list_gtm_templates.`);
+        const rows = (v: unknown): Array<{ name: string; value: string }> | undefined =>
+          Array.isArray(v) ? v.map((p) => ({ name: s(obj(p).name), value: s(obj(p).value) })).filter((p) => p.name) : undefined;
+        const tag = buildNextdoorCapiServerTag(tmpl.type, s(a.name).trim() || 'Nextdoor CAPI Tag', s(a.pixelId), s(a.clientId), s(a.accessToken), {
+          event: a.event != null ? s(a.event) : undefined, eventId: a.eventId != null ? s(a.eventId) : undefined,
+          conversionType: a.conversionType != null ? s(a.conversionType) : undefined, appId: a.appId != null ? s(a.appId) : undefined, testEvent: a.testEvent != null ? s(a.testEvent) : undefined,
+          serverData: rows(a.serverData), userData: rows(a.userData), customData: rows(a.customData),
+          optimistic: bln(a.optimistic), httpOnlyCookie: bln(a.httpOnlyCookie), requireConsent: bln(a.requireConsent),
+          firingTriggerId: Array.isArray(a.firingTriggerId) && a.firingTriggerId.length ? a.firingTriggerId.map(String) : undefined,
+        });
+        return data.createGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), tag as unknown as Record<string, unknown>);
+      },
+    },
+    {
+      name: 'create_yelp_capi_server_tag',
+      description:
+        'Create a Yelp Conversion API SERVER tag from the Stape template (stape-io / yelp-tag), imported automatically. containerId must be the SERVER container. Yelp has no pixel id: only the `accessToken` from Yelp Ads. The event is INHERITED by default; pass `event` to force purchase/add_payment_info/add_to_cart/add_to_wishlist/search/checkout/lead/view_content/view_category/signup/watch_video (or a GA4 name), anything else becomes a custom event. `eventId` is the dedup row; `validate` runs Yelp\'s payload validation. Override rows: serverData (event_id/event_time), userData (em/ph/client_ip_address/madid/fn/ln/ct/st/zp/country/external_id/lead_id/client_user_agent/db/ge), customData. Needs a SERVER trigger.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' }, containerId: { type: 'string' }, workspaceId: { type: 'string' },
+          name: { type: 'string', description: 'Optional, defaults to "Yelp CAPI Tag".' },
+          accessToken: { type: 'string' },
+          event: { type: 'string' }, eventId: { type: 'string' }, conversionType: { type: 'string', description: 'website (default) | physical_store | app' }, validate: { type: 'boolean' },
+          serverData: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false } },
+          userData: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false } },
+          customData: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false } },
+          optimistic: { type: 'boolean' }, requireConsent: { type: 'boolean' },
+          firingTriggerId: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'accessToken'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => `Create Yelp CAPI server tag "${s(a.name).trim() || 'Yelp CAPI Tag'}"`,
+      precheck: (a) => findExistingByName(data, a, s(a.name).trim() || 'Yelp CAPI Tag', 'tag'),
+      handler: async (a) => {
+        if (!s(a.accessToken).trim()) throw new Error('accessToken is required (the Yelp Ads access token, usually a {{variable}}).');
+        const tmpl = await data.importGalleryTemplate(s(a.accountId), s(a.containerId), s(a.workspaceId), 'stape-io', 'yelp-tag');
+        if (!tmpl.type || !tmpl.type.startsWith('cvt_')) throw new Error(`Could not resolve the Stape Yelp template's tag type (got "${tmpl.type}"). Import stape-io/yelp-tag and check list_gtm_templates.`);
+        const rows = (v: unknown): Array<{ name: string; value: string }> | undefined =>
+          Array.isArray(v) ? v.map((p) => ({ name: s(obj(p).name), value: s(obj(p).value) })).filter((p) => p.name) : undefined;
+        const tag = buildYelpCapiServerTag(tmpl.type, s(a.name).trim() || 'Yelp CAPI Tag', s(a.accessToken), {
+          event: a.event != null ? s(a.event) : undefined, eventId: a.eventId != null ? s(a.eventId) : undefined,
+          conversionType: a.conversionType != null ? s(a.conversionType) : undefined, validate: bln(a.validate),
+          serverData: rows(a.serverData), userData: rows(a.userData), customData: rows(a.customData),
+          optimistic: bln(a.optimistic), requireConsent: bln(a.requireConsent),
+          firingTriggerId: Array.isArray(a.firingTriggerId) && a.firingTriggerId.length ? a.firingTriggerId.map(String) : undefined,
+        });
+        return data.createGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), tag as unknown as Record<string, unknown>);
+      },
+    },
+    {
+      name: 'create_spotify_capi_server_tag',
+      description:
+        'Create a Spotify Ads Conversion API SERVER tag from the Stape template (stape-io / spotify-tag), imported automatically. containerId must be the SERVER container. Needs the Spotify Ads `authToken` and `connectionId`. The event is INHERITED by default; pass `event` to force Page_View/Sign_Up/Lead/View_Product/Add_Cart/Start_Checkout/Purchase/Alias (or a GA4 name) or one of the five custom slots (custom_event_1..5) — Spotify has no free-text custom event, so any other name inherits. `eventId` is the dedup row. Override rows: serverEventData (event_id/event_time/event_source_url), eventDetails (amount/currency/content_name/content_category), userData (ip_address/device_id/hashed_emails/hashed_phone_number). Needs a SERVER trigger.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' }, containerId: { type: 'string' }, workspaceId: { type: 'string' },
+          name: { type: 'string', description: 'Optional, defaults to "Spotify CAPI Tag".' },
+          authToken: { type: 'string' }, connectionId: { type: 'string' },
+          event: { type: 'string' }, eventId: { type: 'string' }, actionSource: { type: 'string', description: 'WEB (default) | APP | OFFLINE' }, optOutTargeting: { type: 'boolean' }, generateDeviceIdCookie: { type: 'boolean', description: 'Default true.' },
+          serverEventData: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false } },
+          eventDetails: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false } },
+          userData: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false } },
+          autoMap: { type: 'boolean' }, optimistic: { type: 'boolean' }, requireConsent: { type: 'boolean' },
+          firingTriggerId: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'authToken', 'connectionId'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => `Create Spotify CAPI server tag "${s(a.name).trim() || 'Spotify CAPI Tag'}"`,
+      precheck: (a) => findExistingByName(data, a, s(a.name).trim() || 'Spotify CAPI Tag', 'tag'),
+      handler: async (a) => {
+        if (!s(a.authToken).trim()) throw new Error('authToken is required (the Spotify Ads authentication token, usually a {{variable}}).');
+        if (!s(a.connectionId).trim()) throw new Error('connectionId is required (the Spotify Ads Connection ID).');
+        const tmpl = await data.importGalleryTemplate(s(a.accountId), s(a.containerId), s(a.workspaceId), 'stape-io', 'spotify-tag');
+        if (!tmpl.type || !tmpl.type.startsWith('cvt_')) throw new Error(`Could not resolve the Stape Spotify template's tag type (got "${tmpl.type}"). Import stape-io/spotify-tag and check list_gtm_templates.`);
+        const rows = (v: unknown): Array<{ name: string; value: string }> | undefined =>
+          Array.isArray(v) ? v.map((p) => ({ name: s(obj(p).name), value: s(obj(p).value) })).filter((p) => p.name) : undefined;
+        const tag = buildSpotifyCapiServerTag(tmpl.type, s(a.name).trim() || 'Spotify CAPI Tag', s(a.authToken), s(a.connectionId), {
+          event: a.event != null ? s(a.event) : undefined, eventId: a.eventId != null ? s(a.eventId) : undefined,
+          actionSource: a.actionSource != null ? s(a.actionSource) : undefined, optOutTargeting: bln(a.optOutTargeting), generateDeviceIdCookie: bln(a.generateDeviceIdCookie),
+          serverEventData: rows(a.serverEventData), eventDetails: rows(a.eventDetails), userData: rows(a.userData),
+          autoMap: bln(a.autoMap), optimistic: bln(a.optimistic), requireConsent: bln(a.requireConsent),
+          firingTriggerId: Array.isArray(a.firingTriggerId) && a.firingTriggerId.length ? a.firingTriggerId.map(String) : undefined,
+        });
+        return data.createGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), tag as unknown as Record<string, unknown>);
+      },
+    },
+    {
+      name: 'create_line_yahoo_capi_server_tag',
+      description:
+        'Create a LINE Yahoo (Yahoo! JAPAN Ads) Conversion API SERVER tag from the Stape template (stape-io / line-yahoo-tag), imported automatically. containerId must be the SERVER container. Needs the Yahoo `tagId` (public, yahoo_retargeting_id on the web tag), the `accessToken` and `channelId` from Yahoo Ads. The event is INHERITED by default; pass `event` to force a Yahoo standard event (add_cart/add_wishlist/check_out/generate_lead/login/page_view/payment_info/purchase/reservation/search/sign_up/view_cart/view_listing/view_product, or a GA4 name) — Yahoo has NO custom events, so an unknown name inherits. Every event other than page_view needs its own `eventSnippetId` from Yahoo Ads. `transactionId` is the dedup row. Needs a SERVER trigger.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' }, containerId: { type: 'string' }, workspaceId: { type: 'string' },
+          name: { type: 'string', description: 'Optional, defaults to "LINE Yahoo CAPI Tag".' },
+          tagId: { type: 'string' }, accessToken: { type: 'string' }, channelId: { type: 'string' },
+          event: { type: 'string' }, eventSnippetId: { type: 'string', description: 'Required by Yahoo for any event other than page_view.' }, transactionId: { type: 'string' }, testMode: { type: 'boolean' }, itemIdKey: { type: 'string' },
+          serverEventData: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false } },
+          userIdentifiers: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false } },
+          webParameters: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false } },
+          eventParameters: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false } },
+          autoMap: { type: 'boolean' }, optimistic: { type: 'boolean' }, requireConsent: { type: 'boolean' },
+          firingTriggerId: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'tagId', 'accessToken', 'channelId'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => `Create LINE Yahoo CAPI server tag "${s(a.name).trim() || 'LINE Yahoo CAPI Tag'}"`,
+      precheck: (a) => findExistingByName(data, a, s(a.name).trim() || 'LINE Yahoo CAPI Tag', 'tag'),
+      handler: async (a) => {
+        if (!s(a.tagId).trim()) throw new Error('tagId is required (the Yahoo Tag ID, yahoo_retargeting_id on the web tag).');
+        if (!s(a.accessToken).trim()) throw new Error('accessToken is required (the Yahoo Ads tag access token, usually a {{variable}}).');
+        if (!s(a.channelId).trim()) throw new Error('channelId is required (the Yahoo Ads Channel ID).');
+        const tmpl = await data.importGalleryTemplate(s(a.accountId), s(a.containerId), s(a.workspaceId), 'stape-io', 'line-yahoo-tag');
+        if (!tmpl.type || !tmpl.type.startsWith('cvt_')) throw new Error(`Could not resolve the Stape LINE Yahoo template's tag type (got "${tmpl.type}"). Import stape-io/line-yahoo-tag and check list_gtm_templates.`);
+        const rows = (v: unknown): Array<{ name: string; value: string }> | undefined =>
+          Array.isArray(v) ? v.map((p) => ({ name: s(obj(p).name), value: s(obj(p).value) })).filter((p) => p.name) : undefined;
+        const tag = buildLineYahooCapiServerTag(tmpl.type, s(a.name).trim() || 'LINE Yahoo CAPI Tag', s(a.tagId), s(a.accessToken), s(a.channelId), {
+          event: a.event != null ? s(a.event) : undefined, eventSnippetId: a.eventSnippetId != null ? s(a.eventSnippetId) : undefined, transactionId: a.transactionId != null ? s(a.transactionId) : undefined,
+          testMode: bln(a.testMode), itemIdKey: a.itemIdKey != null ? s(a.itemIdKey) : undefined,
+          serverEventData: rows(a.serverEventData), userIdentifiers: rows(a.userIdentifiers), webParameters: rows(a.webParameters), eventParameters: rows(a.eventParameters),
+          autoMap: bln(a.autoMap), optimistic: bln(a.optimistic), requireConsent: bln(a.requireConsent),
+          firingTriggerId: Array.isArray(a.firingTriggerId) && a.firingTriggerId.length ? a.firingTriggerId.map(String) : undefined,
+        });
+        return data.createGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), tag as unknown as Record<string, unknown>);
+      },
+    },
+    {
+      name: 'create_rtb_house_server_tag',
+      description:
+        'Create an RTB House SERVER tag from the Stape template (stape-io / rtb-house-tag), imported automatically. containerId must be the SERVER container. RTB House is a retargeting tag with NO token: it needs the `taggingHash` (public — the id in the creativecdn.com pixel URL) and the `partnerKey`. Its events are PAGE TYPES, so `event` is required: pass an RTB House type (home/listing/offer/wishlist/basketadd/basketstatus/startorder/conversion_order/conversion/…) or a GA4 name (page_view→home, view_item_list→listing, view_item→offer, add_to_cart→basketadd, view_cart→basketstatus, begin_checkout→startorder, purchase→conversion_order, generate_lead/sign_up→conversion); anything else becomes a custom event. Per-type fields (orderId/orderValue for conversion_order, productIds, categoryId, conversionId/conversionValue) are optional — auto-map derives them from the event. Needs a SERVER trigger.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' }, containerId: { type: 'string' }, workspaceId: { type: 'string' },
+          name: { type: 'string', description: 'Optional, defaults to "RTB House Server Tag".' },
+          taggingHash: { type: 'string' }, partnerKey: { type: 'string' }, event: { type: 'string' },
+          customEventValue: { type: 'string' }, region: { type: 'string', description: 'us (default) | ams | asia' }, identifierType: { type: 'string', description: 'aid (default) | uid | sid' }, identifierValue: { type: 'string' }, itemIdKey: { type: 'string' },
+          categoryId: { type: 'string' }, productIds: { type: 'string' }, orderId: { type: 'string' }, orderValue: { type: 'string' }, orderSubclass: { type: 'string' },
+          conversionId: { type: 'string' }, conversionValue: { type: 'string' }, conversionProductIds: { type: 'string' }, conversionClass: { type: 'string' },
+          serverEventData: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false } },
+          autoMap: { type: 'boolean' }, optimistic: { type: 'boolean' }, requireConsent: { type: 'boolean' },
+          firingTriggerId: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'taggingHash', 'partnerKey', 'event'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => `Create RTB House server tag "${s(a.name).trim() || 'RTB House Server Tag'}"`,
+      precheck: (a) => findExistingByName(data, a, s(a.name).trim() || 'RTB House Server Tag', 'tag'),
+      handler: async (a) => {
+        if (!s(a.taggingHash).trim()) throw new Error('taggingHash is required (the RTB House tagging hash, the id in the creativecdn.com pixel URL).');
+        if (!s(a.partnerKey).trim()) throw new Error('partnerKey is required (the RTB House partner key, usually a {{variable}}).');
+        if (!s(a.event).trim()) throw new Error('event is required: RTB House events are page types (home/listing/offer/basketadd/conversion_order/…) or a GA4 name to map.');
+        const tmpl = await data.importGalleryTemplate(s(a.accountId), s(a.containerId), s(a.workspaceId), 'stape-io', 'rtb-house-tag');
+        if (!tmpl.type || !tmpl.type.startsWith('cvt_')) throw new Error(`Could not resolve the Stape RTB House template's tag type (got "${tmpl.type}"). Import stape-io/rtb-house-tag and check list_gtm_templates.`);
+        const rows = (v: unknown): Array<{ name: string; value: string }> | undefined =>
+          Array.isArray(v) ? v.map((p) => ({ name: s(obj(p).name), value: s(obj(p).value) })).filter((p) => p.name) : undefined;
+        const opt = (k: string): string | undefined => (a[k] != null ? s(a[k]) : undefined);
+        const tag = buildRtbHouseServerTag(tmpl.type, s(a.name).trim() || 'RTB House Server Tag', s(a.taggingHash), s(a.partnerKey), {
+          event: s(a.event), customEventValue: opt('customEventValue'), region: opt('region'), identifierType: opt('identifierType'), identifierValue: opt('identifierValue'), itemIdKey: opt('itemIdKey'),
+          categoryId: opt('categoryId'), productIds: opt('productIds'), orderId: opt('orderId'), orderValue: opt('orderValue'), orderSubclass: opt('orderSubclass'),
+          conversionId: opt('conversionId'), conversionValue: opt('conversionValue'), conversionProductIds: opt('conversionProductIds'), conversionClass: opt('conversionClass'),
+          serverEventData: rows(a.serverEventData),
+          autoMap: bln(a.autoMap), optimistic: bln(a.optimistic), requireConsent: bln(a.requireConsent),
           firingTriggerId: Array.isArray(a.firingTriggerId) && a.firingTriggerId.length ? a.firingTriggerId.map(String) : undefined,
         });
         return data.createGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), tag as unknown as Record<string, unknown>);
