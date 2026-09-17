@@ -471,7 +471,7 @@ function registerGalleryImport(server: McpServer, getClient: () => GtmClient): v
  * The alternative was upgrading or adding a Google client package for one method. Not worth the
  * dependency risk across a 179-tool server.
  */
-async function importFromGallery(
+export async function importFromGallery(
   client: GtmClient,
   parent: string,
   owner: string,
@@ -512,6 +512,42 @@ async function importFromGallery(
     throw new Error('The gallery import returned no template. Check the owner and repository are correct.');
   }
   return data;
+}
+
+/**
+ * The gallery template for `owner/repository` in this workspace: the installed one when present
+ * (matched case-insensitively, since the gallery is inconsistent about capitalisation), else imported.
+ * Returns the template and its tag TYPE (a cvt_… string read off the template, never constructed).
+ * The typed CAPI server-tag tools (serverMigration.ts) call this so a caller never has to import the
+ * template as a separate step — the same idempotent path templates_import_from_gallery takes.
+ */
+export async function ensureGalleryTemplate(
+  client: GtmClient,
+  parent: string,
+  containerId: string,
+  owner: string,
+  repository: string,
+): Promise<{ template: Record<string, unknown>; tagType: string; imported: boolean }> {
+  const api = client.accounts.containers.workspaces.templates as unknown as WorkspaceResourceApi;
+  const wantOwner = owner.trim().toLowerCase();
+  const wantRepo = repository.trim().toLowerCase();
+  const existingPages = await paginate<Record<string, unknown>, Record<string, unknown>>(
+    (pageToken) => api.list({ parent, pageToken }).then((r) => r.data),
+    (data) => data.template as Record<string, unknown>[] | undefined,
+  );
+  const existing = existingPages.items.find((t) => {
+    const ref = t.galleryReference as { owner?: string; repository?: string } | undefined;
+    return ref?.owner?.toLowerCase() === wantOwner && ref?.repository?.toLowerCase() === wantRepo;
+  });
+  const template = existing ?? (await importFromGallery(client, parent, owner, repository));
+  const tagType = customTemplateType(template, containerId);
+  if (!tagType || !tagType.startsWith('cvt_')) {
+    throw new Error(
+      `Could not resolve the tag type of the ${owner}/${repository} template (got "${tagType}"). ` +
+        'Read it from templates_list and pass it to tags_create instead.',
+    );
+  }
+  return { template, tagType, imported: !existing };
 }
 
 /**
