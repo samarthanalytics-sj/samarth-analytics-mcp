@@ -6,6 +6,10 @@ import type { AccountClientManager } from './account-clients';
 import type { RegistryService } from '../services/registry-service';
 import type { ContainerSnapshot, ServerContainerSnapshot } from './gtm-builders';
 import { ga4TagFields, readGa4EventParameters, applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, normalizeTriggerType, setCustomEventName, customEventNameOf, describeTriggerConditions, buildGa4Client, buildGa4ServerTag, buildMetaCapiServerTag, buildTikTokCapiServerTag, buildLinkedInCapiServerTag, buildPinterestCapiServerTag, buildStapeDataTag, buildStapeDataClient, buildServerAllEventsTrigger, buildServerEventTrigger, buildAdsConversionServerTag, buildMetaEmqVariables, buildTikTokEmqVariables, buildEcommerceDlvVariables, buildGa4EventTag, buildTrigger, planTriggerRetarget, type TriggerInput, buildGtmClient, buildVariable, sanitizeName, matchesServerContainer, customTemplateType, upsertGoogleTagConfig, taggingUrlFirstPartyIssue, parseTemplateParameters, summariseTagTypes, type TemplateField, type TagTypeProfile, triggerUsageBreakdown, detectMetaTags, planWebToServerMigration, evaluateTrackingSetup, GA4_ECOMMERCE_FUNNEL_EVENTS, type TrackingSetupReport, type TrackingSetupCheck } from './gtm-builders';
+import {
+  galleryCoordinatesFor, matchInstalledTemplate, templateInstallError,
+} from '../../../../../src/shared/gtm-template-sources';
+import { installTemplateFromSource, type TemplateCreateApi } from '../../../../../src/shared/gtm-template-install';
 import { resolveGa4MeasurementIds } from './gtm-ga4-check';
 import { withQuotaRetry, withRetry, QUOTA_RE, TRANSIENT_5XX_RE, NOT_FOUND_OR_PERMISSION_RE } from './quota-retry';
 import { log } from '../logger';
@@ -2049,7 +2053,9 @@ export class GoogleDataService {
         try {
           const tmpl = await this.q(() => this.importGalleryTemplate(accountId, cid, workspaceId, 'stape-io', 'data-client'));
           if (!tmpl.type || !tmpl.type.startsWith('cvt_')) throw new Error(`Could not resolve the Data Client template type (got "${tmpl.type}").`);
-          await this.q(() => this.createGtmClient(accountId, cid, workspaceId, { name: 'Data Client', type: tmpl.type } as unknown as Record<string, unknown>));
+          // buildStapeDataClient, NOT a bare {name,type}: a parameterless client silently loses
+          // generateClientId / prolongCookies / acceptMultipleEvents, which ARE the enrichment.
+          await this.q(() => this.createGtmClient(accountId, cid, workspaceId, buildStapeDataClient(tmpl.type, 'Data Client') as unknown as Record<string, unknown>));
           applied.push('data_client');
         } catch (e) {
           failed.push({ id: 'data_client', error: msg(e) });
@@ -2366,9 +2372,9 @@ export class GoogleDataService {
     if (existingTag) {
       dataTag = { name: existingTag.name, tagId: existingTag.tagId, reused: true };
     } else {
-      const tmpl = await this.importGalleryTemplate(accountId, webContainerId, webWs, 'stape-io', 'data-tag');
+      const tmpl = await this.q(() => this.importGalleryTemplate(accountId, webContainerId, webWs, 'stape-io', 'data-tag'));
       if (!tmpl.type || !tmpl.type.startsWith('cvt_')) throw new Error(`Could not resolve the Stape Data Tag template type (got "${tmpl.type}"). Import stape-io/data-tag and check list_gtm_templates.`);
-      const created = await this.createGtmTag(accountId, webContainerId, webWs, buildStapeDataTag(tmpl.type, 'Data Tag - All Pages', url) as unknown as Record<string, unknown>);
+      const created = await this.q(() => this.createGtmTag(accountId, webContainerId, webWs, buildStapeDataTag(tmpl.type, 'Data Tag - All Pages', url) as unknown as Record<string, unknown>));
       dataTag = { name: created.name, tagId: created.tagId, reused: false };
     }
 
@@ -2380,9 +2386,9 @@ export class GoogleDataService {
     if (existingClient) {
       dataClient = { name: existingClient.name, clientId: existingClient.clientId, reused: true };
     } else {
-      const tmpl = await this.importGalleryTemplate(accountId, serverContainerId, srvWs, 'stape-io', 'data-client');
+      const tmpl = await this.q(() => this.importGalleryTemplate(accountId, serverContainerId, srvWs, 'stape-io', 'data-client'));
       if (!tmpl.type || !tmpl.type.startsWith('cvt_')) throw new Error(`Could not resolve the Stape Data Client template type (got "${tmpl.type}"). Import stape-io/data-client and check list_gtm_templates.`);
-      const created = await this.createGtmClient(accountId, serverContainerId, srvWs, buildStapeDataClient(tmpl.type, 'Data Client') as unknown as Record<string, unknown>);
+      const created = await this.q(() => this.createGtmClient(accountId, serverContainerId, srvWs, buildStapeDataClient(tmpl.type, 'Data Client') as unknown as Record<string, unknown>));
       dataClient = { name: created.name || 'Data Client', clientId: created.clientId, reused: false };
     }
 
@@ -3303,7 +3309,7 @@ export class GoogleDataService {
     accountId: string,
     containerId: string,
     workspaceId: string
-  ): Promise<Array<{ templateId: string; name: string; type: string; galleryOwner: string; galleryRepository: string }>> {
+  ): Promise<Array<{ templateId: string; name: string; type: string; galleryOwner: string; galleryRepository: string; templateData: string; galleryReference: { owner?: string | null; repository?: string | null } | null }>> {
     const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
     const gtm = tagmanager({ version: 'v2', auth });
     const parent = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`;
@@ -3318,6 +3324,10 @@ export class GoogleDataService {
       type: customTemplateType(t, containerId),
       galleryOwner: t.galleryReference?.owner ?? '',
       galleryRepository: t.galleryReference?.repository ?? '',
+      // Carried so a HAND-INSTALLED template (no galleryReference) can still be identified by its
+      // own ___INFO___ block - see src/shared/gtm-template-sources.ts.
+      templateData: typeof t.templateData === 'string' ? t.templateData : '',
+      galleryReference: t.galleryReference ?? null,
     }));
   }
 
@@ -3424,25 +3434,52 @@ export class GoogleDataService {
     const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
     const gtm = tagmanager({ version: 'v2', auth });
     const parent = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`;
-    const wantOwner = owner.trim().toLowerCase();
-    const wantRepo = repository.trim().toLowerCase();
-    const existing = (await this.listGtmTemplates(accountId, containerId, workspaceId)).find(
-      (t) => t.galleryOwner.toLowerCase() === wantOwner && t.galleryRepository.toLowerCase() === wantRepo
+    // Matches a HAND-INSTALLED copy too: a manual upload carries NO galleryReference, so the old
+    // owner/repository-only lookup missed it and re-ran an import that could never succeed.
+    const existing = matchInstalledTemplate(
+      await this.listGtmTemplates(accountId, containerId, workspaceId),
+      owner,
+      repository
     );
     if (existing) return { templateId: existing.templateId, name: existing.name, type: existing.type, imported: false };
-    const res = await gtm.accounts.containers.workspaces.templates.import_from_gallery({
-      parent,
-      galleryOwner: owner,
-      galleryRepository: repository,
-      ...(sha ? { gallerySha: sha } : {}),
-      acknowledgePermissions: true,
-    });
-    return {
-      templateId: res.data.templateId ?? '',
-      name: res.data.name ?? repository,
-      type: customTemplateType(res.data, containerId),
-      imported: true,
-    };
+
+    // Not installed yet. Import from the gallery when the template really is there, under
+    // coordinates GTM accepts (some stape-io repos are FORKS whose gallery entry belongs to the
+    // upstream author). A template that was never listed is installed by uploading its source
+    // instead, which is exactly what Templates > Import does by hand.
+    const coords = galleryCoordinatesFor(owner, repository);
+    try {
+      if (!coords) {
+        const installed = await installTemplateFromSource(
+          gtm.accounts.containers.workspaces.templates as unknown as TemplateCreateApi,
+          parent,
+          owner,
+          repository
+        );
+        const t = installed.template as { templateId?: string | null; name?: string | null };
+        return {
+          templateId: t.templateId ?? '',
+          name: t.name ?? installed.name,
+          type: customTemplateType(installed.template, containerId),
+          imported: true,
+        };
+      }
+      const res = await gtm.accounts.containers.workspaces.templates.import_from_gallery({
+        parent,
+        galleryOwner: coords.owner,
+        galleryRepository: coords.repository,
+        ...(sha ? { gallerySha: sha } : {}),
+        acknowledgePermissions: true,
+      });
+      return {
+        templateId: res.data.templateId ?? '',
+        name: res.data.name ?? repository,
+        type: customTemplateType(res.data, containerId),
+        imported: true,
+      };
+    } catch (e) {
+      throw new Error(templateInstallError(owner, repository, e instanceof Error ? e.message : String(e)));
+    }
   }
 
   /** Traffic baseline for the audit report over [startDate, endDate] (the data-quality window),
