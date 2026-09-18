@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { capiPlatform } from '../../../../../src/shared/capi-platforms';
 import { ThemeToggle, useTheme } from './ThemeToggle';
 import { ShortcutsOverlay, EmptyState } from './ui';
 import type { AppInfo } from '../../preload';
@@ -9779,7 +9780,13 @@ function ServerContainerPanel({
         webContainerId: ctx.containerId!,
         ...(targetId ? { serverContainerId: targetId } : { newName: name.trim() }),
         selected,
-        values: { ...vals, serverUrl: (vals.serverUrl ?? serverUrl).trim() },
+        // The inputs live in one flat map; the engine takes CAPI credentials in their own bag,
+        // keyed "<platform>.<field>" exactly as the shared spec spells them.
+        values: {
+          measurementId: vals.measurementId,
+          serverUrl: (vals.serverUrl ?? serverUrl).trim(),
+          capi: Object.fromEntries(Object.entries(vals).filter(([k]) => k.includes('.'))),
+        },
       });
       setSummary(r);
       try {
@@ -9885,10 +9892,16 @@ function ServerContainerPanel({
               const notReady = selectedIds
                 .map((id) => byId.get(id)!)
                 .filter((i) => i && (i.requires.some((k) => !value(k).trim()) || i.dependsOn.some((d) => byId.get(d)?.status === 'missing' && !sel[d])));
-              const anyMeta = plan.items.some((i) => i.id.startsWith('meta_capi:') && i.status === 'missing');
-              const anyTikTok = plan.items.some((i) => i.id.startsWith('tiktok_capi:') && i.status === 'missing');
-              const anyLinkedIn = plan.items.some((i) => i.id.startsWith('linkedin_capi:') && i.status === 'missing');
-              const anyPinterest = plan.items.some((i) => i.id.startsWith('pinterest_capi:') && i.status === 'missing');
+              // Which conversion-API destinations this plan actually needs credentials for, read
+              // off the plan itself. Previously four booleans hardcoded here, which is why the
+              // other thirteen destinations could be planned but never filled in or applied.
+              const capiPlatformsNeeded = [...new Set(
+                plan.items
+                  .filter((i) => i.status === 'missing' && i.id.includes('_capi:'))
+                  .map((i) => i.id.slice(0, i.id.indexOf('_capi:'))),
+              )]
+                .map((id) => capiPlatform(id))
+                .filter((s): s is NonNullable<ReturnType<typeof capiPlatform>> => s !== null);
               const CAT_COLOR: Record<string, string> = { critical: 'var(--c-red)', high: 'var(--c-red)', medium: 'var(--c-amber)', low: 'var(--text-muted)' };
               const setAll = (on: boolean): void => {
                 const next: Record<string, boolean> = {};
@@ -9933,7 +9946,7 @@ function ServerContainerPanel({
                       Already in place: {existing.map((i) => i.name).join(' · ')}
                     </div>
                   )}
-                  {(missingValueKeys.length > 0 || anyMeta || anyTikTok || anyLinkedIn || anyPinterest) && (
+                  {(missingValueKeys.length > 0 || capiPlatformsNeeded.length > 0) && (
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', borderTop: '1px dashed var(--border)', paddingTop: 10 }}>
                       {missingValueKeys.includes('measurementId') && (
                         <input style={{ ...styles.input, flex: '1 1 170px' }} placeholder="GA4 Measurement ID (G-…)" value={vals.measurementId ?? ''} onChange={(e) => setVals((v) => ({ ...v, measurementId: e.target.value }))} />
@@ -9941,31 +9954,23 @@ function ServerContainerPanel({
                       {(missingValueKeys.includes('serverUrl') || plan.detected.serverUrl == null) && (
                         <input style={{ ...styles.input, flex: '1 1 220px' }} placeholder="https://sgtm.example.com" value={vals.serverUrl ?? serverUrl} onChange={(e) => setVals((v) => ({ ...v, serverUrl: e.target.value }))} />
                       )}
-                      {anyMeta && (
-                        <>
-                          <input style={{ ...styles.input, flex: '1 1 150px' }} placeholder="Meta Pixel ID" value={vals.metaPixelId ?? ''} onChange={(e) => setVals((v) => ({ ...v, metaPixelId: e.target.value }))} />
-                          <input style={{ ...styles.input, flex: '1 1 190px' }} type="password" placeholder="Meta CAPI access token" value={vals.metaAccessToken ?? ''} onChange={(e) => setVals((v) => ({ ...v, metaAccessToken: e.target.value }))} />
-                        </>
-                      )}
-                      {anyTikTok && (
-                        <>
-                          <input style={{ ...styles.input, flex: '1 1 150px' }} placeholder="TikTok Pixel ID" value={vals.tiktokPixelId ?? ''} onChange={(e) => setVals((v) => ({ ...v, tiktokPixelId: e.target.value }))} />
-                          <input style={{ ...styles.input, flex: '1 1 190px' }} type="password" placeholder="TikTok access token" value={vals.tiktokAccessToken ?? ''} onChange={(e) => setVals((v) => ({ ...v, tiktokAccessToken: e.target.value }))} />
-                        </>
-                      )}
-                      {anyLinkedIn && (
-                        <>
-                          {/* LinkedIn CAPI fires on a Conversion Rule URN (urn:lla:llaPartnerConversion:…), not the web Partner ID. */}
-                          <input style={{ ...styles.input, flex: '1 1 230px' }} placeholder="LinkedIn conversion rule URN" value={vals.linkedinConversionRuleUrn ?? ''} onChange={(e) => setVals((v) => ({ ...v, linkedinConversionRuleUrn: e.target.value }))} />
-                          <input style={{ ...styles.input, flex: '1 1 190px' }} type="password" placeholder="LinkedIn access token" value={vals.linkedinAccessToken ?? ''} onChange={(e) => setVals((v) => ({ ...v, linkedinAccessToken: e.target.value }))} />
-                        </>
-                      )}
-                      {anyPinterest && (
-                        <>
-                          <input style={{ ...styles.input, flex: '1 1 150px' }} placeholder="Pinterest Advertiser ID" value={vals.pinterestAdvertiserId ?? ''} onChange={(e) => setVals((v) => ({ ...v, pinterestAdvertiserId: e.target.value }))} />
-                          <input style={{ ...styles.input, flex: '1 1 190px' }} type="password" placeholder="Pinterest API access token" value={vals.pinterestAccessToken ?? ''} onChange={(e) => setVals((v) => ({ ...v, pinterestAccessToken: e.target.value }))} />
-                        </>
-                      )}
+                      {capiPlatformsNeeded.map((spec) => (
+                        <Fragment key={spec.platform}>
+                          {spec.fields.map((f) => {
+                            const k = `${spec.platform}.${f.key}`;
+                            return (
+                              <input
+                                key={k}
+                                style={{ ...styles.input, flex: f.secret ? '1 1 190px' : '1 1 160px' }}
+                                type={f.secret ? 'password' : 'text'}
+                                placeholder={f.label}
+                                value={vals[k] ?? ''}
+                                onChange={(e) => setVals((v) => ({ ...v, [k]: e.target.value }))}
+                              />
+                            );
+                          })}
+                        </Fragment>
+                      ))}
                     </div>
                   )}
                   {notReady.length > 0 && (
