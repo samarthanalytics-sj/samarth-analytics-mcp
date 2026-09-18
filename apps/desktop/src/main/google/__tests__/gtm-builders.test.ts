@@ -4048,6 +4048,105 @@ test('planWebToServerMigration: the Tier-1 pixels are planned to their typed too
   assert.equal(plan.summary.typedTool, 8);
 });
 
+test('server audit P0: an ungated vendor CAPI tag is critical, a consent-gated or trigger-gated one is silent', () => {
+  const capi = (tagId: string, name: string, consentSettings: unknown, firingTriggerId: string[] = ['1']) => ({
+    tagId, name, type: 'cvt_1', paused: false, firingTriggerId, blockingTriggerId: [], consentSettings,
+    // Meta CAPI shape, so isAnyCapiServerTag recognises it as a third-party vendor tag.
+    parameter: [
+      { type: 'template', key: 'pixelId', value: '123' },
+      { type: 'template', key: 'accessToken', value: '{{tok}}' },
+      { type: 'template', key: 'generateFbp', value: 'true' },
+    ],
+  });
+  const base = { taggingServerUrls: ['https://sgtm.example.com'], clients: [{ clientId: '1', name: 'GA4', type: 'gaaw_client' }], transformations: [] };
+  const consentOf = (rep: ReturnType<typeof auditServerContainer>) => rep.findings.filter((f) => f.category === 'consent');
+
+  // No consent settings at all -> fires for everyone, including refusals.
+  const ungated = auditServerContainer({ ...base, tags: [capi('t1', 'Meta CAPI', null)], triggers: [] } as never);
+  assert.equal(consentOf(ungated).length, 1);
+  assert.equal(consentOf(ungated)[0].severity, 'critical');
+  assert.equal(consentOf(ungated)[0].autoFixable, false, 'loosening consent is never an automatic fix');
+  assert.match(consentOf(ungated)[0].message, /Meta CAPI/);
+
+  // Explicitly declared as needing no consent is just as exposed.
+  const declared = auditServerContainer({ ...base, tags: [capi('t1', 'Meta CAPI', { consentStatus: 'notNeeded' })], triggers: [] } as never);
+  assert.equal(consentOf(declared).length, 1, 'notNeeded is not a gate');
+
+  // Properly gated on the tag -> silent.
+  const gated = auditServerContainer({
+    ...base,
+    tags: [capi('t1', 'Meta CAPI', { consentStatus: 'needed', consentType: { list: [{ value: 'ad_storage' }] } })],
+    triggers: [],
+  } as never);
+  assert.equal(consentOf(gated).length, 0);
+
+  // Gated on the TRIGGER instead of the tag -> also silent, no false positive.
+  const trigGated = auditServerContainer({
+    ...base,
+    tags: [capi('t1', 'Meta CAPI', null, ['9'])],
+    triggers: [{ triggerId: '9', name: 'Purchase (consented)', type: 'customEvent', filter: [
+      { type: 'equals', parameter: [{ key: 'arg0', value: '{{ed - consent_state}}' }, { key: 'arg1', value: 'granted' }] },
+    ] }],
+  } as never);
+  assert.equal(consentOf(trigGated).length, 0, 'a consent condition on the trigger counts as a gate');
+
+  // Many tags aggregate into ONE finding rather than one alarm each.
+  const many = auditServerContainer({
+    ...base,
+    tags: [capi('t1', 'A', null), capi('t2', 'B', null), capi('t3', 'C', null)],
+    triggers: [],
+  } as never);
+  assert.equal(consentOf(many).length, 1, 'aggregated');
+  assert.match(consentOf(many)[0].message, /3 third-party/);
+});
+
+test('server audit P0: the GA4 client that cannot claim, and the malformed tagging URL', () => {
+  const client = (parameter: Array<{ type: string; key: string; value: string }>) => ({ clientId: '1', name: 'GA4', type: 'gaaw_client', parameter });
+  const base = { tags: [], triggers: [], transformations: [] };
+  const msgs = (rep: ReturnType<typeof auditServerContainer>) => rep.findings.map((f) => f.message).join(' | ');
+
+  const offPaths = auditServerContainer({
+    ...base, taggingServerUrls: ['https://sgtm.example.com'],
+    clients: [client([{ type: 'boolean', key: 'activateDefaultPaths', value: 'false' }])],
+  } as never);
+  assert.match(msgs(offPaths), /default paths turned OFF/);
+
+  const onPaths = auditServerContainer({
+    ...base, taggingServerUrls: ['https://sgtm.example.com'],
+    clients: [client([{ type: 'boolean', key: 'activateDefaultPaths', value: 'true' }])],
+  } as never);
+  assert.doesNotMatch(msgs(onPaths), /default paths turned OFF/);
+
+  for (const bad of ['https://sgtm.example.com/', 'https://sgtm.example.com//', 'https://sgtm.example.com/path//x']) {
+    const rep = auditServerContainer({ ...base, taggingServerUrls: [bad], clients: [client([])] } as never);
+    assert.match(msgs(rep), /trailing or doubled slash/, bad);
+  }
+  const good = auditServerContainer({ ...base, taggingServerUrls: ['https://sgtm.example.com'], clients: [client([])] } as never);
+  assert.doesNotMatch(msgs(good), /trailing or doubled slash/);
+});
+
+test('server audit P1: cookie identification mode is reported, never silently corrected', () => {
+  const client = (parameter: Array<{ type: string; key: string; value: string }>) => ({ clientId: '1', name: 'GA4', type: 'gaaw_client', parameter });
+  const base = { tags: [], triggers: [], transformations: [], taggingServerUrls: ['https://sgtm.example.com'] };
+  const find = (rep: ReturnType<typeof auditServerContainer>, re: RegExp) => rep.findings.find((f) => re.test(f.message));
+
+  const js = auditServerContainer({ ...base, clients: [client([{ type: 'template', key: 'cookieManagement', value: 'js' }])] } as never);
+  const jsF = find(js, /leaves client-id cookies to JavaScript/);
+  assert.ok(jsF, 'JS cookie mode is reported');
+  assert.equal(jsF!.autoFixable, false, 'never auto-flipped: it resets returning visitors');
+
+  const noName = auditServerContainer({ ...base, clients: [client([{ type: 'template', key: 'cookieManagement', value: 'server' }])] } as never);
+  const nameF = find(noName, /no cookie name/);
+  assert.ok(nameF, 'server mode with no cookie name writes nothing');
+  assert.equal(nameF!.severity, 'high');
+
+  const ok = auditServerContainer({ ...base, clients: [client([
+    { type: 'template', key: 'cookieManagement', value: 'server' },
+    { type: 'template', key: 'cookieName', value: 'FPID' },
+  ])] } as never);
+  assert.equal(find(ok, /cookie/i), undefined, 'a correct server-cookie setup says nothing');
+});
+
 test('planWebToServerMigration: analytics + affiliate web tags become GENERIC gallery-import items with the template fields and public ids carried', () => {
   const P = (key: string, value: string) => ({ type: 'template', key, value });
   const H = (id: string, name: string, html: string) => ({ tagId: id, name, type: 'html', parameter: [P('html', html)] });
