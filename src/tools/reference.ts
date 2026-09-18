@@ -267,15 +267,18 @@ export const GALLERY_CATEGORIES: { category: string; examples: string[]; known?:
       'Stape Yelp': 'stape-io/yelp-tag',
       'Stape Spotify': 'stape-io/spotify-tag',
       'Stape LINE Yahoo': 'stape-io/line-yahoo-tag',
-      'Stape RTB House': 'stape-io/rtb-house-tag',
+      // NOT in the gallery (the repo README says so): upload template.tpl by hand once.
+      'RTB House (manual install)': 'stape-io/rtb-house-tag',
       'Stape Mixpanel': 'stape-io/mixpanel-tag',
       'Stape Matomo': 'stape-io/matomo-advanced-tag',
       'Stape Piwik PRO': 'stape-io/piwik-pro-tag',
       'Stape Piano Analytics': 'stape-io/piano-tag',
-      'Stape Plausible': 'stape-io/plausible-analytics-tag-server',
-      'Stape Umami': 'stape-io/umami-tag-server',
-      'Stape Pirsch': 'stape-io/pirsch-tag-server',
-      'Stape Snowplow': 'stape-io/snowplow-gtm-server-side-tag',
+      // stape-io only FORKS these four; the gallery entry belongs to the upstream author, so an
+      // import must name the publisher (verified: the forks' README badges point at these owners).
+      Plausible: 'mbaersch/plausible-analytics-tag-server',
+      Umami: 'mbaersch/umami-tag-server',
+      Pirsch: 'mbaersch/pirsch-tag-server',
+      Snowplow: 'snowplow/snowplow-gtm-server-side-tag',
       'Stape Klaviyo': 'stape-io/klaviyo-tag',
       'Stape Awin Conversion API': 'stape-io/awin-conversion-api-tag',
       'Stape CJ': 'stape-io/cj-tag',
@@ -289,7 +292,8 @@ export const GALLERY_CATEGORIES: { category: string; examples: string[]; known?:
       'Stape Affiliate Future': 'stape-io/affiliate-future-server-tag',
       'Stape Effinity': 'stape-io/effinity-tag',
       'Stape Refersion': 'stape-io/refersion-tag',
-      'Stape Tapfiliate': 'stape-io/tapfiliate-tag',
+      // NOT in the gallery (the repo README says so): upload template.tpl by hand once.
+      'Tapfiliate (manual install)': 'stape-io/tapfiliate-tag',
       'Stape Everflow': 'stape-io/everflow-tag',
       'Stape Voluum': 'stape-io/voluum-tag',
     },

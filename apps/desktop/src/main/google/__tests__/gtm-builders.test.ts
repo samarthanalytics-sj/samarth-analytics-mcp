@@ -4084,7 +4084,22 @@ test('planWebToServerMigration: analytics + affiliate web tags become GENERIC ga
   assert.equal(plan.items.length, 24, 'every analytics/affiliate tag is planned');
   assert.equal(plan.summary.generic, 24, 'all of them are generic gallery imports');
   assert.equal(plan.summary.typedTool, 0);
-  for (const it of plan.items) assert.ok(/templates_import_from_gallery \(stape-io\/[a-z0-9-]+\) \+ tags_create/.test(it.serverTool ?? ''), it.serverTool ?? 'no serverTool');
+  // The serverTool names the coordinates the import will ACTUALLY use: the publisher's, which is
+  // not always stape-io, or a manual install for a template that is not in the gallery at all.
+  for (const it of plan.items) {
+    assert.ok(
+      /^(templates_import_from_gallery \([a-z0-9-]+\/[a-z0-9-]+\)|MANUAL template install \([a-z0-9-]+\/[a-z0-9-]+\)) \+ tags_create$/.test(it.serverTool ?? ''),
+      it.serverTool ?? 'no serverTool'
+    );
+  }
+  // stape-io only FORKS these four; importing stape-io/<fork> fails, so the plan names the publisher.
+  assert.match(by('Plausible')?.serverTool ?? '', /mbaersch\/plausible-analytics-tag-server/);
+  assert.match(by('Umami')?.serverTool ?? '', /mbaersch\/umami-tag-server/);
+  assert.match(by('Pirsch')?.serverTool ?? '', /mbaersch\/pirsch-tag-server/);
+  assert.match(by('Snowplow')?.serverTool ?? '', /snowplow\/snowplow-gtm-server-side-tag/);
+  // Tapfiliate is not in the gallery, so the plan must not promise an automatic import.
+  assert.match(by('Tapfiliate')?.serverTool ?? '', /^MANUAL template install \(stape-io\/tapfiliate-tag\)/);
+  assert.match(by('Tapfiliate')?.note ?? '', /NOT in the GTM gallery/);
   // Analytics: public ids come off the snippet; secrets stay in `requires`.
   assert.deepEqual(by('Mixpanel')?.derived, { token: 'tok_123' });
   assert.deepEqual(by('Mixpanel')?.requires, []);

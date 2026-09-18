@@ -19,6 +19,9 @@ import type { GtmClient } from '../utils/gtmClient.js';
 import { checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
 import { paginate, paginationFields, buildListResult } from '../utils/pagination.js';
 import { jsonResult, textResult, errorResult, errorText } from '../utils/toolResponse.js';
+import {
+  galleryCoordinatesFor, matchInstalledTemplate, templateInstallError, resolveTemplateSource,
+} from '../shared/gtm-template-sources.js';
 
 /** A GTM resource collection that lives directly under a workspace. */
 interface WorkspaceResourceApi {
@@ -529,22 +532,45 @@ export async function ensureGalleryTemplate(
   repository: string,
 ): Promise<{ template: Record<string, unknown>; tagType: string; imported: boolean }> {
   const api = client.accounts.containers.workspaces.templates as unknown as WorkspaceResourceApi;
-  const wantOwner = owner.trim().toLowerCase();
-  const wantRepo = repository.trim().toLowerCase();
   const existingPages = await paginate<Record<string, unknown>, Record<string, unknown>>(
     (pageToken) => api.list({ parent, pageToken }).then((r) => r.data),
     (data) => data.template as Record<string, unknown>[] | undefined,
   );
-  const existing = existingPages.items.find((t) => {
-    const ref = t.galleryReference as { owner?: string; repository?: string } | undefined;
-    return ref?.owner?.toLowerCase() === wantOwner && ref?.repository?.toLowerCase() === wantRepo;
-  });
-  const template = existing ?? (await importFromGallery(client, parent, owner, repository));
+  // Matches a HAND-INSTALLED copy too: a manual upload carries no galleryReference, so an
+  // owner/repository-only lookup would miss it and re-attempt an import that cannot work.
+  const existing = matchInstalledTemplate(
+    existingPages.items as Array<{ galleryReference?: { owner?: string | null; repository?: string | null } | null; name?: string | null; templateData?: string | null }>,
+    owner,
+    repository,
+  ) as Record<string, unknown> | undefined;
+
+  let template: Record<string, unknown>;
+  if (existing) {
+    template = existing;
+  } else {
+    // Not installed. Only import when the template is actually IN the gallery under coordinates
+    // GTM accepts - otherwise the import can only fail, so say what to do instead.
+    const coords = galleryCoordinatesFor(owner, repository);
+    if (!coords) throw new Error(templateInstallError(owner, repository));
+    try {
+      template = await importFromGallery(client, parent, coords.owner, coords.repository);
+    } catch (e) {
+      throw new Error(templateInstallError(owner, repository, e instanceof Error ? e.message : String(e)));
+    }
+  }
   const tagType = customTemplateType(template, containerId);
   if (!tagType || !tagType.startsWith('cvt_')) {
     throw new Error(
       `Could not resolve the tag type of the ${owner}/${repository} template (got "${tagType}"). ` +
         'Read it from templates_list and pass it to tags_create instead.',
+    );
+  }
+  // A CLIENT template cannot be used as a tag type, and vice versa. Caught here so the failure
+  // names the mismatch instead of surfacing as an opaque GTM validation error.
+  const src = resolveTemplateSource(owner, repository);
+  if (src?.kind === 'CLIENT') {
+    throw new Error(
+      `${owner}/${repository} is a CLIENT template, not a tag template. Create it with clients.create, not tags_create.`,
     );
   }
   return { template, tagType, imported: !existing };
