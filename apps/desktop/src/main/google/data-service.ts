@@ -5,11 +5,12 @@ import type { OAuth2Client } from 'google-auth-library';
 import type { AccountClientManager } from './account-clients';
 import type { RegistryService } from '../services/registry-service';
 import type { ContainerSnapshot, ServerContainerSnapshot } from './gtm-builders';
-import { ga4TagFields, readGa4EventParameters, applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, normalizeTriggerType, setCustomEventName, customEventNameOf, describeTriggerConditions, buildGa4Client, buildGa4ServerTag, buildMetaCapiServerTag, buildTikTokCapiServerTag, buildLinkedInCapiServerTag, buildPinterestCapiServerTag, buildStapeDataTag, buildStapeDataClient, buildServerAllEventsTrigger, buildServerEventTrigger, buildAdsConversionServerTag, buildMetaEmqVariables, buildTikTokEmqVariables, buildEcommerceDlvVariables, buildGa4EventTag, buildTrigger, planTriggerRetarget, type TriggerInput, buildGtmClient, buildVariable, sanitizeName, matchesServerContainer, customTemplateType, upsertGoogleTagConfig, taggingUrlFirstPartyIssue, parseTemplateParameters, summariseTagTypes, type TemplateField, type TagTypeProfile, triggerUsageBreakdown, detectMetaTags, planWebToServerMigration, evaluateTrackingSetup, GA4_ECOMMERCE_FUNNEL_EVENTS, type TrackingSetupReport, type TrackingSetupCheck } from './gtm-builders';
+import { ga4TagFields, readGa4EventParameters, applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, normalizeTriggerType, setCustomEventName, customEventNameOf, describeTriggerConditions, buildGa4Client, buildGa4ServerTag, buildStapeDataTag, buildStapeDataClient, buildServerAllEventsTrigger, buildServerEventTrigger, buildAdsConversionServerTag, buildMetaEmqVariables, buildTikTokEmqVariables, buildEcommerceDlvVariables, buildGa4EventTag, buildTrigger, planTriggerRetarget, type TriggerInput, buildGtmClient, buildVariable, sanitizeName, matchesServerContainer, customTemplateType, upsertGoogleTagConfig, taggingUrlFirstPartyIssue, parseTemplateParameters, summariseTagTypes, type TemplateField, type TagTypeProfile, triggerUsageBreakdown, detectMetaTags, planWebToServerMigration, evaluateTrackingSetup, GA4_ECOMMERCE_FUNNEL_EVENTS, type TrackingSetupReport, type TrackingSetupCheck } from './gtm-builders';
 import {
   galleryCoordinatesFor, matchInstalledTemplate, templateInstallError,
 } from '../../../../../src/shared/gtm-template-sources';
 import { installTemplateFromSource, type TemplateCreateApi } from '../../../../../src/shared/gtm-template-install';
+import { capiPlatform, capiCredentials } from '../../../../../src/shared/capi-platforms';
 import { resolveGa4MeasurementIds } from './gtm-ga4-check';
 import { withQuotaRetry, withRetry, QUOTA_RE, TRANSIENT_5XX_RE, NOT_FOUND_OR_PERMISSION_RE } from './quota-retry';
 import { log } from '../logger';
@@ -1862,8 +1863,8 @@ export class GoogleDataService {
     selectedIds: string[],
     values: {
       measurementId?: string; serverUrl?: string;
-      metaPixelId?: string; metaAccessToken?: string; tiktokPixelId?: string; tiktokAccessToken?: string;
-      linkedinAccessToken?: string; linkedinConversionRuleUrn?: string; pinterestAdvertiserId?: string; pinterestAccessToken?: string;
+      /** CAPI credentials keyed "<platform>.<field>" - see src/shared/capi-platforms.ts. */
+      capi?: Record<string, string>;
     }
   ): Promise<{
     serverContainer: { containerId: string; publicId: string; name: string };
@@ -2096,21 +2097,15 @@ export class GoogleDataService {
       }
     }
 
-    // 8 · CAPI tags (Meta / TikTok / LinkedIn / Pinterest) - one per selected event; the gallery template
-    // is imported once per platform. Each platform is gated on its OWN credentials (never guessed).
-    // Meta/TikTok also provision their match-quality (EMQ) variables once; the LinkedIn and Pinterest
-    // templates auto-map user data from the event themselves, so they need no extra step.
-    type CapiPlatform = 'meta' | 'tiktok' | 'linkedin' | 'pinterest';
-    const CAPI: Record<CapiPlatform, { label: string; gallery: [owner: string, repo: string]; creds: () => [primary: string, token: string]; missing: string }> = {
-      meta: { label: 'Meta CAPI', gallery: ['stape-io', 'facebook-tag'], creds: () => [values.metaPixelId ?? '', values.metaAccessToken ?? ''], missing: 'Meta pixel id / access token' },
-      tiktok: { label: 'TikTok CAPI', gallery: ['stape-io', 'tiktok-tag'], creds: () => [values.tiktokPixelId ?? '', values.tiktokAccessToken ?? ''], missing: 'TikTok pixel id / access token' },
-      // LinkedIn fires on a Conversion Rule URN (not the web Partner ID) — that is the "primary" here.
-      linkedin: { label: 'LinkedIn CAPI', gallery: ['stape-io', 'linkedin-tag'], creds: () => [values.linkedinConversionRuleUrn ?? '', values.linkedinAccessToken ?? ''], missing: 'LinkedIn conversion rule URN / access token' },
-      pinterest: { label: 'Pinterest CAPI', gallery: ['pinterest', 'ss-gtm-template'], creds: () => [values.pinterestAdvertiserId ?? '', values.pinterestAccessToken ?? ''], missing: 'Pinterest advertiser id / access token' },
-    };
-    const capiIds = selectedIds.filter((id) => /^(meta|tiktok|linkedin|pinterest)_capi:/.test(id));
-    const templateType: Partial<Record<CapiPlatform, string>> = {};
-    const varsDone = new Set<CapiPlatform>();
+    // 8 · CAPI tags - one per selected event; the gallery template is imported once per platform.
+    // Every platform with a typed builder is supported, driven by the shared spec in
+    // src/shared/capi-platforms.ts: it owns the credential fields, the gallery coordinates and the
+    // builder call, so adding a destination is one entry there rather than four edits here.
+    // Each platform is gated on its OWN credentials and never guessed; a platform whose match-quality
+    // variables are needed provisions them once before its first tag.
+    const capiIds = selectedIds.filter((id) => /_capi:/.test(id) && capiPlatform(id.slice(0, id.indexOf('_capi:'))) !== null);
+    const templateType: Record<string, string> = {};
+    const varsDone = new Set<string>();
     const localTriggers = triggers.slice();
     const localTags = tags.slice();
     const ensureEventTrigger = async (eventName: string): Promise<string> => {
@@ -2134,14 +2129,15 @@ export class GoogleDataService {
       return id;
     };
     for (const id of capiIds) {
-      const platform = id.slice(0, id.indexOf('_capi:')) as CapiPlatform;
-      const spec = CAPI[platform];
+      const platform = id.slice(0, id.indexOf('_capi:'));
+      const spec = capiPlatform(platform);
+      if (!spec) continue; // filtered above; keeps the type narrow
       const event = id.slice(id.indexOf(':') + 1);
-      const [rawPrimary, rawToken] = spec.creds();
-      const primary = rawPrimary.trim();
-      const token = rawToken.trim();
-      if (!primary || !token) {
-        skipped.push({ id, reason: `Missing ${spec.missing}.` });
+      // Missing credentials are reported by the vendor's own field names, never guessed or
+      // part-filled: a half-configured CAPI tag fails silently at the destination.
+      const { creds, missing } = capiCredentials(spec, values.capi);
+      if (missing.length) {
+        skipped.push({ id, reason: `Missing ${missing.join(' / ')}.` });
         continue;
       }
       const tagName = `${spec.label} - ${event}`;
@@ -2153,20 +2149,15 @@ export class GoogleDataService {
         if (!templateType[platform]) {
           templateType[platform] = (await this.q(() => this.importGalleryTemplate(accountId, cid, workspaceId, spec.gallery[0], spec.gallery[1]))).type;
         }
-        const type = templateType[platform] as string;
-        if (!varsDone.has(platform)) {
-          if (platform === 'meta') await this.q(() => this.createMetaEmqVariables(accountId, cid, workspaceId)).catch(() => null);
-          if (platform === 'tiktok') await this.q(() => this.createTikTokEmqVariables(accountId, cid, workspaceId)).catch(() => null);
+        const type = templateType[platform];
+        if (spec.emqVariables && !varsDone.has(platform)) {
+          if (spec.emqVariables === 'meta') await this.q(() => this.createMetaEmqVariables(accountId, cid, workspaceId)).catch(() => null);
+          if (spec.emqVariables === 'tiktok') await this.q(() => this.createTikTokEmqVariables(accountId, cid, workspaceId)).catch(() => null);
           varsDone.add(platform);
         }
         const triggerId = await ensureEventTrigger(event);
-        const firing = { firingTriggerId: [triggerId] };
-        const body =
-          platform === 'meta' ? buildMetaCapiServerTag(type, tagName, primary, token, event, firing)
-          : platform === 'tiktok' ? buildTikTokCapiServerTag(type, tagName, primary, token, event, firing)
-          // LinkedIn's builder takes (accessToken, conversionRuleUrn); `primary` is the URN.
-          : platform === 'linkedin' ? buildLinkedInCapiServerTag(type, tagName, token, primary, firing)
-          : buildPinterestCapiServerTag(type, tagName, primary, token, { event, ...firing });
+        // The spec adapts the declared credentials onto this vendor's own argument order.
+        const body = spec.build(type, tagName, creds, { event, firingTriggerId: [triggerId] });
         await this.q(() => this.createGtmTag(accountId, cid, workspaceId, body as unknown as Record<string, unknown>));
         localTags.push({ tagId: '', name: tagName, type, firingTriggerId: [triggerId], blockingTriggerId: [], paused: false, parameter: [], consentSettings: null } as unknown as (typeof localTags)[number]);
         applied.push(id);

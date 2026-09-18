@@ -63,25 +63,26 @@ test('blank container: every baseline item missing, sensible categories, relay n
 
 test('CAPI items: per web pixel event; every platform executable by the app, each gated on its OWN credentials', () => {
   const plan = buildServerPlan(emptyInput());
+  // Credentials are namespaced per platform now, so two vendors can both want "accessToken"
+  // without colliding.
   const meta = plan.items.find((i) => i.id === 'meta_capi:generate_lead')!;
-  assert.deepEqual(meta.requires, ['metaPixelId', 'metaAccessToken']);
+  assert.deepEqual(meta.requires, ['meta.pixelId', 'meta.accessToken']);
   assert.equal(meta.executable, true);
   assert.equal(meta.defaultSelected, false, 'credential-gated items never pre-checked');
   const tiktok = plan.items.find((i) => i.id === 'tiktok_capi:generate_lead')!;
   assert.equal(tiktok.executable, true);
-  // Pinterest used to be "planned but chat-only" even though its builder existed; it is applied by the
-  // app now, gated on the Pinterest advertiser id + API token (never the Meta/TikTok values).
   const pin = plan.items.find((i) => i.id === 'pinterest_capi:generate_lead')!;
   assert.equal(pin.executable, true, 'Pinterest is applied by the app');
-  assert.deepEqual(pin.requires, ['pinterestAdvertiserId', 'pinterestAccessToken']);
+  assert.deepEqual(pin.requires, ['pinterest.advertiserId', 'pinterest.accessToken']);
   assert.equal(pin.defaultSelected, false);
-  assert.ok(/auto-mapped by the template/.test(pin.description), pin.description);
   const capi = plan.items.filter((i) => /_capi:/.test(i.id) && i.status === 'missing');
   assert.ok(capi.length >= 3);
   assert.ok(capi.every((i) => i.executable), 'no CAPI platform is left chat-only');
-  assert.ok(capi.every((i) => i.requires.length === 2), 'each CAPI item requires exactly its own id + secret');
+  assert.ok(capi.every((i) => i.requires.length >= 1), 'every CAPI item names the credentials it needs');
+  assert.ok(capi.every((i) => i.requires.every((r) => r.startsWith(`${i.id.slice(0, i.id.indexOf('_capi:'))}.`))),
+    'an item only ever asks for its OWN platform credentials');
   const linkedin = plan.items.find((i) => i.id.startsWith('linkedin_capi:'));
-  if (linkedin) assert.deepEqual(linkedin.requires, ['linkedinAccessToken', 'linkedinConversionRuleUrn'], 'LinkedIn fires on a conversion rule URN, not the web partner id');
+  if (linkedin) assert.deepEqual(linkedin.requires, ['linkedin.conversionRuleUrn', 'linkedin.accessToken'], 'LinkedIn fires on a conversion rule URN, not the web partner id');
 });
 
 test('CAPI items: GTM built-in LinkedIn Insight tag (bzi) is recognised by its native type, not by name', () => {
@@ -244,6 +245,44 @@ test('buildStapeDataTag: verified template field keys, All Pages default trigger
   assert.equal(get('add_consent_state')!.value, 'true');
   assert.deepEqual(t.firingTriggerId, ['2147479553']);
 });
+
+test('CAPI items: platforms beyond the original four are planned, with their own credential shapes', () => {
+  const pixel = (tagId: string, name: string, trig: string) =>
+    ({ tagId, name, type: 'html', paused: false, firingTriggerId: [trig], blockingTriggerId: [], consentSettings: null,
+       parameter: [{ type: 'template', key: 'html', value: '<script>x()</script>' }] });
+  const ev = (id: string, event: string) =>
+    ({ triggerId: id, name: event, type: 'customEvent', customEventFilter: [
+      { type: 'equals', parameter: [{ key: 'arg0', value: '{{_event}}' }, { key: 'arg1', value: event }] },
+    ], filter: [], autoEventFilter: [], parameter: [] });
+  const input = {
+    ...emptyInput(),
+    web: {
+      tags: [
+        pixel('w1', 'Yelp conversion', '1'),
+        pixel('w2', 'Nextdoor', '2'),
+        pixel('w3', 'LINE Yahoo', '3'),
+        pixel('w4', 'Reddit Pixel', '4'),
+      ],
+      triggers: [ev('1', 'purchase'), ev('2', 'purchase'), ev('3', 'purchase'), ev('4', 'purchase')],
+      variables: [],
+    },
+  };
+  const plan = buildServerPlan(input as never);
+  const req = (p: string) => plan.items.find((i) => i.id === `${p}_capi:purchase`)?.requires;
+
+  // Yelp has no public pixel id at all: the token is the whole credential.
+  assert.deepEqual(req('yelp'), ['yelp.accessToken']);
+  // Nextdoor and LINE Yahoo take three fields, which a two-credential model could never express.
+  assert.deepEqual(req('nextdoor'), ['nextdoor.pixelId', 'nextdoor.clientId', 'nextdoor.accessToken']);
+  assert.deepEqual(req('lineyahoo'), ['lineyahoo.tagId', 'lineyahoo.accessToken', 'lineyahoo.channelId']);
+  assert.deepEqual(req('reddit'), ['reddit.accountId', 'reddit.accessToken']);
+  for (const p of ['yelp', 'nextdoor', 'lineyahoo', 'reddit']) {
+    const item = plan.items.find((i) => i.id === `${p}_capi:purchase`)!;
+    assert.equal(item.executable, true, `${p} is applied by the app, not handed to chat`);
+    assert.equal(item.defaultSelected, false, `${p} is credential-gated`);
+  }
+});
+
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
