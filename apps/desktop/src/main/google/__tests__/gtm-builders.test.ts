@@ -4518,5 +4518,27 @@ test('a round-trip through buildGa4EventTag is read back intact', () => {
   assert.deepEqual(readGa4EventParameters(built), [{ name: 'page_url', value: '{{Page URL}}' }]);
 });
 
+test('server audit P1: Ads conversions with no server Conversion Linker lose click attribution', () => {
+  const t = (tagId: string, name: string, type: string) => ({
+    tagId, name, type, paused: false, firingTriggerId: ['1'], blockingTriggerId: [], consentSettings: null, parameter: [],
+  });
+  const base = { taggingServerUrls: ['https://sgtm.example.com'], clients: [{ clientId: '1', name: 'GA4', type: 'gaaw_client' }], triggers: [], transformations: [] };
+  const linkerMsg = (rep: ReturnType<typeof auditServerContainer>) =>
+    rep.findings.find((f) => /Conversion Linker/.test(f.message));
+
+  const missing = auditServerContainer({ ...base, tags: [t('s1', 'Ads Conversion', 'sgtmadsct')] } as never);
+  assert.ok(linkerMsg(missing), 'an Ads conversion tag with no linker is reported');
+  assert.equal(linkerMsg(missing)!.severity, 'high');
+
+  const present = auditServerContainer({
+    ...base, tags: [t('s1', 'Ads Conversion', 'sgtmadsct'), t('s2', 'Conversion Linker', 'sgtmadscl')],
+  } as never);
+  assert.equal(linkerMsg(present), undefined, 'a linker satisfies it');
+
+  const noAds = auditServerContainer({ ...base, tags: [t('s1', 'GA4 Relay', 'sgtmgaaw')] } as never);
+  assert.equal(linkerMsg(noAds), undefined, 'no Ads conversions means no linker is needed');
+});
+
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
