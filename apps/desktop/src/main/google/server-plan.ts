@@ -13,6 +13,7 @@
 import type { AuditTag, AuditTrigger, ContainerSnapshot, ServerContainerSnapshot } from './gtm-builders';
 import { serverTagParam } from './gtm-builders';
 import { resolveGa4MeasurementIds } from './gtm-ga4-check';
+import { CAPI_PLATFORMS, capiPlatform, capiValueKeys, webPixelPlatform } from '../../../../../src/shared/capi-platforms';
 
 export type PlanCategory = 'critical' | 'high' | 'medium' | 'low' | 'info';
 export type PlanStatus = 'existing' | 'missing';
@@ -35,19 +36,19 @@ export interface ServerPlanItem {
   executable: boolean;
 }
 
-/** Config values the plan can use; `detected` carries what the audit already found. */
+/**
+ * Config values the plan can use; `detected` carries what the audit already found.
+ *
+ * Conversion-API credentials live in `capi`, keyed "<platform>.<field>" exactly as capiValueKeys()
+ * spells them, because the platforms do not share a shape: Yelp needs a token alone, Nextdoor and
+ * LINE Yahoo take three fields each. Naming a field per platform on this interface is what
+ * previously capped the flow at four destinations.
+ */
 export interface ServerPlanValues {
   measurementId?: string;
   serverUrl?: string;
-  metaPixelId?: string;
-  metaAccessToken?: string;
-  tiktokPixelId?: string;
-  tiktokAccessToken?: string;
-  /** LinkedIn CAPI fires on a Conversion Rule URN (urn:lla:llaPartnerConversion:…), not the web Partner ID. */
-  linkedinAccessToken?: string;
-  linkedinConversionRuleUrn?: string;
-  pinterestAdvertiserId?: string;
-  pinterestAccessToken?: string;
+  /** "<platform>.<field>" -> value, e.g. { 'meta.pixelId': '123', 'meta.accessToken': '...' }. */
+  capi?: Record<string, string>;
 }
 
 export interface ServerPlan {
@@ -116,20 +117,10 @@ function eventOfTrigger(tr: AuditTrigger | undefined): string | null {
   return null;
 }
 
-const PIXEL_SIGNS: Array<{ platform: 'meta' | 'tiktok' | 'linkedin' | 'pinterest'; nameRe: RegExp; bodyRe: RegExp }> = [
-  { platform: 'meta', nameRe: /\bmeta\b|facebook|fb[\s_-]?pixel/i, bodyRe: /fbq\(|connect\.facebook\.net/i },
-  { platform: 'tiktok', nameRe: /tiktok/i, bodyRe: /ttq\.|analytics\.tiktok\.com/i },
-  { platform: 'linkedin', nameRe: /linkedin/i, bodyRe: /lintrk|snap\.licdn\.com/i },
-  { platform: 'pinterest', nameRe: /pinterest/i, bodyRe: /pintrk/i },
-];
-
-function webPixelPlatform(t: AuditTag): 'meta' | 'tiktok' | 'linkedin' | 'pinterest' | null {
-  if (t.type === 'gaawe' || t.type === 'gaawc' || t.type === 'googtag') return null;
-  if (t.type === 'bzi') return 'linkedin'; // GTM's built-in LinkedIn Insight tag: native type is authoritative
-  const body = t.type === 'html' ? JSON.stringify(t.parameter ?? []) : '';
-  for (const sign of PIXEL_SIGNS) if (sign.nameRe.test(t.name) || (body && sign.bodyRe.test(body))) return sign.platform;
-  return null;
-}
+// Web-pixel detection and the credential fields each platform needs both come from the shared
+// spec in src/shared/capi-platforms.ts, so a platform is added in ONE place. Previously this file
+// carried its own four-platform copy, which is why the plan never offered the other thirteen
+// destinations the app already had builders for.
 
 export interface ServerPlanInput {
   /** The web container snapshot (events, pixels, Google-tag wiring); null when unreadable. */
@@ -283,7 +274,7 @@ export function buildServerPlan(input: ServerPlanInput): ServerPlan {
   const srvHandled = new Map<string, Set<string>>(); // platform -> covered event names
   for (const t of tags) {
     if (t.paused || !(t.firingTriggerId ?? []).length) continue;
-    const platform = PIXEL_SIGNS.find((p) => p.nameRe.test(t.name))?.platform;
+    const platform = CAPI_PLATFORMS.find((p) => p.nameRe.test(t.name))?.platform;
     if (!platform) continue;
     const set = srvHandled.get(platform) ?? new Set<string>();
     for (const id of t.firingTriggerId ?? []) {
@@ -303,16 +294,14 @@ export function buildServerPlan(input: ServerPlanInput): ServerPlan {
     if (seen.has(key)) continue;
     seen.add(key);
     const covered = srvHandled.get(platform)?.has(norm(event)) ?? false;
-    // All four platforms are applied by the app itself (applyServerPlan), each gated on its own
-    // credentials. Meta/TikTok also auto-provision their match-quality (EMQ) variables; the LinkedIn and
-    // Pinterest templates auto-map user data from the event themselves, so they need no extra step.
-    const CAPI: Record<typeof platform, { label: string; requires: string[]; extra: string }> = {
-      meta: { label: 'Meta CAPI', requires: ['metaPixelId', 'metaAccessToken'], extra: ' Auto-provisions its match-quality variables.' },
-      tiktok: { label: 'TikTok Events API', requires: ['tiktokPixelId', 'tiktokAccessToken'], extra: ' Auto-provisions its match-quality variables.' },
-      linkedin: { label: 'LinkedIn CAPI', requires: ['linkedinAccessToken', 'linkedinConversionRuleUrn'], extra: ' Fires on the Conversion Rule URN you supply; user data is auto-mapped by the template.' },
-      pinterest: { label: 'Pinterest CAPI', requires: ['pinterestAdvertiserId', 'pinterestAccessToken'], extra: ' User data is auto-mapped by the template.' },
-    };
-    const { label, requires, extra } = CAPI[platform];
+    // Every platform with a typed builder is applied by the app itself (applyServerPlan), each
+    // gated on its own credentials, which differ per vendor (Yelp is a token alone; Nextdoor and
+    // LINE Yahoo take three fields).
+    const spec = capiPlatform(platform);
+    if (!spec) continue;
+    const label = spec.label;
+    const requires = capiValueKeys(spec);
+    const extra = spec.emqVariables ? ' Auto-provisions its match-quality variables.' : '';
     push({
       id: `${platform}_capi:${event}`,
       category: covered ? 'info' : 'medium',
