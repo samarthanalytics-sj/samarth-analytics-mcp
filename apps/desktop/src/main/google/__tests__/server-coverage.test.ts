@@ -279,5 +279,76 @@ test('analytics + affiliate web tags classify to their generic platforms (Piwik 
   }
 });
 
+test('cross-container: web and server both feeding ONE property is critical, and correct wiring is silent', () => {
+  // A googtag carries its transport URL inside configSettingsTable, not as a flat parameter.
+  const wiredConfig = (url: string) => tag({
+    tagId: 'w1', name: 'GA4 - Config', type: 'googtag',
+    parameter: [
+      { type: 'template', key: 'tagId', value: 'G-ABC1234' },
+      { type: 'list', key: 'configSettingsTable', list: [
+        { type: 'map', map: [
+          { type: 'template', key: 'parameter', value: 'server_container_url' },
+          { type: 'template', key: 'parameterValue', value: url },
+        ] },
+      ] },
+    ],
+  } as never);
+  const xc = (r: ReturnType<typeof buildServerCoverage>, id: string) => r.crossContainer.filter((f) => f.checkId === id);
+
+  // Default fixture: the web Google tag has no transport URL, and the server relays the SAME id.
+  const parallel = buildServerCoverage(web(), server(), AUDIT_OK);
+  assert.equal(xc(parallel, 'web_server_ga4_parallel').length, 1, 'both legs feed G-ABC1234');
+  assert.equal(xc(parallel, 'web_server_ga4_parallel')[0].severity, 'critical');
+  assert.equal(xc(parallel, 'web_server_ga4_parallel')[0].autoFixable, false, 'which leg to keep is a judgement call');
+  assert.match(xc(parallel, 'web_server_ga4_parallel')[0].message, /counted twice/);
+
+  // Pointed at the tagging server: the web hits flow THROUGH the server, so there is no doubling.
+  const wired = buildServerCoverage(web({ tags: [wiredConfig('https://sgtm.example.com')] }), server(), AUDIT_OK);
+  assert.equal(xc(wired, 'web_server_ga4_parallel').length, 0, 'wired correctly says nothing');
+
+  // Pointed somewhere else entirely: the server never receives them, so both legs still fire.
+  const mismatch = buildServerCoverage(web({ tags: [wiredConfig('https://other.example.com')] }), server(), AUDIT_OK);
+  assert.equal(xc(mismatch, 'web_server_ga4_parallel').length, 1, 'a mismatched transport host still doubles');
+
+  // No server relay at all: nothing is duplicated, whatever the web side does.
+  const noRelay = buildServerCoverage(web(), server({ tags: [] }), AUDIT_OK);
+  assert.equal(xc(noRelay, 'web_server_ga4_parallel').length, 0);
+});
+
+test('cross-container: a second Google tag config without the transport URL bypasses the server', () => {
+  const cfg = (tagId: string, name: string, url?: string) => tag({
+    tagId, name, type: 'googtag',
+    parameter: [
+      { type: 'template', key: 'tagId', value: 'G-ABC1234' },
+      ...(url ? [{ type: 'list', key: 'configSettingsTable', list: [
+        { type: 'map', map: [
+          { type: 'template', key: 'parameter', value: 'server_container_url' },
+          { type: 'template', key: 'parameterValue', value: url },
+        ] },
+      ] }] : []),
+    ],
+  } as never);
+  const xc = (r: ReturnType<typeof buildServerCoverage>) => r.crossContainer.filter((f) => f.checkId === 'duplicate_web_ga4_config');
+
+  // One wired, one not: whichever loads last wins, so traffic bypasses the server unpredictably.
+  const mixed = buildServerCoverage(
+    web({ tags: [cfg('w1', 'GA4 - Config', 'https://sgtm.example.com'), cfg('w9', 'GA4 (CMS plugin)')] }),
+    server(), AUDIT_OK,
+  );
+  assert.equal(xc(mixed).length, 1);
+  assert.equal(xc(mixed)[0].severity, 'high');
+  assert.match(xc(mixed)[0].message, /GA4 \(CMS plugin\)/, 'names the offending tag');
+
+  // Two configs that are BOTH wired are redundant but not a server-side data problem.
+  const bothWired = buildServerCoverage(
+    web({ tags: [cfg('w1', 'A', 'https://sgtm.example.com'), cfg('w9', 'B', 'https://sgtm.example.com')] }),
+    server(), AUDIT_OK,
+  );
+  assert.equal(xc(bothWired).length, 0, 'no bypass, so no finding');
+
+  // A single config is never a duplicate, wired or not.
+  assert.equal(xc(buildServerCoverage(web({ tags: [cfg('w1', 'A')] }), server(), AUDIT_OK)).length, 0);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

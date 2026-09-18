@@ -2694,6 +2694,22 @@ export function auditServerContainer(s: ServerContainerSnapshot): AuditReport {
     }
   }
 
+  // ── P1: Google Ads conversions with no server-side Conversion Linker ───────────────────
+  // Without the linker the server never writes the first-party click-id cookie, so conversions
+  // fall back to third-party cookies and are recorded then quietly lost, or reattributed to
+  // organic/direct. The symptom (conversions that "disappear") looks nothing like the cause.
+  const adsConversionTags = s.tags.filter((t) => t.type === 'sgtmadsct' && !t.paused);
+  if (adsConversionTags.length > 0 && !s.tags.some((t) => t.type === 'sgtmadscl' && !t.paused)) {
+    push({
+      severity: 'high',
+      confidence: 'certain',
+      category: 'firing',
+      message: `${adsConversionTags.length} Google Ads conversion server tag(s) exist but there is no active server-side Conversion Linker, so no first-party click-id cookie is written and conversions lose their click attribution.`,
+      recommendation: 'Add a Conversion Linker server tag (create_server_tag platform "ads_conversion_linker") and fire it on the same trigger as the GA4 relay, so it runs on every claimed request rather than only on conversions.',
+      autoFixable: false,
+    });
+  }
+
   // ── P0: consent is not enforced on VENDOR server tags ──────────────────────────────────
   // Ranked the single highest-damage server finding because it is unrecoverable LIABILITY, not a
   // wrong number: a conversion sent for a user who refused cannot be un-sent. Google's own server
