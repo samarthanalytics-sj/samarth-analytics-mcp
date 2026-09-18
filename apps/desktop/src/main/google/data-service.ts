@@ -9,6 +9,7 @@ import { ga4TagFields, readGa4EventParameters, applyTriggerWaitDefaults, buildEn
 import {
   galleryCoordinatesFor, matchInstalledTemplate, templateInstallError,
 } from '../../../../../src/shared/gtm-template-sources';
+import { installTemplateFromSource, type TemplateCreateApi } from '../../../../../src/shared/gtm-template-install';
 import { resolveGa4MeasurementIds } from './gtm-ga4-check';
 import { withQuotaRetry, withRetry, QUOTA_RE, TRANSIENT_5XX_RE, NOT_FOUND_OR_PERMISSION_RE } from './quota-retry';
 import { log } from '../logger';
@@ -3442,29 +3443,43 @@ export class GoogleDataService {
     );
     if (existing) return { templateId: existing.templateId, name: existing.name, type: existing.type, imported: false };
 
-    // Not installed. Import ONLY when the template really is in the gallery, under coordinates GTM
-    // accepts (some stape-io repos are forks whose gallery entry belongs to the upstream author,
-    // and a few are not listed at all). Otherwise the import can only fail, so say what to do.
+    // Not installed yet. Import from the gallery when the template really is there, under
+    // coordinates GTM accepts (some stape-io repos are FORKS whose gallery entry belongs to the
+    // upstream author). A template that was never listed is installed by uploading its source
+    // instead, which is exactly what Templates > Import does by hand.
     const coords = galleryCoordinatesFor(owner, repository);
-    if (!coords) throw new Error(templateInstallError(owner, repository));
-    let res;
     try {
-      res = await gtm.accounts.containers.workspaces.templates.import_from_gallery({
+      if (!coords) {
+        const installed = await installTemplateFromSource(
+          gtm.accounts.containers.workspaces.templates as unknown as TemplateCreateApi,
+          parent,
+          owner,
+          repository
+        );
+        const t = installed.template as { templateId?: string | null; name?: string | null };
+        return {
+          templateId: t.templateId ?? '',
+          name: t.name ?? installed.name,
+          type: customTemplateType(installed.template, containerId),
+          imported: true,
+        };
+      }
+      const res = await gtm.accounts.containers.workspaces.templates.import_from_gallery({
         parent,
         galleryOwner: coords.owner,
         galleryRepository: coords.repository,
         ...(sha ? { gallerySha: sha } : {}),
         acknowledgePermissions: true,
       });
+      return {
+        templateId: res.data.templateId ?? '',
+        name: res.data.name ?? repository,
+        type: customTemplateType(res.data, containerId),
+        imported: true,
+      };
     } catch (e) {
       throw new Error(templateInstallError(owner, repository, e instanceof Error ? e.message : String(e)));
     }
-    return {
-      templateId: res.data.templateId ?? '',
-      name: res.data.name ?? repository,
-      type: customTemplateType(res.data, containerId),
-      imported: true,
-    };
   }
 
   /** Traffic baseline for the audit report over [startDate, endDate] (the data-quality window),

@@ -113,21 +113,21 @@ export const TEMPLATE_SOURCES: Readonly<Record<string, TemplateSource>> = {
     sourceRepo: 'stape-io/data-client',
     displayName: 'Data Client',
     kind: 'CLIENT',
-    note: 'Stape never listed the Data Client in the gallery, so import_from_gallery cannot install it. Upload the .tpl once per SERVER container; after that the tool finds it and reuses it.',
+    note: 'Stape never listed the Data Client in the gallery, so import_from_gallery cannot install it. It is installed instead by uploading the vendor source, and an existing copy (however it got there) is reused.',
   },
   'stape-io/rtb-house-tag': {
     gallery: null,
     sourceRepo: 'stape-io/rtb-house-tag',
     displayName: 'RTB House Conversions API by Stape',
     kind: 'TAG',
-    note: 'Not listed in the gallery (the repo README says so). Upload the .tpl into the SERVER container, then the RTB House tag builds against it.',
+    note: 'Not listed in the gallery (the repo README says so), so it is installed by uploading the vendor source; the RTB House tag then builds against it.',
   },
   'stape-io/tapfiliate-tag': {
     gallery: null,
     sourceRepo: 'stape-io/tapfiliate-tag',
     displayName: 'Tapfiliate',
     kind: 'TAG',
-    note: 'Not listed in the gallery (the repo README says so). Upload the .tpl into the SERVER container first.',
+    note: 'Not listed in the gallery (the repo README says so), so it is installed by uploading the vendor source.',
   },
 
   // ── Listed, but under the UPSTREAM author: stape-io holds only a fork ──
@@ -215,6 +215,47 @@ export function matchInstalledTemplate<T extends InstalledTemplateLike>(
   return list.find((t) => (t.name ?? '').trim().toLowerCase() === want);
 }
 
+/** Raw URLs to try for this template's source file, in order. Only ever built from the REGISTRY, so
+ *  a caller cannot point the installer at an arbitrary repository. Empty for an unknown template. PURE. */
+export function templateSourceUrls(owner: string, repository: string): string[] {
+  const src = resolveTemplateSource(owner, repository);
+  if (!src) return [];
+  // Branch fallback: most of these repos are on main, a few are still on master.
+  return ['main', 'master'].map((b) => `https://raw.githubusercontent.com/${src.sourceRepo}/${b}/template.tpl`);
+}
+
+export type TemplateVerdict = { ok: true; info: TemplateInfo } | { ok: false; reason: string };
+
+/**
+ * Is this downloaded file really the template we asked for?
+ *
+ * Checked before anything is written into a container, because the installer fetches over the
+ * network: the file has to parse as a GTM template, call itself the name the registry recorded, be
+ * the right kind (a CLIENT is not a TAG), and declare the SERVER context these all target. A
+ * mismatch means the upstream repo moved or the download is not what it claims, and the right
+ * answer is to refuse rather than install it. PURE.
+ */
+export function verifyTemplateSource(
+  templateData: string,
+  owner: string,
+  repository: string,
+): TemplateVerdict {
+  const src = resolveTemplateSource(owner, repository);
+  if (!src) return { ok: false, reason: `${owner}/${repository} is not a known template source.` };
+  const info = parseTemplateInfo(templateData);
+  if (!info) return { ok: false, reason: 'the downloaded file has no readable ___INFO___ block, so it is not a GTM template.' };
+  if (info.kind !== src.kind) {
+    return { ok: false, reason: `expected a ${src.kind} template, but the download declares ${info.kind ?? 'no kind'}.` };
+  }
+  if (info.displayName.trim().toLowerCase() !== src.displayName.trim().toLowerCase()) {
+    return { ok: false, reason: `expected the template to call itself "${src.displayName}", but it calls itself "${info.displayName}".` };
+  }
+  if (info.containerContexts.length > 0 && !info.containerContexts.includes('SERVER')) {
+    return { ok: false, reason: `this template targets ${info.containerContexts.join('/')}, not a SERVER container.` };
+  }
+  return { ok: true, info };
+}
+
 /** The exact manual-install steps for a template that is not in the gallery. PURE. */
 export function manualInstallSteps(owner: string, repository: string): string[] {
   const src = resolveTemplateSource(owner, repository);
@@ -233,7 +274,8 @@ export function manualInstallSteps(owner: string, repository: string): string[] 
 export function templateInstallError(owner: string, repository: string, cause?: string): string {
   const src = resolveTemplateSource(owner, repository);
   const head = src && !src.gallery
-    ? `${owner}/${repository} is NOT in the GTM Community Template Gallery, so it cannot be imported automatically. ${src.note}`
+    ? `Could not install ${owner}/${repository}. It is NOT in the GTM Community Template Gallery, so it is installed by `
+      + `uploading the source from ${src.sourceRepo}, and that did not succeed.${cause ? ` Cause: ${cause}` : ''}`
     : `Could not install the ${owner}/${repository} template.${cause ? ` GTM said: ${cause}` : ''}`;
-  return [head, 'Install it by hand:', ...manualInstallSteps(owner, repository).map((s, i) => `  ${i + 1}. ${s}`)].join('\n');
+  return [head, 'Install it by hand instead:', ...manualInstallSteps(owner, repository).map((s, i) => `  ${i + 1}. ${s}`)].join('\n');
 }

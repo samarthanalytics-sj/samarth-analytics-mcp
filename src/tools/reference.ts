@@ -267,8 +267,8 @@ export const GALLERY_CATEGORIES: { category: string; examples: string[]; known?:
       'Stape Yelp': 'stape-io/yelp-tag',
       'Stape Spotify': 'stape-io/spotify-tag',
       'Stape LINE Yahoo': 'stape-io/line-yahoo-tag',
-      // NOT in the gallery (the repo README says so): upload template.tpl by hand once.
-      'RTB House (manual install)': 'stape-io/rtb-house-tag',
+      // NOT in the gallery (the repo README says so): installed from the vendor source instead.
+      'RTB House (source install)': 'stape-io/rtb-house-tag',
       'Stape Mixpanel': 'stape-io/mixpanel-tag',
       'Stape Matomo': 'stape-io/matomo-advanced-tag',
       'Stape Piwik PRO': 'stape-io/piwik-pro-tag',
@@ -292,8 +292,8 @@ export const GALLERY_CATEGORIES: { category: string; examples: string[]; known?:
       'Stape Affiliate Future': 'stape-io/affiliate-future-server-tag',
       'Stape Effinity': 'stape-io/effinity-tag',
       'Stape Refersion': 'stape-io/refersion-tag',
-      // NOT in the gallery (the repo README says so): upload template.tpl by hand once.
-      'Tapfiliate (manual install)': 'stape-io/tapfiliate-tag',
+      // NOT in the gallery (the repo README says so): installed from the vendor source instead.
+      'Tapfiliate (source install)': 'stape-io/tapfiliate-tag',
       'Stape Everflow': 'stape-io/everflow-tag',
       'Stape Voluum': 'stape-io/voluum-tag',
     },

@@ -22,6 +22,7 @@ import { jsonResult, textResult, errorResult, errorText } from '../utils/toolRes
 import {
   galleryCoordinatesFor, matchInstalledTemplate, templateInstallError, resolveTemplateSource,
 } from '../shared/gtm-template-sources.js';
+import { installTemplateFromSource, type TemplateCreateApi } from '../shared/gtm-template-install.js';
 
 /** A GTM resource collection that lives directly under a workspace. */
 interface WorkspaceResourceApi {
@@ -385,7 +386,10 @@ function registerGalleryImport(server: McpServer, getClient: () => GtmClient): v
         'tags_create with type "gaawe" directly; do not import anything first. ' +
         'Requires GTM_MCP_ENABLE_WRITES=true and confirm=true. ' +
         'The GTM API DOES support this (templates.import_from_gallery); never tell the user it is UI-only. ' +
-        'Idempotent: importing one already present returns it unchanged rather than creating a duplicate. ' +
+        'Idempotent: one already present is returned unchanged rather than duplicated, including a copy installed by hand. ' +
+        'Handles the two cases a plain gallery import cannot: a repo that is only a FORK is imported from the publisher instead, ' +
+        'and a template the gallery never listed (e.g. stape-io/data-client, rtb-house-tag, tapfiliate-tag) is installed by uploading ' +
+        'the vendor source, which is what Templates > Import does by hand. ' +
         'Returns the installed template. To build a tag on it you need its tag TYPE (a cvt_... string): READ ' +
         'that from the container rather than constructing it from the templateId, because the format is not ' +
         'what it appears to be. Pass the exact string as `type` to tags_create ' +
@@ -415,8 +419,10 @@ function registerGalleryImport(server: McpServer, getClient: () => GtmClient): v
         // Already installed? Compared case-insensitively, because the gallery is not consistent
         // about capitalisation (Snapchat/snapchat-google-tag-manager) and a case mismatch would
         // import a second copy of a template that is already there.
+        // Kept for the dry-run/report text below.
         const wantOwner = owner.trim().toLowerCase();
         const wantRepo = repository.trim().toLowerCase();
+        void wantOwner; void wantRepo;
         // The fetch must hand `paginate` the response BODY, not the gaxios envelope. This used to
         // pass the raw response through, so `nextPageToken` sat one level down at
         // `.data.nextPageToken`, was never found, and the scan stopped after page 1: an
@@ -426,24 +432,54 @@ function registerGalleryImport(server: McpServer, getClient: () => GtmClient): v
           (pageToken) => api.list({ parent, pageToken }).then((r) => r.data),
           (data) => data.template as Record<string, unknown>[] | undefined,
         );
-        const existing = existingPages.items.find((t) => {
-          const ref = t.galleryReference as { owner?: string; repository?: string } | undefined;
-          return ref?.owner?.toLowerCase() === wantOwner && ref?.repository?.toLowerCase() === wantRepo;
-        });
+        // Also matches a template installed from SOURCE or by hand, which carries no
+        // galleryReference at all - otherwise this would install a second copy of one already there.
+        const existing = matchInstalledTemplate(
+          existingPages.items as Array<{ galleryReference?: { owner?: string | null; repository?: string | null } | null; name?: string | null; templateData?: string | null }>,
+          owner,
+          repository,
+        ) as Record<string, unknown> | undefined;
         if (existing) {
           return jsonResult({
             imported: false,
-            reason: 'This gallery template is already installed in the workspace; returning the existing one.',
+            reason: 'This template is already installed in the workspace; returning the existing one.',
             template: existing,
             tagType: customTemplateType(existing, containerId),
             tagTypeNote: TAG_TYPE_GUIDANCE,
           });
         }
 
-        const imported = await importFromGallery(client, parent, owner, repository, sha);
+        // A template the gallery never listed cannot be imported from it. Install it the way the
+        // GTM UI's Templates > Import does instead: upload the vendor's own source. Allowlisted to
+        // the registry in gtm-template-sources, and verified before anything is written.
+        const coords = galleryCoordinatesFor(owner, repository);
+        if (!coords) {
+          let installed;
+          try {
+            installed = await installTemplateFromSource(api as unknown as TemplateCreateApi, parent, owner, repository);
+          } catch (e) {
+            throw new Error(templateInstallError(owner, repository, e instanceof Error ? e.message : String(e)));
+          }
+          return jsonResult({
+            imported: true,
+            installedFrom: installed.url,
+            reason:
+              `${owner}/${repository} is not in the Community Template Gallery, so it was installed by uploading its ` +
+              'source from the vendor repository, the same thing Templates > Import does by hand.',
+            template: installed.template,
+            tagType: customTemplateType(installed.template, containerId),
+            tagTypeNote: TAG_TYPE_GUIDANCE,
+          });
+        }
+
+        const imported = await importFromGallery(client, parent, coords.owner, coords.repository, sha);
 
         return jsonResult({
           imported: true,
+          ...(coords.owner.toLowerCase() !== owner.trim().toLowerCase() ||
+             coords.repository.toLowerCase() !== repository.trim().toLowerCase()
+            ? { importedAs: `${coords.owner}/${coords.repository}`, reason: `${owner}/${repository} is a fork; the gallery entry belongs to ${coords.owner}, so it was imported from there.` }
+            : {}),
           template: imported,
           tagType: customTemplateType(
             (imported ?? {}) as Record<string, unknown>,
@@ -548,12 +584,13 @@ export async function ensureGalleryTemplate(
   if (existing) {
     template = existing;
   } else {
-    // Not installed. Only import when the template is actually IN the gallery under coordinates
-    // GTM accepts - otherwise the import can only fail, so say what to do instead.
+    // Not installed yet. A template that IS in the gallery is imported from it; one that is not
+    // listed is installed by uploading its source, which is what Templates > Import does by hand.
     const coords = galleryCoordinatesFor(owner, repository);
-    if (!coords) throw new Error(templateInstallError(owner, repository));
     try {
-      template = await importFromGallery(client, parent, coords.owner, coords.repository);
+      template = coords
+        ? await importFromGallery(client, parent, coords.owner, coords.repository)
+        : (await installTemplateFromSource(api as unknown as TemplateCreateApi, parent, owner, repository)).template;
     } catch (e) {
       throw new Error(templateInstallError(owner, repository, e instanceof Error ? e.message : String(e)));
     }
