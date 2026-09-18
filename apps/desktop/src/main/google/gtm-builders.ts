@@ -2694,6 +2694,117 @@ export function auditServerContainer(s: ServerContainerSnapshot): AuditReport {
     }
   }
 
+  // ── P0: consent is not enforced on VENDOR server tags ──────────────────────────────────
+  // Ranked the single highest-damage server finding because it is unrecoverable LIABILITY, not a
+  // wrong number: a conversion sent for a user who refused cannot be un-sent. Google's own server
+  // tags honour Consent Mode natively, but a third-party CAPI tag does NOT - it fires whenever its
+  // trigger fires unless the tag itself carries a consent gate.
+  //
+  // Deliberately NEVER auto-fixable. Loosening or guessing a consent setting is never a safe
+  // automatic action, and default-deny is the correct failure state. Aggregated into ONE finding
+  // so a container with a dozen CAPI tags produces one clear item rather than a dozen alarms.
+  //
+  // Escape hatch against false positives: a team can gate consent on the TRIGGER instead of the
+  // tag (a condition on a consent variable). When the firing trigger mentions one, this stays
+  // silent rather than crying wolf - the same rule the dedup check follows.
+  const CONSENT_REF_RE = /consent|gcs\b|gdpr|cmp|ad_storage|analytics_storage|ad_user_data|ad_personalization/i;
+  const triggerGatesConsent = (triggerId: string): boolean => {
+    const tr = triggers.find((x) => x.triggerId === triggerId);
+    if (!tr) return false;
+    for (const arr of [tr.customEventFilter, tr.filter, tr.autoEventFilter]) {
+      for (const f of arr ?? []) {
+        const params = ((f as { parameter?: Array<{ value?: unknown }> }).parameter) ?? [];
+        if (params.some((p) => CONSENT_REF_RE.test(String(p.value ?? '')))) return true;
+      }
+    }
+    return false;
+  };
+  const ungatedVendorTags = s.tags.filter((t) => {
+    if (!isAnyCapiServerTag(t)) return false;
+    const gate = evaluateConsentGate(t.consentSettings, ['ad_storage']);
+    // 'ungated' = no additional consent check at all; 'declared_no_consent' = explicitly declared
+    // as needing none. Both mean the tag fires regardless of the visitor's choice.
+    if (gate !== 'ungated' && gate !== 'declared_no_consent') return false;
+    return !(t.firingTriggerId ?? []).some(triggerGatesConsent);
+  });
+  if (ungatedVendorTags.length) {
+    const shown = ungatedVendorTags.slice(0, 5).map((t) => `"${t.name}"`).join(', ');
+    const more = ungatedVendorTags.length > 5 ? ` and ${ungatedVendorTags.length - 5} more` : '';
+    push({
+      severity: 'critical',
+      confidence: 'likely',
+      category: 'consent',
+      message: `${ungatedVendorTags.length} third-party conversion-API server tag(s) carry no consent gate: ${shown}${more}. Unlike Google's server tags these do not honour Consent Mode on their own, so they send data for visitors who refused.`,
+      recommendation: 'Set Consent Settings on each tag to "Require additional consent" with the vendor\'s consent types (ad_storage for advertising vendors, plus ad_user_data / ad_personalization where the vendor requires them), or gate the firing trigger on a consent variable. Decide the correct types deliberately: this is never auto-fixed because the safe default is to send nothing.',
+      autoFixable: false,
+    });
+  }
+
+  // ── P0: the GA4 client will not claim the requests it is there to claim ─────────────────
+  // "No client claimed the request" is the most common way a server container silently receives
+  // nothing. Two causes are visible in the config alone.
+  const ga4ClientCfg = s.clients.find((c) => c.type === 'gaaw_client');
+  const clientParamValue = (c: { parameter?: unknown[] } | undefined, key: string): string => {
+    for (const p of (c?.parameter ?? []) as Array<{ key?: string; value?: unknown }>) {
+      if (p && p.key === key) return String(p.value ?? '');
+    }
+    return '';
+  };
+  if (ga4ClientCfg && clientParamValue(ga4ClientCfg, 'activateDefaultPaths').toLowerCase() === 'false') {
+    push({
+      severity: 'high',
+      confidence: 'certain',
+      category: 'firing',
+      message: `The GA4 client "${ga4ClientCfg.name}" has default paths turned OFF, so it does not claim the standard GA4/gtag request paths - incoming requests go unclaimed and every Google server tag stays idle.`,
+      recommendation: 'Turn default paths back on, or confirm a custom path is configured on BOTH this client and the web tag that sends to it.',
+      autoFixable: false,
+    });
+  }
+  // A trailing or doubled slash makes the collect path "//g/collect", which no client matches.
+  // Trivial, and one of the most frequent real causes of a dead server container.
+  for (const u of s.taggingServerUrls) {
+    const afterProtocol = String(u).replace(/^https?:\/\//i, '');
+    if (afterProtocol.includes('//') || /\/$/.test(afterProtocol)) {
+      push({
+        severity: 'medium',
+        confidence: 'likely',
+        category: 'firing',
+        message: `The tagging server URL "${u}" has a trailing or doubled slash. Request paths are appended to it, producing a doubled slash that no client matches, so requests arrive and are never claimed.`,
+        recommendation: 'Record the URL with no trailing slash (https://sgtm.example.com, not https://sgtm.example.com/).',
+        autoFixable: false,
+      });
+    }
+  }
+
+  // ── P1: cookies written by JavaScript instead of by the server ─────────────────────────
+  // The main reason to run sGTM at all is a server-set cookie that survives browser cookie
+  // capping. Reported, never auto-changed: whether server-managed cookies are correct depends on
+  // the tagging domain passing the browser's first-party test and on the migration flag, neither
+  // of which can be settled from container config, and flipping it blind resets returning visitors.
+  if (ga4ClientCfg) {
+    const cookieMode = clientParamValue(ga4ClientCfg, 'cookieManagement').toLowerCase();
+    const cookieName = clientParamValue(ga4ClientCfg, 'cookieName');
+    if (cookieMode && cookieMode !== 'server') {
+      push({
+        severity: 'medium',
+        confidence: 'likely',
+        category: 'ga4',
+        message: `The GA4 client "${ga4ClientCfg.name}" leaves client-id cookies to JavaScript, so browsers that cap script-written cookies shorten visitor lifetime to days - the durability server-side tagging is meant to provide is not being gained.`,
+        recommendation: 'Consider server-managed cookies, but verify first that the tagging domain is genuinely first-party to the site; switching also needs the JS-client-id migration option on, or returning visitors are counted as new.',
+        autoFixable: false,
+      });
+    } else if (cookieMode === 'server' && !cookieName) {
+      push({
+        severity: 'high',
+        confidence: 'certain',
+        category: 'ga4',
+        message: `The GA4 client "${ga4ClientCfg.name}" is set to server-managed cookies but has no cookie name, so it writes no cookie at all and every request looks like a new visitor.`,
+        recommendation: 'Set the cookie name (FPID is the convention) on the GA4 client.',
+        autoFixable: false,
+      });
+    }
+  }
+
   const nameCounts = new Map<string, number>();
   for (const t of s.tags) nameCounts.set(t.name, (nameCounts.get(t.name) ?? 0) + 1);
   for (const [name, c] of nameCounts) if (c > 1) push({ severity: 'medium', category: 'naming', message: `Duplicate server-tag name "${name}" (${c} tags) — hard to tell them apart.`, recommendation: 'Rename so each tag is uniquely identifiable.', autoFixable: false });
