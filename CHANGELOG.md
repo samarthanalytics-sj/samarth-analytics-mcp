@@ -1,3 +1,27 @@
+## [1.495.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.494.0...v1.495.0) (2026-09-21)
+
+### Features
+
+* **mcp:** register the web->server migration tools on the MCP server (E2) ([#973](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/973)) ([e43f7ec](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/e43f7ecd873a78bebdbd7f767cc5b6a5ce2a256f)), closes [#972](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/972)
+* **server:** audit the three highest-damage sGTM config gaps (consent, claim, cookies) ([#978](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/978)) ([6872089](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/6872089c5fe2ea142142f518fbed7ed5f4bed00b))
+* **server:** catch the failures that only exist in the web + server PAIR ([#979](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/979)) ([ce61de6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/ce61de67e29bdbd3de1ab60a35bfa5ff649abd8c))
+* **server:** migration foundation - carry pixel ids, plan every buildable destination, apply LinkedIn/Pinterest ([#970](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/970)) ([b7df4cc](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/b7df4ccd2ab212e387d69663fe9b32b1b7d5ba47))
+* **server:** one-click apply builds every typed CAPI platform, not four ([#980](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/980)) ([19f2475](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/19f2475b227d6b5ee4ab549206002ea8e7a96d05))
+* **server:** plan analytics + affiliate web tags as generic Stape gallery migrations (Phases C+D) ([#975](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/975)) ([6ad6253](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/6ad625352106d324d17fa24f3efbca02b1673de1))
+* **server:** Tier-1 CAPI builders - X, Quora, AdRoll, Nextdoor, Yelp, Spotify, LINE Yahoo, RTB House ([#974](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/974)) ([3163ab0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/3163ab0a7129994f7beddfd1baced22202a4966b)), closes [#970](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/970)
+* **webaudit:** opt-in interactive discovery of CTA-opened popup forms ([#964](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/964)) ([c7518e7](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c7518e7322dd771e51782c2ee61d3beb80708a8f))
+
+### Bug Fixes
+
+* **authorize:** build against Stytch 6 and Vite 8 so the hosted image deploys again ([#957](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/957)) ([1faa808](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/1faa80889ead449f700051e863ef887528107f11)), closes [#869](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/869)
+* **authorize:** own the consent step and drop the iss parameter so MCP clients can finish sign-in ([#961](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/961)) ([152e79e](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/152e79e2c1f048cb4feab726a99864a108c10cb7))
+* **authorize:** pin Stytch to the 19.x/5.x line so the login page renders again ([#959](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/959)) ([8b89d1c](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/8b89d1ccd1476293dafec1e54d6bd6507cdfdbde)), closes [#869](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/869) [#284](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/284) [#525](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/525)
+* **scan:** name a bot-protection block instead of reporting "http 403" ([#969](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/969)) ([939e35b](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/939e35b5ac4d932c46b986e931e3d523fceb1159))
+* **server:** install Stape templates from coordinates that actually work, and automate the ones the gallery never listed ([#976](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/976)) ([ab26fd2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/ab26fd25b2ce2755c6d165a5c0691e8a047e6b62))
+* **webaudit:** don't detect cookie-consent banners as forms ([#967](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/967)) ([0d83f13](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/0d83f1356ff09520e5d6a2f2ac6de3f54b1485a0))
+* **webaudit:** don't detect site navigation as forms ([#968](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/968)) ([e4cc27e](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/e4cc27e77de7026c29fe6f7c964d9ab559a5475a))
+* **webaudit:** keep the start URL's [#fragment](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/fragment) when scanning the entry page ([#963](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/963)) ([365badf](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/365badfae7f92d62cbaf709beb5d8639bdfbf585))
+
 ## [1.494.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.493.0...v1.494.0) (2026-09-07)
 
 ### Features
