@@ -8,6 +8,7 @@
 | **Subject** | Integrating the Samarth Analytics MCP into the live AI Tag Manager platform, first feature: the GTM AI Chat Assistant |
 | **Date** | 5 August 2026 |
 | **Status** | For engineering planning, infrastructure design, and production deployment |
+| **Revised** | 21 September 2026: the MCP tool and prompt counts in 1.1 were re-measured at commit `19f2475b` (203 tools, up from 173 at v1.450.8), and 1.1 now describes the web-to-server migration surface added since the original analysis. Everything else in this report is unchanged and still reflects the August analysis. |
 | **Sources analyzed** | `samarth-analytics-mcp` (npm `samarth-gtm-mcp` v1.450.8, working copy) and `gtm-ai-automator` (the live AI Tag Manager platform, read from the repository and a supplied archive), plus the live site. Platform database facts are derived from the 146 migration files and the generated types in that repository, not from a live connection to its Supabase project, which this analysis did not have access to. The repository's own audit notes roughly 120 remote-only migrations applied outside version control, so treat the schema described here as the committed schema rather than a guaranteed match for production. |
 
 ---
@@ -16,7 +17,7 @@
 
 **Recommendation: proceed, with a short remediation phase first.**
 
-The integration is technically feasible with high confidence. It is an assembly and hardening project rather than a research project, because the difficult parts already exist and are tested: a working agentic GTM chat (in the monorepo's Electron app), 173 GTM and GA4 tools with default-off write guardrails, 7 curated expert prompts, a Consent Mode v2 engine with a 170-case test suite, and a fully specified production architecture with a reversible cutover runbook.
+The integration is technically feasible with high confidence. It is an assembly and hardening project rather than a research project, because the difficult parts already exist and are tested: a working agentic GTM chat (in the monorepo's Electron app), 203 GTM and GA4 tools with default-off write guardrails, 7 curated expert prompts, a Consent Mode v2 engine with a 170-case test suite, and a fully specified production architecture with a reversible cutover runbook.
 
 **What changes for users.** Today the platform's assistant runs a single blocking `gpt-4o` call with no tools, no streaming, no memory across a page refresh, and keyword-matching retrieval. It cannot see the user's container. After integration it reads live GTM and GA4 state, runs curated workflows (audit, debug a non-firing tag, build a GA4 event tag, set up server-side GTM, install an ecommerce funnel), and proposes changes that a human approves before anything is written.
 
@@ -79,20 +80,21 @@ This report therefore analyzes both: the MCP being integrated (1.1-1.5) and the 
 
 A production Model Context Protocol server for the Google Tag Manager API v2 plus GA4 (Admin and Data APIs), shipped as an npm package and a Docker image, published to the MCP registry. Empirically verified by instantiating the server and reading its registered capabilities:
 
-- **173 tools**, of which **52 are read-only** (no `confirm` argument) and **121 are confirm-gated writes**.
-- **7 MCP prompts**, which are the curated workflows the planned GTM AI Chat is meant to be "powered by".
+- **203 tools**, of which **57 are read-only** (no `confirm` argument) and **146 are confirm-gated writes**. The original analysis measured 173 (52 read-only, 121 gated) at v1.450.8; most of the growth is the web-to-server migration surface described below.
+- **7 MCP prompts**, which are the curated workflows the planned GTM AI Chat is meant to be "powered by". The count is unchanged; `setup_server_side_container` was updated to route through the migration tools.
 
-Tool distribution:
+Tool distribution. Each tool is attributed to the source module that registers it, measured by registering every module on its own server instance, so the families are exact and sum to the total:
 
 | Family | Tools | Family | Tools |
 |---|---:|---|---:|
-| GTM: server-side / advanced (clients, transformations, zones, templates, gtag config) | 29 | GTM: containers + destinations | 12 |
-| GTM: folders | 7 | GTM: tags, versions, environments | 6 each |
-| GTM: workspaces (incl. publish/preview) | 8 | GTM: triggers, variables, user permissions | 5 each |
+| GTM: server-side / advanced (clients, transformations, zones, templates, gtag config) | 30 | GTM: containers + destinations | 11 |
+| **GTM: web-to-server migration** (planner, native server tag, 17 conversion-API server tags) | **19** | GTM: folders | 7 |
+| GTM: workspaces (incl. publish/preview) | 9 | GTM: tags, versions, environments | 6 each |
+| GTM: triggers, variables, user permissions | 5 each | GTM: authoring helpers (template fields, typed builders, type reference) | 5 |
 | GTM: built-in variables | 4 | GTM: accounts | 2 |
-| GTM: audit, export | 1 each | **GTM subtotal** | **97** |
-| GA4 Admin (reads, writes across 20 resource types, plus bespoke settings tools) | 73 | GA4 Data (reporting, read-only) | 3 |
-| | | **GA4 subtotal** | **76** |
+| GTM: audit, export | 1 each | **GTM subtotal** | **122** |
+| GA4 Admin (reads, writes across 20 resource types, plus bespoke settings tools) | 78 | GA4 Data (reporting, read-only) | 3 |
+| | | **GA4 subtotal** | **81** |
 
 The 7 prompts, which map almost one-to-one onto the chat feature you want:
 
@@ -103,10 +105,21 @@ The 7 prompts, which map almost one-to-one onto the chat feature you want:
 | `create-tag` | 6-step GA4 event tag build: event name, trigger, built-ins, trigger/variable creation, `gaawe` tag, event parameters, verify |
 | `report` | Run a GA4 report with correct date handling and cross-check against key events |
 | `explain` | Explain a GTM/GA4 concept, or read and explain a specific live resource |
-| `setup_server_side_container` | Full sGTM build with corpus-validated resource shapes (FPID client, gtm_client, ed/c/rh variables, sgtmgaaw tags, tagging server URLs) |
+| `setup_server_side_container` | Full sGTM build with corpus-validated resource shapes (FPID client, gtm_client, ed/c/rh variables, sgtmgaaw tags, tagging server URLs), then routes each web destination through `plan_server_migration_from_web` and the typed conversion-API tools |
 | `setup_ecommerce_funnel` | Idempotent GA4 ecommerce funnel install with native ecommerce data, plus Consent Mode v2 defaults on the built-in initialization trigger |
 
 Those prompts encode real GTM expertise (correct enum values, `firingTriggerId` as an array, GA4 event parameters belonging in `eventSettingsTable` rather than the generic parameter list, trigger event names never URL-encoded, resource shapes validated against 562 real container exports). They are the single most valuable asset in this integration, and they are plain strings with a test suite of roughly 50 needle assertions guarding their content.
+
+### Web-to-server migration surface (added since the original analysis)
+
+The MCP can now plan and build a server-side (sGTM) setup from an existing web container, which is the most requested server-side workflow and one the chat can drive end to end:
+
+- **`plan_server_migration_from_web`** (read-only) reads a web container and lists, for every tag that can move, the server tool that ports it, the public ids read straight off the web tag so the server tag is created pre-filled, and the secrets the user must still supply. It creates nothing. It covers 17 conversion-API destinations with typed builders (Meta, TikTok, LinkedIn, Pinterest, Snapchat, Microsoft Ads, Reddit, Amazon Ads, StackAdapt, X, Quora, AdRoll, Nextdoor, Yelp, Spotify, LINE Yahoo, RTB House), 24 analytics and affiliate destinations planned as generic template installs (among them Mixpanel, Matomo, Piwik PRO, Klaviyo, Awin, CJ, Impact and Rakuten), and the native Google tags.
+- **`create_server_tag`** builds the native server tags: the GA4 relay, Google Ads conversion, remarketing and Conversion Linker.
+- **17 `create_*_capi_server_tag` tools**, one per typed destination. Each installs its own template, refuses without that vendor's own credentials rather than guessing them, and lands the tag in a draft workspace. Nothing publishes.
+- **`templates_import_from_gallery` handles the two cases a plain gallery import cannot.** A repository that is only a fork is imported from its real publisher, and a template the gallery never listed (the Stape Data Client, RTB House, Tapfiliate) is installed by uploading the vendor's own source. That source install is limited to an allowlisted set of vendor repositories, and the download is verified against the expected template before anything is written to a container.
+
+For the integration this matters in two ways. The planner is read-only, so it sits in the chat's default tool surface with no approval step. The 18 build tools are ordinary confirm-gated writes, so they inherit the approval ladder and the process-wide write guardrails described in 1.5 with no new mechanism.
 
 ## 1.2 How the MCP works today
 
@@ -150,7 +163,7 @@ These are the things that must be addressed, not reasons to avoid the integratio
 3. **Guardrails are process-wide.** There is no way to grant writes to one tenant and not another. Fix: keep the MCP read-only at the process level and route write operations through a separate write-enabled MCP instance (or a per-request policy layer in the orchestrator that refuses before calling), so entitlements are enforced per user, not per process.
 4. **No CORS, by design.** A browser cannot call `/mcp` directly. This is not a defect, it is why an orchestrator tier is mandatory (see 2.2).
 5. **No rate limiting, no per-user quota accounting, no structured logs or request correlation.** All three are supplied by the orchestrator plus the shared observability engine.
-6. **173 tools is far more than a chat model handles well** in one `tools/list` (schemas alone would dominate the context). The desktop app already solved this with progressive tool-group disclosure; reuse that rather than exposing the flat catalog.
+6. **203 tools is far more than a chat model handles well** in one `tools/list` (schemas alone would dominate the context). The desktop app already solved this with progressive tool-group disclosure; reuse that rather than exposing the flat catalog.
 7. **File-based token storage assumes a writable persistent CWD**, which containers do not have. Irrelevant in the hosted path (tokens come from the platform), but it must be consciously disabled.
 8. **Operational rough edges** to fix during hosting: the `runtime-worker` Dockerfile omits `url-guard.mjs` from its `COPY` and therefore fails at boot; both browser images use floating `npm install` against a pinned Playwright base image; Stytch issuer/audience pinning is optional and should be mandatory; two GA4 scopes (`analytics.edit`, `analytics.manage.users`) are requested even for read-only deployments and should be dropped from the hosted client; version strings disagree across `package.json`, `server.json`, and the value reported to MCP clients.
 
@@ -183,7 +196,7 @@ Found with file-level evidence; each is addressed in Sections 2 and 9.
 
 1. **The Cloud Run service has no authentication at all** (deployed `--allow-unauthenticated`, no header check in code; CORS is the only gate and CORS does not stop curl), **no SSRF protection** on `/scan` (so cloud metadata endpoints are reachable through its headless browser with the service's own identity), and an `/inject` route that accepts a Google `accessToken` in the request body and blind-POSTs to the GTM API. This is the highest-severity item in either codebase and is a prerequisite fix, not a nice-to-have.
 2. **No rate limiting on any AI or GTM endpoint.** Limiters exist only inside eight `admin-*` functions as per-isolate in-memory maps; the shared helper always returns true; the `rate_limits` table has zero callers.
-3. **No server-side plan enforcement.** Entitlement checks live in the browser (`useSubscription`, a wrapper component). Every Edge Function accepts any valid JWT. Combined with (2), an agentic chat over 173 tools would be an unbounded bill.
+3. **No server-side plan enforcement.** Entitlement checks live in the browser (`useSubscription`, a wrapper component). Every Edge Function accepts any valid JWT. Combined with (2), an agentic chat over 203 tools would be an unbounded bill.
 4. **Billing is decorative.** The Stripe webhook handler verifies signatures correctly and then logs every event to console with "add your logic here." Nothing updates `user_plans`; the `monthly_limit_*` columns are never read.
 5. **No write safety on GTM mutations.** No dry run, no diff preview, no pre-change snapshot, no rollback. The injector can auto-publish with a fabricated fingerprint, and failures return HTTP 200 with `success: false`, which will silently mislead any MCP client that checks status codes.
 6. **Backend observability is zero.** The shared Sentry, CORS, API-logger, and id-masking helpers have no importers; errors exist only in ephemeral function logs. All 133 functions hardcode a single allowed origin, which breaks `www.` and every preview deployment.
@@ -205,7 +218,7 @@ One thing to note in the platform's favor: `docs/audit-2026-08-03.md` is an hone
 2. That chat brain is unusually portable. An audit of the chat pipeline found that `main/llm/*`, `main/tools/*`, `main/corpus/*`, `main/services/chat-service.ts`, and all of `shared/*` import neither `electron` nor `node:fs`. The Electron coupling is confined to four IPC files, one 21-line encryption adapter, the local JSON stores, and the React renderer. There is also no LLM SDK to re-vendor: provider calls are plain `fetch` plus SSE.
 3. The receiving platform already has the surrounding pieces: authentication, a Postgres with disciplined RLS, an admin and RBAC stack, a good chat UI shell, and a natural proposal-to-approval seam in that UI where tool calls belong.
 
-The risk in this project is not "can it work." It is that the platform's current production posture (no rate limits, no server-side entitlements, decorative billing, an unauthenticated scanner service, no write safety) makes an agentic assistant with 173 tools dangerous and expensive if it is bolted on before those gaps close. That is why Section 14's roadmap starts with a short remediation phase.
+The risk in this project is not "can it work." It is that the platform's current production posture (no rate limits, no server-side entitlements, decorative billing, an unauthenticated scanner service, no write safety) makes an agentic assistant with 203 tools dangerous and expensive if it is bolted on before those gaps close. That is why Section 14's roadmap starts with a short remediation phase.
 
 ## 2.2 The one architectural decision that follows from the code
 
@@ -253,7 +266,7 @@ Ranked by value. "As-is" means no logic change, only dependency injection at the
 | 1 | The 7 MCP prompts plus `gtm-methodology.ts`, `gtm-prompt-sections.ts`, `jit-reference.ts` | The domain brain. This is the actual product differentiator and it is plain strings with tests | None |
 | 2 | Tool registry (~213 tools) with approval ladder, argument validation and tool-redirect, idempotency prechecks | The largest single asset; months of work | Inject services instead of local ones |
 | 3 | Agentic loop (`gateway.ts`) with step budgets, identical-write blocking, no-op-write detection, abort handling | Prevents runaway loops, which is a cost and safety control | None |
-| 4 | Progressive tool-group disclosure (`tool-groups.ts`) | Turns 173 tools into a workable 40-tool visible surface (measured: 40 GTM reads, 15 GA4 reads); directly controls token cost | None |
+| 4 | Progressive tool-group disclosure (`tool-groups.ts`) | Turns 203 tools into a workable 40-tool visible surface (measured in August: 40 GTM reads, 15 GA4 reads); directly controls token cost | None |
 | 5 | OpenAI client plus SSE transport with rate-limit classification, `Retry-After` honoring, wall-clock budget | Battle-tested, ~400 lines, zero dependencies | Drop the other two providers |
 | 6 | `context-budget.ts` (`capToolResult`, `boundChatHistory`) | Structure-preserving truncation with a model-readable partial-result note | None |
 | 7 | Chat memory core with secret redaction (9 credential patterns) and ranked retrieval | Per-client memory without leaking tokens into storage or prompts | Swap JSON file store for Postgres |
@@ -1119,7 +1132,7 @@ The 11 alert definitions already written in the monorepo's observability doc (au
 
 ## 14.1 Feasibility
 
-Proceed. Integrating the Samarth Analytics MCP into AI Tag Manager is technically feasible with high confidence, and the resulting product is a genuine step change: today the platform's assistant cannot see a user's container, cannot act, and forgets the conversation on refresh. After integration it reads live GTM and GA4 state through 173 tools, executes curated expert workflows, and proposes changes a human approves.
+Proceed. Integrating the Samarth Analytics MCP into AI Tag Manager is technically feasible with high confidence, and the resulting product is a genuine step change: today the platform's assistant cannot see a user's container, cannot act, and forgets the conversation on refresh. After integration it reads live GTM and GA4 state through 203 tools, executes curated expert workflows, and proposes changes a human approves.
 
 Two qualifications, stated plainly:
 
