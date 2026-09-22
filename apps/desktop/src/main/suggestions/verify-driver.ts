@@ -313,7 +313,7 @@ export async function detectLiveContainers(
     const status = resp ? resp.status() : null;
     const pageOk = status === null || status < 400; // goto can resolve with a null response on some SPAs
     // POLL for GTM to actually appear rather than reading once after a fixed delay: a fixed short settle
-    // misses a container the site defers (e.g. get.chownow.com and samarthanalytics.com load GTM ~2s after
+    // misses a container the site defers (e.g. get.chewbox.example and samarthanalytics.com load GTM ~2s after
     // idle). Return as soon as a container is seen, then wait a short grace so a NESTED container (one GTM
     // that loads another) also registers. Overall cap keeps a genuinely container-less page from hanging.
     const pollDeadline = Date.now() + Math.max(settleMs, 7000);

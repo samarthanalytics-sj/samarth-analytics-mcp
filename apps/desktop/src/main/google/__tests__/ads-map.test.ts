@@ -582,9 +582,9 @@ const remember = (note: string | undefined): void => { if (note) notes.push(note
 
   const kw = mapStructureRow('keywords', {
     campaign: { name: 'Brand' }, adGroup: { name: 'Core' },
-    adGroupCriterion: { keyword: { text: 'chownow pos', matchType: 'PHRASE' }, qualityInfo: { qualityScore: 7, creativeQualityScore: 'ABOVE_AVERAGE', postClickQualityScore: 'BELOW_AVERAGE', searchPredictedCtr: 'AVERAGE' } },
+    adGroupCriterion: { keyword: { text: 'chewbox pos', matchType: 'PHRASE' }, qualityInfo: { qualityScore: 7, creativeQualityScore: 'ABOVE_AVERAGE', postClickQualityScore: 'BELOW_AVERAGE', searchPredictedCtr: 'AVERAGE' } },
   });
-  check('structure keywords row: quality trio + names', kw.qualityScore === 7 && kw.landingPageExperience === 'BELOW_AVERAGE' && kw.campaign === 'Brand' && kw.keyword === 'chownow pos');
+  check('structure keywords row: quality trio + names', kw.qualityScore === 7 && kw.landingPageExperience === 'BELOW_AVERAGE' && kw.campaign === 'Brand' && kw.keyword === 'chewbox pos');
   const adRow = mapStructureRow('ads', { campaign: { name: 'Brand' }, adGroup: { name: 'Core' }, adGroupAd: { status: 'ENABLED', adStrength: 'GOOD', ad: { id: '345', type: 'RESPONSIVE_SEARCH_AD', finalUrls: ['https://x.com/a'] } } });
   check('structure ads row: strength + final urls', adRow.adStrength === 'GOOD' && Array.isArray(adRow.finalUrls) && (adRow.finalUrls as string[])[0] === 'https://x.com/a');
 }

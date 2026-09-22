@@ -2630,7 +2630,7 @@ export class GoogleDataService {
   /** ONE-STEP "server container from THIS web container": derive the web container's GA4 Measurement
    *  ID, bootstrap a SERVER container (container + GA4 client with server-managed FPID cookies +
    *  firing trigger + GA4 relay tag), then add the production pieces the reference architecture
-   *  (Vocal Minority web+server pair) builds by hand: a GTM client that FIRST-PARTY-SERVES the web
+   *  (reference web+server pair) builds by hand: a GTM client that FIRST-PARTY-SERVES the web
    *  container (allowedContainerIds = the web GTM-XXXX id) and the standard Event Data variables
    *  server tags read (ed - event_id for Meta/TikTok dedup, ed - page_location for page-scoped
    *  campaign triggers). When a server URL is given, records it on the server container, points the

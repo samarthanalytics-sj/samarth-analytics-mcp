@@ -354,7 +354,7 @@ export function createElectronDriver(opts: ElectronDriverOptions = {}): PageDriv
         // Network quiet is a PROXY for "the page is done"; an embed gated on IntersectionObserver or a
         // timer renders AFTER quiet. The page says so directly though: the provider's container is in
         // the DOM with no form inside it yet. Wait on THAT, and only that, so a page with nothing
-        // pending pays nothing. Measured on get.chownow.com, the HubSpot form is renderable at ~3.1s
+        // pending pays nothing. Measured on get.chewbox.example, the HubSpot form is renderable at ~3.1s
         // while network quiet lands at ~8.1s against a 9s ceiling: it fitted with under a second to
         // spare, and only because network chatter happened to outlast the render.
         await waitForPendingEmbeds(wc);
@@ -383,7 +383,7 @@ export function createElectronDriver(opts: ElectronDriverOptions = {}): PageDriv
         // contiguous.
         // Same normalization as the in-page pass: this union decides the REPORTED form count, and an
         // un-normalized key double-counted a single HubSpot form whose field name carries a
-        // per-render GUID (verified live on get.chownow.com: one form, reported as two).
+        // per-render GUID (verified live on get.chewbox.example: one form, reported as two).
         const formKey = (f: RawForm): string =>
           stableFormKey(`${f.action || ''}|${f.method || ''}|${(f.fields || []).map((x) => x.name || x.id || x.type).join(',')}`);
         const byForm = new Map<string, RawForm>();

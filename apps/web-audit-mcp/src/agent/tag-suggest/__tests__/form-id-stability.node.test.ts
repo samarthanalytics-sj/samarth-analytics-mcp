@@ -14,7 +14,7 @@ function check(name: string, cond: boolean, detail?: string): void {
 
 // The real ids observed across three scans of one HubSpot page. The trailing GUID is constant; the
 // leading one is minted per render.
-const FORM_GUID = '79c35ad9-5d43-407b-8c0e-0b62b2cc8de0';
+const FORM_GUID = '11111111-2222-4333-8444-555555555555';
 const HS = [
   `90c40916-c9d8-4b32-b5fa-07cb0779ce19-${FORM_GUID}`,
   `f03fb5b3-eb64-4f2a-b823-6f1d016e87e9-${FORM_GUID}`,
@@ -82,10 +82,10 @@ check('no em dashes in operator-facing text (house style)',
   !/[—–]/.test((formIdScope(HS)?.note ?? '') + (ephemeralFormIdNote([HS[0]]) ?? '')));
 
 // -- The provider's own id (HubSpot data-form-id): ONE sample is enough ----------
-// Verified live on get.chownow.com: the wrapper and the <form> both carry
-// data-form-id="79c35ad9-5d43-407b-8c0e-0b62b2cc8de0", and the DOM id ends with it.
+// Verified live on get.chewbox.example: the wrapper and the <form> both carry
+// data-form-id="11111111-2222-4333-8444-555555555555", and the DOM id ends with it.
 {
-  const one = ['cf2be672-0e24-4813-8728-42d97847318c-' + FORM_GUID];
+  const one = ['abcdef12-7777-4888-8999-abcdefabcdef-' + FORM_GUID];
   const sc = formIdScope(one, FORM_GUID);
   check('provider id: a SINGLE ephemeral sample now stabilizes', sc?.operator === 'contains' && sc.value === FORM_GUID);
   check('provider id: flagged as stabilized', sc?.stabilized === true);
@@ -95,10 +95,10 @@ check('no em dashes in operator-facing text (house style)',
 }
 check('provider id: one that does NOT appear in the DOM id is not trusted', (() => {
   const other = '00000000-0000-0000-0000-000000000000';
-  return formIdScope(['cf2be672-0e24-4813-8728-42d97847318c-' + FORM_GUID], other) === null;
+  return formIdScope(['abcdef12-7777-4888-8999-abcdefabcdef-' + FORM_GUID], other) === null;
 })());
 check('provider id: matched case-insensitively', (() => {
-  const sc = formIdScope(['CF2BE672-0E24-4813-8728-42D97847318C-' + FORM_GUID.toUpperCase()], FORM_GUID);
+  const sc = formIdScope(['ABCDEF12-7777-4888-8999-ABCDEFABCDEF-' + FORM_GUID.toUpperCase()], FORM_GUID);
   return sc?.operator === 'contains' && sc.value === FORM_GUID;
 })());
 check('provider id: blank is ignored, ordinary ids unaffected', (() => {
@@ -108,10 +108,10 @@ check('provider id: blank is ignored, ordinary ids unaffected', (() => {
 
 // -- stableFormKey: one form read twice must not become two forms ----------------
 {
-  // The real field signature from get.chownow.com carries a per-render GUID AND an epoch-ms run.
+  // The real field signature from get.chewbox.example carries a per-render GUID AND an epoch-ms run.
   const key = (guid: string, stamp: string): string =>
     `https://forms-na2.hsforms.com/submissions|post|0-1/firstname,0-1/email,${guid}-${stamp}-input,hs_context`;
-  const a = stableFormKey(key('cf2be672-0e24-4813-8728-42d97847318c', '2118870237419'));
+  const a = stableFormKey(key('abcdef12-7777-4888-8999-abcdefabcdef', '2118870237419'));
   const b = stableFormKey(key('90c40916-c9d8-4b32-b5fa-07cb0779ce19', '2118870999123'));
   check('key: two reads of the SAME re-rendered form collapse to one key', a === b, `${a} vs ${b}`);
   check('key: the volatile parts are replaced, not dropped', a.includes('<uid>') && a.includes('<n>'));
@@ -147,7 +147,7 @@ check('provider id: blank is ignored, ordinary ids unaffected', (() => {
   // win there: it would pick the GUID HubSpot mints on every render, and ship
   // {{dlv - hs_form_id}} equals a value the vendor never posts again. Two uuids means the LAST one.
   {
-    const INSTANCE = 'cf2be672-0e24-4813-8728-42d97847318c';
+    const INSTANCE = 'abcdef12-7777-4888-8999-abcdefabcdef';
     const both = providerFormIdentity({ vendor: 'hubspot', formId: `hsForm_${INSTANCE}-${FORM_GUID}` });
     check('pfid hubspot: hsForm_<instance>-<form> resolves to the FORM guid, never the instance one',
       both.value === FORM_GUID, String(both.value));

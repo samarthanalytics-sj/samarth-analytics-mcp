@@ -33,7 +33,7 @@ const row = (over: Partial<AdsPlanRow> = {}): AdsPlanRow => ({
 
 // ── What must NOT be created ────────────────────────────────────────────────────
 check('a row that already has a real id and label is left alone', (() => {
-  const p = planAdsConversionActions([row({ measurementId: 'AW-17667466396', conversionLabel: 'g9RqCLD6kdQcEJzJwOhB' })]);
+  const p = planAdsConversionActions([row({ measurementId: 'AW-11122233355', conversionLabel: 'AbCdEfGhIjKlMnOpQrSt' })]);
   return p.create.length === 0 && /already has a real/i.test(p.skipped[0]?.reason ?? '');
 })());
 check('a remarketing row is skipped WITH a reason (it has no label to create)', (() => {

@@ -14,7 +14,7 @@ function check(name: string, cond: boolean, detail?: string): void {
   else { failed += 1; failures.push(`x ${name}${detail ? ' : ' + detail : ''}`); }
 }
 
-// The real ChowNow shape: one HubSpot demo form found on seven landing pages, scoped by the engine's
+// The real ChewBox shape: one HubSpot demo form found on seven landing pages, scoped by the engine's
 // anchored {{Page Path}} alternation.
 const PAGES = ['/demo', '/get-started', '/pricing', '/restaurant-online-ordering', '/contact-sales', '/marketing', '/'];
 const pageRegex = (pages: string[]): string => `^(${pages.join('|')})/?$`;
@@ -43,7 +43,7 @@ const form = (over: Partial<SuggestedTagView> = {}): SuggestedTagView => ({
 
 // -- splittableFormPages: what qualifies ------------------------------------------------------
 const pages = splittableFormPages(form());
-check('the 7-page ChowNow RegEx yields its 7 page paths, in regex order',
+check('the 7-page ChewBox RegEx yields its 7 page paths, in regex order',
   pages.length === 7 && JSON.stringify(pages) === JSON.stringify(PAGES), JSON.stringify(pages));
 
 check('a custom_event form tag (shared form_submission dataLayer event) splits too', splittableFormPages(form({

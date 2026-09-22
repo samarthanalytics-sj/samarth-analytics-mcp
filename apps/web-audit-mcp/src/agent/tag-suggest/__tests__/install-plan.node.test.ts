@@ -288,10 +288,10 @@ assert.strictEqual(
 
   // A VENDOR listener now gets a dlvScope when the durable id is known, which is what lets an embed
   // form be scoped to ONE form instead of firing page-wide.
-  const hs = buildFormInstallPlan({ provider: 'hubspot', mechanism: 'embed', dlEvent: 'hubspot-form-success', formId: 'abc-def', formHasNativeForm: false, providerFormId: '79c35ad9-5d43-407b-8c0e-0b62b2cc8de0' });
+  const hs = buildFormInstallPlan({ provider: 'hubspot', mechanism: 'embed', dlEvent: 'hubspot-form-success', formId: 'abc-def', formHasNativeForm: false, providerFormId: '11111111-2222-4333-8444-555555555555' });
   const hsListener = listener(hs.requires);
   check('dlv-scope: a HubSpot listener with a known form GUID carries dlvScope hs_form_id',
-    hsListener?.dlvScope?.key === 'hs_form_id' && hsListener.dlvScope.value === '79c35ad9-5d43-407b-8c0e-0b62b2cc8de0', JSON.stringify(hsListener?.dlvScope));
+    hsListener?.dlvScope?.key === 'hs_form_id' && hsListener.dlvScope.value === '11111111-2222-4333-8444-555555555555', JSON.stringify(hsListener?.dlvScope));
   check('dlv-scope: it never falls back to the DOM id, which the provider never pushes',
     hsListener?.dlvScope?.value !== 'abc-def');
   const hsNoId = buildFormInstallPlan({ provider: 'hubspot', mechanism: 'embed', dlEvent: 'hubspot-form-success', formId: 'abc-def', formHasNativeForm: false });

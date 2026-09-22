@@ -158,7 +158,7 @@ function RailItem({ view, label, active, onClick, badge }: { view: View; label: 
   );
 }
 
-/** "Swapnil Jaykar" → "SJ", "alex.johnson@acmecorp.com" → "AJ" — the rail avatar's initials. */
+/** "Jane Doe" → "JD", "alex.johnson@acmecorp.com" → "AJ" — the rail avatar's initials. */
 function initialsOf(name: string): string {
   const words = name.replace(/@.*$/, '').split(/[\s._-]+/).filter(Boolean);
   const init = words.slice(0, 2).map((w) => w[0]!.toUpperCase()).join('');

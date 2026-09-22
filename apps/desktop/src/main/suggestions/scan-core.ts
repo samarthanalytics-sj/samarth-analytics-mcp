@@ -268,7 +268,7 @@ export function detectInstalled(texts: string[]): { containers: string[]; measur
 /**
  * A scan that read ZERO pages because the site's bot protection blocked it must say so FIRST and
  * loudly. Left as a quiet "Not scanned (1): http 403" under an empty list, it reads as "the scanner
- * found nothing" and the user concludes form / element detection is broken (www.iff.com, Cloudflare
+ * found nothing" and the user concludes form / element detection is broken (a challenge-protected site, Cloudflare
  * challenge, 2026-09-17). pageScans empty + any bot-block reason = the whole scan was blocked.
  */
 function warnIfStartBlocked(pageScans: PageScan[], notScanned: TagScanResult['notScanned'], warnings: string[]): void {

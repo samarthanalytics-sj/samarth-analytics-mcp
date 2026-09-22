@@ -22,8 +22,8 @@ function check(name: string, ok: boolean, detail?: string): void {
 // returns, and what monitor mode feeds the driver as containerSnippet).
 const PREVIEW_SNIPPET =
   "<script>(function(w,d,s,l,i){...j.src='https://www.googletagmanager.com/gtm.js?id='+i+dl+" +
-  "'&gtm_auth=abc123DEF&gtm_preview=env-5&gtm_cookies_win=x';...})(window,document,'script','dataLayer','GTM-NKZD4BVB');</script>";
-const PLAIN_SNIPPET = "<script>...'https://www.googletagmanager.com/gtm.js?id='+i+dl;...'GTM-NKZD4BVB');</script>";
+  "'&gtm_auth=abc123DEF&gtm_preview=env-5&gtm_cookies_win=x';...})(window,document,'script','dataLayer','GTM-EXAMPLE1');</script>";
+const PLAIN_SNIPPET = "<script>...'https://www.googletagmanager.com/gtm.js?id='+i+dl;...'GTM-EXAMPLE1');</script>";
 
 // ── previewParamsFromLoader: extracts the env params from a preview loader ─────────
 {
@@ -42,7 +42,7 @@ const PLAIN_SNIPPET = "<script>...'https://www.googletagmanager.com/gtm.js?id='+
   check('null loader → null params', previewParamsFromLoader(null) === null);
 
   // gtm_cookies_win defaults to 'x' when the loader omits it (still a valid preview).
-  const noCookiesWin = 'https://www.googletagmanager.com/gtm.js?id=GTM-NKZD4BVB&gtm_auth=t0k&gtm_preview=env-9';
+  const noCookiesWin = 'https://www.googletagmanager.com/gtm.js?id=GTM-EXAMPLE1&gtm_auth=t0k&gtm_preview=env-9';
   const p2 = previewParamsFromLoader(noCookiesWin);
   check('missing gtm_cookies_win defaults to x', p2?.gtm_cookies_win === 'x' && p2?.gtm_auth === 't0k' && p2?.gtm_preview === 'env-9');
 }

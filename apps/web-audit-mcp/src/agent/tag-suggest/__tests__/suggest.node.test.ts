@@ -424,7 +424,7 @@ check('rank: high-confidence non-EM first (form/email before download)', ranked[
 
 // ── review-fix regressions ───────────────────────────────────────────────────
 check('provider: Pardot via form action (handler endpoint)', detectFormProvider(sig({}), 'https://go.pardot.com/l/1/2/form-handler').vendor === 'pardot');
-// Marketo without the #mktoForm_<n> id (the get.chownow.com shape): class .mktoForm or the forms2 script.
+// Marketo without the #mktoForm_<n> id (the get.chewbox.example shape): class .mktoForm or the forms2 script.
 check('provider: Marketo via class .mktoForm (no #mktoForm_<n> id)', detectFormProvider(sig({ classNames: ['mktoForm', 'tal'] })).vendor === 'marketo');
 check('provider: Marketo via the forms2 loader script', detectFormProvider(sig({ scriptSrcs: ['https://app-ab12.marketo.com/js/forms2/js/forms2.min.js'] })).vendor === 'marketo');
 check('provider: munchkin.js (tracking-only, loads site-wide without a form) does NOT flip forms to marketo', detectFormProvider(sig({ scriptSrcs: ['https://munchkin.marketo.net/munchkin.js'] })).vendor !== 'marketo');
@@ -724,8 +724,8 @@ check('scroll: no Meta counterpart is derived (GA4-only engagement signal)',
 // Element}} CSS selector on top (corpus: "Click Text ENDS_WITH ? AND Click Classes CONTAINS <cls>");
 // single-page FAQs ALSO get an ANDed {{Page Path}} condition. Per-question tags never emitted alongside.
 const faqEls = [
-  { page: '/faq', kind: 'cta' as const, text: 'Does ChowNow charge commissions?', intent: 'generic' as const, className: 'faq-question flex items-center' },
-  { page: '/faq', kind: 'cta' as const, text: 'Does ChowNow integrate with my POS?', intent: 'generic' as const, className: 'faq-question flex items-center' },
+  { page: '/faq', kind: 'cta' as const, text: 'Does ChewBox charge commissions?', intent: 'generic' as const, className: 'faq-question flex items-center' },
+  { page: '/faq', kind: 'cta' as const, text: 'Does ChewBox integrate with my POS?', intent: 'generic' as const, className: 'faq-question flex items-center' },
   { page: '/faq', kind: 'cta' as const, text: 'What happens to my customer data?', intent: 'generic' as const, className: 'faq-question flex items-center' },
 ];
 const faq = buildSuggestions({ siteHost: 'a.com', forms: [], elements: faqEls });
@@ -737,9 +737,9 @@ check('faq: the grouped question rows are NOT also emitted as their own per-ques
 const loneQ = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [{ page: '/x', kind: 'cta', text: 'Need help?', intent: 'generic', className: 'faq-question' }] });
 check('faq: a single question row is NOT grouped (no faq tag; stays an individual CTA)', !loneQ.some((s) => s.eventName === 'faq_click') && loneQ.some((s) => s.trigger.clickTextValue === 'Need help?'));
 // A STATE class (Bootstrap-style "collapsed", toggled as the accordion opens) must never scope the
-// trigger — the stable structural class ("acc-tog", the ChowNow shape) is picked instead.
+// trigger — the stable structural class ("acc-tog", the ChewBox shape) is picked instead.
 const stateCls = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [
-  { page: '/', kind: 'cta', text: 'Does ChowNow charge commissions?', intent: 'generic', className: 'collapsed acc-tog' },
+  { page: '/', kind: 'cta', text: 'Does ChewBox charge commissions?', intent: 'generic', className: 'collapsed acc-tog' },
   { page: '/', kind: 'cta', text: 'What happens to my customer data?', intent: 'generic', className: 'collapsed acc-tog' },
 ] }).find((s) => s.eventName === 'faq_click');
 check('faq: a toggling state class (.collapsed) is rejected — the stable class (.acc-tog) scopes the selector; root page uses equals',
@@ -1165,7 +1165,7 @@ check('meta: an "Add to Cart" CTA → Meta "AddToCart"; a generic outbound click
     { vendor: 'hubspot', from: 'hsfc renderer attribute', signals: { selectorsPresent: ['[data-hsfc-id]'] } },
     { vendor: 'hubspot', from: 'hs-form-html wrapper class', signals: { classNames: ['hs-form-html'] } },
     { vendor: 'hubspot', from: 'hsfc-* field classes', signals: { classNames: ['hsfc-Form', 'hsfc-FieldLabel'] } },
-    { vendor: 'hubspot', from: 'classic hsForm_<guid> id', signals: { selectorsPresent: ['#hsForm_79c35ad9-5d43-407b-8c0e-0b62b2cc8de0'] } },
+    { vendor: 'hubspot', from: 'classic hsForm_<guid> id', signals: { selectorsPresent: ['#hsForm_11111111-2222-4333-8444-555555555555'] } },
     { vendor: 'hubspot', from: 'submissions endpoint action', signals: {}, action: 'https://forms-na2.hsforms.com/submissions/v3/public/submit' },
     // Gravity Forms.
     { vendor: 'gravityforms', from: 'gform_wrapper class', signals: { classNames: ['gform_wrapper'] } },

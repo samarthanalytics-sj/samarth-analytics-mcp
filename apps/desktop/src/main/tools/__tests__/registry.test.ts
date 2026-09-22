@@ -482,7 +482,7 @@ function fakeAds(
           {
             resourceName: 'customers/9876543210/conversionActions/111', id: '111', name: 'Contact form',
             status: 'ENABLED', type: 'WEBPAGE', category: 'SUBMIT_LEAD_FORM', primaryForGoal: true,
-            conversionId: 'AW-17867466396', conversionLabel: 'g9RqCLD6kdQcEJzJwOhB', taggable: true,
+            conversionId: 'AW-11122233344', conversionLabel: 'AbCdEfGhIjKlMnOpQrSt', taggable: true,
           },
           {
             resourceName: 'customers/9876543210/conversionActions/222', id: '222', name: 'Offline sale',
@@ -508,7 +508,7 @@ function fakeAds(
       return {
         resourceName: 'customers/9876543210/conversionActions/333', id: '333', name: input.name,
         status: 'ENABLED', type: 'WEBPAGE', category: input.category,
-        conversionId: 'AW-17867466396', conversionLabel: 'NEWLABEL123', taggable: true,
+        conversionId: 'AW-11122233344', conversionLabel: 'NEWLABEL123', taggable: true,
       };
     },
   } as unknown as GoogleAdsService;
@@ -1620,13 +1620,13 @@ async function main(): Promise<void> {
     const out = JSON.parse(
       await reg.execute('create_gtm_tracking_tag', {
         accountId: '1', containerId: '2', workspaceId: '3',
-        platform: 'google_ads_remarketing', tagName: 'RMKT', conversionId: 'AW-605994778',
+        platform: 'google_ads_remarketing', tagName: 'RMKT', conversionId: 'AW-333444555',
         trigger: { name: 'All Pages', kind: 'pageview' },
       })
     );
     assert.equal(out.tag.type, 'sp');
     assert.equal(trkParam(out, 'customParamsFormat'), 'NONE');
-    assert.equal(trkParam(out, 'conversionId'), 'AW-605994778'); // sp passes conversionId through
+    assert.equal(trkParam(out, 'conversionId'), 'AW-333444555'); // sp passes conversionId through
   });
 
   await test('create_tracking_tag (conversion_linker) dispatches gclidw; linkerDomains implies cross-domain', async () => {
@@ -2819,8 +2819,8 @@ async function main(): Promise<void> {
     const list = rec(JSON.parse(await gtm.execute('list_google_ads_conversion_actions', { customerId: '9876543210', loginCustomerId: '1234567890' })));
     assert.ok(fa.calls.includes('listConversionActions:9876543210:1234567890'), 'the manager id is passed through');
     const actions = list.actions as Array<Record<string, unknown>>;
-    assert.equal(actions[0].conversionId, 'AW-17867466396');
-    assert.equal(actions[0].conversionLabel, 'g9RqCLD6kdQcEJzJwOhB', 'the label is what a GTM awct tag cannot be built without');
+    assert.equal(actions[0].conversionId, 'AW-11122233344');
+    assert.equal(actions[0].conversionLabel, 'AbCdEfGhIjKlMnOpQrSt', 'the label is what a GTM awct tag cannot be built without');
     assert.equal(actions[0].taggable, true);
     // An untaggable action reports null + the reason instead of a plausible-looking label.
     assert.equal(actions[1].conversionLabel, null);
@@ -3275,8 +3275,8 @@ async function main(): Promise<void> {
     assert.ok(fa.calls.some((c) => c.startsWith('createConversionAction:9876543210:Offline sale')), 'the non-taggable same-name entry was created fresh');
     assert.ok(fa.calls.some((c) => c.startsWith('createConversionAction:9876543210:Brand New')), 'the unmatched entry was created');
     const reused = out.created.find((c: { source: string }) => c.source === 'reused');
-    assert.equal(reused.conversionId, 'AW-17867466396', 'reused row carries the existing id');
-    assert.equal(reused.conversionLabel, 'g9RqCLD6kdQcEJzJwOhB', 'reused row carries the existing label, not a new one');
+    assert.equal(reused.conversionId, 'AW-11122233344', 'reused row carries the existing id');
+    assert.equal(reused.conversionLabel, 'AbCdEfGhIjKlMnOpQrSt', 'reused row carries the existing label, not a new one');
   });
 
   await test('batch conversion actions: reuse defaults OFF (a same-named action is duplicated, no read)', async () => {

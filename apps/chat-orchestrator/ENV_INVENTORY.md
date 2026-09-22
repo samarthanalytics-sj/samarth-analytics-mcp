@@ -5,7 +5,7 @@ how do I rebuild `.env`" — it is deliberately safe to commit, because every en
 secret lives*, not what it is.
 
 The real `.env` is gitignored and exists in one place. A local backup is at
-`C:\Users\admin\Documents\samarth-secrets-backup\` (same machine, so it survives a bad edit but
+a folder outside the repo on the same machine (so it survives a bad edit but
 not a lost laptop). Anything genuinely off-machine should go in a password manager.
 
 ## Secrets: cannot be derived, must be recovered from their source
@@ -14,14 +14,14 @@ not a lost laptop). Anything genuinely off-machine should go in a password manag
 |---|---|
 | `OPENAI_API_KEY` | platform.openai.com → API keys. Cannot be re-read after creation; mint a new one and delete the old. |
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase dashboard → Project Settings → API → `service_role`. Re-readable. **Bypasses RLS**; treat as root. |
-| `GOOGLE_OAUTH_CLIENT_SECRET` | Google Cloud Console → APIs & Services → Credentials, project `gtm-ai-agent-463411`. Not re-readable; use "Add secret" and remove the old one. |
+| `GOOGLE_OAUTH_CLIENT_SECRET` | Google Cloud Console → APIs & Services → Credentials, the Cloud project that owns the OAuth client. Not re-readable; use "Add secret" and remove the old one. |
 | `ORCHESTRATOR_SLACK_WEBHOOK_URL` | Slack → the app's Incoming Webhooks page. Re-readable there. **Optional and normally unset**: the webhook lives in Supabase Vault and is managed from Admin > Orchestrator. Setting it here overrides the stored one. |
 
 ## Public or re-derivable: no recovery needed
 
 | Key | Notes |
 |---|---|
-| `GOOGLE_OAUTH_CLIENT_ID` | Public by design. Currently `678847533961-...` (project `gtm-ai-agent-463411`). Must match the Google provider configured in Supabase Auth **and** the `GOOGLE_CLIENT_ID` edge-function secret. |
+| `GOOGLE_OAUTH_CLIENT_ID` | Public by design. The `<project-number>-...apps.googleusercontent.com` id of the Cloud project. Must match the Google provider configured in Supabase Auth **and** the `GOOGLE_CLIENT_ID` edge-function secret. |
 | `SUPABASE_URL`, `SUPABASE_ANON_KEY` | Public; both ship in the frontend bundle. |
 | `SUPABASE_JWKS_URL`, `SUPABASE_JWT_ISSUER`, `SUPABASE_JWT_AUDIENCE`, `SUPABASE_FUNCTIONS_URL` | Derived from the project ref. |
 

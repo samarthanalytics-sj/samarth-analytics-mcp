@@ -123,8 +123,8 @@ export interface GtmClientResource {
  *  server tags can read the event; `activateDefaultPaths` claims the standard /g/collect endpoints.
  *  Shape corpus-validated (3 server containers). By default it also enables SERVER-MANAGED first-party
  *  ID cookies (cookieManagement=server → the httpOnly FPID cookie, 2-year age, auto domain,
- *  migrated from the JS client id) — the production pattern from the Vocal Minority reference
- *  server container (GTM-57RM3QCT) and Stape's recommended setup: the identifier survives
+ *  migrated from the JS client id) — the production pattern from the reference export
+ *  server container (GTM-REFEXP01) and Stape's recommended setup: the identifier survives
  *  ITP/JS-cookie limits because the server sets it. Pass serverManagedCookies:false for the
  *  plain JS-cookie client. */
 export function buildGa4Client(name: string, opts?: { serverManagedCookies?: boolean }): GtmClientResource {
@@ -149,7 +149,7 @@ export function buildGa4Client(name: string, opts?: { serverManagedCookies?: boo
 /** The server GTM client (`gtm_client`) — lets the tagging server FIRST-PARTY-SERVE gtm.js and
  *  its dependencies for the listed WEB container(s) (the site loads GTM from the owner's domain
  *  instead of googletagmanager.com — ad-blocker/ITP resilience). Shape validated against the
- *  Vocal Minority reference: compression + dependency serving ON, geo resolution OFF, and
+ *  reference export: compression + dependency serving ON, geo resolution OFF, and
  *  allowedContainerIds as a LIST of {containerId} maps holding the web GTM-XXXX public ids. */
 export function buildGtmClient(name: string, allowedContainerIds: string[]): GtmClientResource {
   return {
@@ -256,7 +256,7 @@ export function buildServerEventTrigger(
   clientName?: string,
   opts?: {
     /** Also scope to pages whose URL CONTAINS this substring (e.g. "/petition/minister-for-children/") —
-     *  the multi-tenant campaign pattern from the Vocal Minority reference: one event, one page/campaign,
+     *  the multi-tenant campaign pattern from the reference export: one event, one page/campaign,
      *  one destination tag. Reads {{ed - page_location}} (create it via the event_data variable kind,
      *  keyPath "page_location") unless pageUrlVariable overrides. */
     pageUrlContains?: string;

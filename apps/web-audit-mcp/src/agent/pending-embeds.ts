@@ -1,7 +1,7 @@
 // "Is a form still on its way?" - the signal that network quiet cannot give us.
 //
 // The scan waits for network quiet before reading forms, which is a PROXY for the page being done.
-// Measured on get.chownow.com: DOMContentLoaded 1.5s, the HubSpot render-definition 1.9s, the React
+// Measured on get.chewbox.example: DOMContentLoaded 1.5s, the HubSpot render-definition 1.9s, the React
 // island runtime that actually renders the form 3.1s, load 4.4s, last HubSpot call 4.9s, and the last
 // resource of any kind 7.4s. Quiet therefore arrives around 8.1s against a 9s ceiling - it fitted,
 // with under a second to spare, and only because network activity happened to outlast the render.

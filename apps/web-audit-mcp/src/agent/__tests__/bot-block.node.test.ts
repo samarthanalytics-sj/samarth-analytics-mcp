@@ -10,7 +10,7 @@ function check(name: string, cond: boolean, detail?: string): void {
   else { failed += 1; failures.push(`✗ ${name}${detail ? ' — ' + detail : ''}`); }
 }
 
-// The exact headers www.iff.com returned to the scanner (2026-09-17).
+// The exact headers a Cloudflare-challenged site returned to the scanner (2026-09-17).
 const iff = { 'Cf-Mitigated': 'challenge', Server: 'cloudflare', 'CF-RAY': 'a3c6236b2f403f60-BOM' };
 check('cloudflare challenge → named challenge', botBlockReason(403, iff) === 'blocked by Cloudflare bot challenge');
 check('header keys are case-insensitive', botBlockReason(403, { 'cf-mitigated': 'challenge' }) === 'blocked by Cloudflare bot challenge');
