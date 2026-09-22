@@ -1,3 +1,9 @@
+## [1.496.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.495.2...v1.496.0) (2026-09-22)
+
+### Features
+
+* **monitor:** drift monitoring for server containers, including the web + server pair ([#985](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/985)) ([a1ac474](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a1ac474e53cae41a19322f429acdd8a3d4420f37)), closes [#984](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/984)
+
 ## [1.495.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.495.1...v1.495.2) (2026-09-22)
 
 ### Bug Fixes
