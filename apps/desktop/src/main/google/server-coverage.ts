@@ -262,7 +262,10 @@ export function buildServerCoverage(
   // ── Server capabilities ──
   const hasGa4Client = server.clients.some((c) => c.type === 'gaaw_client');
   const activeServerTags = server.tags.filter((t) => !t.paused && (t.firingTriggerId ?? []).length > 0);
-  const relays = activeServerTags.filter((t) => t.type === 'sgtmgaaw' && serverTagParam(t, 'measurementId').trim() !== '');
+  // A relay with a blank Measurement ID inherits it from the event: that is the recommended setup,
+  // not a misconfiguration, so it counts as a relay. Its effective ids are whatever the web sends.
+  const relays = activeServerTags.filter((t) => t.type === 'sgtmgaaw');
+  const inheritingRelay = relays.some((t) => serverTagParam(t, 'measurementId').trim() === '');
   const ga4Covered = hasGa4Client && relays.length > 0;
   const ga4By = ga4Covered ? `client + relay "${relays[0].name}"` : undefined;
 
@@ -341,7 +344,9 @@ export function buildServerCoverage(
 
   // ── Config comparison: Measurement IDs + web wiring ──
   const webIds = resolveGa4MeasurementIds(web).ids;
-  const serverIds = [...new Set(relays.map((t) => serverTagParam(t, 'measurementId').trim()).filter((v) => v && !v.includes('{{')))];
+  const explicitServerIds = [...new Set(relays.map((t) => serverTagParam(t, 'measurementId').trim()).filter((v) => v && !v.includes('{{')))];
+  // An inheriting relay forwards the web's own ids, so they are its effective server ids.
+  const serverIds = inheritingRelay ? [...new Set([...explicitServerIds, ...webIds])] : explicitServerIds;
   const idsMatch = webIds.length && serverIds.length ? webIds.some((id) => serverIds.includes(id)) : null;
 
   const googleTag = web.tags.find((t) => (t.type === 'googtag' || t.type === 'gaawc') && !t.paused);

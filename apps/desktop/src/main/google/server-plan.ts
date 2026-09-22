@@ -149,7 +149,8 @@ export function buildServerPlan(input: ServerPlanInput): ServerPlan {
   const hasGa4Client = clients.some((c) => c.type === 'gaaw_client');
   const hasGtmClient = clients.some((c) => c.type === 'gtm_client');
   const allEventsTrigger = triggers.find((t) => norm(t.name) === 'all events');
-  const relay = tags.find((t) => t.type === 'sgtmgaaw' && !t.paused && serverTagParam(t, 'measurementId').trim() !== '');
+  // A blank Measurement ID inherits from the event (the recommended setup), so it is still a relay.
+  const relay = tags.find((t) => t.type === 'sgtmgaaw' && !t.paused);
   const hasVar = (name: string): boolean => variables.some((v) => norm(v.name) === norm(name));
   const clientNameEnabled = input.enabledBuiltIns.some((b) => norm(b) === 'clientname' || norm(b) === 'client name');
   const taggingUrls = s?.taggingServerUrls ?? [];
