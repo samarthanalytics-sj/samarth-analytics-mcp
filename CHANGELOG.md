@@ -1,3 +1,9 @@
+## [1.495.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.495.1...v1.495.2) (2026-09-22)
+
+### Bug Fixes
+
+* **audit:** pick the engine by container type, whatever surface asked ([#984](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/984)) ([61e297f](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/61e297fe6fe528dd53872f5a357bce5d7a008a5c))
+
 ## [1.495.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.495.0...v1.495.1) (2026-09-22)
 
 ### Bug Fixes
