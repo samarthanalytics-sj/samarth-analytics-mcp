@@ -26,11 +26,35 @@ export type AuditReportWithInventory = AuditReport & { inventory?: ContainerInve
  * Variable Audit) for the chat to render. The background monitor omits it, so
  * the stored audit history stays lean.
  */
+/**
+ * Which engine a container needs. A SERVER container audited by the WEB engine is pure noise: every
+ * reference to a server built-in ({{Client Name}}, {{Request Path}}) reads as an undefined variable,
+ * so a 33-tag server container came back with 125 findings and not one true one. Both the Audit
+ * tab and the chat's audit_gtm_container reach auditWorkspace without checking the type, so the
+ * check lives here, once. Reads the cached container list; on any failure it returns null and the
+ * caller keeps today's behaviour rather than inventing a type.
+ */
+export async function containerKind(
+  data: GoogleDataService,
+  ctx: Pick<WorkspaceCtx, 'accountId' | 'containerId'>,
+): Promise<'web' | 'server' | null> {
+  try {
+    const c = (await data.listGtmContainers(ctx.accountId)).find((x) => x.containerId === ctx.containerId);
+    if (!c) return null;
+    return (c.usageContext ?? []).some((u) => String(u ?? '').toLowerCase() === 'server') ? 'server' : 'web';
+  } catch {
+    return null;
+  }
+}
+
 export async function auditWorkspace(
   data: GoogleDataService,
   ctx: WorkspaceCtx,
   opts?: { includeInventory?: boolean },
 ): Promise<AuditReportWithInventory> {
+  // A server container gets the server engine, whatever surface asked. Its report satisfies the
+  // same shape; it carries no web inventory because a server container has none of those objects.
+  if ((await containerKind(data, ctx)) === 'server') return auditServerWorkspace(data, ctx);
   const snapshot = await data.getGtmContainerSnapshot(ctx.accountId, ctx.containerId, ctx.workspaceId);
   const report: AuditReportWithInventory = auditContainer(snapshot);
   for (const f of report.findings) {
@@ -54,6 +78,13 @@ export async function auditWorkspace(
  * retargeted at another container.
  */
 export async function auditServerWorkspace(data: GoogleDataService, ctx: WorkspaceCtx): Promise<AuditReport> {
+  // The mirror image: the server engine on a WEB container would report "no client claims requests"
+  // on every web container in existence. Refuse with the right tool named instead.
+  if ((await containerKind(data, ctx)) === 'web') {
+    throw new Error(
+      `Container ${ctx.containerId} is a WEB container, so the server audit does not apply. Use audit_gtm_container (the Audit tab) for it.`,
+    );
+  }
   const report = auditServerContainer(
     await data.getServerContainerSnapshot(ctx.accountId, ctx.containerId, ctx.workspaceId)
   );
