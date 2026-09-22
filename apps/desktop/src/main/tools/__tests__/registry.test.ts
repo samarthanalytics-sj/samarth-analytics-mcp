@@ -747,8 +747,9 @@ async function main(): Promise<void> {
     // plus the two CAPI server tags create_snapchat_capi_server_tag / create_microsoft_capi_server_tag = 123,
     // plus the read-only plan_server_migration_from_web = 124,
     // plus the GTM write create_stape_data_pipeline = 125,
-    // plus the eight Tier-1 CAPI server tags (X / Quora / AdRoll / Nextdoor / Yelp / Spotify / LINE Yahoo / RTB House) = 133.
-    assert.equal(withWrites.list().length, 133 + 64, 'read + write registry has 133 GTM/GA4-read/context/write + 64 GA4-write tools');
+    // plus the eight Tier-1 CAPI server tags (X / Quora / AdRoll / Nextdoor / Yelp / Spotify / LINE Yahoo / RTB House) = 133,
+    // plus probe_server_runtime (the one hit verification may deliver, human-approved) = 134.
+    assert.equal(withWrites.list().length, 134 + 64, 'read + write registry has 134 GTM/GA4-read/context/write + 64 GA4-write tools');
     for (const n of ['create_x_capi_server_tag', 'create_quora_capi_server_tag', 'create_adroll_capi_server_tag', 'create_nextdoor_capi_server_tag', 'create_yelp_capi_server_tag', 'create_spotify_capi_server_tag', 'create_line_yahoo_capi_server_tag', 'create_rtb_house_server_tag']) {
       assert.equal(withWrites.list().some((t) => t.name === n), true, `${n} present`);
       assert.equal(withWrites.isWrite?.(n), true, `${n} is a write`);

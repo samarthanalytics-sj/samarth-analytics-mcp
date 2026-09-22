@@ -5,12 +5,13 @@ import type { OAuth2Client } from 'google-auth-library';
 import type { AccountClientManager } from './account-clients';
 import type { RegistryService } from '../services/registry-service';
 import type { ContainerSnapshot, ServerContainerSnapshot } from './gtm-builders';
-import { ga4TagFields, readGa4EventParameters, applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, normalizeTriggerType, setCustomEventName, customEventNameOf, describeTriggerConditions, buildGa4Client, buildGa4ServerTag, buildStapeDataTag, buildStapeDataClient, buildServerAllEventsTrigger, buildServerEventTrigger, buildAdsConversionServerTag, buildMetaEmqVariables, buildTikTokEmqVariables, buildEcommerceDlvVariables, buildGa4EventTag, buildTrigger, planTriggerRetarget, type TriggerInput, buildGtmClient, buildVariable, sanitizeName, matchesServerContainer, customTemplateType, upsertGoogleTagConfig, taggingUrlFirstPartyIssue, parseTemplateParameters, summariseTagTypes, type TemplateField, type TagTypeProfile, triggerUsageBreakdown, detectMetaTags, planWebToServerMigration, evaluateTrackingSetup, GA4_ECOMMERCE_FUNNEL_EVENTS, type TrackingSetupReport, type TrackingSetupCheck } from './gtm-builders';
+import { serverTagParam, ga4TagFields, readGa4EventParameters, applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, normalizeTriggerType, setCustomEventName, customEventNameOf, describeTriggerConditions, buildGa4Client, buildGa4ServerTag, buildStapeDataTag, buildStapeDataClient, buildServerAllEventsTrigger, buildServerEventTrigger, buildAdsConversionServerTag, buildMetaEmqVariables, buildTikTokEmqVariables, buildEcommerceDlvVariables, buildGa4EventTag, buildTrigger, planTriggerRetarget, type TriggerInput, buildGtmClient, buildVariable, sanitizeName, matchesServerContainer, customTemplateType, upsertGoogleTagConfig, taggingUrlFirstPartyIssue, parseTemplateParameters, summariseTagTypes, type TemplateField, type TagTypeProfile, triggerUsageBreakdown, detectMetaTags, planWebToServerMigration, evaluateTrackingSetup, GA4_ECOMMERCE_FUNNEL_EVENTS, type TrackingSetupReport, type TrackingSetupCheck } from './gtm-builders';
 import {
   galleryCoordinatesFor, matchInstalledTemplate, templateInstallError,
 } from '../../../../../src/shared/gtm-template-sources';
 import { installTemplateFromSource, type TemplateCreateApi } from '../../../../../src/shared/gtm-template-install';
 import { capiPlatform, capiCredentials } from '../../../../../src/shared/capi-platforms';
+import { buildProbeHit, probeSuffix, probeVerdict, describeProbe, type ProbeResult } from './runtime-probe';
 import { resolveGa4MeasurementIds } from './gtm-ga4-check';
 import { withQuotaRetry, withRetry, QUOTA_RE, TRANSIENT_5XX_RE, NOT_FOUND_OR_PERMISSION_RE } from './quota-retry';
 import { log } from '../logger';
@@ -2321,6 +2322,81 @@ export class GoogleDataService {
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  /**
+   * The runtime leg: send ONE labelled synthetic event through the tagging server and read it back
+   * from the GA4 property's realtime report. The only place verification delivers a hit, and it is
+   * operator-triggered only (never from the monitor or the verify engine). See runtime-probe.ts for
+   * why each safeguard exists. SSRF-guarded the same way as verifyServerEndpoint.
+   */
+  async runServerRuntimeProbe(
+    accountId: string,
+    containerId: string,
+    workspaceId: string,
+    opts?: { measurementId?: string; pollMs?: number; maxWaitMs?: number }
+  ): Promise<ProbeResult> {
+    const server = await this.getServerContainerSnapshot(accountId, containerId, workspaceId);
+    const taggingUrl = (server.taggingServerUrls ?? []).find((u) => /^https:/i.test(u));
+    if (!taggingUrl) throw new Error('This server container has no https tagging server URL recorded, so there is nothing to send the probe to. Record it first (set_server_container_tagging_url).');
+    // Which id to probe: the explicit one, else the single id the active relays forward. Several
+    // ids means the caller must choose; guessing would probe a property the user did not mean.
+    let measurementId = (opts?.measurementId ?? '').trim();
+    if (!measurementId) {
+      const relayIds = [...new Set(server.tags
+        .filter((t) => t.type === 'sgtmgaaw' && !t.paused && (t.firingTriggerId ?? []).length > 0)
+        .map((t) => serverTagParam(t, 'measurementId').trim())
+        .map((v) => { const m = v.match(/^\{\{(.+)\}\}$/); if (!m) return v; const c = (server.variables ?? []).find((x) => x.name.trim().toLowerCase() === m[1].trim().toLowerCase() && (x.type ?? '').toLowerCase() === 'c'); return c ? String(((c.parameter ?? []) as Array<{ key?: string; value?: unknown }>).find((pp) => pp.key === 'value')?.value ?? '') : v; })
+        .filter((v) => /^G-/i.test(v)))];
+      if (relayIds.length === 1) measurementId = relayIds[0];
+      else if (relayIds.length === 0) throw new Error('No active GA4 relay with a literal Measurement ID was found; pass measurementId explicitly.');
+      else throw new Error(`This server forwards ${relayIds.length} Measurement IDs (${relayIds.join(', ')}); pass measurementId to say which one to probe.`);
+    }
+    // The property to read back from: found through the ids the user can actually access.
+    const known = await this.listGa4MeasurementIds();
+    const hit0 = known.find((k) => k.measurementId.toUpperCase() === measurementId.toUpperCase());
+    const hit = buildProbeHit({ taggingUrl, measurementId, suffix: probeSuffix() });
+    const taggingHost = new URL(taggingUrl).host;
+    const { requestAllowed } = await import('../suggestions/ssrf');
+    if (!(await requestAllowed(hit.url))) throw new Error('Refusing to probe a private/loopback/metadata host.');
+    const sentAt = Date.now();
+    let sendStatus: number | null = null;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 6000);
+    try {
+      const res = await fetch(hit.url, { method: 'GET', signal: controller.signal, redirect: 'manual' });
+      sendStatus = res.status;
+    } catch {
+      sendStatus = null;
+    } finally {
+      clearTimeout(timer);
+    }
+    const base = { measurementId: hit.measurementId, property: hit0?.property ?? null, propertyDisplayName: hit0?.propertyDisplayName ?? null, taggingHost, eventName: hit.eventName, sendStatus, sentAt };
+    if (sendStatus === null || sendStatus < 200 || sendStatus >= 300) {
+      const r = { ...base, status: 'send_failed' as const, seenAt: null, latencyMs: null, polls: 0 };
+      return { ...r, ...describeProbe(r) };
+    }
+    if (!hit0) {
+      // Sent and accepted, but no readable property for this id: honest about which half is proven.
+      const r = { ...base, status: 'not_verified' as const, seenAt: null, latencyMs: null, polls: 0 };
+      return { ...r, ...describeProbe(r), note: `The server accepted the hit (HTTP ${sendStatus}), but no GA4 property this account can read has the stream ${hit.measurementId}, so the arrival could not be read back. Check DebugView on that property for "${hit.eventName}".` };
+    }
+    const pollMs = Math.max(2000, opts?.pollMs ?? 10_000);
+    const maxWaitMs = Math.max(pollMs, opts?.maxWaitMs ?? 120_000);
+    let polls = 0;
+    while (Date.now() - sentAt < maxWaitMs) {
+      await new Promise((r) => setTimeout(r, pollMs));
+      polls += 1;
+      const rep = await this.runGa4RealtimeReport({ property: hit0.property, dimensions: ['eventName'], metrics: ['eventCount'] }).catch(() => null);
+      const verdict = rep ? probeVerdict(rep.rows, hit.eventName) : { status: 'not_verified' as const };
+      if (verdict.status === 'pass') {
+        const seenAt = Date.now();
+        const r = { ...base, status: 'pass' as const, seenAt, latencyMs: seenAt - sentAt, polls };
+        return { ...r, ...describeProbe(r) };
+      }
+    }
+    const r = { ...base, status: 'not_verified' as const, seenAt: null, latencyMs: null, polls };
+    return { ...r, ...describeProbe(r) };
   }
 
   /** One-shot: create a SERVER container, then add a GA4 client + a GA4 server tag (relaying

@@ -4414,6 +4414,25 @@ export function buildToolRegistry(
       handler: (a) => data.setServerContainerTaggingUrl(s(a.accountId), s(a.containerId), [s(a.serverUrl)]),
     },
     {
+      name: 'probe_server_runtime',
+      description:
+        'RUNTIME PROOF for a SERVER container: sends ONE labelled synthetic GA4 event (named samarth_probe_<id>, throwaway client id, debug_mode on) through the recorded tagging server and reads it back from the realtime report of the GA4 property. This is the only check that proves the round trip web -> tagging server -> GA4 relay -> property actually works; every other server check proves configuration only. It DELIVERS a hit into a production property, so it is human-approved and never runs on a schedule. Result status: pass (seen in realtime, with latency), not_verified (accepted by the server but not seen within the wait: realtime can lag, so this is NOT a failure), or send_failed (the server refused it: a 400 means no client claimed /g/collect). Pass measurementId when the server forwards more than one id. Takes up to 2 minutes.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string', description: 'The SERVER container.' },
+          workspaceId: { type: 'string' },
+          measurementId: { type: 'string', description: 'Which GA4 id to probe when the server forwards several (G-XXXXXXX).' },
+        },
+        required: ['accountId', 'containerId', 'workspaceId'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => `Send ONE synthetic GA4 probe event through server container ${s(a.containerId)}'s tagging server${a.measurementId ? ` for ${s(a.measurementId)}` : ''} and read it back from realtime`,
+      handler: (a) => data.runServerRuntimeProbe(s(a.accountId), s(a.containerId), s(a.workspaceId), a.measurementId ? { measurementId: s(a.measurementId) } : undefined),
+    },
+    {
       name: 'setup_ecommerce_funnel',
       description:
         "ONE STEP: install the FULL GA4 ecommerce funnel in a WEB container. Per funnel event (default view_item, add_to_cart, view_cart, begin_checkout, add_shipping_info, add_payment_info, purchase) it creates a Custom Event trigger plus a GA4 event tag with 'Send Ecommerce data' ON, so the tag forwards the WHOLE dataLayer ecommerce object and no per-parameter mapping is needed. Also creates the dlv - ecommerce.* variables downstream Ads/Meta tags read. Idempotent: same-named resources are skipped, so re-running completes a partial install. Derive measurementId from the existing Google tag or ask.",
