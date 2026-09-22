@@ -32,7 +32,7 @@ check('siteLabel of a bad url is empty', siteLabel('not a url') === '');
 check('siteLabel of undefined is empty', siteLabel(undefined) === '');
 
 // ── tagTitle: clean human title from a tag name ──────────────────────────────────
-check('tagTitle strips "Vendor - Type - " prefix + " Tag" suffix', tagTitle('GA4 - Event - The ChowNow Feed Tag') === 'The ChowNow Feed');
+check('tagTitle strips "Vendor - Type - " prefix + " Tag" suffix', tagTitle('GA4 - Event - The ChewBox Feed Tag') === 'The ChewBox Feed');
 check('tagTitle keeps internal dashes in the friendly part', tagTitle('GA4 - Event - Get A Quote Click - Global Tag') === 'Get A Quote Click - Global');
 check('tagTitle leaves a plain name unchanged', tagTitle('My Custom Name') === 'My Custom Name');
 check('tagTitle is empty-safe', tagTitle(undefined) === '' && tagTitle('') === '');

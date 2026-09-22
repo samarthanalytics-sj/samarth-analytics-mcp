@@ -34,7 +34,7 @@ export interface TaTagResult {
 
 /** One dataLayer event as Tag Assistant sees it — the unit of the TA left-rail timeline. */
 export interface TaEventRecord {
-  /** The container that processed the event (publicId, e.g. GTM-NKZD4BVB). */
+  /** The container that processed the event (publicId, e.g. GTM-EXAMPLE1). */
   container: string;
   /** Which page load this event belongs to. `gtm.uniqueEventId` (the frame's `eventId`) RESTARTS at 0 on
    *  every full page navigation, but we drive one debug session across many pages into a single stream —
@@ -486,7 +486,7 @@ export function buildTriggerSuggestions(
  *  "Google tags found" chips, read from the DOM), which includes containers PRESENT but not
  *  debugging — something the debug stream alone can't reveal. When absent it falls back to the
  *  debug-stream containers. Distinguishes three real cases: (a) selected container present but NOT
- *  in debug (TA defaulted to another / no-access container — the common ChowNow case), (b) selected
+ *  in debug (TA defaulted to another / no-access container — the common ChewBox case), (b) selected
  *  container genuinely absent from the page, (c) present but sign-in needed. */
 export function containerDebugProblem(capture: TaCapture, publicId: string, onPage?: string[]): string | null {
   const want = publicId.toUpperCase();

@@ -34,33 +34,33 @@ check('status: weird/absent → unknown', mapExecuteStatus('zzz') === 'unknown' 
   const frames: unknown[] = [
     JSON.stringify({ type: 'PING', locale: 'en' }), // junk — skipped
     'not json at all', // junk — skipped
-    starting('GTM-NKZD4BVB', false),
-    starting('GTM-NKZD4BVB', true), // debug RELOAD — debug:true must win
-    details('GTM-NKZD4BVB', true),
+    starting('GTM-EXAMPLE1', false),
+    starting('GTM-EXAMPLE1', true), // debug RELOAD — debug:true must win
+    details('GTM-EXAMPLE1', true),
     // form_submission event 33: the push, a resolved DLV, two tags firing
-    memo('GTM-NKZD4BVB', 33, 'form_submission', 'EVENT_STARTED'),
-    memo('GTM-NKZD4BVB', 33, 'form_submission', 'DATA_LAYER', {
+    memo('GTM-EXAMPLE1', 33, 'form_submission', 'EVENT_STARTED'),
+    memo('GTM-EXAMPLE1', 33, 'form_submission', 'DATA_LAYER', {
       message: { event: 'form_submission', form_name: 'contact_form', form_type: 'main_contact', 'gtm.uniqueEventId': 43 },
       macroInfo: [{ name: 'dlv - form_name', type: 'v', resolvedValue: 'contact_form' }],
     }),
-    memo('GTM-NKZD4BVB', 33, 'form_submission', 'TAG_STARTED', {}, 'GA4 - Event - Get In Touch Form Tag'),
-    memo('GTM-NKZD4BVB', 33, 'form_submission', 'TAG_STATUS', { tagInfo: [{ name: 'GA4 - Event - Get In Touch Form Tag', execute: 'execute_running' }] }),
-    memo('GTM-NKZD4BVB', 33, 'form_submission', 'TAG_STATUS', { tagInfo: [{ name: 'GA4 - Event - Get In Touch Form Tag', execute: 'execute_succeeded' }] }),
-    memo('GTM-NKZD4BVB', 33, 'form_submission', 'TAG_STATUS', { tagInfo: [{ name: 'Meta - Event - Get In Touch Form Tag', execute: 'execute_succeeded' }] }),
+    memo('GTM-EXAMPLE1', 33, 'form_submission', 'TAG_STARTED', {}, 'GA4 - Event - Get In Touch Form Tag'),
+    memo('GTM-EXAMPLE1', 33, 'form_submission', 'TAG_STATUS', { tagInfo: [{ name: 'GA4 - Event - Get In Touch Form Tag', execute: 'execute_running' }] }),
+    memo('GTM-EXAMPLE1', 33, 'form_submission', 'TAG_STATUS', { tagInfo: [{ name: 'GA4 - Event - Get In Touch Form Tag', execute: 'execute_succeeded' }] }),
+    memo('GTM-EXAMPLE1', 33, 'form_submission', 'TAG_STATUS', { tagInfo: [{ name: 'Meta - Event - Get In Touch Form Tag', execute: 'execute_succeeded' }] }),
     // a click event 31 with a failing tag
-    memo('GTM-NKZD4BVB', 31, 'gtm.linkClick', 'EVENT_STARTED'),
-    memo('GTM-NKZD4BVB', 31, 'gtm.linkClick', 'TAG_STATUS', { tagInfo: [{ name: 'GA4 - Event - Email Click Tag', execute: 'execute_failure' }] }),
+    memo('GTM-EXAMPLE1', 31, 'gtm.linkClick', 'EVENT_STARTED'),
+    memo('GTM-EXAMPLE1', 31, 'gtm.linkClick', 'TAG_STATUS', { tagInfo: [{ name: 'GA4 - Event - Email Click Tag', execute: 'execute_failure' }] }),
     // another container's frames must not bleed in
     memo('G-TDV157MGKV', 16, 'form_submission', 'TAG_STATUS', { tagInfo: [{ name: '_Tagging Activity Tag 4', execute: 'execute_running' }] }),
   ];
   const cap = parseTaFrames(frames);
 
-  const gtm = cap.containers.find((c) => c.id === 'GTM-NKZD4BVB')!;
+  const gtm = cap.containers.find((c) => c.id === 'GTM-EXAMPLE1')!;
   check('container: parsed with debug:true (reload wins over first plain load)', gtm.debug === true);
   check('container: detailsFound carried', gtm.detailsFound === true);
-  check('container: debug problem is null when debugging', containerDebugProblem(cap, 'GTM-NKZD4BVB') === null);
+  check('container: debug problem is null when debugging', containerDebugProblem(cap, 'GTM-EXAMPLE1') === null);
 
-  const evs = eventsForContainer(cap, 'GTM-NKZD4BVB');
+  const evs = eventsForContainer(cap, 'GTM-EXAMPLE1');
   check('events: two GTM events, chronological by eventId', evs.length === 2 && evs[0].eventId === 31 && evs[1].eventId === 33);
   const form = evs[1];
   check('event: name form_submission', form.eventName === 'form_submission');
@@ -77,35 +77,35 @@ check('status: weird/absent → unknown', mapExecuteStatus('zzz') === 'unknown' 
 
 // ── the signed-out case (what the probe hit): GTM container not enabled for debugging ─────────────
 {
-  const cap = parseTaFrames([starting('GTM-NKZD4BVB', false), details('GTM-NKZD4BVB', false)]);
-  const problem = containerDebugProblem(cap, 'GTM-NKZD4BVB');
+  const cap = parseTaFrames([starting('GTM-EXAMPLE1', false), details('GTM-EXAMPLE1', false)]);
+  const problem = containerDebugProblem(cap, 'GTM-EXAMPLE1');
   check('signed-out: problem names the sign-in requirement', /signed-in|sign in/i.test(problem ?? ''));
   check('unknown container: problem says the selected one is not live here', /not live on this URL/.test(containerDebugProblem(cap, 'GTM-MISSING') ?? ''));
   // Selected-vs-live MISMATCH: TA connected to a DIFFERENT container than the one selected. The
   // message must NAME the containers it actually saw and steer to the Preview-snippet fix.
-  const mismatch = containerDebugProblem(cap, 'GTM-TCZW2WCF') ?? '';
-  check('mismatch: names the other container TA found', /found these containers on this page/.test(mismatch) && mismatch.includes('GTM-NKZD4BVB'));
-  check('mismatch: names the selected container as absent', mismatch.includes('GTM-TCZW2WCF'));
+  const mismatch = containerDebugProblem(cap, 'GTM-EXAMPLE2') ?? '';
+  check('mismatch: names the other container TA found', /found these containers on this page/.test(mismatch) && mismatch.includes('GTM-EXAMPLE1'));
+  check('mismatch: names the selected container as absent', mismatch.includes('GTM-EXAMPLE2'));
   check('mismatch: steers to the GTM Preview snippet + names indirect loads', /Preview snippet/.test(mismatch) && /dataLayer|consent|server-side/.test(mismatch));
-  check('containersSeenOnPage: lists only GTM- ids', JSON.stringify(containersSeenOnPage(cap)) === JSON.stringify(['GTM-NKZD4BVB']));
+  check('containersSeenOnPage: lists only GTM- ids', JSON.stringify(containersSeenOnPage(cap)) === JSON.stringify(['GTM-EXAMPLE1']));
 }
 
-// ── the ChowNow case: selected container IS on the page (a TA chip) but TA debugged a DIFFERENT one ─
-// TA lists GTM-TCZW2WCF among the page's Google tags, yet defaulted to debugging GTM-TG6Q92 (no
-// access), so no debug frames ever streamed for GTM-TCZW2WCF. The `onPage` chip list is the only
-// signal that GTM-TCZW2WCF is present — the diagnostic must say "installed but not in debug", NOT
+// ── the ChewBox case: selected container IS on the page (a TA chip) but TA debugged a DIFFERENT one ─
+// TA lists GTM-EXAMPLE2 among the page's Google tags, yet defaulted to debugging GTM-OTHER1 (no
+// access), so no debug frames ever streamed for GTM-EXAMPLE2. The `onPage` chip list is the only
+// signal that GTM-EXAMPLE2 is present — the diagnostic must say "installed but not in debug", NOT
 // "saw no container".
 {
   // Debug stream carries ONLY the container TA defaulted to; the selected one is absent from it.
-  const cap = parseTaFrames([starting('GTM-TG6Q92', false), details('GTM-TG6Q92', false)]);
-  const onPage = ['GTM-TG6Q92', 'GTM-TCZW2WCF', 'AW-947183689', 'G-ZXJP53FYFH'];
-  const msg = containerDebugProblem(cap, 'GTM-TCZW2WCF', onPage) ?? '';
-  check('chownow: says the selected container IS installed', /GTM-TCZW2WCF IS installed on this page/.test(msg));
-  check('chownow: names the container TA defaulted to', msg.includes('GTM-TG6Q92'));
-  check('chownow: never claims no container was seen', !/saw no/.test(msg));
-  check('chownow: steers to the Preview snippet', /Preview snippet/.test(msg));
+  const cap = parseTaFrames([starting('GTM-OTHER1', false), details('GTM-OTHER1', false)]);
+  const onPage = ['GTM-OTHER1', 'GTM-EXAMPLE2', 'AW-111222333', 'G-EXAMPLE11'];
+  const msg = containerDebugProblem(cap, 'GTM-EXAMPLE2', onPage) ?? '';
+  check('chewbox: says the selected container IS installed', /GTM-EXAMPLE2 IS installed on this page/.test(msg));
+  check('chewbox: names the container TA defaulted to', msg.includes('GTM-OTHER1'));
+  check('chewbox: never claims no container was seen', !/saw no/.test(msg));
+  check('chewbox: steers to the Preview snippet', /Preview snippet/.test(msg));
   // Lower-case selected id must still match a chip regardless of case.
-  check('chownow: match is case-insensitive', /IS installed/.test(containerDebugProblem(cap, 'gtm-tczw2wcf', onPage) ?? ''));
+  check('chewbox: match is case-insensitive', /IS installed/.test(containerDebugProblem(cap, 'gtm-example2', onPage) ?? ''));
 }
 
 // ── worst-status-wins: failed is never papered over by a later running frame ───────────────────────
@@ -322,12 +322,12 @@ check('status: weird/absent → unknown', mapExecuteStatus('zzz') === 'unknown' 
 //    merge page-B's event N onto page-A's event N (that mislabeled click tags as gtm.formInteract). ──────
 {
   const dl = (id: number, name: string, extra: Record<string, unknown> = {}): string =>
-    memo('GTM-NKZD4BVB', id, name, 'DATA_LAYER', { message: { event: name, ...extra } });
+    memo('GTM-EXAMPLE1', id, name, 'DATA_LAYER', { message: { event: name, ...extra } });
   const tag = (id: number, name: string, tagName: string): string =>
-    memo('GTM-NKZD4BVB', id, name, 'TAG_STATUS', { tagInfo: [{ name: tagName, execute: 'execute_succeeded' }] });
+    memo('GTM-EXAMPLE1', id, name, 'TAG_STATUS', { tagInfo: [{ name: tagName, execute: 'execute_succeeded' }] });
   const frames: unknown[] = [
-    starting('GTM-NKZD4BVB', true),
-    details('GTM-NKZD4BVB', true),
+    starting('GTM-EXAMPLE1', true),
+    details('GTM-EXAMPLE1', true),
     // PAGE 1: an email link click fires the Email Click tags (uniqueEventId 0,1,5).
     dl(0, 'gtm.init'), dl(1, 'gtm.js'),
     dl(5, 'gtm.linkClick', { 'gtm.elementUrl': 'mailto:hi@x.com' }),
@@ -341,7 +341,7 @@ check('status: weird/absent → unknown', mapExecuteStatus('zzz') === 'unknown' 
     tag(5, 'gtm.formInteract', 'GA4 - Event - CTA Click Tag'),
   ];
   const cap = parseTaFrames(frames);
-  const evs = eventsForContainer(cap, 'GTM-NKZD4BVB');
+  const evs = eventsForContainer(cap, 'GTM-EXAMPLE1');
   check('multi-page: the two same-eventId events are kept SEPARATE (not merged)', evs.filter((e) => e.eventId === 5).length === 2);
   check('multi-page: they carry distinct page epochs', new Set(evs.filter((e) => e.eventId === 5).map((e) => e.epoch)).size === 2);
   check('multi-page: page-1 order (epoch,eventId) comes before page-2', evs[0].epoch === 0 && evs[evs.length - 1].epoch === 1);

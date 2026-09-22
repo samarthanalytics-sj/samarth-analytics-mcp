@@ -231,10 +231,10 @@ const seeds = tagPageSeedUrls(
     { formName: 'x' } as { page?: string }, // no page scope
     { page: 'not-a-path' }, // not a leading-slash path
   ],
-  'https://get.chownow.com/',
+  'https://get.chewbox.example/',
 );
 check('tagPageSeedUrls: origin-resolved, deduped, non-path scopes dropped',
-  JSON.stringify(seeds) === JSON.stringify(['https://get.chownow.com/resources/guides/2026-calendar', 'https://get.chownow.com/resources/guides/holiday-checklist']),
+  JSON.stringify(seeds) === JSON.stringify(['https://get.chewbox.example/resources/guides/2026-calendar', 'https://get.chewbox.example/resources/guides/holiday-checklist']),
   JSON.stringify(seeds));
 check('tagPageSeedUrls: the homepage tag equals the target and is dropped', tagPageSeedUrls([{ page: '/' }], 'https://site.com/').length === 0);
 check('tagPageSeedUrls: a non-URL target yields no seeds (never a crash)', tagPageSeedUrls([{ page: '/x' }], 'not a url').length === 0);

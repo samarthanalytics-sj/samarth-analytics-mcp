@@ -237,10 +237,10 @@ test('Google Ads Call Conversion tag: awcc + exactly the 3 corpus params, conver
 });
 
 test('Google Ads Remarketing tag: sp + all-pages audience (customParamsFormat NONE), conversionId passes through', () => {
-  const t = buildGoogleAdsRemarketingTag({ name: 'RMKT', conversionId: 'AW-605994778' });
+  const t = buildGoogleAdsRemarketingTag({ name: 'RMKT', conversionId: 'AW-333444555' });
   assert.equal(t.type, 'sp');
   // Unlike awct/awcc, sp stores conversionId as-is (the corpus has both AW- and bare forms).
-  assert.equal(findParam(t.parameter, 'conversionId')?.value, 'AW-605994778');
+  assert.equal(findParam(t.parameter, 'conversionId')?.value, 'AW-333444555');
   assert.equal(findParam(t.parameter, 'customParamsFormat')?.value, 'NONE');
   assert.equal(findParam(t.parameter, 'enableDynamicRemarketing')?.value, 'false');
   assert.equal(findParam(t.parameter, 'rdp')?.value, 'false');
@@ -1999,7 +1999,7 @@ test('auditServerContainer: PII-named vars feeding CAPI tags with zero transform
   assert.ok(!unref.findings.some((x) => /PII-named variable/.test(x.message)), 'a PII-named var not feeding a CAPI tag is not flagged');
 });
 
-// Helpers for the corpus-motivated server checks (Vocal Minority GTM-57RM3QCT reference).
+// Helpers for the corpus-motivated server checks (GTM-REFEXP01 reference export).
 const clientNameEqualsGa4 = [
   { type: 'EQUALS', parameter: [
     { type: 'template', key: 'arg0', value: '{{Client Name}}' },
@@ -2033,15 +2033,15 @@ test('auditServerContainer (1): flags DUPLICATE GA4 relays — same Measurement 
       { triggerId: '10', name: 'GA Client', type: 'ALWAYS', filter: clientNameEqualsGa4 },
     ],
     tags: [
-      gaawTag('7', 'GA4 Tag', 'G-VOCAL', ['6']),
-      gaawTag('15', 'Google Analytics GA4', 'G-VOCAL', ['10']),
+      gaawTag('7', 'GA4 Tag', 'G-REFEXP1', ['6']),
+      gaawTag('15', 'Google Analytics GA4', 'G-REFEXP1', ['10']),
     ],
   });
   const dup = rep.findings.find((f) => /counted 2× in GA4/i.test(f.message));
   assert.ok(dup, 'emits a duplicate-relay finding');
   assert.equal(dup!.severity, 'critical');
   assert.ok(/"GA4 Tag"/.test(dup!.message) && /"Google Analytics GA4"/.test(dup!.message), 'names both duplicate tags');
-  assert.ok(/G-VOCAL/.test(dup!.message), 'names the shared Measurement ID');
+  assert.ok(/G-REFEXP1/.test(dup!.message), 'names the shared Measurement ID');
 });
 
 test('auditServerContainer (1): does NOT flag GA4 relays with different ids/triggers, paused, TRIGGERLESS, or different eventName overrides', () => {
@@ -3336,7 +3336,7 @@ test('buildGa4Client: server-managed FPID cookies by DEFAULT (reference shape), 
   const params = c.parameter as Array<Record<string, unknown>>;
   assert.equal(findParam(params, 'activateDefaultPaths')?.value, 'true');
   assert.equal(findParam(params, 'activateGtagSupport')?.value, 'true');
-  // The FPID block — exact keys/values from the reference export (GTM-57RM3QCT).
+  // The FPID block — exact keys/values from the reference export (GTM-REFEXP01).
   assert.equal(findParam(params, 'cookieManagement')?.value, 'server');
   assert.equal(findParam(params, 'cookieName')?.value, 'FPID');
   assert.equal(findParam(params, 'cookieDomain')?.value, 'auto');
@@ -3350,7 +3350,7 @@ test('buildGa4Client: server-managed FPID cookies by DEFAULT (reference shape), 
 });
 
 test('buildGtmClient: first-party serving client locked to the web container ids', () => {
-  const c = buildGtmClient('GTM Web Container', ['GTM-W7M2SN98', 'GTM-ABC1234']);
+  const c = buildGtmClient('GTM Web Container', ['GTM-EXAMPLE4', 'GTM-ABC1234']);
   assert.equal(c.type, 'gtm_client');
   const params = c.parameter as Array<Record<string, unknown>>;
   assert.equal(findParam(params, 'activateResponseCompression')?.value, 'true');
@@ -3360,7 +3360,7 @@ test('buildGtmClient: first-party serving client locked to the web container ids
   assert.equal(list?.list?.length, 2);
   assert.deepEqual(
     list.list!.map((m) => m.map.find((x) => x.key === 'containerId')?.value),
-    ['GTM-W7M2SN98', 'GTM-ABC1234'],
+    ['GTM-EXAMPLE4', 'GTM-ABC1234'],
     'LIST of {containerId} maps — the exact reference shape',
   );
 });
@@ -4514,12 +4514,12 @@ test('ga4TagFields returns a GA4 tag event name + measurement id', () => {
   const tag = {
     type: 'gaawe',
     parameter: [
-      { type: 'template', key: 'eventName', value: 'why_restaurants_choose_chownow_for_online_ordering' },
+      { type: 'template', key: 'eventName', value: 'why_restaurants_choose_chewbox_for_online_ordering' },
       { type: 'template', key: 'measurementIdOverride', value: 'G-REAL12345' },
       { type: 'template', key: 'measurementId', value: '' },
     ],
   };
-  assert.deepEqual(ga4TagFields(tag), { eventName: 'why_restaurants_choose_chownow_for_online_ordering', measurementId: 'G-REAL12345' });
+  assert.deepEqual(ga4TagFields(tag), { eventName: 'why_restaurants_choose_chewbox_for_online_ordering', measurementId: 'G-REAL12345' });
 });
 test('ga4TagFields reads a Google tag measurement id from tagId', () => {
   assert.deepEqual(ga4TagFields({ type: 'googtag', parameter: [{ type: 'template', key: 'tagId', value: 'G-ABC123' }] }), { measurementId: 'G-ABC123' });

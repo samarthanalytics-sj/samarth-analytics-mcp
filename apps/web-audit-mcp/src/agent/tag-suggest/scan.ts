@@ -677,7 +677,7 @@ export async function scanSiteForTagSuggestions(
     );
 
     // A scan that read NO page because the site's bot protection blocked it must say so as a note, so
-    // the model relays "the site blocked the scanner" rather than "no forms found" (www.iff.com behind
+    // the model relays "the site blocked the scanner" rather than "no forms found" (a challenge-protected site behind
     // a Cloudflare challenge, 2026-09-17). Zero pages read + any bot-block reason = the scan was blocked.
     const blockedStart = pageScans.length === 0 ? notScanned.find((n) => isBotBlockReason(n.reason)) : undefined;
     const blockedStartNotes = blockedStart ? [blockedStartWarning(blockedStart.reason)] : [];

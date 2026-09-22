@@ -21,7 +21,7 @@ const proofImg = (screenshot?: string): string =>
 const isFired = (status: string): boolean => status === 'Fired' || status === 'Config OK' || status === 'Server-side';
 
 /** A clean, human title from a tag name: strip a leading "Vendor - Type - " (e.g. "GA4 - Event - ") and a
- *  trailing " Tag", so "GA4 - Event - The ChowNow Feed Tag" becomes "The ChowNow Feed". Exported for tests. */
+ *  trailing " Tag", so "GA4 - Event - The ChewBox Feed Tag" becomes "The ChewBox Feed". Exported for tests. */
 export function tagTitle(tag?: string): string {
   const raw = (tag ?? '').trim();
   const clean = raw.replace(/^[^-]+ - [^-]+ - /, '').replace(/\s+Tag$/i, '').trim();

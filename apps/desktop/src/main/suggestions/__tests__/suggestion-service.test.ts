@@ -237,7 +237,7 @@ async function main(): Promise<void> {
 
   // ── start page blocked by bot protection → honest reason + a LOUD warning, not "found nothing" ──
   // The Electron driver reports a WAF challenge page as ok:true / http 403 with a classified `error`
-  // (www.iff.com behind a Cloudflare challenge, 2026-09-17). With zero pages read, the scan must say
+  // (a site behind a Cloudflare challenge, 2026-09-17). With zero pages read, the scan must say
   // the SITE blocked it - a quiet "http 403" under an empty list reads as broken form detection.
   {
     const fd = fakeDriver({

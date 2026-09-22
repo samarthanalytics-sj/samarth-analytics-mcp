@@ -55,12 +55,12 @@ async function main(): Promise<void> {
   // 6) previewParamsFromAny: extract GTM preview creds from whatever the user pastes — the JS snippet
   //    (creds inside the container-id string), a Preview/Tag-Assistant URL, or a bare gtm.js URL.
   const fromSnippet = previewParamsFromAny(
-    `<script>(function(w,d,s,l,i){})(window,document,'script','dataLayer','GTM-NKZD4BVB&gtm_auth=aBc123_x&gtm_preview=env-5&gtm_cookies_win=x');</script>`);
+    `<script>(function(w,d,s,l,i){})(window,document,'script','dataLayer','GTM-EXAMPLE1&gtm_auth=aBc123_x&gtm_preview=env-5&gtm_cookies_win=x');</script>`);
   check('preview: parses the GTM JS snippet',
     fromSnippet?.gtm_auth === 'aBc123_x' && fromSnippet?.gtm_preview === 'env-5' && fromSnippet?.gtm_cookies_win === 'x');
-  const fromUrl = previewParamsFromAny('https://www.googletagmanager.com/gtm.js?id=GTM-NKZD4BVB&gtm_auth=TOK99&gtm_preview=env-12&gtm_cookies_win=x');
+  const fromUrl = previewParamsFromAny('https://www.googletagmanager.com/gtm.js?id=GTM-EXAMPLE1&gtm_auth=TOK99&gtm_preview=env-12&gtm_cookies_win=x');
   check('preview: parses a gtm.js loader URL', fromUrl?.gtm_auth === 'TOK99' && fromUrl?.gtm_preview === 'env-12');
-  const fromTa = previewParamsFromAny('https://tagassistant.google.com/#/?source=TAG_MANAGER&id=GTM-NKZD4BVB&gtm_auth=zZ_9&gtm_preview=env-3');
+  const fromTa = previewParamsFromAny('https://tagassistant.google.com/#/?source=TAG_MANAGER&id=GTM-EXAMPLE1&gtm_auth=zZ_9&gtm_preview=env-3');
   check('preview: parses a Tag Assistant preview URL (defaults cookies_win to x)', fromTa?.gtm_auth === 'zZ_9' && fromTa?.gtm_preview === 'env-3' && fromTa?.gtm_cookies_win === 'x');
   check('preview: null for plain text / no creds', previewParamsFromAny('just some notes') === null && previewParamsFromAny('') === null && previewParamsFromAny(null) === null);
   check('preview: null when only one of the two creds is present', previewParamsFromAny('gtm_auth=only_this_one') === null);

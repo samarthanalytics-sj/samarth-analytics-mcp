@@ -1,6 +1,6 @@
 // Corpus miner (run MANUALLY on the machine that has the raw GTM exports; the repo never contains them):
-//   npx tsx scripts/mine-corpus.ts [inputDir] [outputFile]
-// Defaults: inputDir = the local GTM_Consolidated folder, outputFile = src/shared/corpus/gtm-pattern-library.json
+//   npx tsx scripts/mine-corpus.ts <inputDir> [outputFile]
+// inputDir is required (the folder of raw exports); outputFile defaults to src/shared/corpus/gtm-pattern-library.json
 // Parses every export, mines the anonymized pattern library (see shared/corpus-patterns.ts for the
 // anonymization layers), HARD-FAILS on any leak-scan hit, then writes the artifact + prints stats.
 
@@ -8,7 +8,7 @@ import { readdirSync, readFileSync, writeFileSync, mkdirSync, existsSync } from 
 import { join, dirname, resolve } from 'node:path';
 import { minePatternLibrary, scanForLeaks, type CorpusExport } from '../src/shared/corpus-patterns';
 
-const inputDir = process.argv[2] ?? 'F:\\New folder\\GTM_Consolidated';
+const inputDir = process.argv[2] ?? '';
 const outFile = resolve(process.argv[3] ?? join(__dirname, '..', 'src', 'shared', 'corpus', 'gtm-pattern-library.json'));
 
 if (!existsSync(inputDir)) {
