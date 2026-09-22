@@ -123,6 +123,49 @@ async function main(): Promise<void> {
     assert.equal(service.status().lastError, 'boom');
   });
 
+
+  await test('SERVER container: the pair is monitored; a wired web tag losing its server URL raises an alert', async () => {
+    // A server container is remembered. Its account also holds one web container whose Google tag
+    // points at the tagging host, and the server holds the relay for that tag's id.
+    const HOST = 'https://our.example.com';
+    const wiredCfg = (url: string) => ({ type: 'list', key: 'configSettingsTable', list: [{ type: 'map', map: [
+      { type: 'template', key: 'parameter', value: 'server_container_url' }, { type: 'template', key: 'parameterValue', value: url },
+    ] }] });
+    let webUrl: string | undefined = HOST;
+    const webSnap = () => ({ tags: [tag({ tagId: 't1', name: 'AUS GA4', type: 'googtag', firingTriggerId: ['1'], parameter: [{ type: 'template', key: 'tagId', value: 'G-AUAUAU1' }, ...(webUrl ? [wiredCfg(webUrl)] : [])] })], triggers: [], variables: [] });
+    const serverSnap = { taggingServerUrls: [HOST], clients: [{ clientId: '1', name: 'GA4', type: 'gaaw_client' }], transformations: [], variables: [], triggers: [{ triggerId: '90', name: 'All', type: 'always' }],
+      tags: [tag({ tagId: 's1', name: 'AU relay', type: 'sgtmgaaw', firingTriggerId: ['90'], parameter: [{ type: 'template', key: 'measurementId', value: 'G-AUAUAU1' }] })] };
+    const calls: string[] = [];
+    const data = {
+      listGtmContainers: async () => [
+        { containerId: 'S', name: 'Server', publicId: 'GTM-S', usageContext: ['server'] },
+        { containerId: 'W', name: 'Web', publicId: 'GTM-W', usageContext: ['web'] },
+      ],
+      listGtmWorkspaces: async () => [{ workspaceId: '3', name: 'Default Workspace', path: '' }],
+      getServerContainerSnapshot: async () => { calls.push('server'); return serverSnap; },
+      getGtmContainerSnapshot: async (_a: string, c: string) => { calls.push(`web:${c}`); return webSnap(); },
+    } as unknown as GoogleDataService;
+    const alerts: MonitorAlert[] = [];
+    let t = 5000;
+    const service = new MonitorService({
+      registry: { getActiveView: () => activeView({ gtmContext: { accountId: '1', containerId: 'S', containerName: 'Server', workspaceId: '2' } }) },
+      data, history: new AuditHistoryStore(join(dir, 'server-pair.json')), emit: (a) => alerts.push(a), now: () => (t += 1000),
+    });
+    assert.equal(await service.runOnce(), null, 'baseline: correct pair, no alert');
+    assert.ok(calls.includes('server') && calls.includes('web:W'), 'the server engine ran and the paired web container was read');
+    assert.ok(!calls.some((c) => c === 'web:S'), 'the server container itself was never audited with the web engine');
+
+    // Regression: someone removes the server container URL from the web tag.
+    webUrl = undefined;
+    const alert = await service.runOnce();
+    assert.ok(alert, 'the pair regression is a NEW finding, so it alerts');
+    assert.ok(alert!.newFindings.some((f) => /"AUS GA4"/.test(f.message) && /straight to Google/.test(f.message)), alert!.newFindings.map((f) => f.message).join(' | '));
+    assert.equal(alert!.newFindings[0].category, 'coverage');
+
+    // Same state again: no new alert (it is not new any more).
+    assert.equal(await service.runOnce(), null);
+  });
+
   await test('configure clamps the interval to >= 5 min and persists', async () => {
     const file = join(dir, 'cfg.json');
     const make = () =>

@@ -1,5 +1,6 @@
 import type { GoogleDataService } from './data-service';
 import { auditContainer, auditServerContainer, type AuditReport } from './gtm-builders';
+import { pairDriftFindings, withPairFindings, type WebPair } from './server-pair';
 import { buildContainerInventory, type ContainerInventory } from './gtm-inventory';
 import { diffAudits, type AuditDrift } from './gtm-monitor';
 import { AuditHistoryStore } from '../storage/audit-history';
@@ -114,13 +115,43 @@ export interface AuditChanges {
  * this run, and return what changed (new vs resolved issues). The heart of
  * continuous monitoring. `now` is injected so callers control the timestamp.
  */
+/**
+ * For a SERVER container, the findings only the web + server PAIR reveals: a wired web tag whose
+ * relay is gone, a relay whose web tag went direct, both legs feeding one property. Every web
+ * container in the account is read so pairing can be decided from the tagging host. Best effort:
+ * if any of that fails the plain server report stands, so the monitor never breaks over a
+ * pairing read. Returns [] for a web container.
+ */
+export async function pairFindingsFor(data: GoogleDataService, ctx: WorkspaceCtx, report: AuditReport): Promise<ReturnType<typeof pairDriftFindings>> {
+  try {
+    if ((await containerKind(data, ctx)) !== 'server') return [];
+    const server = await data.getServerContainerSnapshot(ctx.accountId, ctx.containerId, ctx.workspaceId);
+    const containers = await data.listGtmContainers(ctx.accountId);
+    const webs: WebPair[] = [];
+    for (const c of containers) {
+      if (c.containerId === ctx.containerId) continue;
+      if ((c.usageContext ?? []).some((u) => String(u ?? '').toLowerCase() === 'server')) continue;
+      const wss = await data.listGtmWorkspaces(ctx.accountId, c.containerId);
+      const ws = wss.find((w) => /default/i.test(w.name)) ?? wss[0];
+      if (!ws) continue;
+      webs.push({ containerId: c.containerId, name: c.name, snapshot: await data.getGtmContainerSnapshot(ctx.accountId, c.containerId, ws.workspaceId) });
+    }
+    return pairDriftFindings(server, webs, report.summary);
+  } catch {
+    return [];
+  }
+}
+
 export async function auditChanges(
   data: GoogleDataService,
   history: AuditHistoryStore,
   ctx: WorkspaceCtx,
   now: number
 ): Promise<AuditChanges> {
-  const report = await auditWorkspace(data, ctx);
+  // The pair findings ride along as ordinary findings, so history, drift and the alert need no
+  // new shape: a regression in the pair is simply a NEW finding on the next scheduled run.
+  const base = await auditWorkspace(data, ctx);
+  const report = withPairFindings(base, await pairFindingsFor(data, ctx, base));
   const key = AuditHistoryStore.key(ctx.accountId, ctx.containerId, ctx.workspaceId);
   const prev = history.last(key);
   const drift = diffAudits(prev?.report.findings ?? null, report.findings);
