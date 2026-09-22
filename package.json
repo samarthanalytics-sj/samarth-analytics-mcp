@@ -4,8 +4,8 @@
   "description": "Production-ready MCP server for Google Tag Manager API v2 — Samarth Analytics",
   "type": "module",
   "bin": {
-    "samarth-gtm-mcp": "./dist/index.js",
-    "samarth-gtm-auth": "./dist/scripts/auth-google.js"
+    "samarth-gtm-mcp": "dist/index.js",
+    "samarth-gtm-auth": "dist/scripts/auth-google.js"
   },
   "main": "./dist/index.js",
   "files": [
