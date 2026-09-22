@@ -1,3 +1,9 @@
+## [1.497.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.496.0...v1.497.0) (2026-09-22)
+
+### Features
+
+* **server:** the runtime leg, proven by one labelled synthetic event read back from GA4 ([#986](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/986)) ([14a7d9a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/14a7d9a1523af988feb4ac893b5fca79a27a5419))
+
 ## [1.496.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.495.2...v1.496.0) (2026-09-22)
 
 ### Features
