@@ -1000,20 +1000,30 @@ test('audit: structured findings carry resource + recommendation + machine fix',
 });
 
 test('audit: Consent Mode v2 + missing event name flagged on bare GA4/Ads tags', () => {
+  const tags = [
+    { tagId: '1', name: 'Bare GA4', type: 'gaawe', firingTriggerId: ['T1'], paused: false, parameter: [{ key: 'measurementIdOverride', value: 'G-9' }] },
+    { tagId: '2', name: 'Ads', type: 'awct', firingTriggerId: ['T1'], paused: false, parameter: [] },
+  ];
+  // A container that does not use Consent Mode AT ALL: one container-level finding, not one per
+  // tag. Per-tag alarms here were 86% of every high finding across 558 real containers.
+  const bare = auditContainer({ tags, triggers: [{ triggerId: 'T1', name: 'All Pages', type: 'pageview' }], variables: [] });
+  assert.ok(bare.findings.some((f) => f.message.includes('has no event name')), 'GA4 missing event name flagged');
+  const bareConsent = bare.findings.filter((f) => f.category === 'consent');
+  assert.equal(bareConsent.length, 1, 'ONE finding for a container with no Consent Mode');
+  assert.equal(bareConsent[0].checkId, 'consent-mode-not-configured');
+  assert.equal(bareConsent[0].severity, 'medium', 'matches the consent engine, which reports the same fact at medium');
+  assert.match(bareConsent[0].message, /2 data-sending tag/);
+  assert.match(bareConsent[0].message, /"Bare GA4"/);
+  assert.equal(bareConsent[0].autoFixable, false, 'whether to adopt Consent Mode is a decision, not a fix');
+
+  // The SAME tags in a container that DOES use Consent Mode (a Consent Initialization trigger
+  // exists): now each unconfigured tag is a real gap in a working setup, reported per tag with its fix.
   const r = auditContainer({
-    tags: [
-      { tagId: '1', name: 'Bare GA4', type: 'gaawe', firingTriggerId: ['T1'], paused: false, parameter: [{ key: 'measurementIdOverride', value: 'G-9' }] },
-      { tagId: '2', name: 'Ads', type: 'awct', firingTriggerId: ['T1'], paused: false, parameter: [] },
-    ],
-    triggers: [{ triggerId: 'T1', name: 'All Pages', type: 'pageview' }],
+    tags,
+    triggers: [{ triggerId: 'T1', name: 'All Pages', type: 'pageview' }, { triggerId: 'T0', name: 'Consent Initialization - All Pages', type: 'consentInit' }],
     variables: [],
   });
-  const cats = r.findings.map((f) => f.category);
-  assert.ok(cats.includes('consent'), 'consent finding for tags without consentSettings');
-  assert.ok(r.findings.some((f) => f.message.includes('has no event name')), 'GA4 missing event name flagged');
-  // Both consent-relevant tags should be flagged for consent.
-  assert.equal(r.findings.filter((f) => f.category === 'consent').length, 2);
-  // Brain: consent is High (not Medium), confidence 'likely', and now AUTO-FIXABLE.
+  assert.equal(r.findings.filter((f) => f.category === 'consent').length, 2, 'per tag when Consent Mode is in use');
   const ga4Consent = r.findings.find((f) => f.category === 'consent' && f.resource?.id === '1');
   assert.equal(ga4Consent?.severity, 'high', 'consent finding is High');
   assert.equal(ga4Consent?.confidence, 'likely', 'consent finding is [Likely]');
@@ -1022,6 +1032,35 @@ test('audit: Consent Mode v2 + missing event name flagged on bare GA4/Ads tags',
   assert.deepEqual(ga4Consent?.fix?.args.consentTypes, ['analytics_storage'], 'GA4 → analytics_storage');
   const adsConsent = r.findings.find((f) => f.category === 'consent' && f.resource?.id === '2');
   assert.deepEqual(adsConsent?.fix?.args.consentTypes, ['ad_storage', 'ad_user_data', 'ad_personalization'], 'Ads → ad signals');
+});
+
+test('audit: an event tag whose {{Constant}} Measurement ID matches the Google tag literal is NOT "Cannot detect the Google tag"', () => {
+  const base = {
+    triggers: [{ triggerId: 'T1', name: 'All Pages', type: 'pageview' }, { triggerId: 'T0', name: 'Consent Initialization', type: 'consentInit' }],
+    variables: [{ variableId: 'v1', name: 'GA4 ID', type: 'c', parameter: [{ key: 'value', value: 'G-ABC123' }] }],
+  };
+  const cannotDetect = (r: ReturnType<typeof auditContainer>) => r.findings.filter((f) => /NO Google\/Configuration tag/.test(f.message));
+
+  // Google tag holds the literal, the event tag holds a Constant with the same value: one id, no finding.
+  const ok = auditContainer({ ...base, tags: [
+    { tagId: '1', name: 'Google tag', type: 'googtag', firingTriggerId: ['T1'], paused: false, parameter: [{ key: 'tagId', value: 'G-ABC123' }], consentSettings: { consentStatus: 'NEEDED', consentType: { list: [{ value: 'analytics_storage' }] } } },
+    { tagId: '2', name: 'GA4 - view_item', type: 'gaawe', firingTriggerId: ['T1'], paused: false, parameter: [{ key: 'measurementIdOverride', value: '{{GA4 ID}}' }, { key: 'eventName', value: 'view_item' }], consentSettings: { consentStatus: 'NEEDED', consentType: { list: [{ value: 'analytics_storage' }] } } },
+  ] });
+  assert.equal(cannotDetect(ok).length, 0, 'the Constant resolves to the declared literal; this flagged 24% of real containers');
+
+  // The other way round too: Google tag holds the Constant, the event tag holds the literal.
+  const ok2 = auditContainer({ ...base, tags: [
+    { tagId: '1', name: 'Google tag', type: 'googtag', firingTriggerId: ['T1'], paused: false, parameter: [{ key: 'tagId', value: '{{GA4 ID}}' }] },
+    { tagId: '2', name: 'GA4 - view_item', type: 'gaawe', firingTriggerId: ['T1'], paused: false, parameter: [{ key: 'measurementIdOverride', value: 'G-ABC123' }, { key: 'eventName', value: 'view_item' }] },
+  ] });
+  assert.equal(cannotDetect(ok2).length, 0);
+
+  // A reference that resolves to NOTHING the Google tag declares is still a real finding.
+  const bad = auditContainer({ ...base, tags: [
+    { tagId: '1', name: 'Google tag', type: 'googtag', firingTriggerId: ['T1'], paused: false, parameter: [{ key: 'tagId', value: 'G-OTHER99' }] },
+    { tagId: '2', name: 'GA4 - view_item', type: 'gaawe', firingTriggerId: ['T1'], paused: false, parameter: [{ key: 'measurementIdOverride', value: '{{GA4 ID}}' }, { key: 'eventName', value: 'view_item' }] },
+  ] });
+  assert.equal(cannotDetect(bad).length, 1, 'a genuinely undeclared id is still reported');
 });
 
 test('consentTypesFor maps destination type → required consent signals', () => {
@@ -1263,6 +1302,9 @@ test('audit: Universal Analytics tags are flagged as deprecated; Microsoft Ads (
     tags: [
       { tagId: '1', name: 'Old UA', type: 'ua', firingTriggerId: ['T1'], paused: false, parameter: [] },
       { tagId: '2', name: 'Bing UET', type: 'baut', firingTriggerId: ['T1'], paused: false, parameter: [], consentSettings: { consentStatus: 'NOT_SET' } },
+      // A tag that already declares consent proves this container uses Consent Mode, so the
+      // unconfigured baut tag is reported per tag rather than folded into a container-level note.
+      { tagId: '3', name: 'GA4 (gated)', type: 'gaawe', firingTriggerId: ['T1'], paused: false, parameter: [{ key: 'measurementIdOverride', value: 'G-1' }, { key: 'eventName', value: 'page_view' }], consentSettings: { consentStatus: 'NEEDED', consentType: { list: [{ value: 'analytics_storage' }] } } },
     ],
     triggers: [{ triggerId: 'T1', name: 'All Pages', type: 'pageview' }],
     variables: [],
@@ -1852,7 +1894,7 @@ test('auditServerContainer flags missing client, blank ids, no trigger, paused, 
   assert.ok(rep.summary.critical >= 1, 'no client → a critical');
   assert.ok(/no client/i.test(msgs), 'names the missing-client problem');
   assert.ok(/no tagging server URL/i.test(msgs), 'flags missing tagging URL');
-  assert.ok(/no Measurement ID/i.test(msgs), 'flags GA4 tag with blank measurement id');
+  assert.ok(!/no Measurement ID/i.test(msgs), 'a blank measurement id INHERITS from the event and is not a defect');
   assert.ok(/never fires/i.test(msgs), 'flags the tag with no firing trigger');
   assert.ok(/Conversion ID and\/or Label/i.test(msgs), 'flags incomplete Ads conversion');
   assert.ok(/PAUSED/i.test(msgs), 'flags the paused server tag');
