@@ -350,5 +350,20 @@ test('cross-container: a second Google tag config without the transport URL bypa
   assert.equal(xc(buildServerCoverage(web({ tags: [cfg('w1', 'A')] }), server(), AUDIT_OK)).length, 0);
 });
 
+test('GA4: a relay with a BLANK Measurement ID inherits it from the event and still covers GA4', () => {
+  // This is the recommended setup and what every real server container in the corpus does. It used
+  // to make the coverage scorer call GA4 uncovered and the plan offer to create a second relay.
+  const srv = server({ tags: [tag({ tagId: 's1', name: 'GA4 Relay', type: 'sgtmgaaw', firingTriggerId: ['90'], parameter: [] })], triggers: [clientTrigger('90')] });
+  const r = buildServerCoverage(web(), srv, AUDIT_OK);
+  assert.equal(r.ga4.relay, true, 'a blank id is still a relay');
+  assert.deepEqual(r.ga4.serverMeasurementIds, ['G-ABC1234'], 'an inheriting relay forwards whatever the web sends');
+  assert.equal(r.ga4.idsMatch, true);
+  const ga4Row = r.rows.find((x) => x.platform === 'ga4');
+  assert.equal(ga4Row?.status, 'covered');
+  // And the pair check still sees the doubling: the web tag is not wired, so both legs feed G-ABC1234.
+  assert.equal(r.crossContainer.filter((f) => f.checkId === 'web_server_ga4_parallel').length, 1, 'inheriting relay + unwired web = counted twice');
+});
+
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
