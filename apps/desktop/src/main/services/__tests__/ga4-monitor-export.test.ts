@@ -17,8 +17,8 @@ function test(name: string, fn: () => void): void {
 
 const run = (over: Partial<Ga4MonitorRun> = {}): Ga4MonitorRun => ({
   at: Date.parse('2026-07-09T14:15:00Z'),
-  property: 'properties/353451709',
-  propertyLabel: 'Purple Tresor Property - GA4',
+  property: 'properties/300000001',
+  propertyLabel: 'Example Property - GA4',
   timeZone: 'Asia/Kolkata',
   health: 'critical',
   summary: '2 issues need attention (1 critical, 1 high).',
@@ -50,8 +50,8 @@ console.log('\nGA4 monitor export:');
 
 test('CSV: metadata preamble, one row per alert and per check, quotes escaped', () => {
   const csv = monitorRunToCsv(run());
-  assert.ok(csv.startsWith('GA4 monitoring report,Purple Tresor Property - GA4\r\n'), 'title row');
-  assert.ok(csv.includes('Property ID,353451709'), 'bare numeric id');
+  assert.ok(csv.startsWith('GA4 monitoring report,Example Property - GA4\r\n'), 'title row');
+  assert.ok(csv.includes('Property ID,300000001'), 'bare numeric id');
   assert.ok(csv.includes('Reporting timezone,Asia/Kolkata'), 'timezone stated');
   assert.ok(csv.includes('Type,Status,Name,What we found,Technical detail,Recommendation'), 'header row');
   assert.ok(/Alert,High,Campaign and channel revenue do not reconcile,"Your ads look about 10x/.test(csv), 'alert row leads with the plain voice');

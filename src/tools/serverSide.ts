@@ -618,7 +618,7 @@ export async function ensureGalleryTemplate(
  *
  * Deliberately NOT computed here. This used to return `cvt_<containerId>_<templateId>`, which is
  * not the format GTM actually uses: a real import produced `cvt_TB7ZX` against container
- * 223151851, so the constructed string was wrong and would have been passed straight into
+ * 200000001, so the constructed string was wrong and would have been passed straight into
  * tags_create as an invalid type.
  *
  * It happened to cause no harm only because the caller ignored it. That is luck, not design: a

@@ -63,7 +63,7 @@ test('the errors we actually debugged are left readable', () => {
 
 test('ordinary identifiers are not mistaken for secrets', () => {
   // Container and account ids are the whole point of a GTM error message.
-  const msg = 'container GTM-ABCD123 account 6305785417 workspace 12 tag 1489388038';
+  const msg = 'container GTM-ABCD123 account 6000000001 workspace 12 tag 1489388038';
   assert.equal(redactSecrets(msg), msg);
 });
 

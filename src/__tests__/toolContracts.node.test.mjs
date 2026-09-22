@@ -136,7 +136,7 @@ await test('workspace-scoped list results echo the scope they were read from', a
   }));
 
   const res = await scoped._registeredTools.tags_list.handler(
-    { accountId: '6300744495', containerId: '223151851', workspaceId: '2' },
+    { accountId: '6000000002', containerId: '200000001', workspaceId: '2' },
     { requestId: 'test' },
   );
   const body = JSON.parse(res.content[0].text);
@@ -147,8 +147,8 @@ await test('workspace-scoped list results echo the scope they were read from', a
   assert.strictEqual(body.count, 0, 'fixture returns no tags');
   assert.ok(body.scope, 'an empty list must still say where it looked');
   assert.strictEqual(body.scope.workspaceId, '2');
-  assert.strictEqual(body.scope.containerId, '223151851');
-  assert.strictEqual(body.scope.accountId, '6300744495');
+  assert.strictEqual(body.scope.containerId, '200000001');
+  assert.strictEqual(body.scope.accountId, '6000000002');
 });
 
 console.log(`\n${passed} passed, ${failed} failed\n`);

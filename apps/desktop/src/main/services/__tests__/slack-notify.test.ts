@@ -52,13 +52,13 @@ wrap('structured alert fields render as Summary metric lines, Impact, and curate
     impact: 'Revenue & ROAS unreliable today; campaign spend decisions at risk.',
     actions: ['Verify Purchase and Key Event tracking in GA4 DebugView/Realtime', 'Check for duplicate event firing'],
   });
-  const p = buildSlackPayload('Purple Tresor Property - GA4', result({ alerts: [a], property: 'properties/353451709' }), [a]);
+  const p = buildSlackPayload('Example Property - GA4', result({ alerts: [a], property: 'properties/300000001' }), [a]);
   const json = JSON.stringify(p.blocks);
   assert.ok(json.includes('Sessions: +344%'), 'metric summary lines used instead of prose');
   assert.ok(!json.includes('0 active users'), 'prose detail not duplicated when structured lines exist');
   assert.ok(json.includes('*Impact*') && json.includes('ROAS unreliable'), 'impact section rendered');
   assert.ok(json.includes('\u2022 Verify Purchase and Key Event tracking'), 'curated bullets rendered');
-  assert.ok(json.includes('*Property ID:* 353451709'), 'numeric property id');
+  assert.ok(json.includes('*Property ID:* 300000001'), 'numeric property id');
 });
 
 wrap('a healthy weekly digest is a ONE-LINE all-clear, not a wall of green checks', () => {

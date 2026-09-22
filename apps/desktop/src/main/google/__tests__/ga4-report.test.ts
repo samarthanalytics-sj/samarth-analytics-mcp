@@ -34,8 +34,8 @@ function test(name: string, fn: () => void): void {
 }
 
 const snap = (over: Partial<Ga4PropertySnapshot> = {}): Ga4PropertySnapshot => ({
-  property: 'properties/353451709',
-  displayName: 'Purple Tresor Property - GA4',
+  property: 'properties/300000001',
+  displayName: 'Example Property - GA4',
   timeZone: 'Asia/Calcutta',
   currencyCode: 'INR',
   industryCategory: 'SHOPPING',
@@ -205,7 +205,7 @@ test('report has all 9 verdict-first sections', () => {
   ]) {
     assert.ok(md.includes(h), `missing section: ${h}`);
   }
-  assert.ok(md.includes('353451709'), 'property id (in title + scope)');
+  assert.ok(md.includes('300000001'), 'property id (in title + scope)');
   assert.ok(md.includes('14 months'), 'retention label');
   // Verdict is read-first: it precedes the metadata appendix.
   assert.ok(md.indexOf('## 1 · Executive summary') < md.indexOf('## 9 · Scope'), 'exec summary before metadata');
