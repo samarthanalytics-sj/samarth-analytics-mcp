@@ -1,3 +1,9 @@
+## [1.495.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.495.0...v1.495.1) (2026-09-22)
+
+### Bug Fixes
+
+* **audit:** remove three false positives that were half of every finding ([#983](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/983)) ([0b936ea](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/0b936ea1ecf68345066aa0ef3163718b87af121e))
+
 ## [1.495.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.494.0...v1.495.0) (2026-09-21)
 
 ### Features
