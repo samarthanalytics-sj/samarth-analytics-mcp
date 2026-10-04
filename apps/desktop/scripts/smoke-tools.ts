@@ -369,13 +369,15 @@ async function main(): Promise<void> {
     //   - create_google_ads_conversion_action (a live Ads conversion action);
     //   - the GA4 ACCESS-BINDING create/update tools, which change WHO can access a property/account
     //     (a permission write, flagged `sensitive` in ga4-write-tools → approval:true). The delete
-    //     access-binding tool is caught by isDestructive above, so only create_/update_ land here.
+    //     access-binding tool is caught by isDestructive above, so only create_/update_ land here;
+    //   - probe_server_runtime, which delivers a live synthetic hit into a production GA4 property.
     // registry.list() intentionally projects only {name, description, inputSchema} (the LLM tool
     // shape), so this classification cannot read the approval flag off the listed tools and must name
     // the gated set. Keep it in step with the registry: any new Tool.approval write belongs here.
     const isApprovalGated = (n: string) =>
       n === 'create_google_ads_conversion_action' ||
       n === 'create_google_ads_conversion_actions_for_tags' ||
+      n === 'probe_server_runtime' ||
       ((n.startsWith('create_') || n.startsWith('update_')) && n.endsWith('_access_binding'));
     const destructiveNames = writeNames.filter(isDestructive);
     const gatedNames = writeNames.filter((n) => !isDestructive(n) && isApprovalGated(n));
