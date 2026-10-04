@@ -18,7 +18,7 @@ There are two ways to get it running on a Mac:
 ## Prerequisites
 
 - **macOS 11 (Big Sur) or later** — Apple Silicon (M-series) or Intel.
-- **Node.js 18+** and **Git**. Easiest via [Homebrew](https://brew.sh):
+- **Node.js 22.12+** and **Git**. Easiest via [Homebrew](https://brew.sh):
   ```bash
   brew install node git
   ```
@@ -76,8 +76,8 @@ Now jump to [First-run setup](#first-run-setup).
 ```bash
 git clone https://github.com/samarthanalytics-sj/samarth-analytics-mcp.git
 cd samarth-analytics-mcp/apps/desktop
-npm install        # downloads the macOS Electron binary automatically
-npm run dev
+npm install
+npm run dev        # first run downloads the macOS Electron binary automatically
 ```
 
 This opens the app with hot-reload. It's not a packaged app — use Option A for a
