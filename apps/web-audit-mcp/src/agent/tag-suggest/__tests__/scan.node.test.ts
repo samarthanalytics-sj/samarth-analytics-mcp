@@ -2,7 +2,8 @@
  * Phase 3 orchestrator — pure report-building tests (no browser).
  * Run: tsx apps/web-audit-mcp/src/agent/tag-suggest/__tests__/scan.node.test.ts
  */
-import { pagePath, toPageScan, assembleTagReport, accountNotScanned, entryNavUrl, scanSiteForTagSuggestions, type AssembleArgs } from '../scan.js';
+import { pagePath, toPageScan, assembleTagReport, accountNotScanned, entryNavUrl, scanSiteForTagSuggestions, scanResponseFailure, type AssembleArgs } from '../scan.js';
+import { isBotBlockReason } from '../../bot-block.js';
 import type { PageScan, PageScanRaw, RawElement } from '../collect.js';
 import type { PageSignals } from '../types.js';
 
@@ -110,6 +111,25 @@ check('report: notScanned + notes carried through', report.notScanned.length ===
     reasonFor('https://acme.com/contact').length === 1 && reasonFor('https://acme.com/contact')[0].reason.startsWith('scan failed'));
 }
 
+// ── scanResponseFailure: a scan worker never reads a challenge / error page as a page ─────────────────
+check('scanResponseFailure: a Cloudflare challenge (403 + cf-mitigated) is named',
+  scanResponseFailure(403, { 'cf-mitigated': 'challenge', server: 'cloudflare' }) === 'blocked by Cloudflare bot challenge');
+check('scanResponseFailure: a rate limit behind Cloudflare (429) is named as a block',
+  scanResponseFailure(429, { server: 'cloudflare' }) === 'blocked by Cloudflare (http 429)');
+check('scanResponseFailure: a plain 404 / 500 is "http N"',
+  scanResponseFailure(404, {}) === 'http 404' && scanResponseFailure(500, {}) === 'http 500');
+check('scanResponseFailure: 200 and redirects are scanned', scanResponseFailure(200, {}) === null && scanResponseFailure(304, {}) === null);
+check('scanResponseFailure: no status (same-document navigation) keeps scanning', scanResponseFailure(null, {}) === null);
+{
+  // Chosen-pages mode: no crawl, so the worker's failure is the only record. It must be listed once and
+  // be recognisable as a block, which is what fires the "the site blocked the scanner" note.
+  const url = 'https://acme.com/pricing';
+  const reason = scanResponseFailure(403, { 'cf-mitigated': 'challenge' });
+  const out = accountNotScanned([], [], new Set([url]), reason ? [{ url, reason }] : []);
+  check('scanResponseFailure: a blocked chosen page is listed once, as a bot block',
+    out.length === 1 && out[0].url === url && isBotBlockReason(out[0].reason), JSON.stringify(out));
+}
+
 // ── report.existingTracking is populated (Phase 2) ────────────────────────────
 {
   const trackedSig: PageSignals = {
@@ -161,6 +181,10 @@ check('entryNavUrl: null normalised start → unchanged', entryNavUrl(START, nul
   const clicks = src.indexOf('discoverInteractiveForms(');
   check('worker: the page screenshot is taken before interactive form discovery clicks anything',
     shot > 0 && clicks > 0 && shot < clicks, `screenshot@${shot} discover@${clicks}`);
+  const statusCheck = src.indexOf('scanResponseFailure(');
+  const collect = src.indexOf('collectPageRaw(');
+  check('worker: the goto response status is checked before the page is read',
+    statusCheck > 0 && collect > 0 && statusCheck < collect, `status@${statusCheck} collect@${collect}`);
 }
 
 console.log(`\nTag-scan: ${passed} passed, ${failed} failed`);

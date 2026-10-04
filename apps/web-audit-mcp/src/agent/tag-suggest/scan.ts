@@ -37,7 +37,7 @@ import { buildSuggestions } from './suggest.js';
 import { BLOG_RE } from './blog-paths.js';
 import { detectExistingTracking, type ExistingTracking } from './existing-tracking.js';
 import type { SuggestedTag, FormPurpose, SuggestPlatform } from './types.js';
-import { isBotBlockReason, blockedStartWarning } from '../bot-block.js';
+import { botBlockReason, isBotBlockReason, blockedStartWarning, type HeaderBag } from '../bot-block.js';
 
 /** A page that was discovered but not turned into suggestions, with the reason. */
 export interface NotScanned {
@@ -284,6 +284,18 @@ export function accountNotScanned(
   }
   out.push(...crawlSkipped);
   return out;
+}
+
+/**
+ * Why a scan worker's navigation response must not be read as a page, or null when it can be. PURE.
+ *
+ * Playwright's goto does not throw on a 403 / 429 / 503, so without this a WAF challenge page was read
+ * as a real page with no forms and no elements. The crawl already drops pages at 400 and above; the
+ * workers are the only navigation in chosen-pages mode, and open fresh contexts in crawl mode.
+ */
+export function scanResponseFailure(status: number | null, headers: HeaderBag): string | null {
+  if (status === null || status < 400) return null;
+  return botBlockReason(status, headers) ?? `http ${status}`;
 }
 
 const CREATE_NOTE =
@@ -604,7 +616,13 @@ export async function scanSiteForTagSuggestions(
         for (let target = claim(); target; target = claim()) {
           try {
             inst.markNavigationStart();
-            await page.goto(entryNavUrl(target.url, startNormUrl, startHash), { waitUntil: 'domcontentloaded', timeout: config.navTimeoutMs });
+            const resp = await page.goto(entryNavUrl(target.url, startNormUrl, startHash), { waitUntil: 'domcontentloaded', timeout: config.navTimeoutMs });
+            // A bot challenge or an error page is not a page with no forms: name it, and do not scan it.
+            const failure = resp ? scanResponseFailure(resp.status(), resp.headers()) : null;
+            if (failure) {
+              collectFailures.push({ url: target.url, reason: failure });
+              continue;
+            }
             await page.waitForTimeout(settleMs);
             const raw = await collectPageRaw(page);
             const forms = await scanForms(page, page.url());
