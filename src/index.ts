@@ -25,7 +25,7 @@ import {
   deriveApiBase,
   GoogleScopeError,
 } from './auth/googleIdentityResolver.js';
-import { resolveHttpBinding, bindingBanner } from './utils/httpBinding.js';
+import { resolveHttpBinding, resolveHttpPort, bindingBanner } from './utils/httpBinding.js';
 import { getGuardrailConfig } from './utils/guardrails.js';
 import { guardrailBanner, guardrailStatus } from './utils/guardrailMode.js';
 import { decidePostRoute, UNKNOWN_SESSION_MESSAGE } from './utils/mcpSession.js';
@@ -95,8 +95,13 @@ async function startHttpServer(auth: OAuth2Client): Promise<void> {
   );
 
   // PORT is the conventional env var injected by hosts like Render/Fly;
-  // GTM_MCP_HTTP_PORT takes precedence when explicitly set.
-  const port = parseInt(process.env.GTM_MCP_HTTP_PORT ?? process.env.PORT ?? '3001', 10);
+  // GTM_MCP_HTTP_PORT takes precedence when explicitly set (blank counts as unset).
+  const portChoice = resolveHttpPort(process.env);
+  if (portChoice.refuse) {
+    console.error(`[samarth-gtm-mcp] ${portChoice.refuse}`);
+    process.exit(1);
+  }
+  const port = portChoice.port;
 
   // ── Auth modes ─────────────────────────────────────────────────────────────
   // Multi-user mode (Stytch Connected Apps) activates when STYTCH_PROJECT_ID is

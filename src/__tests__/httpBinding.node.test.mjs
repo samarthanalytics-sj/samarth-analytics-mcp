@@ -12,7 +12,7 @@
  */
 
 import assert from 'assert';
-import { existsSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { fileURLToPath, pathToFileURL } from 'url';
 import path from 'path';
 
@@ -22,9 +22,8 @@ if (!existsSync(distPath)) {
   console.error(`\n✗ httpBinding test: ${distPath} not found. Run "npm run build" first.`);
   process.exit(1);
 }
-const { resolveHttpBinding, bindingBanner, LOOPBACK, ALL_INTERFACES } = await import(
-  pathToFileURL(distPath).href
-);
+const { resolveHttpBinding, resolveHttpPort, DEFAULT_HTTP_PORT, bindingBanner, LOOPBACK, ALL_INTERFACES } =
+  await import(pathToFileURL(distPath).href);
 
 let passed = 0;
 let failed = 0;
@@ -131,6 +130,55 @@ await test('the banner names the authentication mode, including NONE', () => {
   assert.match(bindingBanner({ host: LOOPBACK, authMode: 'none' }, 1), /NONE/);
   assert.match(bindingBanner({ host: LOOPBACK, authMode: 'stytch' }, 1), /Stytch/);
   assert.match(bindingBanner({ host: LOOPBACK, authMode: 'static-token' }, 1), /bearer token/);
+});
+
+// ── the port ──────────────────────────────────────────────────────────────────
+// It used to be parseInt(GTM_MCP_HTTP_PORT ?? PORT ?? '3001'): an empty GTM_MCP_HTTP_PORT is not
+// nullish, so it shadowed the host-injected PORT, parsed to NaN, and app.listen threw.
+console.log('\nHTTP port:');
+
+await test('nothing set → the 3001 default', () => {
+  assert.deepStrictEqual(resolveHttpPort({}), { port: DEFAULT_HTTP_PORT });
+  assert.strictEqual(DEFAULT_HTTP_PORT, 3001);
+});
+
+await test('GTM_MCP_HTTP_PORT wins over PORT', () => {
+  assert.deepStrictEqual(resolveHttpPort({ GTM_MCP_HTTP_PORT: '4000', PORT: '10000' }), { port: 4000 });
+});
+
+await test('PORT (Render/Fly) is used when GTM_MCP_HTTP_PORT is unset', () => {
+  assert.deepStrictEqual(resolveHttpPort({ PORT: '10000' }), { port: 10000 });
+});
+
+await test('REGRESSION: an empty or blank GTM_MCP_HTTP_PORT counts as unset and falls through to PORT', () => {
+  assert.deepStrictEqual(resolveHttpPort({ GTM_MCP_HTTP_PORT: '', PORT: '10000' }), { port: 10000 });
+  assert.deepStrictEqual(resolveHttpPort({ GTM_MCP_HTTP_PORT: '   ', PORT: '10000' }), { port: 10000 });
+  assert.deepStrictEqual(resolveHttpPort({ GTM_MCP_HTTP_PORT: '', PORT: '' }), { port: DEFAULT_HTTP_PORT });
+});
+
+await test('REGRESSION: a non-numeric or out-of-range port refuses with the variable named, never NaN', () => {
+  for (const [name, v] of [
+    ['GTM_MCP_HTTP_PORT', 'abc'],
+    ['GTM_MCP_HTTP_PORT', '3001abc'],
+    ['GTM_MCP_HTTP_PORT', '0'],
+    ['GTM_MCP_HTTP_PORT', '65536'],
+    ['GTM_MCP_HTTP_PORT', '-1'],
+    ['PORT', '12.5'],
+  ]) {
+    const r = resolveHttpPort({ [name]: v });
+    assert.ok(r.refuse, `${name}=${v} must refuse`);
+    assert.ok(r.refuse.includes(name), r.refuse);
+    assert.ok(Number.isInteger(r.port), 'port is never NaN');
+  }
+  assert.deepStrictEqual(resolveHttpPort({ GTM_MCP_HTTP_PORT: '65535' }), { port: 65535 });
+  assert.deepStrictEqual(resolveHttpPort({ GTM_MCP_HTTP_PORT: ' 8080 ' }), { port: 8080 });
+});
+
+await test('index.ts takes its port from resolveHttpPort, not a raw parseInt', () => {
+  // index.ts cannot be imported (it starts a server at load), so check the wiring in its source.
+  const indexSrc = readFileSync(path.resolve(here, '../index.ts'), 'utf-8');
+  assert.match(indexSrc, /resolveHttpPort\(process\.env\)/);
+  assert.ok(!/parseInt\(\s*process\.env\.GTM_MCP_HTTP_PORT/.test(indexSrc), 'the NaN-prone parseInt is back');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

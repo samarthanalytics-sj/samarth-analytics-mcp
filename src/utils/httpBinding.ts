@@ -97,6 +97,40 @@ export function resolveHttpBinding(env: NodeJS.ProcessEnv = process.env): HttpBi
   return { host, authMode };
 }
 
+export const DEFAULT_HTTP_PORT = 3001;
+
+export interface HttpPort {
+  port: number;
+  /** Set when the configured port is unusable; the string is the operator-facing reason. */
+  refuse?: string;
+}
+
+/**
+ * The port to listen on. GTM_MCP_HTTP_PORT wins, then PORT (injected by Render/Fly), then 3001.
+ *
+ * This used to be `parseInt(GTM_MCP_HTTP_PORT ?? PORT ?? '3001')`: an EMPTY GTM_MCP_HTTP_PORT is not
+ * nullish, so it never fell through to the host-injected PORT, parsed to NaN, and app.listen threw
+ * ERR_SOCKET_BAD_PORT (after the banner had already been built around "localhost:NaN"). Blank values
+ * now count as unset; a non-blank value that is not an integer in 1-65535 refuses with its name.
+ */
+export function resolveHttpPort(env: NodeJS.ProcessEnv = process.env): HttpPort {
+  for (const name of ['GTM_MCP_HTTP_PORT', 'PORT']) {
+    const raw = (env[name] ?? '').trim();
+    if (!raw) continue;
+    const n = /^\d+$/.test(raw) ? Number(raw) : NaN;
+    if (!Number.isInteger(n) || n < 1 || n > 65535) {
+      return {
+        port: DEFAULT_HTTP_PORT,
+        refuse:
+          `HTTP transport refused to start: ${name}=${JSON.stringify(raw)} is not a valid TCP port ` +
+          '(expected an integer from 1 to 65535). Fix or unset it.',
+      };
+    }
+    return { port: n };
+  }
+  return { port: DEFAULT_HTTP_PORT };
+}
+
 /** What to print at startup: the host actually bound, never a hardcoded "localhost". */
 export function bindingBanner(b: HttpBinding, port: number): string {
   const shown = b.host === ALL_INTERFACES ? `all interfaces (${ALL_INTERFACES})` : b.host;
