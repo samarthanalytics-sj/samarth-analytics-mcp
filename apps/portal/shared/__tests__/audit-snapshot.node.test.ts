@@ -460,6 +460,78 @@ testAsync("R-smoke: /api/gtm/consent-audit returns normalized findings", async (
   }
 });
 
+/**
+ * Run the full audit and the consent-only route on the same workspace and pair
+ * every consent-route finding with the full audit's finding of the same id.
+ */
+async function consentParity(
+  fx: FixtureLike,
+  runtimeCapture?: unknown,
+): Promise<Array<{ c: any; a: any }>> {
+  const body: Record<string, unknown> = { containerPublicId: fx.containerPublicId };
+  if (runtimeCapture) body.runtimeCapture = runtimeCapture;
+  const full = await callRoute(auditHandler, body, [gtmRoutes(fx)]);
+  const focused = await callRoute(consentAuditHandler, body, [gtmRoutes(fx)]);
+  assert.equal(full.status, 200, JSON.stringify(full.json).slice(0, 300));
+  assert.equal(focused.status, 200, JSON.stringify(focused.json).slice(0, 300));
+  const byId = new Map<string, any>(full.json.findings.map((f: any) => [f.id, f]));
+  return focused.json.findings.map((c: any) => ({ c, a: byId.get(c.id) }));
+}
+
+function assertConsentParity(pairs: Array<{ c: any; a: any }>): void {
+  assert.ok(pairs.length > 0, "expected consent findings");
+  for (const { c, a } of pairs) {
+    assert.ok(a, `consent finding ${c.id} missing from the full audit`);
+    assert.equal(a.severity, c.severity, `${c.id} severity differs`);
+    assert.equal(a.confidence, c.confidence, `${c.id} confidence differs`);
+    assert.equal(a.needsManualReview, c.needsManualReview, `${c.id} needsManualReview differs`);
+    assert.deepEqual(a.sources, c.sources, `${c.id} sources differ`);
+    assert.deepEqual(a.evidence, c.evidenceItems, `${c.id} structured evidence differs`);
+    assert.deepEqual(a.accuracyNotes, c.accuracyNotes, `${c.id} accuracyNotes differ`);
+    assert.equal(a.confidenceDowngraded, c.confidenceDowngraded, `${c.id} confidenceDowngraded differs`);
+    assert.equal(a.suggestedFix, c.suggestedFix, `${c.id} suggestedFix differs`);
+  }
+}
+
+testAsync("R-parity A: full audit and /api/gtm/consent-audit agree on every consent finding", async () => {
+  // Regression: the full audit mapped consent-engine findings directly, skipping
+  // normalizeFindingAccuracy — no evidence[], no CONFIG-only confidence cap.
+  assertConsentParity(await consentParity(FIXTURE_A_CONFIG_ONLY_WEB));
+});
+
+testAsync("R-parity A: CONFIG-only consent findings in the full audit cap at medium + carry evidence", async () => {
+  const r = await callRoute(
+    auditHandler,
+    { containerPublicId: FIXTURE_A_CONFIG_ONLY_WEB.containerPublicId },
+    [gtmRoutes(FIXTURE_A_CONFIG_ONLY_WEB)],
+  );
+  const consent = r.json.findings.filter((f: any) => f.category === "consent");
+  assert.ok(consent.length > 0);
+  for (const f of consent) {
+    assert.ok(
+      MAX_CONF[f.confidence ?? "low"] <= MAX_CONF.medium,
+      `${f.id} has ${f.confidence} confidence from CONFIG-only evidence`,
+    );
+    assert.ok(Array.isArray(f.evidence) && f.evidence.length > 0, `${f.id} missing evidence[]`);
+  }
+});
+
+testAsync("R-parity B: with a runtime capture, engine snippets are evidence rows, not suggestedFix text", async () => {
+  const capture = {
+    capturedAt: FIXTURE_B_RECONCILE_WEB.runtime.capturedAt,
+    pages: FIXTURE_B_RECONCILE_WEB.runtime.pages,
+  };
+  const pairs = await consentParity(FIXTURE_B_RECONCILE_WEB, capture);
+  assertConsentParity(pairs);
+  assert.ok(
+    pairs.some(({ a }) => (a.evidence ?? []).some((e: EvidenceItem) => e.label === "Captured signal")),
+    "expected a captured runtime snippet as a structured evidence row",
+  );
+  for (const { a } of pairs) {
+    assert.ok(!/ Evidence: /.test(a.suggestedFix ?? ""), `${a.id} embeds raw evidence in suggestedFix`);
+  }
+});
+
 for (const [name, fn] of asyncTests) {
   try {
     await fn();

@@ -114,6 +114,53 @@ export function deriveEvidence(
 }
 
 /**
+ * Build structured, source-scoped evidence rows for a Consent Mode v2 engine
+ * finding (shared/consent-audit.ts). The engine emits free-text snippets
+ * (`evidence: string[]` — redacted hit URLs, console lines); each is mapped onto
+ * the source that produced the finding (RUNTIME when present, else the primary
+ * source) as a short row, and the finding's entity/parameter provenance is
+ * always included. Values are bounded (≤ 5 snippet rows, ≤ 160 chars). Never
+ * empty — falls back to provenance. Used by BOTH /api/gtm/consent-audit and the
+ * full /api/gtm/audit (and the Express dev routes) so their evidence can't drift.
+ */
+export function buildConsentEvidenceItems(
+  f: {
+    evidence?: string[];
+    entity?: AccuracyFinding["entity"];
+    parameter?: string;
+  },
+  sources: AccuracySource[],
+): EvidenceItem[] {
+  const primary = sources[0] ?? "CONFIG";
+  const observedSource: AccuracySource = sources.includes("RUNTIME")
+    ? "RUNTIME"
+    : primary;
+  const items: EvidenceItem[] = [];
+  for (const snippet of f.evidence ?? []) {
+    if (!snippet) continue;
+    items.push({
+      source: observedSource,
+      label: observedSource === "RUNTIME" ? "Captured signal" : "Config signal",
+      value: snippet.length > 160 ? `${snippet.slice(0, 159)}…` : snippet,
+    });
+    if (items.length >= 5) break; // keep the row count bounded
+  }
+  // Always carry entity/parameter provenance so the row set is never empty.
+  const provenance = deriveEvidence({
+    sources,
+    entity: f.entity,
+    parameter: f.parameter,
+  });
+  // Avoid duplicating a bare "Evidence source" provenance row when we already
+  // have concrete snippets.
+  for (const p of provenance) {
+    if (items.length > 0 && p.label === "Evidence source") continue;
+    items.push(p);
+  }
+  return items;
+}
+
+/**
  * Verbs/phrases that assert *observed runtime behaviour* (a tag actually fired,
  * double-fired, sent data on a real page load). A CONFIG-only finding must never
  * read as one of these — configuration is intent, not proof. Kept narrow and

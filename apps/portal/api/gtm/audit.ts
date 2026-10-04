@@ -2228,28 +2228,29 @@ function toConsentRuntimeInput(rt: RuntimeState | null): ConsentRuntimeInput | n
   return { capturedAt: rt.capturedAt, pages, states: rt.states, ok: true };
 }
 
-function consentFindingToAudit(f: ConsentFinding): AuditFinding {
-  return {
+// Routed through pushFinding (→ normalizeFindingAccuracy) like every other rule,
+// with the same structured evidence /api/gtm/consent-audit builds, so the full
+// audit and the consent-only route agree on severity/confidence/evidence. The
+// engine's snippets live in evidence[] — not appended to suggestedFix.
+function consentFindingToAudit(f: ConsentFinding, out: AuditFinding[]): void {
+  const sources: AuditSourceFlag[] = f.sources.length > 0 ? f.sources : ["CONFIG"];
+  pushFinding(out, {
     id: fid(`consent:${f.id}`),
     category: "consent",
-    title: f.finding,
-    description: f.whyItMatters,
     severity: f.severity,
     finding: f.finding,
     affected: f.affected,
     whyItMatters: f.whyItMatters,
-    suggestedFix:
-      f.evidence && f.evidence.length
-        ? `${f.suggestedFix} Evidence: ${f.evidence.join(" | ")}`
-        : f.suggestedFix,
+    suggestedFix: f.suggestedFix,
     needsManualReview: f.needsManualReview,
-    sources: f.sources,
+    sources,
     confidence: f.confidence,
     entity: f.entity,
     parameter: f.parameter,
     businessImpact: f.businessImpact,
     effort: f.effort,
-  };
+    evidence: accuracy().buildConsentEvidenceItems(f, sources) as EvidenceItem[],
+  });
 }
 
 function buildSummary(findings: AuditFinding[], itemsChecked: number): string {
@@ -2316,7 +2317,7 @@ async function runAudit(
       toConsentConfigInput(ctx),
       toConsentRuntimeInput(runtime),
     );
-    for (const cf of consentResult.findings) findings.push(consentFindingToAudit(cf));
+    for (const cf of consentResult.findings) consentFindingToAudit(cf, findings);
   } catch (e) {
     findings.push({
       id: "consent-engine-unavailable",

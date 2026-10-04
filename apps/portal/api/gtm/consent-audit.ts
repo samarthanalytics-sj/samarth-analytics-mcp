@@ -395,10 +395,10 @@ function buildResponse(
     severityCounts[acc.severity] += 1;
     // Structured evidence: prefer the engine's free-text snippets (mapped onto
     // the source that produced the finding), else derive a provenance row.
-    const evidenceItems = buildConsentEvidenceItems(
+    // (shared with /api/gtm/audit — see shared/audit-accuracy.ts).
+    const evidenceItems = accuracy.buildConsentEvidenceItems(
       f,
       acc.sources as AccuracySource[],
-      accuracy,
     );
     return {
       id: fid(`consent:${f.id}`),
@@ -446,48 +446,6 @@ function fid(seed: string): string {
   return (
     "f_" + crypto.createHash("sha1").update(seed).digest("hex").slice(0, 10)
   );
-}
-
-/**
- * Build structured, source-scoped evidence rows for a consent finding. The
- * consent engine emits free-text snippets (`evidence: string[]` — redacted hit
- * URLs, console lines); we map each onto the source that produced the finding
- * (RUNTIME when present, else CONFIG) as a short "Observed" row, and always
- * include the finding's entity/parameter provenance. Values are already short
- * (the engine slices to ~160 chars). Never empty — falls back to provenance.
- */
-function buildConsentEvidenceItems(
-  f: ConsentFinding,
-  sources: AccuracySource[],
-  accuracy: AccuracyModule,
-): EvidenceItem[] {
-  const primary = sources[0] ?? "CONFIG";
-  const observedSource: AccuracySource = sources.includes("RUNTIME")
-    ? "RUNTIME"
-    : primary;
-  const items: EvidenceItem[] = [];
-  for (const snippet of f.evidence ?? []) {
-    if (!snippet) continue;
-    items.push({
-      source: observedSource,
-      label: observedSource === "RUNTIME" ? "Captured signal" : "Config signal",
-      value: snippet.length > 160 ? `${snippet.slice(0, 159)}…` : snippet,
-    });
-    if (items.length >= 5) break; // keep the row count bounded
-  }
-  // Always carry entity/parameter provenance so the row set is never empty.
-  const provenance = accuracy.deriveEvidence({
-    sources,
-    entity: f.entity,
-    parameter: f.parameter,
-  });
-  // Avoid duplicating a bare "Evidence source" provenance row when we already
-  // have concrete snippets.
-  for (const p of provenance) {
-    if (items.length > 0 && p.label === "Evidence source") continue;
-    items.push(p);
-  }
-  return items;
 }
 
 // ════════════════════════════════════════════════════════════════════════════

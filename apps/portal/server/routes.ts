@@ -34,6 +34,10 @@ import {
   type RuntimeInput,
   type RuntimePage,
 } from "../shared/consent-audit";
+import {
+  buildConsentEvidenceItems,
+  normalizeFindingAccuracy,
+} from "../shared/audit-accuracy";
 // Tolerant of malformed percent-encoding (one bad cookie must not 500 every route).
 import {
   clearOAuthStateCookie,
@@ -361,26 +365,40 @@ export async function registerRoutes(
         info: 0,
       };
       const findings = result.findings.map((f) => {
-        severityCounts[f.severity] += 1;
+        // Same evidence-scoped invariants + structured evidence as the Vercel
+        // route (api/gtm/consent-audit.ts) so dev and prod output can't drift.
+        const acc = normalizeFindingAccuracy({
+          finding: f.finding,
+          severity: f.severity,
+          sources: f.sources,
+          confidence: f.confidence,
+          needsManualReview: f.needsManualReview ?? false,
+          entity: f.entity,
+          parameter: f.parameter,
+        });
+        severityCounts[acc.severity] += 1;
         const hasConfig = f.sources.includes("CONFIG");
         const hasRuntime = f.sources.includes("RUNTIME");
         const layer =
           hasConfig && hasRuntime ? "reconcile" : hasRuntime ? "runtime" : "config";
         return {
           id: f.id,
-          severity: f.severity,
-          confidence: f.confidence,
-          sources: f.sources,
+          severity: acc.severity,
+          confidence: acc.confidence,
+          sources: acc.sources,
           finding: f.finding,
           whyItMatters: f.whyItMatters,
           suggestedFix: f.suggestedFix,
           businessImpact: f.businessImpact,
           effort: f.effort,
-          needsManualReview: f.needsManualReview,
+          needsManualReview: acc.needsManualReview,
           parameter: f.parameter,
           entity: f.entity,
           affected: f.affected,
           evidence: f.evidence,
+          evidenceItems: buildConsentEvidenceItems(f, acc.sources),
+          accuracyNotes: acc.accuracyNotes,
+          confidenceDowngraded: acc.confidenceDowngraded,
           layer,
         };
       });

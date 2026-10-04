@@ -23,6 +23,7 @@ import {
   coverageIsConfigOnly,
   configOnlyCoverageWarning,
   defaultConfidence,
+  buildConsentEvidenceItems,
   type AccuracyFinding,
   type AccuracySource,
   type AccuracySeverity,
@@ -310,6 +311,42 @@ test("J02 runtime finding round-trips unchanged in severity/confidence", () => {
   const r = normalizeFindingAccuracy(input);
   assert.equal(r.severity, "high");
   assert.equal(r.confidence, "high");
+});
+
+// ── K. consent evidence rows (shared by /api/gtm/audit + /api/gtm/consent-audit)
+
+test("K01 CONFIG-only consent finding without snippets -> CONFIG provenance rows", () => {
+  const rows = buildConsentEvidenceItems(
+    { entity: { name: "GA4 - purchase", path: "tags/12" }, parameter: "consentSettings" },
+    CONFIG,
+  );
+  assert.ok(rows.length > 0);
+  for (const r of rows) assert.equal(r.source, "CONFIG");
+  assert.ok(rows.some((r) => r.label === "GTM entity" && r.entityPath === "tags/12"));
+  assert.ok(rows.some((r) => r.parameter === "consentSettings"));
+});
+test("K02 runtime snippets become RUNTIME 'Captured signal' rows (no bare provenance row)", () => {
+  const rows = buildConsentEvidenceItems(
+    { evidence: ["https://region1.google-analytics.com/g/collect?gcs=G100"] },
+    ["CONFIG", "RUNTIME"],
+  );
+  assert.equal(rows[0].source, "RUNTIME");
+  assert.equal(rows[0].label, "Captured signal");
+  assert.ok(!rows.some((r) => r.label === "Evidence source"));
+});
+test("K03 snippet rows are bounded (<= 5 rows, <= 160 chars)", () => {
+  const rows = buildConsentEvidenceItems(
+    { evidence: ["x".repeat(300), "a", "b", "c", "d", "e", "f"] },
+    RUNTIME,
+  );
+  const snippets = rows.filter((r) => r.label === "Captured signal");
+  assert.equal(snippets.length, 5);
+  assert.equal(snippets[0].value!.length, 160);
+  assert.ok(snippets[0].value!.endsWith("…"));
+});
+test("K04 never empty: no snippets/entity/parameter -> one provenance row", () => {
+  const rows = buildConsentEvidenceItems({}, CONFIG);
+  assert.deepEqual(rows, [{ source: "CONFIG", label: "Evidence source" }]);
 });
 
 // ── run summary ──────────────────────────────────────────────────────────--
