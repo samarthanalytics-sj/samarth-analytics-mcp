@@ -46,6 +46,12 @@ test('a region the server has NO relay for is left direct in silence: that is a 
   assert.deepEqual(fs, [], 'US sends direct and the server never claimed it');
 });
 
+test('a region left direct is silent whatever the tag order, and with an inheriting relay too', () => {
+  const tags = [googleTag('t2', 'US GA4', 'G-USUSUS1'), googleTag('t1', 'AUS GA4', 'G-AUAUAU1', HOST)];
+  assert.deepEqual(pairDriftFindings(server(), [web(tags)], SUMMARY), [], 'the direct US tag listed first must not decide the container\'s wiring');
+  assert.deepEqual(pairDriftFindings(server({ tags: [relay('s1', 'Relay', '')] }), [web(tags)], SUMMARY), [], 'an inheriting relay cannot double a direct tag');
+});
+
 test('a wired tag LOSING its server URL surfaces as pair_relay_without_wiring (high)', () => {
   const fs = pairDriftFindings(server(), [web([googleTag('t1', 'AUS GA4', 'G-AUAUAU1')])], SUMMARY);
   assert.deepEqual(ids(fs), ['pair_relay_without_wiring']);

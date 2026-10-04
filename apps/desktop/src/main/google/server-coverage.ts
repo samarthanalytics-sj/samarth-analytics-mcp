@@ -383,12 +383,17 @@ export function buildServerCoverage(
   const idsMatch = webIds.length && serverIds.length ? webIds.some((id) => serverIds.includes(id)) : null;
 
   const serverUrlOf = webServerUrlResolver(web.variables);
-  const googleTag = web.tags.find((t) => (t.type === 'googtag' || t.type === 'gaawc') && !t.paused);
-  const webUrl = googleTag ? serverUrlOf(googleTag) : '';
   const host = (u: string): string => {
     try { return new URL(u).hostname.toLowerCase(); } catch { return ''; }
   };
   const serverUrls = server.taggingServerUrls ?? [];
+  const serverHosts = new Set(serverUrls.map(host).filter(Boolean));
+  const webConfigTags = web.tags.filter((t) => (t.type === 'googtag' || t.type === 'gaawc') && !t.paused);
+  // The container is wired when ANY active Google tag points at this server (the rule pairing uses):
+  // a region deliberately left direct must not hide the one that is wired. Otherwise the first tag
+  // speaks for the container.
+  const googleTag = webConfigTags.find((t) => serverHosts.has(host(serverUrlOf(t)))) ?? webConfigTags[0];
+  const webUrl = googleTag ? serverUrlOf(googleTag) : '';
   const wiring: ServerCoverageReport['webWiring'] = {
     status: !googleTag
       ? 'unknown'
@@ -408,17 +413,42 @@ export function buildServerCoverage(
 
   // ── Cross-container findings: what neither container reveals on its own ──
   const crossContainer: CrossContainerFinding[] = [];
-  const sharedIds = webIds.filter((id) => serverIds.includes(id));
   // Google's own migration guidance is explicit that one property must not be fed by both the
   // browser and the server: doing so does not "add resilience", it counts everything twice.
-  if (relays.length > 0 && sharedIds.length > 0 && (wiring.status === 'not_wired' || wiring.status === 'url_mismatch')) {
-    const why = wiring.status === 'not_wired'
+  //
+  // Judged per Measurement ID, from the web Google tag(s) carrying that id, never from whichever
+  // tag happens to be listed first. Only an EXPLICIT relay id counts: an inheriting (blank-id) relay
+  // forwards only the ids whose hits reach this server, so it cannot double a tag that sends
+  // direct (that is an idle relay, which the pair check reports as pair_relay_without_wiring).
+  const wiredIds = new Set<string>();
+  const directIds = new Map<string, { status: 'not_wired' | 'url_mismatch'; url: string }>();
+  for (const t of webConfigTags) {
+    const url = serverUrlOf(t);
+    const status = !url
+      ? 'not_wired'
+      : serverHosts.has(host(url))
+        ? 'wired'
+        : serverUrls.length === 0 || /\{\{[^}]+\}\}/.test(url)
+          ? 'unknown'
+          : 'url_mismatch';
+    for (const id of resolveGa4MeasurementIds({ tags: [t], triggers: [], variables: web.variables }).ids) {
+      if (status === 'wired') wiredIds.add(id);
+      else if (status !== 'unknown' && !directIds.has(id)) directIds.set(id, { status, url });
+    }
+  }
+  const parallelIds = [...new Set(explicitServerIds.map((id) => id.toUpperCase()))].filter((id) => directIds.has(id) && !wiredIds.has(id));
+  if (parallelIds.length > 0) {
+    const behind = parallelIds.map((id) => directIds.get(id)!);
+    const mismatch = behind.find((d) => d.status === 'url_mismatch');
+    const why = !mismatch
       ? 'the web Google tag has no server container URL, so it still sends straight to Google'
-      : `the web Google tag points at ${wiring.webUrl || 'a different host'}, which is not this tagging server, so its hits never reach this container`;
+      : behind.some((d) => d.status === 'not_wired')
+        ? 'the web Google tags for these ids either have no server container URL or point at a different host, so their hits never reach this container'
+        : `the web Google tag points at ${mismatch.url || 'a different host'}, which is not this tagging server, so its hits never reach this container`;
     crossContainer.push({
       severity: 'critical',
       checkId: 'web_server_ga4_parallel',
-      message: `The web container and this server container both send GA4 to ${sharedIds.join(', ')}, because ${why}. Every session, user and event in that property is counted twice.`,
+      message: `The web container and this server container both send GA4 to ${parallelIds.join(', ')}, because ${why}. Every session, user and event in that property is counted twice.`,
       recommendation: 'Pick one sender per property. Either point the web Google tag at this tagging server so its hits flow through the server, or stop the server relay. While migrating, send the server copy to a SEPARATE property until the numbers match, rather than doubling a live one.',
       autoFixable: false,
     });
@@ -426,7 +456,6 @@ export function buildServerCoverage(
   // A second Google tag for the same measurement ID re-initialises gtag WITHOUT the transport URL,
   // so a share of traffic silently bypasses the server even when the first tag is wired correctly.
   // This is one of the most common reasons a server container "only gets some of the traffic".
-  const webConfigTags = web.tags.filter((t) => (t.type === 'googtag' || t.type === 'gaawc') && !t.paused);
   const byMeasurementId = new Map<string, Array<{ name: string; wired: boolean }>>();
   for (const t of webConfigTags) {
     const raw = t.type === 'googtag' ? serverTagParam(t, 'tagId') : serverTagParam(t, 'measurementId');

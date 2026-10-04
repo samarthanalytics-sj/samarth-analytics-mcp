@@ -393,8 +393,38 @@ test('GA4: a relay with a BLANK Measurement ID inherits it from the event and st
   assert.equal(r.ga4.idsMatch, true);
   const ga4Row = r.rows.find((x) => x.platform === 'ga4');
   assert.equal(ga4Row?.status, 'covered');
-  // And the pair check still sees the doubling: the web tag is not wired, so both legs feed G-ABC1234.
-  assert.equal(r.crossContainer.filter((f) => f.checkId === 'web_server_ga4_parallel').length, 1, 'inheriting relay + unwired web = counted twice');
+  // An inheriting relay forwards only what reaches this server. The web tag is not wired, so its
+  // hits never arrive and nothing is doubled: that is an idle relay, not double counting.
+  assert.equal(r.crossContainer.filter((f) => f.checkId === 'web_server_ga4_parallel').length, 0, 'inheriting relay + unwired web is not counted twice');
+});
+
+test('cross-container: double counting is judged per Measurement ID, not from the first Google tag', () => {
+  const cfg = (tagId: string, name: string, id: string, url?: string) => tag({
+    tagId, name, type: 'googtag',
+    parameter: [
+      { type: 'template', key: 'tagId', value: id },
+      ...(url ? [{ type: 'list', key: 'configSettingsTable', list: [{ type: 'map', map: [
+        { type: 'template', key: 'parameter', value: 'server_container_url' }, { type: 'template', key: 'parameterValue', value: url },
+      ] }] }] : []),
+    ],
+  } as never);
+  const relay = (mid: string) => tag({ tagId: 's1', name: 'GA4 Relay', type: 'sgtmgaaw', firingTriggerId: ['90'], parameter: mid ? [{ type: 'template', key: 'measurementId', value: mid }] : [] });
+  const xc = (r: ReturnType<typeof buildServerCoverage>) => r.crossContainer.filter((f) => f.checkId === 'web_server_ga4_parallel');
+  // US is deliberately direct and listed FIRST; AU is wired to this server and relayed explicitly.
+  const regions = web({ tags: [cfg('w1', 'US GA4', 'G-USUSUS1'), cfg('w2', 'AUS GA4', 'G-AUAUAU1', 'https://sgtm.example.com')], triggers: [] });
+  const explicit = buildServerCoverage(regions, server({ tags: [relay('G-AUAUAU1')], triggers: [clientTrigger('90')] }), AUDIT_OK);
+  assert.equal(xc(explicit).length, 0, 'G-AUAUAU1 flows through the server; G-USUSUS1 is not relayed');
+  assert.equal(explicit.webWiring.status, 'wired', 'a wired regional tag makes the container wired');
+  assert.equal(explicit.webWiring.webUrl, 'https://sgtm.example.com');
+  const inheriting = buildServerCoverage(regions, server({ tags: [relay('')], triggers: [clientTrigger('90')] }), AUDIT_OK);
+  assert.equal(xc(inheriting).length, 0, 'an inheriting relay never doubles the direct US tag');
+
+  // The id that really is relayed explicitly AND sent direct is still caught, and only it is named.
+  const doubled = buildServerCoverage(regions, server({ tags: [relay('G-USUSUS1')], triggers: [clientTrigger('90')] }), AUDIT_OK);
+  assert.equal(xc(doubled).length, 1);
+  assert.match(xc(doubled)[0].message, /G-USUSUS1/);
+  assert.doesNotMatch(xc(doubled)[0].message, /G-AUAUAU1/);
+  assert.match(xc(doubled)[0].message, /no server container URL/);
 });
 
 
