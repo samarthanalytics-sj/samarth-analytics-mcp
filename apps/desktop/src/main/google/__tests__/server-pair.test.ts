@@ -69,6 +69,13 @@ test('an INHERITING relay forwards whatever arrives, so a wired tag is never "un
   assert.deepEqual(fs, []);
 });
 
+test('a relay whose Measurement ID is a non-Constant variable forwards an unknown set: no "certain" blackhole', () => {
+  for (const mid of ['{{ed - measurement_id}}', '{{Lookup - GA4 ID}}']) {
+    const fs = pairDriftFindings(server({ tags: [relay('s1', 'Relay', mid)] }), [web([googleTag('t1', 'AUS GA4', 'G-AUAUAU1', HOST)])], SUMMARY);
+    assert.deepEqual(fs, [], mid);
+  }
+});
+
 test('Constant-backed ids match on both sides', () => {
   const srv = server({
     tags: [relay('s1', 'AU relay', '{{AU ID}}')],

@@ -94,18 +94,23 @@ export function pairDriftFindings(
   const relays = server.tags.filter((t) => t.type === 'sgtmgaaw' && !t.paused && (t.firingTriggerId ?? []).length > 0);
   const forwarded = new Set<string>();
   let inherits = false;
+  // A relay whose Measurement ID is a variable we cannot read (Event Data, Lookup or RegEx table)
+  // forwards an unknown set of ids, so no wired tag can be called "certainly dropped".
+  let dynamic = false;
   for (const r of relays) {
     const raw = serverTagParam(r, 'measurementId').trim();
     if (!raw) { inherits = true; continue; }
-    const id = literalId(resolveServer(raw));
+    const resolved = resolveServer(raw);
+    const id = literalId(resolved);
     if (id) forwarded.add(id);
+    else if (/\{\{[^}]+\}\}/.test(resolved)) dynamic = true;
   }
 
   const allTags = webs.flatMap(webGoogleTags);
 
   // 1. Wired to this server, but nothing forwards it: the blackhole.
   for (const g of allTags) {
-    if (!g.wiredHost || !hosts.has(g.wiredHost) || !g.id || inherits || forwarded.has(g.id)) continue;
+    if (!g.wiredHost || !hosts.has(g.wiredHost) || !g.id || inherits || dynamic || forwarded.has(g.id)) continue;
     out.push({
       severity: 'critical',
       confidence: 'certain',
