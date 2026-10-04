@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { capToolResult, compactToolHistory, productOf, scopeTools, toOpenAiTools } from '../tools.js';
 import { runTurn } from '../loop.js';
 import { ApprovalBroker } from '../approvals.js';
+import { approvalGate } from '../writeTiers.js';
 import type { OrchestratorConfig } from '../config.js';
 import { McpConnection } from '../mcp-client.js';
 import type { OpenAiClient } from '../openai.js';
@@ -161,6 +162,45 @@ test('truncation drops deletes first, then writes, then reads', () => {
   });
   assert.equal(scoped.length, 3);
   assert.equal(scoped.some((t) => t.isDelete), false, 'a delete survived truncation ahead of a read');
+});
+
+await testAsync('the catalog reads the MCP\'s [DELETE] label, not only the tool name', async () => {
+  // built_in_variables_disable is gated by the server as a delete, and no word in its name says so.
+  // Classified by name alone it was offered with deletes off and ran with confirm=true, no card.
+  const listed = [
+    { name: 'built_in_variables_disable', description: '[DELETE] Disable one or more built-in variables in a GTM workspace.' },
+    { name: 'built_in_variables_enable', description: '[WRITE] Enable one or more built-in variables in a GTM workspace.' },
+    { name: 'tags_delete', description: '[DELETE] Delete a GTM tag.' },
+    { name: 'ga4_trash_thing', description: '[GA4 DELETE] Soft-delete (trash) a thing.' },
+    { name: 'versions_publish', description: '[PUBLISH] Publish a container version.' },
+  ].map((t) => ({
+    ...t,
+    inputSchema: { type: 'object', properties: { workspaceId: { type: 'string' }, confirm: { type: 'boolean' } } },
+  }));
+  const conn = new McpConnection({} as OrchestratorConfig);
+  Object.assign(conn as unknown as Record<string, unknown>, {
+    client: {
+      listTools: async () => ({ tools: listed }),
+      listPrompts: async () => ({ prompts: [] }),
+    },
+  });
+  await (conn as unknown as { refreshCatalog(): Promise<void> }).refreshCatalog();
+  const byName = new Map(conn.listTools().map((t) => [t.name, t]));
+
+  assert.equal(byName.get('built_in_variables_disable')?.isDelete, true, 'a [DELETE]-tier tool is a delete');
+  assert.equal(byName.get('ga4_trash_thing')?.isDelete, true, 'the GA4 label counts too');
+  assert.equal(byName.get('tags_delete')?.isDelete, true);
+  assert.equal(byName.get('built_in_variables_enable')?.isDelete, false, 'its [WRITE] twin is not');
+  assert.equal(byName.get('versions_publish')?.isDelete, false, 'publish stays never-offered, not a delete');
+
+  const offered = scopeTools(conn.listTools(), { product: 'gtm', includeWrites: true }).map((t) => t.name);
+  assert.equal(offered.includes('built_in_variables_disable'), false, 'offered with deletes off');
+  assert.ok(offered.includes('built_in_variables_enable'));
+  assert.deepEqual(
+    approvalGate(byName.get('built_in_variables_disable')!, false),
+    { confirmWord: 'DELETE' },
+    'once offered, it stops for the typed confirmation like any delete',
+  );
 });
 
 console.log('openai mapping');

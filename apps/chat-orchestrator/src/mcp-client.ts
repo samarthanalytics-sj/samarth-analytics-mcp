@@ -40,6 +40,13 @@ const NEVER_OFFERED = /publish|reauthorize/i;
  */
 const DESTRUCTIVE = /(^|_)(delete|remove|archive)(_|$)/i;
 
+/**
+ * The MCP's own tier label, which its descriptions lead with. Read alongside the name because a name
+ * can miss: `built_in_variables_disable` is gated by the server as a delete and its name carries
+ * none of the words above, so it used to be offered with deletes off and run without a card.
+ */
+const DELETE_TIER_LABEL = /^\[(GA4 )?DELETE\]/;
+
 export class McpConnection {
   private client: Client | null = null;
   private tools: ToolDef[] = [];
@@ -148,7 +155,9 @@ export class McpConnection {
           inputSchema: schema,
           isWrite,
           isDestructive: NEVER_OFFERED.test(t.name),
-          isDelete: !NEVER_OFFERED.test(t.name) && DESTRUCTIVE.test(t.name),
+          isDelete:
+            !NEVER_OFFERED.test(t.name) &&
+            (DESTRUCTIVE.test(t.name) || DELETE_TIER_LABEL.test(t.description ?? '')),
           surface: isWrite ? classifyWriteSurface(t.name, properties) : undefined,
         });
       }
