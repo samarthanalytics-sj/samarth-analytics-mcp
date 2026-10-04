@@ -2059,7 +2059,9 @@ export interface ServerMigrationItem {
 }
 
 export interface ServerMigrationPlan {
-  ga4: { present: boolean; measurementIds: string[] };
+  /** `unresolvedRefs` (only when non-empty): GA4 tags whose Measurement ID is a {{variable}} that is not
+   *  a Constant, so the id cannot be read statically - ask for it rather than assume there is no GA4. */
+  ga4: { present: boolean; measurementIds: string[]; unresolvedRefs?: string[] };
   items: ServerMigrationItem[];
   summary: { total: number; auto: number; typedTool: number; generic: number; manual: number; skipped: number };
 }
@@ -2213,17 +2215,33 @@ export function planWebToServerMigration(snapshot: ContainerSnapshot): ServerMig
     for (const p of t.parameter) { const pp = p as { key?: string; value?: unknown }; if (pp.key === key) return String(pp.value ?? '').trim(); }
     return '';
   };
+  // A {{Name}} reference to a CONSTANT variable resolves to that constant's literal value (the GTM API
+  // returns it in parameter[].value) - the same resolution the desktop's resolveGa4MeasurementIds does.
+  // Any other reference is left as-is.
+  const constants = new Map<string, string>();
+  for (const v of snapshot.variables ?? []) {
+    if (String(v.type ?? '').toLowerCase() !== 'c') continue;
+    const p = (v.parameter ?? []).find((x) => (x as { key?: string }).key === 'value') as { value?: unknown } | undefined;
+    const val = String(p?.value ?? '').trim();
+    if (val) constants.set(String(v.name ?? '').trim().toLowerCase(), val);
+  }
+  const resolve = (x: string): string => x.replace(/\{\{([^}]+)\}\}/g, (m, n: string) => constants.get(n.trim().toLowerCase()) ?? m).trim();
   const meta = detectMetaTags(snapshot);
   const metaIds = new Set(meta.metaTags.map((m) => m.id));
   const measurementIds = new Set<string>();
+  const ga4UnresolvedRefs = new Set<string>();
   const items: ServerMigrationItem[] = [];
 
   for (const t of snapshot.tags) {
     const type = String(t.type ?? '');
-    // GA4: aggregated into the relay, collect the measurement id.
-    if ((type === 'googtag' && /^G-/i.test(pv(t, 'tagId'))) || type === 'gaawe') {
-      const mid = pv(t, 'tagId') || pv(t, 'measurementIdOverride') || pv(t, 'measurementId');
-      if (/^G-/i.test(mid)) measurementIds.add(mid);
+    // GA4: aggregated into the relay, collect the measurement id. A {{Constant}} id resolves to its
+    // literal; any other {{variable}} id is reported in ga4.unresolvedRefs instead of dropping GA4.
+    const googtagId = type === 'googtag' ? pv(t, 'tagId') : '';
+    if ((type === 'googtag' && (/^G-/i.test(resolve(googtagId)) || /^\{\{[^}]+\}\}$/.test(resolve(googtagId)))) || type === 'gaawe') {
+      const keys = ['tagId', 'measurementIdOverride', 'measurementId'];
+      const mid = keys.map((k) => resolve(pv(t, k))).find((x) => /^G-/i.test(x));
+      if (mid) measurementIds.add(mid.toUpperCase());
+      else for (const k of keys) if (pv(t, k).includes('{{')) { ga4UnresolvedRefs.add(pv(t, k)); break; }
       continue;
     }
     // Meta (detected by fbq/name/snippet) → Meta CAPI. The Pixel ID is public and on the web tag
@@ -2293,9 +2311,10 @@ export function planWebToServerMigration(snapshot: ContainerSnapshot): ServerMig
   }
 
   const count = (s: ServerMigrationItem['status']): number => items.filter((i) => i.status === s).length;
+  const ga4Present = measurementIds.size > 0 || ga4UnresolvedRefs.size > 0;
   return {
-    ga4: { present: measurementIds.size > 0, measurementIds: [...measurementIds] },
+    ga4: { present: ga4Present, measurementIds: [...measurementIds], ...(ga4UnresolvedRefs.size ? { unresolvedRefs: [...ga4UnresolvedRefs] } : {}) },
     items,
-    summary: { total: items.length, auto: measurementIds.size > 0 ? 1 : 0, typedTool: count('typed-tool'), generic: count('generic'), manual: count('manual'), skipped: count('skip') },
+    summary: { total: items.length, auto: ga4Present ? 1 : 0, typedTool: count('typed-tool'), generic: count('generic'), manual: count('manual'), skipped: count('skip') },
   };
 }

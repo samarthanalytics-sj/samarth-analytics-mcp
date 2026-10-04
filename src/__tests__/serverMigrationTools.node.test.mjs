@@ -94,6 +94,32 @@ await test('plan_server_migration_from_web: reads the web container and plans ea
   assert.ok(/triggers_create/.test(res.note));
 });
 
+await test('plan_server_migration_from_web: a {{Constant}} GA4 Measurement ID resolves; a non-Constant one is reported, not dropped', async () => {
+  const constant = { variableId: 'v1', name: 'GA4 Measurement ID', type: 'c', parameter: [P('value', 'G-ABC123')] };
+  const client = stubClient({
+    variables: [constant],
+    tags: [
+      { tagId: '1', name: 'Google Tag', type: 'googtag', parameter: [P('tagId', '{{GA4 Measurement ID}}')] },
+      { tagId: '2', name: 'GA4 Purchase', type: 'gaawe', parameter: [P('measurementIdOverride', '{{GA4 Measurement ID}}')] },
+      // A variable override must not hide a literal measurementId behind it.
+      { tagId: '3', name: 'GA4 Lead', type: 'gaawe', parameter: [P('measurementIdOverride', '{{Lookup - GA4}}'), P('measurementId', 'g-def456')] },
+    ],
+  });
+  const res = json(await callValidated(serverWith(client), 'plan_server_migration_from_web', WS));
+  assert.deepEqual(res.ga4, { present: true, measurementIds: ['G-ABC123', 'G-DEF456'] });
+  assert.equal(res.summary.auto, 1);
+  assert.equal(res.items.length, 0, 'the Google tag is GA4, never a vendor item');
+
+  const unresolved = stubClient({
+    variables: [{ variableId: 'v2', name: 'Lookup - GA4', type: 'smm', parameter: [] }],
+    tags: [{ tagId: '1', name: 'Google Tag', type: 'googtag', parameter: [P('tagId', '{{Lookup - GA4}}')] }],
+  });
+  const r2 = json(await callValidated(serverWith(unresolved), 'plan_server_migration_from_web', WS));
+  assert.deepEqual(r2.ga4, { present: true, measurementIds: [], unresolvedRefs: ['{{Lookup - GA4}}'] });
+  assert.equal(r2.summary.auto, 1);
+  assert.equal(r2.items.length, 0);
+});
+
 await test('a CAPI tool with the template already installed: no import, tag created with the cvt type, credentials and trigger', async () => {
   const client = stubClient({ templates: [INSTALLED('stape-io', 'reddit-tag', 'RD01')] });
   const res = json(await callValidated(serverWith(client), 'create_reddit_capi_server_tag', { ...WS, pixelId: '{{Reddit Pixel}}', accessToken: '{{Reddit Token}}', event: 'purchase', eventId: '{{Event ID}}', firingTriggerId: ['5'], confirm: true }));

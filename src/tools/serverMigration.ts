@@ -265,7 +265,8 @@ export function registerServerMigrationTools(server: McpServer, getClient: () =>
         'web tag (`derived` - Pixel IDs from template params or the fbq/ttq/pintrk/rdt/snaptr/uet/twq init calls, so the server ' +
         'tag is created pre-filled), and the secrets you must still ask the user for (`requires` - CAPI access tokens are never in ' +
         'a web container). Creates NOTHING. GA4 is reported once in `ga4` (port it with create_server_tag platform "ga4" as the ' +
-        'relay, or the setup_server_side_container prompt); Google Ads conversion (awct) / remarketing (sp) -> create_server_tag; ' +
+        'relay, or the setup_server_side_container prompt; a {{Constant}} Measurement ID is resolved to its value, any other ' +
+        '{{variable}} id is listed in ga4.unresolvedRefs - ask the user for the G- id); Google Ads conversion (awct) / remarketing (sp) -> create_server_tag; ' +
         'Meta/TikTok/LinkedIn/Pinterest/Reddit/Snapchat/Microsoft/Amazon/StackAdapt/X/Quora/AdRoll/Nextdoor/Yelp/Spotify/' +
         'LINE Yahoo/RTB House pixels -> their typed tool (native Microsoft UET `baut` and LinkedIn Insight `bzi` tags are ' +
         'recognised by type); analytics (Mixpanel, Matomo, Piwik PRO, Piano, Plausible, Umami, Pirsch, Snowplow, Klaviyo) and ' +
