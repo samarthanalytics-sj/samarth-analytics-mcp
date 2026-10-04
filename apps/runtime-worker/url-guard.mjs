@@ -110,8 +110,11 @@ export function urlAllowed(rawUrl, allowlist = []) {
   }
 
   let host = parsed.hostname.toLowerCase();
-  // Strip IPv6 brackets for the literal-name comparisons below.
-  const bareHost = host.replace(/^\[/, "").replace(/\]$/, "");
+  // Strip IPv6 brackets for the literal-name comparisons below. Trailing dots
+  // name the same host in absolute (FQDN) form — "localhost." and
+  // "foo.localhost.." resolve to loopback — so strip them too, before the name
+  // and allowlist checks.
+  const bareHost = host.replace(/^\[/, "").replace(/\]$/, "").replace(/\.+$/, "");
 
   if (
     bareHost === "localhost" ||

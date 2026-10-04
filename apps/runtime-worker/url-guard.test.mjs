@@ -33,6 +33,22 @@ test("blocks loopback by name and IP", () => {
   }
 });
 
+test("blocks the trailing-dot (FQDN) spelling of loopback names", () => {
+  for (const u of [
+    "http://localhost./",
+    "http://foo.localhost./",
+    "http://ip6-localhost./",
+    "http://LOCALHOST../",
+  ]) {
+    assert.equal(urlAllowed(u).ok, false, u);
+  }
+});
+
+test("matches the allowlist against the trailing-dot spelling", () => {
+  assert.equal(urlAllowed("https://client.com./", ["client.com"]).ok, true);
+  assert.equal(urlAllowed("https://evilclient.com./", ["client.com"]).ok, false);
+});
+
 test("blocks RFC-1918 and CGNAT ranges", () => {
   for (const u of [
     "http://10.0.0.5/",

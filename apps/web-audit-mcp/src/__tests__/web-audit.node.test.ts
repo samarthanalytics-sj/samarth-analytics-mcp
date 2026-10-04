@@ -97,6 +97,13 @@ check('guard: allowlist match', urlAllowed('https://shop.example.com', ['example
 check('guard: allowlist exact', urlAllowed('https://example.com', ['example.com']).ok);
 check('guard: allowlist miss', !urlAllowed('https://notexample.com', ['example.com']).ok);
 check('guard: allowlist no suffix-confusion', !urlAllowed('https://evilexample.com', ['example.com']).ok);
+// A trailing dot is the absolute (FQDN) spelling of the same host, and resolves the same way.
+check('guard: localhost. (trailing dot) blocked', !urlAllowed('http://localhost./').ok);
+check('guard: .localhost. (trailing dot) blocked', !urlAllowed('http://foo.localhost./').ok);
+check('guard: ip6-localhost. blocked', !urlAllowed('http://ip6-localhost./').ok);
+check('guard: LOCALHOST.. (repeated dots) blocked', !urlAllowed('http://LOCALHOST../').ok);
+check('guard: allowlist matches the FQDN spelling', urlAllowed('https://client.com./', ['client.com']).ok);
+check('guard: FQDN spelling is no suffix-confusion', !urlAllowed('https://evilclient.com./', ['client.com']).ok);
 
 // ── tracker classification ─────────────────────────────────────────────────
 
