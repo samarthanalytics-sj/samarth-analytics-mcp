@@ -28,6 +28,8 @@ const {
   decidePostRoute,
   decideSessionAccess,
   sessionErrorResponse,
+  sessionOwnedBy,
+  redactSessionId,
   isInitializeRequest,
   UNKNOWN_SESSION_MESSAGE,
   MISSING_SESSION_MESSAGE,
@@ -148,6 +150,49 @@ test('REGRESSION: a missing header is a 400 (DELETE used to answer 404), never a
 });
 
 
+console.log('\nmcpSession: sessions are bound to the principal that opened them');
+
+// Sessions were keyed by mcp-session-id alone, so in multi-user mode another authenticated member who
+// learned an id could resume the session, take its event stream, or DELETE it.
+const ALICE = 'stytch:org-1:member-alice';
+const BOB = 'stytch:org-1:member-bob';
+
+test('the owner is recognised; anyone else, or no stored session, is not', () => {
+  assert.strictEqual(sessionOwnedBy(ALICE, ALICE), true);
+  assert.strictEqual(sessionOwnedBy(ALICE, BOB), false);
+  assert.strictEqual(sessionOwnedBy(undefined, ALICE), false);
+});
+
+test("REGRESSION: another principal's session id on a tools/call is refused like an unknown id", () => {
+  const route = decidePostRoute('alice-sess', sessionOwnedBy(ALICE, BOB), CALL);
+  assert.strictEqual(route.kind, 'unknown-session');
+});
+
+test("REGRESSION: another principal's session id on an initialize mints a NEW session, never resumes", () => {
+  assert.strictEqual(decidePostRoute('alice-sess', sessionOwnedBy(ALICE, BOB), INIT).kind, 'create');
+});
+
+test("REGRESSION: GET/DELETE with another principal's session id is the same 404 as an unknown id", () => {
+  const foreign = decideSessionAccess('alice-sess', sessionOwnedBy(ALICE, BOB));
+  const unknown = decideSessionAccess('no-such-sess', sessionOwnedBy(undefined, BOB));
+  assert.strictEqual(foreign.kind, 'unknown-session');
+  assert.deepStrictEqual(sessionErrorResponse(foreign.kind), sessionErrorResponse(unknown.kind));
+});
+
+test('the owner still resumes and reaches its own session', () => {
+  assert.strictEqual(decidePostRoute('alice-sess', sessionOwnedBy(ALICE, ALICE), CALL).kind, 'resume');
+  assert.strictEqual(decideSessionAccess('alice-sess', sessionOwnedBy(ALICE, ALICE)).kind, 'ok');
+});
+
+test('REGRESSION: session ids are redacted for logs, never printed whole', () => {
+  const sid = 'f849818d-d6cb-4931-b69a-fe6e0ede948f';
+  const shown = redactSessionId(sid);
+  assert.ok(!shown.includes(sid), shown);
+  assert.ok(shown.startsWith('f849818d'), 'a short prefix stays for correlation');
+  assert.ok(shown.length < 16, shown);
+  assert.ok(!redactSessionId('short-id').includes('short-id'), 'a short id is not printed either');
+});
+
 console.log('\nindex.ts: HTTP transport session lifetime and body limit');
 
 // These two live in src/index.ts, which cannot be imported: it calls main() at module load, so
@@ -201,6 +246,26 @@ test('REGRESSION: GET and DELETE /mcp answer session errors through decideSessio
   }
   assert.ok(!indexCode.includes('Missing or invalid mcp-session-id header.'), 'the GET 400-for-unknown body is back');
   assert.ok(!indexCode.includes("'Session not found.'"), 'the non-JSON-RPC DELETE 404 body is back');
+});
+
+test('REGRESSION: index.ts binds each session to its principal and checks it on POST, GET and DELETE', () => {
+  assert.match(indexCode, /sessions\.set\([^)]*principal/, 'the stored session must record its principal');
+  for (const route of ["app.post('/mcp'", "app.get('/mcp'", "app.delete('/mcp'"]) {
+    const at = indexCode.indexOf(route);
+    const handler = indexCode.slice(at, indexCode.indexOf('});', at));
+    assert.match(handler, /ownsSession\(sessionId, principal\)/, `${route} must check the session owner`);
+    assert.ok(!/sessions\.has\(sessionId\)/.test(handler), `${route} still routes on bare existence`);
+  }
+  assert.match(indexCode, /sessionOwnedBy\(sessions\.get\(sessionId\)\?\.principal, principal\)/);
+});
+
+test('REGRESSION: index.ts never logs a full session id', () => {
+  const logs = indexCode.match(/console\.error\([^;]*HTTP session[^;]*;/g) ?? [];
+  assert.ok(logs.length >= 3, `expected the new / closed / idle session logs, found ${logs.length}`);
+  for (const line of logs) {
+    assert.ok(!/\$\{sid\}/.test(line), `raw session id logged: ${line}`);
+    assert.match(line, /redactSessionId\(sid\)/, line);
+  }
 });
 
 test('REGRESSION: every stored session records lastActivity', () => {

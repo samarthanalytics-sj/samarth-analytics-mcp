@@ -69,6 +69,23 @@ export function decideSessionAccess(sessionId: string | undefined, hasSession: b
   return { kind: 'ok', sessionId };
 }
 
+/**
+ * May this request's principal use the stored session? Sessions were keyed by mcp-session-id alone,
+ * so in multi-user mode any other authenticated member who learned an id (they are logged) could
+ * resume it, take over its event stream, or DELETE it. A session now records the principal that
+ * initialized it, and a request from anyone else is treated exactly like an unknown id - pass the
+ * result as `hasSession` to decidePostRoute / decideSessionAccess - so a 404 never confirms that
+ * someone else's session exists.
+ */
+export function sessionOwnedBy(owner: string | undefined, principal: string): boolean {
+  return owner !== undefined && owner === principal;
+}
+
+/** A session id shortened for logs: enough to correlate lines, not enough to address the session. */
+export function redactSessionId(sid: string): string {
+  return sid.length >= 16 ? `${sid.slice(0, 8)}...` : '[redacted]';
+}
+
 /** Status + JSON-RPC error body for a missing (400) or unknown/expired (404) session id. */
 export function sessionErrorResponse(kind: 'missing-header' | 'unknown-session'): {
   status: number;
