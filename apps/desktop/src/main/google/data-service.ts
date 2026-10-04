@@ -3522,7 +3522,8 @@ export class GoogleDataService {
     // Not installed yet. Import from the gallery when the template really is there, under
     // coordinates GTM accepts (some stape-io repos are FORKS whose gallery entry belongs to the
     // upstream author). A template that was never listed is installed by uploading its source
-    // instead, which is exactly what Templates > Import does by hand.
+    // instead, which is exactly what Templates > Import does by hand. That source is fetched only
+    // at its reviewed commit and refused unless its SHA-256 matches the pin (gtm-template-install).
     const coords = galleryCoordinatesFor(owner, repository);
     try {
       if (!coords) {

@@ -17,8 +17,26 @@ import {
   matchInstalledTemplate,
   manualInstallSteps,
   templateInstallError,
+  templatePin,
+  templateSourceUrls,
   TEMPLATE_SOURCES,
 } from '../shared/gtm-template-sources';
+
+/** The reviewed pins (2026-10-04, audit N31). A change here is a change to what code gets installed. */
+const PINS = {
+  'stape-io/data-client': {
+    sourceSha: '70522367b20028dc8639776755f4ef0455b96f69',
+    sha256: '78ed188c307974de345d51493b8ee822ff2001464a5c536f507b5b11e7a22d86',
+  },
+  'stape-io/rtb-house-tag': {
+    sourceSha: '12e2a768b96bc379e9638edf2a90949e62ba0c5d',
+    sha256: '5e5e0494f2b0e80b1c900b242097b7ea57d15ea8fdedfc14ac0226fff7075ec2',
+  },
+  'stape-io/tapfiliate-tag': {
+    sourceSha: 'fa9cc0bb2ffb8bc2d80c8149d270330865389bcb',
+    sha256: '15868a22014b8bc6e4d22216548fa76f1c838dfeaaf1b5505c600e03c2a1a8b8',
+  },
+} as const;
 
 let passed = 0;
 let failed = 0;
@@ -110,10 +128,58 @@ test('an UNKNOWN repo is never matched by a name guess', () => {
   assert.equal(matchInstalledTemplate(list, 'acme', 'some-tag'), undefined, 'no registry entry means no fuzzy match');
 });
 
+test('each not-in-gallery template is pinned to its reviewed commit and SHA-256', () => {
+  for (const [k, pin] of Object.entries(PINS)) {
+    const src = TEMPLATE_SOURCES[k];
+    assert.equal(src?.gallery, null, `${k} is a source install`);
+    assert.equal(src?.sourceSha, pin.sourceSha, `${k} commit`);
+    assert.equal(src?.sha256, pin.sha256, `${k} hash`);
+  }
+});
+
+test('templateSourceUrls returns exactly ONE url, at the pinned commit, never a branch', () => {
+  for (const [k, pin] of Object.entries(PINS)) {
+    const [owner, repo] = k.split('/');
+    const urls = templateSourceUrls(owner, repo);
+    assert.deepEqual(urls, [`https://raw.githubusercontent.com/${k}/${pin.sourceSha}/template.tpl`]);
+    assert.ok(!urls.some((u) => /\/(main|master)\//.test(u)), 'no mutable branch');
+  }
+  assert.deepEqual(templateSourceUrls('STAPE-IO', 'Data-Client'), [
+    `https://raw.githubusercontent.com/stape-io/data-client/${PINS['stape-io/data-client'].sourceSha}/template.tpl`,
+  ], 'resolved case-insensitively, always from the registry spelling');
+});
+
+test('templateSourceUrls is empty for an entry without a pin, and for an unknown template', () => {
+  // The forks are gallery imports and carry no pin: no URL, so the installer can never fetch them.
+  assert.deepEqual(templateSourceUrls('stape-io', 'pirsch-tag-server'), []);
+  assert.deepEqual(templateSourceUrls('mbaersch', 'umami-tag-server'), []);
+  assert.deepEqual(templateSourceUrls('acme', 'evil-template'), []);
+  assert.deepEqual(templateSourceUrls('stape-io', 'facebook-tag'), [], 'unexceptional = not in the registry');
+  assert.equal(templatePin('stape-io', 'pirsch-tag-server'), null);
+});
+
+test('the manual steps point at the pinned commit and give the SHA-256 to check', () => {
+  for (const [k, pin] of Object.entries(PINS)) {
+    const [owner, repo] = k.split('/');
+    const steps = manualInstallSteps(owner, repo).join('\n');
+    assert.ok(steps.includes(`https://raw.githubusercontent.com/${k}/${pin.sourceSha}/template.tpl`), `${k}: pinned URL`);
+    assert.ok(steps.includes(pin.sha256), `${k}: the hash to check`);
+    assert.ok(/SHA-256/.test(steps), `${k}: says to check the SHA-256`);
+    assert.ok(!/\/(main|master)\//.test(steps), `${k}: never a branch URL`);
+  }
+});
+
+test('the manual steps for an unpinned template name no branch URL', () => {
+  const steps = manualInstallSteps('stape-io', 'facebook-tag').join('\n');
+  assert.ok(!/raw\.githubusercontent\.com/.test(steps), 'no raw URL without a pin');
+  assert.ok(/review it/.test(steps), 'tells the user to review an unpinned file');
+});
+
 test('the not-in-gallery error names the cause and the manual steps', () => {
   const err = templateInstallError('stape-io', 'data-client');
   assert.ok(/NOT in the GTM Community Template Gallery/.test(err), err);
-  assert.ok(/raw\.githubusercontent\.com\/stape-io\/data-client/.test(err), 'points at the .tpl to download');
+  assert.ok(/raw\.githubusercontent\.com\/stape-io\/data-client\/70522367b20028dc8639776755f4ef0455b96f69\/template\.tpl/.test(err), 'points at the pinned .tpl to download');
+  assert.ok(err.includes(PINS['stape-io/data-client'].sha256), 'gives the hash to check');
   assert.ok(/Client Templates/.test(err), 'a CLIENT installs under Client Templates, not Tag Templates');
   assert.ok(/Re-run this step/.test(err), 'tells the user the tool will then continue');
 });
@@ -138,6 +204,11 @@ test('every registry entry is internally consistent', () => {
     assert.ok(v.note.trim().length > 0, `${k} must say why it is an exception`);
     assert.ok(!v.note.includes('—'), `${k} note must not use an em dash`);
     if (v.gallery) assert.notEqual(v.gallery.owner.toLowerCase(), 'stape-io', `${k} is a fork entry, so the publisher is not stape-io`);
+    // A pin is both values or neither, and well-formed; a source install (gallery: null) must have one.
+    assert.equal(v.sourceSha === undefined, v.sha256 === undefined, `${k}: sourceSha and sha256 are set together`);
+    if (v.sourceSha !== undefined) assert.ok(/^[0-9a-f]{40}$/.test(v.sourceSha), `${k}: sourceSha is a full lowercase commit`);
+    if (v.sha256 !== undefined) assert.ok(/^[0-9a-f]{64}$/.test(v.sha256), `${k}: sha256 is lowercase hex`);
+    if (!v.gallery) assert.ok(templatePin(...(k.split('/') as [string, string])), `${k} is source-installed, so it must be pinned`);
   }
 });
 
