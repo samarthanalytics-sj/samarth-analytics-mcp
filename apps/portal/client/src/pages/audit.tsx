@@ -52,6 +52,7 @@ import { useGtmSelection } from "@/hooks/use-gtm-selection";
 import { useRuntimeCapture } from "@/hooks/use-runtime-capture";
 import { portalApi } from "@/lib/portal-api";
 import { usePortal } from "@/lib/portal-store";
+import { readAuditDeepLink, stripAuditDeepLink } from "@shared/audit-deep-link";
 // The synthetic sample capture (~6KB) is only needed when the user clicks
 // "load/download sample", so it is imported dynamically inside those handlers
 // instead of being bundled into the audit page chunk.
@@ -108,8 +109,26 @@ const COVERAGE_LABEL: Record<string, string> = {
 export default function AuditPage() {
   const { oauth } = usePortal();
 
+  // The Containers page links here as /audit?a=<accountId>&c=<publicId>:
+  // preselect that container instead of the first one. Read once on mount,
+  // then drop the keys from the URL, because the search string outlives later
+  // hash navigations and would otherwise re-apply on every return to /audit.
+  const [deepLink] = useState(() => readAuditDeepLink(window.location.search));
+  useEffect(() => {
+    if (!deepLink) return;
+    const { pathname, search, hash } = window.location;
+    window.history.replaceState(
+      window.history.state,
+      "",
+      pathname + stripAuditDeepLink(search) + hash,
+    );
+  }, [deepLink]);
+
   // Primary account → container → workspace cascade (auto-selects each tier).
-  const selection = useGtmSelection({ enabled: oauth.connected });
+  const selection = useGtmSelection({
+    enabled: oauth.connected,
+    initial: deepLink,
+  });
   const {
     accountId,
     containerId,

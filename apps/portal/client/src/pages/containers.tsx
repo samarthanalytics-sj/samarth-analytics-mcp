@@ -33,6 +33,7 @@ import { HealthBadge } from "@/components/status-chip";
 import { portalApi } from "@/lib/portal-api";
 import { usePortal } from "@/lib/portal-store";
 import { SOURCE_LABELS } from "@shared/portal-types";
+import { auditDeepLinkHref } from "@shared/audit-deep-link";
 import type {
   ContainerRecord,
   GtmAccountSummary,
@@ -397,7 +398,7 @@ export default function ContainersPage() {
                                   data-testid={`button-audit-${c.containerId}`}
                                 >
                                   <Link
-                                    href={`/audit?c=${encodeURIComponent(c.publicId)}`}
+                                    href={auditDeepLinkHref(c)}
                                   >
                                     Audit{" "}
                                     <ExternalLink className="ml-1 h-3 w-3" />
@@ -478,7 +479,7 @@ export default function ContainersPage() {
                               className="w-full min-h-10"
                             >
                               <Link
-                                href={`/audit?c=${encodeURIComponent(c.publicId)}`}
+                                href={auditDeepLinkHref(c)}
                               >
                                 Open audit
                               </Link>
