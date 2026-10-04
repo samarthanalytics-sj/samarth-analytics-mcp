@@ -1852,9 +1852,10 @@ export function auditContainer(s: ContainerSnapshot, opts?: { clientRegion?: str
 
   // Consent Mode findings are shaped by whether the container uses Consent Mode AT ALL.
   //
-  // When it does (a consent-initialisation trigger, a default/update call, or tags that already
-  // declare consent), a data-sending tag with no consent settings is a real gap in a working setup
-  // and is reported per tag, with its fix.
+  // When it does (a consent-initialisation trigger, a tag firing on the built-in Consent
+  // Initialization trigger, a default/update call, or tags that already declare consent), a
+  // data-sending tag with no consent settings is a real gap in a working setup and is reported per
+  // tag, with its fix.
   //
   // When it does not, the same per-tag finding is noise: it fired once per tag on 91% of real
   // containers and was 86% of every high-severity finding the audit produced. The actual problem
@@ -1864,7 +1865,11 @@ export function auditContainer(s: ContainerSnapshot, opts?: { clientRegion?: str
   const consentModeInUse =
     s.triggers.some((tr) => /^consentinit/.test((tr.type ?? '').toLowerCase().replace(/[^a-z]/g, '')) || /consent[\s_-]?init/i.test(tr.name)) ||
     s.tags.some((t) => { const st = normConsent(t.consentSettings?.consentStatus); return st === 'needed' || st === 'notneeded'; }) ||
-    s.tags.some((t) => t.type === 'html' && /gtag\(\s*['"]consent['"]|consent[_\s-]?(default|update)|ad_user_data|ad_personalization/i.test(String(t.parameter.find((p) => p.key === 'html')?.value ?? '')));
+    s.tags.some((t) => t.type === 'html' && /gtag\(\s*['"]consent['"]|consent[_\s-]?(default|update)|ad_user_data|ad_personalization/i.test(String(t.parameter.find((p) => p.key === 'html')?.value ?? ''))) ||
+    // A CMP template (cvt_*, calls setDefaultConsentState) or consent-default tag on the BUILT-IN
+    // Consent Initialization trigger: triggers.list never returns built-ins, so look at the tag side.
+    // A data-sending tag (GA4, Ads, ...) placed there is not a consent setup, so it does not count.
+    s.tags.some((t) => !t.paused && !CONSENT_RELEVANT_TYPES.has(t.type) && (t.firingTriggerId ?? []).map(String).includes(CONSENT_INIT_TRIGGER_ID));
   if (unconfiguredConsentTags.length > 0 && consentModeInUse) {
     for (const t of unconfiguredConsentTags) {
       findings.push({

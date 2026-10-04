@@ -1034,6 +1034,34 @@ test('audit: Consent Mode v2 + missing event name flagged on bare GA4/Ads tags',
   assert.deepEqual(adsConsent?.fix?.args.consentTypes, ['ad_storage', 'ad_user_data', 'ad_personalization'], 'Ads → ad signals');
 });
 
+test('audit: a CMP template on the BUILT-IN Consent Initialization trigger means Consent Mode is in use', () => {
+  // triggers.list never returns GTM's built-in triggers, so the CMP tag's firingTriggerId
+  // (2147479572) is the only sign of the consent initialisation.
+  const cmp = { tagId: '9', name: 'Cookiebot CMP', type: 'cvt_123_45', firingTriggerId: ['2147479572'], paused: false, parameter: [], consentSettings: { consentStatus: 'notSet' } };
+  const senders = [
+    { tagId: '1', name: 'Bing UET', type: 'baut', firingTriggerId: ['2147479553'], paused: false, parameter: [], consentSettings: { consentStatus: 'notSet' } },
+    { tagId: '2', name: 'LinkedIn Insight', type: 'bzi', firingTriggerId: ['2147479553'], paused: false, parameter: [], consentSettings: { consentStatus: 'notSet' } },
+  ];
+  const r = auditContainer({ tags: [cmp, ...senders], triggers: [], variables: [] });
+  const consent = r.findings.filter((f) => f.category === 'consent');
+  assert.equal(consent.some((f) => f.checkId === 'consent-mode-not-configured'), false, 'a consent initialisation exists');
+  assert.equal(consent.length, 2, 'per-tag gaps when Consent Mode is in use');
+  for (const f of consent) {
+    assert.equal(f.severity, 'high');
+    assert.equal(f.autoFixable, true);
+    assert.equal(f.fix?.tool, 'set_gtm_tag_consent');
+  }
+
+  // The same container with the CMP tag PAUSED has no live consent initialisation: one medium finding.
+  const paused = auditContainer({ tags: [{ ...cmp, paused: true }, ...senders], triggers: [], variables: [] });
+  const pausedConsent = paused.findings.filter((f) => f.category === 'consent');
+  assert.deepEqual(pausedConsent.map((f) => f.checkId), ['consent-mode-not-configured']);
+
+  // A data-sending tag placed on Consent Initialization is not a consent setup.
+  const misplaced = auditContainer({ tags: [{ ...senders[0], firingTriggerId: ['2147479572'] }, senders[1]], triggers: [], variables: [] });
+  assert.deepEqual(misplaced.findings.filter((f) => f.category === 'consent').map((f) => f.checkId), ['consent-mode-not-configured']);
+});
+
 test('audit: an event tag whose {{Constant}} Measurement ID matches the Google tag literal is NOT "Cannot detect the Google tag"', () => {
   const base = {
     triggers: [{ triggerId: 'T1', name: 'All Pages', type: 'pageview' }, { triggerId: 'T0', name: 'Consent Initialization', type: 'consentInit' }],
