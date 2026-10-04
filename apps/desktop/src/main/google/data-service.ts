@@ -2136,7 +2136,8 @@ export class GoogleDataService {
       const event = id.slice(id.indexOf(':') + 1);
       // Missing credentials are reported by the vendor's own field names, never guessed or
       // part-filled: a half-configured CAPI tag fails silently at the destination.
-      const { creds, missing } = capiCredentials(spec, values.capi);
+      // Per-conversion ids are read for THIS event only, so two events never share one conversion.
+      const { creds, missing } = capiCredentials(spec, values.capi, event);
       if (missing.length) {
         skipped.push({ id, reason: `Missing ${missing.join(' / ')}.` });
         continue;

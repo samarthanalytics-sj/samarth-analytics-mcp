@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { capiPlatform } from '../../../../../src/shared/capi-platforms';
+import { capiPlatform, capiValueKey } from '../../../../../src/shared/capi-platforms';
 import { ThemeToggle, useTheme } from './ThemeToggle';
 import { ShortcutsOverlay, EmptyState } from './ui';
 import type { AppInfo } from '../../preload';
@@ -9781,7 +9781,8 @@ function ServerContainerPanel({
         ...(targetId ? { serverContainerId: targetId } : { newName: name.trim() }),
         selected,
         // The inputs live in one flat map; the engine takes CAPI credentials in their own bag,
-        // keyed "<platform>.<field>" exactly as the shared spec spells them.
+        // keyed "<platform>.<field>" (or "<platform>.<field>@<event>" for a per-conversion id)
+        // exactly as the shared spec spells them.
         values: {
           measurementId: vals.measurementId,
           serverUrl: (vals.serverUrl ?? serverUrl).trim(),
@@ -9954,23 +9955,31 @@ function ServerContainerPanel({
                       {(missingValueKeys.includes('serverUrl') || plan.detected.serverUrl == null) && (
                         <input style={{ ...styles.input, flex: '1 1 220px' }} placeholder="https://sgtm.example.com" value={vals.serverUrl ?? serverUrl} onChange={(e) => setVals((v) => ({ ...v, serverUrl: e.target.value }))} />
                       )}
-                      {capiPlatformsNeeded.map((spec) => (
-                        <Fragment key={spec.platform}>
-                          {spec.fields.map((f) => {
-                            const k = `${spec.platform}.${f.key}`;
-                            return (
+                      {capiPlatformsNeeded.map((spec) => {
+                        // A per-conversion id (X Event ID, LinkedIn conversion rule, Yahoo event snippet)
+                        // gets one input per SELECTED event: one shared value would report every event
+                        // as the same conversion.
+                        const events = selectedIds
+                          .filter((id) => id.startsWith(`${spec.platform}_capi:`))
+                          .map((id) => id.slice(id.indexOf(':') + 1));
+                        const inputs = spec.fields.flatMap((f) => (f.perEvent
+                          ? events.filter((ev) => !f.notNeededFor?.(ev)).map((ev) => ({ f, k: capiValueKey(spec, f, ev), placeholder: `${f.label} for ${ev}` }))
+                          : [{ f, k: `${spec.platform}.${f.key}`, placeholder: f.label }]));
+                        return (
+                          <Fragment key={spec.platform}>
+                            {inputs.map(({ f, k, placeholder }) => (
                               <input
                                 key={k}
                                 style={{ ...styles.input, flex: f.secret ? '1 1 190px' : '1 1 160px' }}
                                 type={f.secret ? 'password' : 'text'}
-                                placeholder={f.label}
+                                placeholder={placeholder}
                                 value={vals[k] ?? ''}
                                 onChange={(e) => setVals((v) => ({ ...v, [k]: e.target.value }))}
                               />
-                            );
-                          })}
-                        </Fragment>
-                      ))}
+                            ))}
+                          </Fragment>
+                        );
+                      })}
                     </div>
                   )}
                   {notReady.length > 0 && (

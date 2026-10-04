@@ -189,7 +189,21 @@ await test('each CAPI tool refuses without its OWN credentials, and creates noth
   assert.ok(/accessToken is required/.test(text(await callValidated(s, 'create_yelp_capi_server_tag', { ...WS, accessToken: ' ', confirm: true }))));
   assert.ok(/event is required/.test(text(await callValidated(s, 'create_rtb_house_server_tag', { ...WS, taggingHash: 'h', partnerKey: 'k', event: '', confirm: true }))));
   assert.ok(/tagIds is required/.test(text(await callValidated(s, 'create_amazon_capi_server_tag', { ...WS, tagIds: [], confirm: true }))));
+  // LINE Yahoo: a forced non-page_view event needs its own Event Snippet ID; page_view and inherit do not.
+  assert.ok(/eventSnippetId is required for the "purchase" event/.test(text(await callValidated(s, 'create_line_yahoo_capi_server_tag', { ...WS, tagId: 'T', accessToken: 'A', channelId: 'C', event: 'purchase', confirm: true }))));
   assert.equal(client.calls.length, 0, 'no import and no create on a refusal');
+});
+
+await test('create_line_yahoo_capi_server_tag: page_view and inherit need no snippet; a conversion carries its own', async () => {
+  const client = stubClient({ templates: [INSTALLED('stape-io', 'line-yahoo-tag', 'LY1')] });
+  const s = serverWith(client);
+  const base = { ...WS, tagId: 'T', accessToken: 'A', channelId: 'C', confirm: true };
+  await callValidated(s, 'create_line_yahoo_capi_server_tag', { ...base, event: 'page_view' });
+  await callValidated(s, 'create_line_yahoo_capi_server_tag', { ...base });
+  await callValidated(s, 'create_line_yahoo_capi_server_tag', { ...base, event: 'purchase', eventSnippetId: 'SNIP1' });
+  const tags = client.calls.filter((c) => c.kind === 'tag').map((c) => c.body);
+  assert.equal(tags.length, 3);
+  assert.equal(paramVal(tags[2], 'eventSnippetId'), 'SNIP1');
 });
 
 await test('enumerated inputs: case and aliases normalise; unrecognised values are refused, not defaulted', async () => {

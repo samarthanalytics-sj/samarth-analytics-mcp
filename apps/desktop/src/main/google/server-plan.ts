@@ -39,10 +39,11 @@ export interface ServerPlanItem {
 /**
  * Config values the plan can use; `detected` carries what the audit already found.
  *
- * Conversion-API credentials live in `capi`, keyed "<platform>.<field>" exactly as capiValueKeys()
- * spells them, because the platforms do not share a shape: Yelp needs a token alone, Nextdoor and
- * LINE Yahoo take three fields each. Naming a field per platform on this interface is what
- * previously capped the flow at four destinations.
+ * Conversion-API credentials live in `capi`, keyed "<platform>.<field>" (or "<platform>.<field>@<event>"
+ * for a per-conversion id such as the X Event ID) exactly as capiValueKeys() spells them, because
+ * the platforms do not share a shape: Yelp needs a token alone, Nextdoor and LINE Yahoo take three
+ * fields each. Naming a field per platform on this interface is what previously capped the flow at
+ * four destinations.
  */
 export interface ServerPlanValues {
   measurementId?: string;
@@ -301,7 +302,8 @@ export function buildServerPlan(input: ServerPlanInput): ServerPlan {
     const spec = capiPlatform(platform);
     if (!spec) continue;
     const label = spec.label;
-    const requires = capiValueKeys(spec);
+    // Per-conversion ids (X Event ID, LinkedIn conversion rule, Yahoo snippet) are keyed by this event.
+    const requires = capiValueKeys(spec, event);
     const extra = spec.emqVariables ? ' Auto-provisions its match-quality variables.' : '';
     push({
       id: `${platform}_capi:${event}`,

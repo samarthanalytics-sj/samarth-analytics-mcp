@@ -19,7 +19,7 @@ import {
   buildSnapchatCapiServerTag, buildMicrosoftCapiServerTag, buildAmazonCapiServerTag,
   buildXCapiServerTag, buildQuoraCapiServerTag, buildAdRollCapiServerTag,
   buildNextdoorCapiServerTag, buildYelpCapiServerTag, buildSpotifyCapiServerTag,
-  buildLineYahooCapiServerTag, buildRtbHouseServerTag, stackAdaptPixelType,
+  buildLineYahooCapiServerTag, buildRtbHouseServerTag, stackAdaptPixelType, lineYahooServerEvent,
 } from './server-migration.js';
 import type { GtmTagResource } from './gtm-builders.js';
 
@@ -31,7 +31,8 @@ export type CapiPlatformId =
   | 'spotify' | 'lineyahoo' | 'rtbhouse';
 
 export interface CapiCredentialField {
-  /** Stored under `${platform}.${key}`; also the template's own field name where they agree. */
+  /** Stored under `${platform}.${key}` (per event for a perEvent field, see capiValueKey); also the
+   *  template's own field name where they agree. */
   key: string;
   /** What the input asks for, in the vendor's own words. */
   label: string;
@@ -42,6 +43,12 @@ export interface CapiCredentialField {
   /** For a field with a fixed set of values: false = unrecognised, reported like a missing value so the
    *  item is skipped rather than silently built with a default. */
   accepts?: (value: string) => boolean;
+  /** A per-CONVERSION identifier (X Event ID, LinkedIn conversion rule URN, Yahoo Event Snippet ID):
+   *  stored per event under `${platform}.${key}@${event}` and never shared, because one tag = one
+   *  conversion at the destination, so a single value would report every event as that conversion. */
+  perEvent?: boolean;
+  /** Events this field is not needed for (LINE Yahoo page_view has no event snippet). */
+  notNeededFor?: (event: string) => boolean;
 }
 
 export interface CapiPlatformSpec {
@@ -90,7 +97,7 @@ export const CAPI_PLATFORMS: readonly CapiPlatformSpec[] = [
     // LinkedIn fires on a Conversion Rule URN, NOT the web Partner ID: a different identifier
     // entirely, and the most common thing to get wrong here.
     fields: [
-      { key: 'conversionRuleUrn', label: 'LinkedIn conversion rule URN (urn:lla:llaPartnerConversion:...)' },
+      { key: 'conversionRuleUrn', label: 'LinkedIn conversion rule URN (urn:lla:llaPartnerConversion:...)', perEvent: true },
       { key: 'accessToken', label: 'LinkedIn access token', secret: true },
     ],
     build: (t, n, c, x) => buildLinkedInCapiServerTag(t, n, c.accessToken, c.conversionRuleUrn, { firingTriggerId: x.firingTriggerId }),
@@ -140,10 +147,11 @@ export const CAPI_PLATFORMS: readonly CapiPlatformSpec[] = [
   {
     platform: 'x', label: 'X (Twitter) CAPI', gallery: ['stape-io', 'twitter-tag'],
     nameRe: /\btwitter\b|\bx[\s_-]?pixel\b/i, bodyRe: /twq\(|static\.ads-twitter/i,
-    // eventId is the per-conversion X Event ID (tw-...), so one tag is one X conversion event.
+    // eventId is the per-conversion X Event ID (tw-...), so one tag is one X conversion event: it is
+    // collected per event, never shared across them.
     fields: [
       { key: 'pixelId', label: 'X Pixel ID' },
-      { key: 'eventId', label: 'X Event ID (tw-...)' },
+      { key: 'eventId', label: 'X Event ID (tw-...)', perEvent: true },
       { key: 'pixelAccessToken', label: 'X pixel access token', secret: true },
     ],
     build: (t, n, c, x) => buildXCapiServerTag(t, n, c.pixelId, c.eventId, { pixelAccessToken: c.pixelAccessToken }, { firingTriggerId: x.firingTriggerId }),
@@ -195,8 +203,10 @@ export const CAPI_PLATFORMS: readonly CapiPlatformSpec[] = [
       { key: 'tagId', label: 'Yahoo tag ID' },
       { key: 'accessToken', label: 'LINE Yahoo access token', secret: true },
       { key: 'channelId', label: 'Channel ID' },
+      // Yahoo needs its own Event Snippet ID for every event other than page_view.
+      { key: 'eventSnippetId', label: 'Yahoo Event Snippet ID', perEvent: true, notNeededFor: (e) => lineYahooServerEvent(e) === 'page_view' },
     ],
-    build: (t, n, c, x) => buildLineYahooCapiServerTag(t, n, c.tagId, c.accessToken, c.channelId, { event: x.event, firingTriggerId: x.firingTriggerId }),
+    build: (t, n, c, x) => buildLineYahooCapiServerTag(t, n, c.tagId, c.accessToken, c.channelId, { event: x.event, eventSnippetId: c.eventSnippetId, firingTriggerId: x.firingTriggerId }),
   },
   {
     platform: 'rtbhouse', label: 'RTB House', gallery: ['stape-io', 'rtb-house-tag'],
@@ -229,22 +239,29 @@ export function webPixelPlatform(
   return null;
 }
 
-/** The value keys this platform's credentials are stored under, e.g. "meta.accessToken". PURE. */
-export function capiValueKeys(spec: CapiPlatformSpec): string[] {
-  return spec.fields.map((f) => `${spec.platform}.${f.key}`);
+/** Where one field's value is stored for `event`: "meta.accessToken", or "x.eventId@purchase" for a
+ *  perEvent field (never the platform-wide key, so one conversion id can never cover two events). PURE. */
+export function capiValueKey(spec: CapiPlatformSpec, field: CapiCredentialField, event: string): string {
+  return field.perEvent ? `${spec.platform}.${field.key}@${event}` : `${spec.platform}.${field.key}`;
 }
 
-/** Credentials for a platform, read from the flat `${platform}.${field}` map. PURE. */
+/** The value keys this platform's tag for `event` needs, e.g. "meta.accessToken", "x.eventId@purchase". PURE. */
+export function capiValueKeys(spec: CapiPlatformSpec, event: string): string[] {
+  return spec.fields.filter((f) => !f.notNeededFor?.(event)).map((f) => capiValueKey(spec, f, event));
+}
+
+/** Credentials for a platform's tag for `event`, read from the flat value map (see capiValueKey). PURE. */
 export function capiCredentials(
   spec: CapiPlatformSpec,
   values: Record<string, string | undefined> | undefined,
+  event: string,
 ): { creds: Record<string, string>; missing: string[] } {
   const creds: Record<string, string> = {};
   const missing: string[] = [];
   for (const f of spec.fields) {
-    const v = (values?.[`${spec.platform}.${f.key}`] ?? '').trim();
+    const v = (values?.[capiValueKey(spec, f, event)] ?? '').trim();
     creds[f.key] = v;
-    if (!v && !f.optional) missing.push(f.label);
+    if (!v && !f.optional && !f.notNeededFor?.(event)) missing.push(f.perEvent ? `${f.label} for ${event}` : f.label);
     else if (v && f.accepts && !f.accepts(v)) missing.push(f.secret ? `${f.label} (unrecognised value)` : `${f.label} (unrecognised "${v}")`);
   }
   return { creds, missing };

@@ -52,6 +52,7 @@ import {
   buildLineYahooCapiServerTag,
   buildRtbHouseServerTag,
   stackAdaptPixelType,
+  lineYahooServerEvent,
 } from '../shared/server-migration.js';
 
 const wsBase = z.object({
@@ -244,7 +245,15 @@ const CAPI_TOOLS: CapiSpec[] = [
     name: 'create_line_yahoo_capi_server_tag', defaultTagName: 'LINE Yahoo CAPI Tag', gallery: ['stape-io', 'line-yahoo-tag'],
     description: 'Create a LINE Yahoo (Yahoo! JAPAN Ads) Conversion API SERVER tag from the Stape template (stape-io/line-yahoo-tag), imported automatically. Needs the Yahoo tagId (public), accessToken and channelId. Omit `event` to inherit; Yahoo has NO custom events (unknown names inherit). Every event other than page_view needs its own eventSnippetId from Yahoo Ads. transactionId is the dedup row.',
     fields: { tagId: z.string(), accessToken: z.string().describe(tokenDoc('Yahoo Ads tag access token')), channelId: z.string(), event: z.string().optional(), eventSnippetId: z.string().optional(), transactionId: z.string().optional(), testMode: z.boolean().optional(), serverEventData: rowsSchema, userIdentifiers: rowsSchema, webParameters: rowsSchema, eventParameters: rowsSchema, autoMap: z.boolean().optional(), optimistic: z.boolean().optional(), requireConsent: z.boolean().optional() },
-    validate: (a) => firstMissing(need(a, 'tagId', 'the Yahoo Tag ID'), need(a, 'accessToken', 'the Yahoo Ads access token'), need(a, 'channelId', 'the Yahoo Ads Channel ID')),
+    validate: (a) => {
+      const base = firstMissing(need(a, 'tagId', 'the Yahoo Tag ID'), need(a, 'accessToken', 'the Yahoo Ads access token'), need(a, 'channelId', 'the Yahoo Ads Channel ID'));
+      if (base) return base;
+      // A forced standard event other than page_view cannot be attributed without its own snippet id.
+      const std = s(a.event).trim() ? lineYahooServerEvent(s(a.event)) : null;
+      return std && std !== 'page_view' && !s(a.eventSnippetId).trim()
+        ? `eventSnippetId is required for the "${std}" event (Yahoo needs its own Event Snippet ID for every event other than page_view).`
+        : null;
+    },
     build: (type, name, a, firingTriggerId) => buildLineYahooCapiServerTag(type, name, s(a.tagId), s(a.accessToken), s(a.channelId), { event: opt(a.event), eventSnippetId: opt(a.eventSnippetId), transactionId: opt(a.transactionId), testMode: b(a.testMode), serverEventData: rows(a.serverEventData), userIdentifiers: rows(a.userIdentifiers), webParameters: rows(a.webParameters), eventParameters: rows(a.eventParameters), autoMap: b(a.autoMap), optimistic: b(a.optimistic), requireConsent: b(a.requireConsent), firingTriggerId }),
   },
   {
