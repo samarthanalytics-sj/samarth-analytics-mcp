@@ -4,20 +4,74 @@
  * the same /mcp + /health surface, minus OAuth (this server has no Google auth).
  *
  * The /mcp endpoint is gated by a bearer token (WEB_AUDIT_HTTP_AUTH_TOKEN).
- * When unset, the endpoint is open and a warning is logged — never expose an
- * ungated /mcp to the public internet.
+ * Without one the server REFUSES TO START, mirroring the root server
+ * (src/utils/httpBinding.ts). WEB_AUDIT_HTTP_ALLOW_UNAUTHENTICATED=true is the
+ * local-development opt-in, and it binds 127.0.0.1 only.
  *
- * The pure helpers (isAuthorized, buildHealthBody) are exported and unit-tested;
- * the express glue is thin and follows the proven root pattern.
+ * The pure helpers (isAuthorized, buildHealthBody, resolveHttpBinding,
+ * bindingBanner, decidePostRoute) are exported and unit-tested; the express
+ * glue is thin and follows the proven root pattern.
  */
 
 import { timingSafeEqual } from 'node:crypto';
+import type { AddressInfo } from 'node:net';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { loadConfig } from './utils/config.js';
 import { loadPlaywright } from './agent/browser.js';
 import { SERVER_NAME, SERVER_VERSION } from './server.js';
 
-/** Constant-time bearer-token check. Empty token = auth disabled (caller warns). */
+export const LOOPBACK = '127.0.0.1';
+
+export interface HttpBinding {
+  /** Interface to bind. Undefined = Node's default (every interface), which is exactly how an
+   *  authenticated server has always listened, so hosted deployments are unchanged. */
+  host: string | undefined;
+  authRequired: boolean;
+  /** Set when the server must NOT start; the string is the operator-facing reason. */
+  refuse?: string;
+}
+
+/**
+ * Decide whether the HTTP transport may start, and where it listens.
+ *
+ * Without a token, isAuthorized() lets every request through, and the listener
+ * used to bind every interface behind a single stderr warning — so anyone who
+ * could reach the port could drive this server's headless browser (crawls,
+ * consent-banner clicks, and real form submits when verify is enabled).
+ *
+ *  1. Token set: authenticated, listen as before (all interfaces).
+ *  2. No token: refuse to start, unless WEB_AUDIT_HTTP_ALLOW_UNAUTHENTICATED is
+ *     exactly 'true' (the `=== 'true'` idiom every other gate here uses).
+ *  3. No token, opted in: bind 127.0.0.1 only, so the opt-in covers local
+ *     development without also publishing the port.
+ */
+export function resolveHttpBinding(env: NodeJS.ProcessEnv = process.env): HttpBinding {
+  // Same truthiness isAuthorized() uses, so "authenticated" means the same thing in both places.
+  const authRequired = Boolean(env.WEB_AUDIT_HTTP_AUTH_TOKEN);
+  if (authRequired) return { host: undefined, authRequired };
+  if (env.WEB_AUDIT_HTTP_ALLOW_UNAUTHENTICATED !== 'true') {
+    return {
+      host: LOOPBACK,
+      authRequired,
+      refuse:
+        'HTTP transport refused to start: WEB_AUDIT_HTTP_AUTH_TOKEN is not set, so /mcp would let ' +
+        "anyone who can reach the port drive this server's headless browser. Set " +
+        'WEB_AUDIT_HTTP_AUTH_TOKEN (e.g. `openssl rand -hex 32`). For local development only, set ' +
+        `WEB_AUDIT_HTTP_ALLOW_UNAUTHENTICATED=true (it then binds ${LOOPBACK} only).`,
+    };
+  }
+  return { host: LOOPBACK, authRequired };
+}
+
+/** Startup banner from the address ACTUALLY bound — never a hardcoded "localhost". */
+export function bindingBanner(address: string, port: number, authRequired: boolean): string {
+  const shown = address === '::' || address === '0.0.0.0' ? `all interfaces (${address})` : address;
+  const auth = authRequired ? 'bearer token' : 'NONE (WEB_AUDIT_HTTP_ALLOW_UNAUTHENTICATED=true)';
+  return `HTTP server listening on ${shown}, port ${port} - authentication: ${auth}`;
+}
+
+/** Constant-time bearer-token check. Empty token = auth disabled, which startHttpServer only
+ *  permits with WEB_AUDIT_HTTP_ALLOW_UNAUTHENTICATED=true and a loopback bind. */
 export function isAuthorized(authHeader: string | undefined, token: string): boolean {
   if (!token) return true;
   const expected = Buffer.from(`Bearer ${token}`);
@@ -104,6 +158,8 @@ export const UNKNOWN_SESSION_MESSAGE =
 
 export interface HttpServerHandle {
   port: number;
+  /** The address actually bound (e.g. '127.0.0.1', or '::' for every interface). */
+  host: string;
   close: () => Promise<void>;
 }
 
@@ -112,8 +168,13 @@ export interface HttpServerHandle {
  * accepts exactly one transport, so a single shared instance threw "Already
  * connected to a transport" on the second client's initialize. Resolves once the
  * socket is listening; the returned handle exposes the bound port and a close().
+ * Rejects, before anything listens, when no auth token is configured and the
+ * unauthenticated opt-in is not set (see resolveHttpBinding).
  */
 export async function startHttpServer(createServer: () => McpServer): Promise<HttpServerHandle> {
+  const binding = resolveHttpBinding(process.env);
+  if (binding.refuse) throw new Error(binding.refuse);
+
   const { StreamableHTTPServerTransport } = await import(
     '@modelcontextprotocol/sdk/server/streamableHttp.js'
   );
@@ -129,8 +190,8 @@ export async function startHttpServer(createServer: () => McpServer): Promise<Ht
   const authToken = process.env.WEB_AUDIT_HTTP_AUTH_TOKEN ?? '';
   if (!authToken) {
     console.error(
-      `[${SERVER_NAME}] WARNING: WEB_AUDIT_HTTP_AUTH_TOKEN is not set — /mcp is unauthenticated. ` +
-        'Set it before exposing this server beyond localhost.',
+      `[${SERVER_NAME}] WARNING: WEB_AUDIT_HTTP_AUTH_TOKEN is not set — /mcp is unauthenticated ` +
+        `(WEB_AUDIT_HTTP_ALLOW_UNAUTHENTICATED=true), so it listens on ${LOOPBACK} only.`,
     );
   }
 
@@ -242,13 +303,14 @@ export async function startHttpServer(createServer: () => McpServer): Promise<Ht
   });
 
   return await new Promise<HttpServerHandle>((resolve) => {
-    const httpServer = app.listen(port, () => {
-      const bound = (httpServer.address() as { port: number }).port;
-      console.error(`[${SERVER_NAME}] HTTP server on http://localhost:${bound}`);
-      console.error(`[${SERVER_NAME}] MCP endpoint: POST http://localhost:${bound}/mcp`);
-      console.error(`[${SERVER_NAME}] Health: GET http://localhost:${bound}/health`);
+    const onListening = (): void => {
+      const { address, port: bound } = httpServer.address() as AddressInfo;
+      console.error(`[${SERVER_NAME}] ${bindingBanner(address, bound, binding.authRequired)}`);
+      console.error(`[${SERVER_NAME}] MCP endpoint: POST /mcp`);
+      console.error(`[${SERVER_NAME}] Health: GET /health`);
       resolve({
         port: bound,
+        host: address,
         close: () =>
           new Promise<void>((r) => {
             for (const { transport, server } of sessions.values()) {
@@ -258,6 +320,10 @@ export async function startHttpServer(createServer: () => McpServer): Promise<Ht
             httpServer.close(() => r());
           }),
       });
-    });
+    };
+    // No host when authenticated: Node's default (every interface), exactly as before.
+    const httpServer = binding.host
+      ? app.listen(port, binding.host, onListening)
+      : app.listen(port, onListening);
   });
 }

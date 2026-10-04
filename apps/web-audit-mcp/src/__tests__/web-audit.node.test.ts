@@ -47,6 +47,8 @@ import {
   buildHealthBody,
   isInitializeRequest,
   decidePostRoute,
+  resolveHttpBinding,
+  bindingBanner,
   startHttpServer,
 } from '../http.js';
 import { createWebAuditMcpServer } from '../server.js';
@@ -648,6 +650,54 @@ await withHttpEnv({ WEB_AUDIT_HTTP_AUTH_TOKEN: TEST_HTTP_TOKEN, WEB_AUDIT_HTTP_P
     check('http live: the other session survives the DELETE', listBAfter.status === 200 && listBAfterText.includes('site_crawl'), `${listBAfter.status}`);
   } finally {
     await handle.close();
+  }
+});
+
+// ── HTTP transport: binding ─────────────────────────────────────────────────
+// REGRESSION: with WEB_AUDIT_HTTP_AUTH_TOKEN unset, isAuthorized() admits every request and the
+// listener bound every interface behind one stderr warning, so /mcp was anonymous to the network.
+// Now the server refuses to start unless explicitly opted in, and then binds loopback only.
+// isAuthorized() itself is unchanged (the "no token → open" checks above still describe it); the
+// gate moved to startup.
+
+const bindNone = resolveHttpBinding({});
+check('http bind: no token → refuses to start', typeof bindNone.refuse === 'string' && /WEB_AUDIT_HTTP_AUTH_TOKEN/.test(bindNone.refuse ?? ''));
+check(
+  'http bind: opt-in must be exactly "true"',
+  typeof resolveHttpBinding({ WEB_AUDIT_HTTP_ALLOW_UNAUTHENTICATED: '1' }).refuse === 'string' &&
+    typeof resolveHttpBinding({ WEB_AUDIT_HTTP_ALLOW_UNAUTHENTICATED: 'TRUE' }).refuse === 'string',
+);
+const bindOptIn = resolveHttpBinding({ WEB_AUDIT_HTTP_ALLOW_UNAUTHENTICATED: 'true' });
+check('http bind: opt-in starts on loopback only', bindOptIn.refuse === undefined && bindOptIn.host === '127.0.0.1' && !bindOptIn.authRequired);
+const bindToken = resolveHttpBinding({ WEB_AUDIT_HTTP_AUTH_TOKEN: 's3cret' });
+check('http bind: token → starts with the unchanged default listen', bindToken.refuse === undefined && bindToken.host === undefined && bindToken.authRequired);
+check(
+  'http bind: a token makes the opt-in irrelevant',
+  resolveHttpBinding({ WEB_AUDIT_HTTP_AUTH_TOKEN: 's3cret', WEB_AUDIT_HTTP_ALLOW_UNAUTHENTICATED: 'true' }).host === undefined,
+);
+check('http bind: banner says all interfaces, not localhost', /all interfaces \(::\)/.test(bindingBanner('::', 8080, true)) && !/localhost/.test(bindingBanner('::', 8080, true)));
+check('http bind: banner names loopback and no auth', /127\.0\.0\.1/.test(bindingBanner('127.0.0.1', 8080, false)) && /NONE/.test(bindingBanner('127.0.0.1', 8080, false)));
+check('http live: token server banner printed the bound address, never localhost', httpLogs.some((l) => /listening on .*bearer token/.test(l)) && !httpLogs.some((l) => /localhost/.test(l)));
+
+await withHttpEnv({ WEB_AUDIT_HTTP_PORT: '0' }, async () => {
+  let refused: unknown = null;
+  try {
+    const h = await startHttpServer(createWebAuditMcpServer);
+    await h.close();
+  } catch (e) {
+    refused = e;
+  }
+  check('http live: no token → startHttpServer rejects before listening', refused instanceof Error && /refused to start/.test(refused.message));
+});
+
+await withHttpEnv({ WEB_AUDIT_HTTP_ALLOW_UNAUTHENTICATED: 'true', WEB_AUDIT_HTTP_PORT: '0' }, async () => {
+  const h = await startHttpServer(createWebAuditMcpServer);
+  try {
+    check('http live: unauthenticated opt-in binds 127.0.0.1', h.host === '127.0.0.1', h.host);
+    const body = (await (await fetch(`http://127.0.0.1:${h.port}/health`)).json()) as { authRequired: boolean };
+    check('http live: health reports authRequired=false under the opt-in', body.authRequired === false);
+  } finally {
+    await h.close();
   }
 });
 

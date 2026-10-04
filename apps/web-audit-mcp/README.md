@@ -144,9 +144,11 @@ docker run -p 8080:8080 \
 The image is based on `mcr.microsoft.com/playwright` (Chromium + system deps
 preinstalled), defaults to `WEB_AUDIT_TRANSPORT=http` on port 8080, and runs as
 the non-root `pwuser`. `GET /health` reports `playwrightAvailable`, so a
-misconfigured browser host is visible before the first audit. **Always set
-`WEB_AUDIT_HTTP_AUTH_TOKEN`** before exposing `/mcp` beyond localhost — without
-it the endpoint is open (and the server logs a warning).
+misconfigured browser host is visible before the first audit. **`WEB_AUDIT_HTTP_AUTH_TOKEN`
+is required** — without it the HTTP server refuses to start. For local
+development only, `WEB_AUDIT_HTTP_ALLOW_UNAUTHENTICATED=true` starts it without
+auth, bound to `127.0.0.1` (so it is unreachable from other machines, and from
+outside a container).
 
 ## Environment variables
 
@@ -161,7 +163,8 @@ it the endpoint is open (and the server logs a warning).
 | `WEB_AUDIT_HEADED` | `false` | `true` runs a visible browser (local debugging). |
 | `WEB_AUDIT_TRANSPORT` | `stdio` | `http` to run the Streamable HTTP server. |
 | `WEB_AUDIT_HTTP_PORT` / `PORT` | `8080` | HTTP listen port (`WEB_AUDIT_HTTP_PORT` wins). |
-| `WEB_AUDIT_HTTP_AUTH_TOKEN` | *(unset = open)* | Bearer token required on `/mcp`. Set this in any hosted deployment. |
+| `WEB_AUDIT_HTTP_AUTH_TOKEN` | *(required for HTTP)* | Bearer token required on `/mcp`. Unset = the HTTP server refuses to start. |
+| `WEB_AUDIT_HTTP_ALLOW_UNAUTHENTICATED` | `false` | `true` lets the HTTP server start without a token, for local development only; it then binds `127.0.0.1`. |
 
 ## Development
 
