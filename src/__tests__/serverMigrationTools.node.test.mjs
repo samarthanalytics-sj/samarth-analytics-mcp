@@ -35,7 +35,8 @@ function stubClient({ tags = [], triggers = [], variables = [], templates = [] }
     accounts: { containers: { workspaces: {
       tags: { ...lister('tag', tags), create: async (a) => { calls.push({ kind: 'tag', body: a.requestBody }); return { data: { tagId: 'TAG-new', name: a.requestBody?.name, type: a.requestBody?.type } }; } },
       triggers: lister('trigger', triggers),
-      variables: lister('variable', variables),
+      // Stateful: a created variable is listed afterwards, so idempotency can be observed.
+      variables: { ...lister('variable', variables), create: async (a) => { calls.push({ kind: 'variable', body: a.requestBody }); variables.push(a.requestBody); return { data: a.requestBody }; } },
       templates: lister('template', templates),
     } } },
   };
@@ -217,6 +218,53 @@ await test('enumerated inputs: case and aliases normalise; unrecognised values a
   assert.ok(/tagRegion "APAC" is not recognised/.test(text(await callValidated(s, 'create_amazon_capi_server_tag', { ...WS, tagIds: ['T1'], tagRegion: 'APAC', confirm: true }))));
   assert.ok(/pixelType "banana" is not recognised/.test(text(await callValidated(s, 'create_stackadapt_server_tag', { ...WS, pixelID: 'P', pixelType: 'banana', confirm: true }))));
   assert.equal(client.calls.length, before, 'nothing created on a refusal');
+});
+
+await test('Meta / TikTok / Snapchat CAPI tools create the ed - variables their tag reads (idempotently) before the tag', async () => {
+  const tools = [
+    ['create_meta_capi_server_tag', INSTALLED('stape-io', 'facebook-tag', 'FB1'), { pixelId: '1', accessToken: '{{T}}', event: 'Purchase' }],
+    ['create_tiktok_capi_server_tag', INSTALLED('stape-io', 'tiktok-tag', 'TT1'), { pixelId: 'C1', accessToken: '{{T}}', event: 'purchase' }],
+    ['create_snapchat_capi_server_tag', INSTALLED('Snapchat', 'capi-google-tag-manager-serverside-tag', 'SC1'), { pixelId: 'S1', apiAccessToken: '{{T}}', event: 'purchase' }],
+  ];
+  for (const [tool, installed, args] of tools) {
+    const client = stubClient({ templates: [installed], variables: [{ variableId: '9', name: 'ed - event_id', type: 'ed', parameter: [] }] });
+    const s = serverWith(client);
+    const res = json(await callValidated(s, tool, { ...WS, ...args, firingTriggerId: ['5'], confirm: true }));
+    const kinds = client.calls.map((c) => c.kind);
+    assert.ok(kinds.includes('variable') && kinds.lastIndexOf('variable') < kinds.indexOf('tag'), `${tool}: variables go in before the tag`);
+    assert.ok(res.variables.skipped.includes('ed - event_id'), `${tool}: an existing variable is reused, not duplicated`);
+    const have = new Set(['ed - event_id', ...res.variables.created]);
+    const tag = client.calls.find((c) => c.kind === 'tag').body;
+    const refs = [...JSON.stringify(tag.parameter).matchAll(/\{\{((?:ed|rh) - [^}]+)\}\}/g)].map((m) => m[1]);
+    assert.ok(refs.length > 0, `${tool} maps Event Data`);
+    for (const r of refs) assert.ok(have.has(r), `${tool}: {{${r}}} would dangle`);
+    // A second tag in the same container creates no variable again.
+    const before = client.calls.filter((c) => c.kind === 'variable').length;
+    const res2 = json(await callValidated(s, tool, { ...WS, ...args, name: 'Second', firingTriggerId: ['6'], confirm: true }));
+    assert.deepEqual(res2.variables.created, [], `${tool}: idempotent`);
+    assert.equal(client.calls.filter((c) => c.kind === 'variable').length, before);
+  }
+  // Dry run names the variables it would ensure, and writes nothing.
+  const dryClient = stubClient();
+  const prevDry = process.env.DRY_RUN;
+  process.env.DRY_RUN = 'true';
+  try {
+    const dry = json(await callValidated(serverWith(dryClient), 'create_meta_capi_server_tag', { ...WS, pixelId: '1', accessToken: 'T', event: 'Purchase', confirm: true }));
+    assert.equal(dry.dryRun, true);
+    assert.ok(dry.wouldEnsureVariables.includes('ed - email_address'));
+    assert.equal(dryClient.calls.length, 0);
+  } finally {
+    if (prevDry === undefined) delete process.env.DRY_RUN; else process.env.DRY_RUN = prevDry;
+  }
+});
+
+await test('a CAPI tag create that fails after the template import says the template is already in the workspace', async () => {
+  const client = stubClient();
+  client.accounts.containers.workspaces.tags.create = async () => { throw new Error('Unknown variable reference'); };
+  const res = await callValidated(serverWith(client), 'create_tiktok_capi_server_tag', { ...WS, pixelId: 'C1', accessToken: 'T', event: 'purchase', confirm: true });
+  assert.equal(res.isError, true);
+  assert.ok(/Unknown variable reference/.test(text(res)), text(res));
+  assert.ok(/stape-io\/tiktok-tag is already imported into the workspace as cvt_IMP9/.test(text(res)), text(res));
 });
 
 await test('create_server_tag: GA4 relay + Ads conversion shapes; per-platform validation', async () => {
