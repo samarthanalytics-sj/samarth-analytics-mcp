@@ -245,6 +245,39 @@ const CAPI_TOOL: Record<Exclude<CoveragePlatform, 'ga4'>, string> = {
   voluum: 'import_gallery_template (stape-io/voluum-tag) + create_tag',
 };
 
+/** A web Google tag's server_container_url as far as config can resolve it: the tag's own
+ *  configSettingsTable row, else the row of the Google Tag: Configuration Settings (gtcs) variable
+ *  it references, with a whole-value {{Constant}} replaced by its literal. A value that still holds
+ *  a {{variable}} could not be resolved statically; '' means no URL is set. PURE. */
+export function webServerUrlResolver(variables: ContainerSnapshot['variables']): (t: AuditTag) => string {
+  const constants = new Map<string, string>();
+  const gtcs = new Map<string, ContainerSnapshot['variables'][number]>();
+  for (const v of variables) {
+    const type = (v.type ?? '').toLowerCase();
+    const key = (v.name ?? '').trim().toLowerCase();
+    if (type === 'c') {
+      const val = String((v.parameter ?? []).find((p) => p.key === 'value')?.value ?? '').trim();
+      if (val) constants.set(key, val);
+    } else if (type === 'gtcs') {
+      gtcs.set(key, v);
+    }
+  }
+  const refName = (s: string): string | null => {
+    const m = s.trim().match(/^\{\{([^}]+)\}\}$/);
+    return m ? m[1].trim().toLowerCase() : null;
+  };
+  return (t: AuditTag): string => {
+    let raw = googleTagConfigValue(t as unknown as Record<string, unknown>, 'server_container_url').trim();
+    if (!raw) {
+      const name = refName(serverTagParam(t, 'configSettingsVariable'));
+      const v = name ? gtcs.get(name) : undefined;
+      if (v) raw = googleTagConfigValue(v as unknown as Record<string, unknown>, 'server_container_url').trim();
+    }
+    const c = refName(raw);
+    return c ? (constants.get(c) ?? raw) : raw;
+  };
+}
+
 /** Configuration subscore from audit severity counts - the STATED formula (100 - 25/critical -
  *  10/high - 3/medium - 1/low, floored at 0). Shared with the documentation header. PURE. */
 export function configurationScore(sm: { critical: number; high: number; medium: number; low: number }): number {
@@ -349,8 +382,9 @@ export function buildServerCoverage(
   const serverIds = inheritingRelay ? [...new Set([...explicitServerIds, ...webIds])] : explicitServerIds;
   const idsMatch = webIds.length && serverIds.length ? webIds.some((id) => serverIds.includes(id)) : null;
 
+  const serverUrlOf = webServerUrlResolver(web.variables);
   const googleTag = web.tags.find((t) => (t.type === 'googtag' || t.type === 'gaawc') && !t.paused);
-  const webUrl = googleTag ? googleTagConfigValue(googleTag as unknown as Record<string, unknown>, 'server_container_url').trim() : '';
+  const webUrl = googleTag ? serverUrlOf(googleTag) : '';
   const host = (u: string): string => {
     try { return new URL(u).hostname.toLowerCase(); } catch { return ''; }
   };
@@ -364,7 +398,10 @@ export function buildServerCoverage(
           ? 'unknown'
           : serverUrls.some((u) => host(u) && host(u) === host(webUrl))
             ? 'wired'
-            : 'url_mismatch',
+            // A URL still held in a {{variable}} (Lookup table, JS) cannot be compared from config.
+            : /\{\{[^}]+\}\}/.test(webUrl)
+              ? 'unknown'
+              : 'url_mismatch',
     webUrl,
     serverUrls,
   };
@@ -395,7 +432,7 @@ export function buildServerCoverage(
     const raw = t.type === 'googtag' ? serverTagParam(t, 'tagId') : serverTagParam(t, 'measurementId');
     const id = raw.trim();
     if (!id || id.includes('{{') || !/^G-/i.test(id)) continue;
-    const wired = googleTagConfigValue(t as unknown as Record<string, unknown>, 'server_container_url').trim() !== '';
+    const wired = serverUrlOf(t) !== '';
     const list = byMeasurementId.get(id) ?? [];
     list.push({ name: t.name, wired });
     byMeasurementId.set(id, list);

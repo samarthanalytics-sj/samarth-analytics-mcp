@@ -21,8 +21,8 @@
 // configs) are carried through as findings too. PURE.
 
 import type { AuditFinding, AuditReport, AuditTag, ContainerSnapshot, ServerContainerSnapshot } from './gtm-builders';
-import { googleTagConfigValue, serverTagParam } from './gtm-builders';
-import { buildServerCoverage } from './server-coverage';
+import { serverTagParam } from './gtm-builders';
+import { buildServerCoverage, webServerUrlResolver } from './server-coverage';
 
 const GA4_ID = /G-[A-Z0-9]{4,}/i;
 
@@ -57,23 +57,27 @@ export interface WebPair {
 export function pairedWebContainers(server: ServerContainerSnapshot, webs: readonly WebPair[]): WebPair[] {
   const hosts = new Set((server.taggingServerUrls ?? []).map(hostOf).filter(Boolean));
   if (hosts.size === 0) return [];
-  return webs.filter((w) => w.snapshot.tags.some((t) =>
-    (t.type === 'googtag' || t.type === 'gaawc') && !t.paused &&
-    hosts.has(hostOf(googleTagConfigValue(t as unknown as Record<string, unknown>, 'server_container_url').trim()))));
+  return webs.filter((w) => webGoogleTags(w).some((g) => hosts.has(g.wiredHost)));
 }
 
-interface WebGoogleTag { tag: AuditTag; id: string | null; wiredHost: string; container: string }
+/** wiredUrl: the server_container_url after Constant / Configuration Settings variable resolution
+ *  ('' = none set, so the tag sends direct). wiredHost: its host, '' when it cannot be parsed, e.g. a
+ *  URL held in a Lookup or JS variable, which is neither provably direct nor provably ours. */
+interface WebGoogleTag { tag: AuditTag; id: string | null; wiredUrl: string; wiredHost: string; container: string }
 
 function webGoogleTags(w: WebPair): WebGoogleTag[] {
   const resolve = constantResolver(w.snapshot.variables);
+  const serverUrlOf = webServerUrlResolver(w.snapshot.variables);
   return w.snapshot.tags
     .filter((t) => (t.type === 'googtag' || t.type === 'gaawc') && !t.paused)
     .map((t) => {
       const raw = String(t.parameter.find((p) => (p.key === 'tagId' || p.key === 'tag_id' || p.key === 'measurementId') && p.value)?.value ?? '');
+      const url = serverUrlOf(t);
       return {
         tag: t,
         id: literalId(resolve(raw)),
-        wiredHost: hostOf(googleTagConfigValue(t as unknown as Record<string, unknown>, 'server_container_url').trim()),
+        wiredUrl: url,
+        wiredHost: hostOf(url),
         container: w.name,
       };
     });
@@ -125,7 +129,7 @@ export function pairDriftFindings(
 
   // 2. The server would forward it, but the web tag sends direct: the relay is idle.
   for (const g of allTags) {
-    if (!g.id || !forwarded.has(g.id) || g.wiredHost) continue;
+    if (!g.id || !forwarded.has(g.id) || g.wiredUrl) continue;
     out.push({
       severity: 'high',
       confidence: 'certain',

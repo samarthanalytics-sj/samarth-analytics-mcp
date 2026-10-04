@@ -88,6 +88,31 @@ test('Constant-backed ids match on both sides', () => {
   assert.deepEqual(pairDriftFindings(srv, [w], SUMMARY), [], 'both sides resolve to G-AUAUAU1');
 });
 
+test('a server URL held in a Constant or a Configuration Settings (gtcs) variable is resolved, so the tag is wired and paired', () => {
+  const urlConst = { variableId: 'v1', name: 'sGTM URL', type: 'c', parameter: [{ key: 'value', value: HOST }] };
+  const viaConst: WebPair = { containerId: 'w', name: 'web', snapshot: {
+    tags: [googleTag('t1', 'AUS GA4', 'G-AUAUAU1', '{{sGTM URL}}')], triggers: [], variables: [urlConst],
+  } };
+  assert.equal(pairedWebContainers(server(), [viaConst]).length, 1, 'Constant-wired container is paired');
+  assert.deepEqual(pairDriftFindings(server(), [viaConst], SUMMARY), [], 'not reported as sending direct');
+  const pausedRelay = pairDriftFindings(server({ tags: [relay('s1', 'AU relay', 'G-AUAUAU1', true)] }), [viaConst], SUMMARY);
+  assert.deepEqual(ids(pausedRelay), ['pair_wired_but_unforwarded'], 'a relay paused under it is still caught');
+
+  const gtcsTag = { ...googleTag('t1', 'AUS GA4', 'G-AUAUAU1'), parameter: [
+    { type: 'template', key: 'tagId', value: 'G-AUAUAU1' }, { type: 'template', key: 'configSettingsVariable', value: '{{GT Settings}}' },
+  ] } as unknown as AuditTag;
+  const viaGtcs: WebPair = { containerId: 'w', name: 'web', snapshot: {
+    tags: [gtcsTag], triggers: [], variables: [{ variableId: 'v2', name: 'GT Settings', type: 'gtcs', parameter: [wired('{{sGTM URL}}')] }, urlConst],
+  } };
+  assert.equal(pairedWebContainers(server(), [viaGtcs]).length, 1, 'gtcs-wired container is paired');
+  assert.deepEqual(pairDriftFindings(server(), [viaGtcs], SUMMARY), []);
+});
+
+test('a server URL in a variable that cannot be resolved is not "sends direct"', () => {
+  const fs = pairDriftFindings(server(), [web([googleTag('t1', 'AUS GA4', 'G-AUAUAU1', '{{Lookup - sGTM URL}}')])], SUMMARY);
+  assert.deepEqual(fs, [], 'no pair_relay_without_wiring, and no blackhole claim either');
+});
+
 test('pairing is by tagging host; a web tag pointing at a DIFFERENT host is not this server\'s pair', () => {
   const other = web([googleTag('t1', 'AUS GA4', 'G-AUAUAU1', 'https://elsewhere.example.com')]);
   assert.deepEqual(pairedWebContainers(server(), [other]), []);
