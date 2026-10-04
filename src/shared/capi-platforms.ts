@@ -101,6 +101,8 @@ export const CAPI_PLATFORMS: readonly CapiPlatformSpec[] = [
   {
     platform: 'snapchat', label: 'Snapchat CAPI', gallery: ['Snapchat', 'capi-google-tag-manager-serverside-tag'],
     nameRe: /snap(chat)?\b/i, bodyRe: /snaptr\(|sc-static\.net/i,
+    // Snap's userDataParameters + event_id reuse the Meta `ed - ` variables (SNAP_USER_DATA_MAP).
+    emqVariables: 'meta',
     fields: [{ key: 'pixelId', label: 'Snapchat Pixel ID' }, { key: 'accessToken', label: 'Snapchat API access token', secret: true }],
     build: (t, n, c, x) => buildSnapchatCapiServerTag(t, n, c.pixelId, c.accessToken, x.event, { firingTriggerId: x.firingTriggerId }),
   },

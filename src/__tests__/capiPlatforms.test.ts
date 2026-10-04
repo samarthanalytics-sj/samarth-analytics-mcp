@@ -11,6 +11,7 @@ import assert from 'assert';
 import {
   CAPI_PLATFORMS, capiPlatform, capiValueKeys, capiCredentials, webPixelPlatform,
 } from '../shared/capi-platforms';
+import { buildMetaEmqVariables, buildTikTokEmqVariables } from '../shared/server-migration';
 
 let passed = 0, failed = 0;
 function test(name: string, fn: () => void): void {
@@ -88,6 +89,24 @@ test('every platform builds a real tag from its declared fields', () => {
       assert.ok(blob.includes(expected), `${p.platform}: ${f.key} never reaches the built tag`);
     }
   }
+});
+
+test('every {{ed - }} / {{rh - }} variable a built tag references is provisioned by its own spec', () => {
+  // A tag referencing a variable the container lacks hard-fails on create, so a spec whose builder emits
+  // such references must provision them (emqVariables) - Snapchat reuses the Meta set.
+  const provided: Record<string, Set<string>> = {
+    meta: new Set(buildMetaEmqVariables().map((v) => v.name)),
+    tiktok: new Set(buildTikTokEmqVariables().map((v) => v.name)),
+  };
+  for (const p of CAPI_PLATFORMS) {
+    const creds = Object.fromEntries(p.fields.map((f) => [f.key, `v_${f.key}`]));
+    const blob = JSON.stringify(p.build('cvt_1', 'n', creds, { event: 'purchase', firingTriggerId: ['7'] }));
+    const refs = [...blob.matchAll(/\{\{((?:ed|rh) - [^}]+)\}\}/g)].map((m) => m[1]);
+    if (!refs.length) continue;
+    assert.ok(p.emqVariables, `${p.platform} references ${refs[0]} but provisions no variables`);
+    for (const r of refs) assert.ok(provided[p.emqVariables!].has(r), `${p.platform}: {{${r}}} is not created by the ${p.emqVariables} variable set`);
+  }
+  assert.equal(capiPlatform('snapchat')?.emqVariables, 'meta');
 });
 
 test('web pixels resolve to their platform, and GA4 tags never do', () => {
