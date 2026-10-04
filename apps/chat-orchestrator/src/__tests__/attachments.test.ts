@@ -13,6 +13,7 @@ import {
   extractAttachment,
   attachmentPrompt,
   htmlTablesToText,
+  isAttachmentInput,
   MAX_ATTACHMENT_CHARS,
 } from '../attachments.js';
 
@@ -90,6 +91,31 @@ test('files past the per-message cap are reported, never silently dropped', asyn
   assert.equal(ok.length, 5);
   assert.equal(rejected.length, 2);
   assert.ok(rejected.every((r) => /Only 5 attachments/.test(r.reason)));
+});
+
+test('a null or malformed entry is reported, never thrown out of the batch', async () => {
+  // A null used to throw in extractAttachment and again in extractAll's own catch, escaping the
+  // Express handler as an unhandled rejection, which exits the whole process.
+  const bad = [null, 7, { name: 'x.txt' }] as unknown as { name: string; dataBase64: string }[];
+  const { ok, rejected } = await extractAll([...bad, { name: 'a.txt', dataBase64: b64('kept') }]);
+  assert.equal(ok.length, 1, 'the good file survives');
+  assert.equal(rejected.length, 3);
+  assert.ok(rejected.every((r) => typeof r.name === 'string' && r.reason.length > 0));
+
+  // Past the per-message cap too, where the entry was dereferenced without any try at all.
+  const many = [
+    ...Array.from({ length: 5 }, (_, i) => ({ name: `f${i}.txt`, dataBase64: b64('x') })),
+    null,
+  ] as unknown as { name: string; dataBase64: string }[];
+  const capped = await extractAll(many);
+  assert.equal(capped.rejected.length, 1);
+});
+
+test('the request boundary check accepts only a named, base64-carrying object', () => {
+  assert.equal(isAttachmentInput({ name: 'a.txt', dataBase64: b64('x') }), true);
+  for (const bad of [null, undefined, 7, 'a.txt', { name: 'a.txt' }, { dataBase64: 'eA==' }, { name: 1, dataBase64: 'eA==' }]) {
+    assert.equal(isAttachmentInput(bad), false, `${JSON.stringify(bad)} was accepted`);
+  }
 });
 
 test('the prompt block frames attachments as reference, not as instructions', async () => {

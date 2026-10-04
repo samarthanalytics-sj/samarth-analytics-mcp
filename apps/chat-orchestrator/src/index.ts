@@ -25,7 +25,7 @@ import { deadline, DeadlineError } from './deadline.js';
 import { installTimestampedLogging } from './log-time.js';
 import { scopeTools } from './tools.js';
 import { checkAllowlistAgainstServer } from './integrations.js';
-import { extractAll, type ExtractedAttachment } from './attachments.js';
+import { extractAll, isAttachmentInput, type ExtractedAttachment } from './attachments.js';
 import { MemoryStore } from './memory.js';
 import { isSuperAdmin, tailLog, MAX_LINES } from './logs.js';
 import {
@@ -1874,6 +1874,14 @@ async function main(): Promise<void> {
       return res.status(400).json({
         code: 'bad_request',
         message: 'Every message needs a string content.',
+      });
+    }
+    // The same for attachments, for the same reason: a null entry threw out of extractAll below,
+    // outside the turn's try, after a session had been acquired and with nothing to release it.
+    if (Array.isArray(body.attachments) && !body.attachments.every(isAttachmentInput)) {
+      return res.status(400).json({
+        code: 'bad_request',
+        message: 'Every attachment needs a string name and dataBase64.',
       });
     }
     const product: Product = body.context?.product === 'ga4' ? 'ga4' : 'gtm';
