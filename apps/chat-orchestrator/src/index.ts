@@ -1101,7 +1101,7 @@ async function main(): Promise<void> {
     } catch (err) {
       if (err instanceof DeadlineError) {
         void acquiring.then(
-          () => pool.release(user.id),
+          (late) => pool.release(user.id, late),
           // The acquire failing after the deadline is already answered; the catch is only here so
           // its rejection is attached and cannot become an unhandled rejection.
           () => undefined,
@@ -1152,7 +1152,7 @@ async function main(): Promise<void> {
         message: err instanceof Error ? err.message : 'Could not complete that request.',
       });
     } finally {
-      pool.release(user.id);
+      pool.release(user.id, mcp);
     }
   }
 
@@ -1944,7 +1944,7 @@ async function main(): Promise<void> {
         // early return never reaches. Without this, one unreadable attachment pinned that user's
         // child as in use for the life of the process: never idle-evicted, still counted busy by
         // the capacity check, and one pool slot gone for good.
-        pool.release(user.id);
+        pool.release(user.id, userMcp);
         return res.status(400).json({
           error: 'attachments_unreadable',
           message: rejected.map((r) => r.reason).join(' '),
@@ -2015,6 +2015,10 @@ async function main(): Promise<void> {
       trigger: 'User request',
     });
 
+    // Every connection this turn holds a use of: the one acquired above, plus any replacement an
+    // auth refresh mints mid-turn. Each is released exactly once, in the finally below.
+    const held: McpConnection[] = [userMcp];
+
     try {
       await runTurn({
         cfg,
@@ -2031,7 +2035,11 @@ async function main(): Promise<void> {
         // token. Without one, the retry replaces the MCP's own actionable message ("run
         // npm run auth:google") with a confusing one about refresh being unavailable.
         onAuthFailure: tokenProvider
-          ? () => pool.refreshIdentity(user.id, userJwt)
+          ? async () => {
+              const fresh = await pool.refreshIdentity(user.id, userJwt);
+              held.push(fresh);
+              return fresh;
+            }
           : undefined,
         approvals: approvals ?? undefined,
         memory,
@@ -2088,7 +2096,7 @@ async function main(): Promise<void> {
       });
       stream.send({ type: 'done', reason: 'aborted' });
     } finally {
-      pool.release(user.id);
+      for (const connection of held) pool.release(user.id, connection);
       stream.close();
     }
   });

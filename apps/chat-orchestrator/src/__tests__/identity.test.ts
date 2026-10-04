@@ -7,10 +7,12 @@
  */
 import assert from 'node:assert/strict';
 import { McpConnection } from '../mcp-client.js';
+import { McpPool } from '../mcp-pool.js';
 import {
   GoogleIdentityError,
   isGoogleAuthFailure,
   SupabaseTokenProvider,
+  type GoogleTokenProvider,
 } from '../google-identity.js';
 import type { OrchestratorConfig } from '../config.js';
 
@@ -262,6 +264,85 @@ await testAsync('a write-back failure does not lose the freshly minted token', a
   };
   const identity = await providerWith(fake).refresh('u', 'jwt');
   assert.equal(identity.accessToken, 'ya29.new');
+});
+
+console.log('pool: replacing a child under a running turn');
+
+/**
+ * A pool whose children are never spawned. connect/close are swapped on the prototype for the
+ * duration of `fn`, and every close is recorded, which is the thing under test.
+ */
+async function withStubbedChildren(fn: (closed: McpConnection[]) => Promise<void>): Promise<void> {
+  const proto = McpConnection.prototype as unknown as { connect(): Promise<void>; close(): Promise<void> };
+  const { connect, close } = proto;
+  const closed: McpConnection[] = [];
+  proto.connect = async () => {};
+  proto.close = async function (this: McpConnection) {
+    closed.push(this);
+  };
+  try {
+    await fn(closed);
+  } finally {
+    proto.connect = connect;
+    proto.close = close;
+  }
+}
+
+function poolWithTokens(): { pool: McpPool; setToken(t: string): void } {
+  let current = 'ya29.first';
+  const tokens: GoogleTokenProvider = {
+    getIdentity: async () => ({ accessToken: current }),
+    refresh: async () => {
+      current = `${current}.refreshed`;
+      return { accessToken: current };
+    },
+  };
+  const cfg = { pool: { maxSessions: 5, idleTtlMs: 60_000 }, mcp: { env: {} } } as unknown as OrchestratorConfig;
+  return { pool: new McpPool(cfg, tokens), setToken: (t) => (current = t) };
+}
+
+await testAsync('a token change does not close the child another turn is still using', async () => {
+  await withStubbedChildren(async (closed) => {
+    const { pool, setToken } = poolWithTokens();
+    const turnA = await pool.acquire('u', 'jwt');
+    // A second request arrives with a new token (a near-expiry refresh, say) while A is running.
+    setToken('ya29.second');
+    const turnB = await pool.acquire('u', 'jwt');
+    assert.notEqual(turnA, turnB, 'a new token means a new child');
+    assert.equal(closed.includes(turnA), false, 'turn A had its child closed mid-turn');
+
+    // A finishing must release ITS child, not B's replacement.
+    pool.release('u', turnA);
+    assert.ok(closed.includes(turnA), 'the replaced child is closed once its last turn is done');
+    assert.equal(closed.includes(turnB), false);
+    assert.deepEqual(pool.stats(), { sessions: 1, busy: 1 }, 'B is still running and must count as busy');
+
+    pool.release('u', turnB);
+    assert.deepEqual(pool.stats(), { sessions: 1, busy: 0 });
+  });
+});
+
+await testAsync('an identity refresh in one turn leaves the other turn its child', async () => {
+  await withStubbedChildren(async (closed) => {
+    const { pool } = poolWithTokens();
+    const turnA = await pool.acquire('u', 'jwt');
+    const turnB = await pool.acquire('u', 'jwt');
+    assert.equal(turnA, turnB, 'same token, shared child');
+
+    // Google rejects A's token mid-turn; A refreshes and carries on with the replacement.
+    const refreshed = await pool.refreshIdentity('u', 'jwt');
+    assert.equal(closed.includes(turnB), false, 'B was cut off by A refreshing');
+
+    pool.release('u', turnA);
+    pool.release('u', refreshed);
+    assert.equal(closed.includes(turnB), false, 'B still holds the old child');
+    assert.deepEqual(pool.stats(), { sessions: 2, busy: 1 });
+
+    pool.release('u', turnB);
+    assert.ok(closed.includes(turnB));
+    assert.equal(closed.includes(refreshed), false, 'the replacement stays pooled for the next turn');
+    assert.deepEqual(pool.stats(), { sessions: 1, busy: 0 });
+  });
 });
 
 console.log(`\n${passed} assertions passed`);
