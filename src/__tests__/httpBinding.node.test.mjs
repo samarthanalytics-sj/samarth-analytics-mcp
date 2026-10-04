@@ -22,8 +22,16 @@ if (!existsSync(distPath)) {
   console.error(`\n✗ httpBinding test: ${distPath} not found. Run "npm run build" first.`);
   process.exit(1);
 }
-const { resolveHttpBinding, resolveHttpPort, DEFAULT_HTTP_PORT, bindingBanner, LOOPBACK, ALL_INTERFACES } =
-  await import(pathToFileURL(distPath).href);
+const {
+  resolveHttpBinding,
+  resolveHttpPort,
+  DEFAULT_HTTP_PORT,
+  bindingBanner,
+  needsRebindingGuard,
+  rebindingRejection,
+  LOOPBACK,
+  ALL_INTERFACES,
+} = await import(pathToFileURL(distPath).href);
 
 let passed = 0;
 let failed = 0;
@@ -179,6 +187,81 @@ await test('index.ts takes its port from resolveHttpPort, not a raw parseInt', (
   const indexSrc = readFileSync(path.resolve(here, '../index.ts'), 'utf-8');
   assert.match(indexSrc, /resolveHttpPort\(process\.env\)/);
   assert.ok(!/parseInt\(\s*process\.env\.GTM_MCP_HTTP_PORT/.test(indexSrc), 'the NaN-prone parseInt is back');
+});
+
+// ── DNS rebinding ─────────────────────────────────────────────────────────────
+// The unauthenticated loopback server had no Host/Origin check, so a hostile page that re-pointed
+// its own DNS name at 127.0.0.1 could drive /mcp from the operator's browser.
+console.log('\nDNS rebinding guard:');
+
+await test('REGRESSION: the unauthenticated loopback server is guarded', () => {
+  for (const h of [LOOPBACK, '::1', 'localhost']) {
+    const b = resolveHttpBinding({ GTM_MCP_HTTP_ALLOW_UNAUTHENTICATED: 'true', GTM_MCP_HTTP_HOST: h });
+    assert.strictEqual(needsRebindingGuard(b), true, h);
+  }
+  assert.strictEqual(
+    needsRebindingGuard(resolveHttpBinding({ GTM_MCP_HTTP_ALLOW_UNAUTHENTICATED: 'true' })),
+    true,
+    'the default opt-in binding'
+  );
+});
+
+await test('authenticated servers and the twice-opted-in public host are not guarded', () => {
+  assert.strictEqual(needsRebindingGuard(resolveHttpBinding({ GTM_MCP_HTTP_AUTH_TOKEN: 's' })), false);
+  assert.strictEqual(needsRebindingGuard(resolveHttpBinding({ STYTCH_PROJECT_ID: 'p' })), false);
+  assert.strictEqual(
+    needsRebindingGuard(
+      resolveHttpBinding({ GTM_MCP_HTTP_AUTH_TOKEN: 's', GTM_MCP_HTTP_HOST: LOOPBACK })
+    ),
+    false,
+    'a token-gated loopback server does not need it'
+  );
+  assert.strictEqual(
+    needsRebindingGuard(
+      resolveHttpBinding({ GTM_MCP_HTTP_ALLOW_UNAUTHENTICATED: 'true', GTM_MCP_HTTP_HOST: ALL_INTERFACES })
+    ),
+    false,
+    'behind an auth proxy the Host header is not predictable'
+  );
+});
+
+await test('loopback Host headers pass, with or without a port', () => {
+  for (const h of ['127.0.0.1:3001', 'localhost:3001', '[::1]:3001', 'localhost', '127.0.0.1', 'LOCALHOST:3001']) {
+    assert.strictEqual(rebindingRejection(h, undefined), undefined, h);
+  }
+});
+
+await test('REGRESSION: a rebound Host header is rejected', () => {
+  for (const h of ['evil.example:3001', 'evil.example', '127.0.0.1.nip.io:3001', '10.0.0.5:3001']) {
+    assert.match(rebindingRejection(h, undefined) ?? '', /Invalid Host/, h);
+  }
+  assert.match(rebindingRejection(undefined, undefined) ?? '', /Missing Host/);
+  assert.ok(rebindingRejection('', undefined));
+});
+
+await test('a loopback browser Origin passes; no Origin (non-browser client) passes', () => {
+  assert.strictEqual(rebindingRejection('127.0.0.1:3001', 'http://localhost:5173'), undefined);
+  assert.strictEqual(rebindingRejection('127.0.0.1:3001', 'http://127.0.0.1:3001'), undefined);
+  assert.strictEqual(rebindingRejection('[::1]:3001', 'http://[::1]:3001'), undefined);
+  assert.strictEqual(rebindingRejection('127.0.0.1:3001', undefined), undefined);
+});
+
+await test('REGRESSION: a foreign or opaque Origin is rejected even with a loopback Host', () => {
+  for (const o of ['https://evil.example', 'http://evil.example:3001', 'null', 'file:///tmp/x.html', 'not a url']) {
+    assert.match(rebindingRejection('127.0.0.1:3001', o) ?? '', /Invalid Origin/, o);
+  }
+});
+
+await test('index.ts installs the guard as middleware ahead of the /mcp routes', () => {
+  const indexSrc = readFileSync(path.resolve(here, '../index.ts'), 'utf-8');
+  const guard = indexSrc.indexOf('needsRebindingGuard(binding)');
+  assert.ok(guard >= 0, 'the guard is not wired');
+  assert.match(indexSrc.slice(guard, guard + 400), /app\.use\(/);
+  assert.match(indexSrc.slice(guard, guard + 400), /rebindingRejection\(req\.headers\.host, req\.headers\.origin\)/);
+  for (const route of ["app.post('/mcp'", "app.get('/mcp'", "app.delete('/mcp'"]) {
+    const at = indexSrc.indexOf(route);
+    assert.ok(at > guard, `${route} must be registered after the guard`);
+  }
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

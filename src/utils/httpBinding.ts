@@ -97,6 +97,55 @@ export function resolveHttpBinding(env: NodeJS.ProcessEnv = process.env): HttpBi
   return { host, authMode };
 }
 
+/** Loopback names as the WHATWG URL parser reports a hostname (no port; IPv6 in brackets). */
+const LOOPBACK_HOSTNAMES = ['localhost', '127.0.0.1', '[::1]'];
+
+/**
+ * Whether requests need a DNS-rebinding guard: the unauthenticated server bound to loopback.
+ *
+ * Binding loopback stops other machines from connecting, but not a web page in the operator's own
+ * browser: a hostile site can re-point its own DNS name at 127.0.0.1, after which the browser treats
+ * requests to that name as same-origin and the open /mcp hands over this server's Google credentials.
+ * Authenticated servers are not exposed (the page cannot obtain the bearer token), and an operator who
+ * opted in twice to an unauthenticated NON-loopback host is fronting it with a proxy whose Host
+ * header we cannot predict, so both are left alone.
+ */
+export function needsRebindingGuard(b: HttpBinding): boolean {
+  return b.authMode === 'none' && (b.host === LOOPBACK || b.host === '::1' || b.host === 'localhost');
+}
+
+/**
+ * The DNS-rebinding check: the Host header must name loopback, and a browser Origin, when present,
+ * must be a loopback origin too. Returns the rejection reason, or undefined when the request may
+ * proceed. Non-browser MCP clients send no Origin, so they are unaffected.
+ */
+export function rebindingRejection(
+  hostHeader: string | undefined,
+  originHeader: string | undefined
+): string | undefined {
+  if (!hostHeader) return 'Missing Host header';
+  let hostname: string;
+  try {
+    hostname = new URL(`http://${hostHeader}`).hostname;
+  } catch {
+    return `Invalid Host header: ${hostHeader}`;
+  }
+  if (!LOOPBACK_HOSTNAMES.includes(hostname)) return `Invalid Host: ${hostname}`;
+  if (originHeader !== undefined) {
+    let origin: URL;
+    try {
+      origin = new URL(originHeader);
+    } catch {
+      return `Invalid Origin: ${originHeader}`;
+    }
+    const webScheme = origin.protocol === 'http:' || origin.protocol === 'https:';
+    if (!webScheme || !LOOPBACK_HOSTNAMES.includes(origin.hostname)) {
+      return `Invalid Origin: ${originHeader}`;
+    }
+  }
+  return undefined;
+}
+
 export const DEFAULT_HTTP_PORT = 3001;
 
 export interface HttpPort {

@@ -25,7 +25,13 @@ import {
   deriveApiBase,
   GoogleScopeError,
 } from './auth/googleIdentityResolver.js';
-import { resolveHttpBinding, resolveHttpPort, bindingBanner } from './utils/httpBinding.js';
+import {
+  resolveHttpBinding,
+  resolveHttpPort,
+  bindingBanner,
+  needsRebindingGuard,
+  rebindingRejection,
+} from './utils/httpBinding.js';
 import { getGuardrailConfig } from './utils/guardrails.js';
 import { guardrailBanner, guardrailStatus } from './utils/guardrailMode.js';
 import { decidePostRoute, UNKNOWN_SESSION_MESSAGE } from './utils/mcpSession.js';
@@ -123,6 +129,18 @@ async function startHttpServer(auth: OAuth2Client): Promise<void> {
   }
   if (binding.warning) {
     console.error(`[samarth-gtm-mcp] WARNING: ${binding.warning}`);
+  }
+  // DNS-rebinding guard for the unauthenticated loopback server (see needsRebindingGuard). Registered
+  // before every route so POST, GET and DELETE /mcp are all covered.
+  if (needsRebindingGuard(binding)) {
+    app.use((req, res, next) => {
+      const reason = rebindingRejection(req.headers.host, req.headers.origin);
+      if (reason) {
+        res.status(403).json({ jsonrpc: '2.0', error: { code: -32000, message: reason }, id: null });
+        return;
+      }
+      next();
+    });
   }
   if (!multiUser && !staticToken) {
     console.error(
