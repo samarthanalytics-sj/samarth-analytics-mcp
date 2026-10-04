@@ -28,6 +28,14 @@ check('datadome', botBlockReason(403, { 'x-datadome': 'protected' }) === 'blocke
 check('perimeterx cookie', botBlockReason(403, { 'set-cookie': '_px3=abc' }) === 'blocked by PerimeterX bot protection');
 check('aws waf', botBlockReason(403, { 'x-amzn-waf-action': 'challenge' }) === 'blocked by AWS WAF');
 
+// A 503 behind a CDN is usually maintenance mode or a down origin; the CDN's presence headers are on
+// every response, so only a decisive challenge marker makes it a block (was: "blocked by …").
+check('cloudflare 503 with only cf-ray / server → null (origin error, stays "http 503")', botBlockReason(503, { server: 'cloudflare', 'cf-ray': 'x' }) === null);
+check('akamai 503 (AkamaiGHost + bm_sz) → null', botBlockReason(503, { server: 'AkamaiGHost', 'set-cookie': 'bm_sz=1; Path=/' }) === null);
+check('503 with only x-akamai-* / x-iinfo / _px → null', botBlockReason(503, { 'X-Akamai-Transformed': '9', 'X-Iinfo': '1-2-3', 'set-cookie': '_px3=abc' }) === null);
+check('503 with cf-mitigated is still a Cloudflare challenge', botBlockReason(503, { 'cf-mitigated': 'challenge' }) === 'blocked by Cloudflare bot challenge');
+check('503 with x-amzn-waf-action is still an AWS WAF block', botBlockReason(503, { 'x-amzn-waf-action': 'block' }) === 'blocked by AWS WAF');
+
 check('a plain 404 is not a block', botBlockReason(404, iff) === null);
 check('a 200 is never a block', botBlockReason(200, iff) === null);
 check('a 401 is auth, not a bot check', botBlockReason(401, iff) === null);
