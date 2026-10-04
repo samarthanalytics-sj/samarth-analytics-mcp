@@ -1,3 +1,14 @@
+## [1.497.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.497.1...v1.497.2) (2026-10-04)
+
+### Bug Fixes
+
+* **deps-chat-orchestrator:** patch transitive xmldom, brace-expansion, hono, qs, ip-address, fast-uri and uuid advisories ([ab6556a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/ab6556a6c2b7e46f3bc27204b742e70fb50e7051))
+* **deps-desktop:** upgrade Electron to 42 and patch transitive advisories ([6e66ad1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/6e66ad151773170d53d793839ea24ae93bb5bba2))
+* **deps-mcp-authorize:** override uuid to 11.1.1 under @stytch/core ([87eac04](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/87eac04d4ac9d9d333ce4cc53585eb9783bf6522))
+* **deps-portal:** patch qs, browserslist, baseline-browser-mapping, postcss-selector-parser and esbuild ([881967c](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/881967cc20ea38b8bc1d1a422672a94190235ab2))
+* **deps-web-audit:** patch hono, qs, fast-uri and ip-address advisories ([d1fe777](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d1fe777d1f0bcc9601757cfda022ebce4dce373a))
+* **deps:** patch root lockfile advisories (qs, hono, fast-uri, ip-address, undici, uuid, ...) ([2ef7388](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/2ef7388ad1971fa8a603eaa2dd4b83292dcc7b84))
+
 ## [1.497.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.497.0...v1.497.1) (2026-10-04)
 
 ### Bug Fixes
