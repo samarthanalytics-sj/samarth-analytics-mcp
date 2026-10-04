@@ -532,6 +532,91 @@ testAsync("R-parity B: with a runtime capture, engine snippets are evidence rows
   }
 });
 
+// ── GTM CONFIG ↔ GA4 Admin: unregistered event parameters ───────────────────
+
+const GA4_PARAMS_WEB: FixtureLike = {
+  containerPublicId: "GTM-ZZZZZZZ",
+  usageContext: ["web"],
+  config: {
+    tags: [
+      {
+        tagId: "1",
+        name: "GA4 - sign_up",
+        type: "gaawe",
+        firingTriggerId: ["2147479553"],
+        parameter: [
+          { type: "template", key: "eventName", value: "sign_up" },
+          {
+            type: "list",
+            key: "eventParameters",
+            list: [
+              { type: "map", map: [{ type: "template", key: "name", value: "plan_tier" }, { type: "template", key: "value", value: "pro" }] },
+              { type: "map", map: [{ type: "template", key: "name", value: "seat_count" }, { type: "template", key: "value", value: "3" }] },
+            ],
+          },
+        ],
+      },
+    ],
+    triggers: [],
+    variables: [],
+  },
+};
+
+const OK_DIMS: StubResponse = { status: 200, body: { customDimensions: [{ parameterName: "plan_tier" }] } };
+const OK_METRICS: StubResponse = { status: 200, body: { customMetrics: [{ parameterName: "seat_count" }] } };
+const FAILED_READ: StubResponse = { status: 500, body: { error: { message: "backend error" } } };
+
+function ga4AdminRoutes(lists: { dimensions: StubResponse; metrics: StubResponse }) {
+  return (url: URL): StubResponse | undefined => {
+    if (url.hostname !== "analyticsadmin.googleapis.com") return undefined;
+    const p = url.pathname;
+    if (p.endsWith("/customDimensions")) return lists.dimensions;
+    if (p.endsWith("/customMetrics")) return lists.metrics;
+    if (p.endsWith("/dataStreams")) return { status: 200, body: { dataStreams: [] } };
+    if (p.endsWith("/dataRetentionSettings")) return { status: 200, body: {} };
+    if (p.endsWith("/googleAdsLinks")) return { status: 200, body: { googleAdsLinks: [] } };
+    return undefined;
+  };
+}
+
+const UNREGISTERED_PARAMS =
+  "GTM sends event parameters that are not registered as GA4 custom dimensions/metrics";
+
+async function auditWithGa4(lists: { dimensions: StubResponse; metrics: StubResponse }) {
+  const r = await callRoute(auditHandler, { ga4PropertyId: "123456" }, [
+    gtmRoutes(GA4_PARAMS_WEB),
+    ga4AdminRoutes(lists),
+  ]);
+  assert.equal(r.status, 200, JSON.stringify(r.json).slice(0, 300));
+  return r.json.findings as Array<{ finding?: string; affected?: string[] }>;
+}
+
+testAsync("R-ga4 control: a param registered in neither list is flagged when both reads succeed", async () => {
+  const findings = await auditWithGa4({
+    dimensions: OK_DIMS,
+    metrics: { status: 200, body: { customMetrics: [] } },
+  });
+  const f = findings.find((x) => x.finding === UNREGISTERED_PARAMS);
+  assert.ok(f, "expected the unregistered-params finding");
+  assert.deepEqual(f!.affected, ["seat_count"]);
+});
+
+testAsync("R-ga4: a failed custom-dimensions read does not misflag params as unregistered", async () => {
+  // Regression: `if (cdFailed && cmFailed) return;` let the rule run on the
+  // metrics list alone and report plan_tier (a registered dimension).
+  const findings = await auditWithGa4({ dimensions: FAILED_READ, metrics: OK_METRICS });
+  assert.ok(!findings.some((x) => x.finding === UNREGISTERED_PARAMS));
+  assert.ok(
+    findings.some((x) => x.finding === "Could not read ga4_custom_dimensions from the GA4 Admin API"),
+    "the failed read is surfaced as a tool failure instead",
+  );
+});
+
+testAsync("R-ga4: a failed custom-metrics read does not misflag params as unregistered", async () => {
+  const findings = await auditWithGa4({ dimensions: OK_DIMS, metrics: FAILED_READ });
+  assert.ok(!findings.some((x) => x.finding === UNREGISTERED_PARAMS));
+});
+
 for (const [name, fn] of asyncTests) {
   try {
     await fn();

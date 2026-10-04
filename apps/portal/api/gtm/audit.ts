@@ -1518,12 +1518,13 @@ function ruleCrossMeasurementIds(ctx: Ctx, out: AuditFinding[]) {
 function ruleCrossCustomDimensions(ctx: Ctx, out: AuditFinding[]) {
   const ga4 = ctx.ga4;
   if (!ga4) return;
-  // Only run when we successfully read custom dimensions/metrics. An empty list
-  // after a successful read is meaningful (none registered); a failed read is
-  // already surfaced as a tool failure, so skip in that case.
+  // Only run when we successfully read custom dimensions AND metrics. An empty
+  // list after a successful read is meaningful (none registered); a failed read
+  // is already surfaced as a tool failure, so skip in that case — with either
+  // list missing, params registered there would be misreported as unregistered.
   const cdFailed = ga4.failures.some((f) => f.resource === "ga4_custom_dimensions");
   const cmFailed = ga4.failures.some((f) => f.resource === "ga4_custom_metrics");
-  if (cdFailed && cmFailed) return;
+  if (cdFailed || cmFailed) return;
 
   const registered = new Set<string>();
   for (const d of ga4.customDimensions) {
