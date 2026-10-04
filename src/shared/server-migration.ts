@@ -2047,8 +2047,11 @@ export interface ServerMigrationItem {
   detectedBy: 'native-type' | 'name';
   /** The desktop tool to run to create the server tag, or null when there is no server equivalent. */
   serverTool: string | null;
-  /** Fields read straight off the web tag (destination ids). */
-  derived: Record<string, string>;
+  /** Fields read straight off the web tag (destination ids), keyed by the server tool's own input field
+   *  (Amazon's `tagIds` is an array, as the tool takes it). A {{Constant}} reference is resolved to its
+   *  value; any other {{variable}} is never copied (the server container has no such variable) - that id
+   *  is listed in `requires` instead. */
+  derived: Record<string, string | string[]>;
   /** Secrets/ids the caller must supply that are NOT in the web container (e.g. a CAPI access token). */
   requires: string[];
   /** One-line guidance. */
@@ -2069,17 +2072,20 @@ export interface ServerMigrationPlan {
 /** Name/snippet heuristics for template-based (cvt_) or Custom HTML pixels, mapped to their typed
  *  server CAPI tool. Access tokens are never in the web container, so they are listed in `requires`.
  *
- *  `derivedKey` is the SERVER field the web pixel's public id feeds, `idKeys` the gallery-template
- *  params that hold it (our own web builders' keys, e.g. TikTok `pixel_code`, Snap `pixel_id`) and
- *  `snippetRe` its position inside the vendor's Custom HTML init call. When the id is found the plan
- *  carries it in `derived`, so the server tag is created pre-filled and only the secret is left to type.
+ *  `derivedKey` is the SERVER field the web pixel's public id feeds (for a typed tool, that tool's own
+ *  input field), `idKeys` the gallery-template params that hold it (our own web builders' keys, e.g.
+ *  TikTok `pixel_code`, Snap `pixel_id`) and `snippetRe` its position inside the vendor's Custom HTML
+ *  init call. When the id is found the plan carries it in `derived`, so the server tag is created
+ *  pre-filled and only the secret is left to type; when a typed tool's id is NOT found it is listed in
+ *  `requires`, since the tool refuses without it. `idOptional` marks an id the server tool does not take
+ *  (LinkedIn's Partner ID), `idArray` one the tool takes as an array (Amazon's tagIds).
  *
  *  ORDER MATTERS (first hit wins): LinkedIn precedes Snapchat because a LinkedIn Custom HTML snippet
  *  loads from snap.licdn.com, which `/snap/` would otherwise claim. */
 const SERVER_MIGRATION_HEURISTICS: ReadonlyArray<{
   re: RegExp; destination: string; serverTool: string; requires: string[]; note: string;
   /** Omitted for a platform whose web tag carries no public id (Yelp, Spotify): nothing to derive. */
-  derivedKey?: string; idKeys?: string[]; snippetRe?: RegExp;
+  derivedKey?: string; idKeys?: string[]; snippetRe?: RegExp; idOptional?: boolean; idArray?: boolean;
   /** Further ids read off the snippet (AdRoll carries advertiser AND pixel ids). */
   extra?: Array<{ key: string; re: RegExp }>;
   status?: ServerMigrationItem['status'];
@@ -2088,18 +2094,18 @@ const SERVER_MIGRATION_HEURISTICS: ReadonlyArray<{
     derivedKey: 'pixelId', idKeys: ['pixel_code', 'pixelCode', 'pixelId'], snippetRe: /ttq\.load\s*\(\s*['"]([^'"]+)['"]/i },
   { re: /linkedin|_linkedin_partner_id|lintrk|licdn\.com/i, destination: 'LinkedIn', serverTool: 'create_linkedin_capi_server_tag', requires: ['accessToken', 'conversionRuleUrn'],
     note: 'LinkedIn CAPI server tag. The web Partner ID is informational: the server tag fires on a Conversion Rule URN, which the caller must supply.',
-    derivedKey: 'partnerId', idKeys: ['partnerId', 'id'], snippetRe: /_linkedin_partner_id\s*=\s*['"]([^'"]+)['"]/i },
+    derivedKey: 'partnerId', idKeys: ['partnerId', 'id'], snippetRe: /_linkedin_partner_id\s*=\s*['"]([^'"]+)['"]/i, idOptional: true },
   { re: /pinterest|pintrk\s*\(/i, destination: 'Pinterest', serverTool: 'create_pinterest_capi_server_tag', requires: ['apiAccessToken'], note: 'Pinterest CAPI server tag.',
     derivedKey: 'advertiserId', idKeys: ['tagId', 'advertiserId'], snippetRe: /pintrk\s*\(\s*['"]load['"]\s*,\s*['"]([^'"]+)['"]/i },
   { re: /reddit|rdt\s*\(/i, destination: 'Reddit', serverTool: 'create_reddit_capi_server_tag', requires: ['accessToken'], note: 'Reddit CAPI server tag.',
-    derivedKey: 'accountId', idKeys: ['accountId', 'pixelId'], snippetRe: /rdt\s*\(\s*['"]init['"]\s*,\s*['"]([^'"]+)['"]/i },
+    derivedKey: 'pixelId', idKeys: ['accountId', 'pixelId'], snippetRe: /rdt\s*\(\s*['"]init['"]\s*,\s*['"]([^'"]+)['"]/i },
   { re: /snap(chat)?|snaptr\s*\(/i, destination: 'Snapchat', serverTool: 'create_snapchat_capi_server_tag', requires: ['apiAccessToken'], note: 'Snapchat CAPI server tag.',
     derivedKey: 'pixelId', idKeys: ['pixel_id', 'pixelId'], snippetRe: /snaptr\s*\(\s*['"]init['"]\s*,\s*['"]([^'"]+)['"]/i },
   { re: /microsoft|bing|\buet\b|uetq/i, destination: 'Microsoft Ads', serverTool: 'create_microsoft_capi_server_tag', requires: ['authToken'], note: 'Microsoft Ads CAPI; REQUIRES MSCLKID forwarded from the web side.',
     derivedKey: 'uetTagId', idKeys: ['tagId', 'uetTagId'], snippetRe: /\bti\s*:\s*['"]([^'"]+)['"]/i },
   // Builders + typed tools already exist for these two; they were simply never planned.
   { re: /amazon[\s_-]?(ads?|pixel|tag)|amzn\s*\(|amazon-adsystem/i, destination: 'Amazon Ads', serverTool: 'create_amazon_capi_server_tag', requires: [], note: 'Amazon Ads CAPI server tag (region defaults to NA; pass tagRegion for EU).',
-    derivedKey: 'tagId', idKeys: ['tagId'], snippetRe: /amzn\s*\(\s*['"]addTag['"]\s*,\s*['"]([^'"]+)['"]/i },
+    derivedKey: 'tagIds', idArray: true, idKeys: ['tagId'], snippetRe: /amzn\s*\(\s*['"]addTag['"]\s*,\s*['"]([^'"]+)['"]/i },
   { re: /stackadapt|\bsaq\s*\(|srv\.stackadapt/i, destination: 'StackAdapt', serverTool: 'create_stackadapt_server_tag', requires: [], note: 'StackAdapt server-side pixel.',
     derivedKey: 'pixelID', idKeys: ['pixelID', 'pixelId'], snippetRe: /saq\s*\(\s*['"]ts['"]\s*,\s*['"]([^'"]+)['"]/i },
   // X (Twitter): the server tag needs the per-conversion X "Event ID" (tw-…) from X Ads Events Manager
@@ -2109,7 +2115,7 @@ const SERVER_MIGRATION_HEURISTICS: ReadonlyArray<{
     note: 'X Conversion API server tag (stape-io/twitter-tag). eventId = the X conversion Event ID (tw-…), one per conversion event.',
     derivedKey: 'pixelId', idKeys: ['pixelId'], snippetRe: /twq\s*\(\s*['"]config['"]\s*,\s*['"]([^'"]+)['"]/i },
   { re: /quora|\bqp\s*\(/i, destination: 'Quora', serverTool: 'create_quora_capi_server_tag', requires: ['accessToken'], note: 'Quora Conversion API server tag (stape-io/quora-tag).',
-    derivedKey: 'accountId', idKeys: ['accountId', 'pixelId'], snippetRe: /qp\s*\(\s*['"]init['"]\s*,\s*['"]([^'"]+)['"]/i },
+    derivedKey: 'pixelId', idKeys: ['accountId', 'pixelId'], snippetRe: /qp\s*\(\s*['"]init['"]\s*,\s*['"]([^'"]+)['"]/i },
   { re: /adroll|__adroll|adroll_adv_id/i, destination: 'AdRoll', serverTool: 'create_adroll_capi_server_tag', requires: ['accessToken'], note: 'AdRoll server tag (stape-io/adroll-tag); needs the advertisable id AND the pixel id, both public.',
     derivedKey: 'advertisableId', idKeys: ['advertisableId'], snippetRe: /adroll_adv_id\s*=\s*['"]([^'"]+)['"]/i,
     extra: [{ key: 'pixelId', re: /adroll_pix_id\s*=\s*['"]([^'"]+)['"]/i }] },
@@ -2226,6 +2232,25 @@ export function planWebToServerMigration(snapshot: ContainerSnapshot): ServerMig
     if (val) constants.set(String(v.name ?? '').trim().toLowerCase(), val);
   }
   const resolve = (x: string): string => x.replace(/\{\{([^}]+)\}\}/g, (m, n: string) => constants.get(n.trim().toLowerCase()) ?? m).trim();
+  // Carry the web tag's public ids into `derived`. Any {{variable}} left after Constant resolution is NOT
+  // copied: the server container has no such variable, so the server tag would reference one that does
+  // not exist. That id goes to `missing` (for `requires`) and the note names the web variable; a
+  // `required` id that is simply absent goes to `missing` too.
+  const carry = (pairs: Array<[key: string, raw: string]>, required: string[]): { derived: Record<string, string>; missing: string[]; refNote: string } => {
+    const derived: Record<string, string> = {};
+    const missing: string[] = [];
+    const refs: string[] = [];
+    for (const [key, raw] of pairs) {
+      const v = resolve(raw);
+      if (v && !v.includes('{{')) { derived[key] = v; continue; }
+      if (v) refs.push(`${key} from ${raw}`);
+      if (v || required.includes(key)) missing.push(key);
+    }
+    const refNote = refs.length
+      ? ` The web tag reads ${refs.join(', ')}, a variable that is not a Constant, so it was not carried: supply the literal value (or create a server variable of that name).`
+      : '';
+    return { derived, missing, refNote };
+  };
   const meta = detectMetaTags(snapshot);
   const metaIds = new Set(meta.metaTags.map((m) => m.id));
   const measurementIds = new Set<string>();
@@ -2247,29 +2272,33 @@ export function planWebToServerMigration(snapshot: ContainerSnapshot): ServerMig
     // Meta (detected by fbq/name/snippet) → Meta CAPI. The Pixel ID is public and on the web tag
     // (template param or fbq('init', …)), so carry it; only the access token is left to supply.
     if (metaIds.has(t.tagId)) {
-      const pixelId = pv(t, 'pixelId') || (META_INIT_RE.exec(pv(t, 'html'))?.[1] ?? '').trim();
+      const c = carry([['pixelId', pv(t, 'pixelId') || (META_INIT_RE.exec(pv(t, 'html'))?.[1] ?? '').trim()]], ['pixelId']);
       items.push({
         webTag: t.name, destination: 'Meta', detectedBy: 'name', serverTool: 'create_meta_capi_server_tag',
-        derived: pixelId ? { pixelId } : {}, requires: pixelId ? ['accessToken'] : ['pixelId', 'accessToken'],
-        note: 'Meta Conversions API server tag; auto-imports stape-io/facebook-tag.', status: 'typed-tool',
+        derived: c.derived, requires: [...c.missing, 'accessToken'],
+        note: `Meta Conversions API server tag; auto-imports stape-io/facebook-tag.${c.refNote}`, status: 'typed-tool',
       });
       continue;
     }
     // Native Google/Floodlight conversion types (authoritative).
     if (type === 'awct') {
-      items.push({ webTag: t.name, destination: 'Google Ads conversion', detectedBy: 'native-type', serverTool: 'create_server_tag (platform: ads_conversion)', derived: { conversionId: pv(t, 'conversionId'), conversionLabel: pv(t, 'conversionLabel') }, requires: [], note: 'Fire on a per-event server trigger; set productReporting for ecommerce.', status: 'typed-tool' });
+      const c = carry([['conversionId', pv(t, 'conversionId')], ['conversionLabel', pv(t, 'conversionLabel')]], ['conversionId', 'conversionLabel']);
+      items.push({ webTag: t.name, destination: 'Google Ads conversion', detectedBy: 'native-type', serverTool: 'create_server_tag (platform: ads_conversion)', derived: c.derived, requires: c.missing, note: `Fire on a per-event server trigger; set productReporting for ecommerce.${c.refNote}`, status: 'typed-tool' });
       continue;
     }
     if (type === 'sp') {
-      items.push({ webTag: t.name, destination: 'Google Ads remarketing', detectedBy: 'native-type', serverTool: 'create_server_tag (platform: ads_remarketing)', derived: { conversionId: pv(t, 'conversionId') }, requires: [], note: 'Server-side remarketing audience tag.', status: 'typed-tool' });
+      const c = carry([['conversionId', pv(t, 'conversionId')]], ['conversionId']);
+      items.push({ webTag: t.name, destination: 'Google Ads remarketing', detectedBy: 'native-type', serverTool: 'create_server_tag (platform: ads_remarketing)', derived: c.derived, requires: c.missing, note: `Server-side remarketing audience tag.${c.refNote}`, status: 'typed-tool' });
       continue;
     }
     if (type === 'awcc') {
-      items.push({ webTag: t.name, destination: 'Google Ads call conversion', detectedBy: 'native-type', serverTool: null, derived: { conversionId: pv(t, 'conversionId') }, requires: [], note: 'No standard sGTM call-conversion tag; keep it client-side or use Google Ads call reporting.', status: 'manual' });
+      // Manual (no server tool): nothing is required, but a {{variable}} id is still never carried.
+      items.push({ webTag: t.name, destination: 'Google Ads call conversion', detectedBy: 'native-type', serverTool: null, derived: carry([['conversionId', pv(t, 'conversionId')]], []).derived, requires: [], note: 'No standard sGTM call-conversion tag; keep it client-side or use Google Ads call reporting.', status: 'manual' });
       continue;
     }
     if (type === 'flc') {
-      items.push({ webTag: t.name, destination: 'Floodlight', detectedBy: 'native-type', serverTool: 'templates_import_from_gallery + tags_create', derived: { advertiserId: pv(t, 'advertiserId'), groupTag: pv(t, 'groupTag'), activityTag: pv(t, 'activityTag') }, requires: [], note: 'No typed server Floodlight builder; use a server Floodlight template via the generic path.', status: 'generic' });
+      const c = carry([['advertiserId', pv(t, 'advertiserId')], ['groupTag', pv(t, 'groupTag')], ['activityTag', pv(t, 'activityTag')]], []);
+      items.push({ webTag: t.name, destination: 'Floodlight', detectedBy: 'native-type', serverTool: 'templates_import_from_gallery + tags_create', derived: c.derived, requires: c.missing, note: `No typed server Floodlight builder; use a server Floodlight template via the generic path.${c.refNote}`, status: 'generic' });
       continue;
     }
     if (type === 'gclidw') {
@@ -2281,32 +2310,32 @@ export function planWebToServerMigration(snapshot: ContainerSnapshot): ServerMig
     // verified against the 562-container corpus). The same server tools apply as for the pixels'
     // template/Custom-HTML forms below.
     if (type === 'baut') {
-      const uetTagId = pv(t, 'tagId');
-      items.push({ webTag: t.name, destination: 'Microsoft Ads', detectedBy: 'native-type', serverTool: 'create_microsoft_capi_server_tag', derived: uetTagId ? { uetTagId } : {}, requires: ['authToken'], note: 'Microsoft Ads CAPI; REQUIRES MSCLKID forwarded from the web side.', status: 'typed-tool' });
+      const c = carry([['uetTagId', pv(t, 'tagId')]], ['uetTagId']);
+      items.push({ webTag: t.name, destination: 'Microsoft Ads', detectedBy: 'native-type', serverTool: 'create_microsoft_capi_server_tag', derived: c.derived, requires: [...c.missing, 'authToken'], note: `Microsoft Ads CAPI; REQUIRES MSCLKID forwarded from the web side.${c.refNote}`, status: 'typed-tool' });
       continue;
     }
     if (type === 'bzi') {
-      const partnerId = pv(t, 'id');
-      items.push({ webTag: t.name, destination: 'LinkedIn', detectedBy: 'native-type', serverTool: 'create_linkedin_capi_server_tag', derived: partnerId ? { partnerId } : {}, requires: ['accessToken', 'conversionRuleUrn'], note: 'LinkedIn CAPI server tag. The web Partner ID is informational: the server tag fires on a Conversion Rule URN, which the caller must supply.', status: 'typed-tool' });
+      // The Partner ID is informational (the server tool does not take it), so it is never required.
+      items.push({ webTag: t.name, destination: 'LinkedIn', detectedBy: 'native-type', serverTool: 'create_linkedin_capi_server_tag', derived: carry([['partnerId', pv(t, 'id')]], []).derived, requires: ['accessToken', 'conversionRuleUrn'], note: 'LinkedIn CAPI server tag. The web Partner ID is informational: the server tag fires on a Conversion Rule URN, which the caller must supply.', status: 'typed-tool' });
       continue;
     }
     // Template/Custom-HTML pixels by name or snippet. The vendor's public id is read off the template
     // param (idKeys) or the init call in the snippet (snippetRe) and carried as `derived`, so the server
-    // tag is created pre-filled; it is never a secret, so it is never in `requires`.
+    // tag is created pre-filled. A typed tool's id that is not found (or is a non-Constant {{variable}})
+    // is listed in `requires`, because the tool refuses without it.
     const html = pv(t, 'html');
     const hay = `${t.name} ${type} ${html}`;
     const hit = SERVER_MIGRATION_HEURISTICS.find((h) => h.re.test(hay));
     if (hit) {
-      const derived: Record<string, string> = {};
-      if (hit.derivedKey) {
-        const id = (hit.idKeys ?? []).map((k) => pv(t, k)).find(Boolean) || (hit.snippetRe?.exec(html)?.[1] ?? '').trim();
-        if (id) derived[hit.derivedKey] = id;
-      }
-      for (const x of hit.extra ?? []) {
-        const v = (x.re.exec(html)?.[1] ?? '').trim();
-        if (v) derived[x.key] = v;
-      }
-      items.push({ webTag: t.name, destination: hit.destination, detectedBy: 'name', serverTool: hit.serverTool, derived, requires: hit.requires, note: hit.note, status: hit.status ?? 'typed-tool' });
+      const pairs: Array<[string, string]> = [];
+      if (hit.derivedKey) pairs.push([hit.derivedKey, (hit.idKeys ?? []).map((k) => pv(t, k)).find(Boolean) || (hit.snippetRe?.exec(html)?.[1] ?? '').trim()]);
+      for (const x of hit.extra ?? []) pairs.push([x.key, (x.re.exec(html)?.[1] ?? '').trim()]);
+      const typed = (hit.status ?? 'typed-tool') === 'typed-tool';
+      const c = carry(pairs, typed ? pairs.map(([k]) => k) : []);
+      const derived: Record<string, string | string[]> = { ...c.derived };
+      if (hit.idArray && hit.derivedKey && typeof derived[hit.derivedKey] === 'string') derived[hit.derivedKey] = [derived[hit.derivedKey] as string];
+      const requires = hit.idOptional ? hit.requires : [...new Set([...c.missing, ...hit.requires])];
+      items.push({ webTag: t.name, destination: hit.destination, detectedBy: 'name', serverTool: hit.serverTool, derived, requires, note: hit.idOptional ? hit.note : `${hit.note}${c.refNote}`, status: hit.status ?? 'typed-tool' });
     }
   }
 

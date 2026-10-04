@@ -120,6 +120,37 @@ await test('plan_server_migration_from_web: a {{Constant}} GA4 Measurement ID re
   assert.equal(r2.items.length, 0);
 });
 
+await test('plan_server_migration_from_web: a {{variable}} id is never carried into derived; missing ids are required; keys match the tool fields', async () => {
+  const client = stubClient({
+    variables: [{ variableId: 'v1', name: 'TikTok ID', type: 'c', parameter: [P('value', 'C7TK')] }],
+    tags: [
+      // A web variable the server container does not have: never copied, required instead.
+      { tagId: '1', name: 'Meta Pixel', type: 'html', parameter: [P('html', "<script>fbq('init','{{Meta Pixel ID}}')</script>")] },
+      { tagId: '2', name: 'Ads - Purchase', type: 'awct', parameter: [P('conversionId', '{{Google Ads ID}}'), P('conversionLabel', 'LBL')] },
+      // A Constant resolves to its literal value.
+      { tagId: '3', name: 'TikTok Pixel', type: 'cvt_TT01', parameter: [P('pixel_code', '{{TikTok ID}}')] },
+      // No id on the web tag at all: the typed tool still needs it.
+      { tagId: '4', name: 'Snap Pixel', type: 'html', parameter: [P('html', '<script>snaptr("track","PAGE_VIEW")</script>')] },
+      { tagId: '5', name: 'Reddit Pixel', type: 'html', parameter: [P('html', "<script>rdt('init','t2_abc')</script>")] },
+      { tagId: '6', name: 'Amazon Ads pixel', type: 'html', parameter: [P('html', "<script>amzn('addTag','tag-987')</script>")] },
+    ],
+  });
+  const res = json(await callValidated(serverWith(client), 'plan_server_migration_from_web', WS));
+  const by = (d) => res.items.find((i) => i.destination === d);
+  assert.deepEqual(by('Meta').derived, {});
+  assert.deepEqual(by('Meta').requires, ['pixelId', 'accessToken']);
+  assert.ok(by('Meta').note.includes('{{Meta Pixel ID}}'), 'the note names the web variable');
+  assert.deepEqual(by('Google Ads conversion').derived, { conversionLabel: 'LBL' });
+  assert.deepEqual(by('Google Ads conversion').requires, ['conversionId']);
+  assert.deepEqual(by('TikTok').derived, { pixelId: 'C7TK' });
+  assert.deepEqual(by('TikTok').requires, ['accessToken']);
+  assert.deepEqual(by('Snapchat').derived, {});
+  assert.deepEqual(by('Snapchat').requires, ['pixelId', 'apiAccessToken']);
+  assert.deepEqual(by('Reddit').derived, { pixelId: 't2_abc' }, 'create_reddit_capi_server_tag takes pixelId, not the GTM accountId');
+  assert.deepEqual(by('Amazon Ads').derived, { tagIds: ['tag-987'] }, 'create_amazon_capi_server_tag takes a tagIds array');
+  assert.ok(!JSON.stringify(res.items.map((i) => i.derived)).includes('{{'), 'no web-container variable reference is ever carried');
+});
+
 await test('a CAPI tool with the template already installed: no import, tag created with the cvt type, credentials and trigger', async () => {
   const client = stubClient({ templates: [INSTALLED('stape-io', 'reddit-tag', 'RD01')] });
   const res = json(await callValidated(serverWith(client), 'create_reddit_capi_server_tag', { ...WS, pixelId: '{{Reddit Pixel}}', accessToken: '{{Reddit Token}}', event: 'purchase', eventId: '{{Event ID}}', firingTriggerId: ['5'], confirm: true }));

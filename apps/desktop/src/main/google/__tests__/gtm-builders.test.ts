@@ -3854,7 +3854,7 @@ test('planWebToServerMigration: classifies GA4/Ads/Floodlight/Linker natives + M
 
   // Builders that existed but were never planned, and the X generic path.
   assert.equal(by('Amazon Ads')?.serverTool, 'create_amazon_capi_server_tag');
-  assert.deepEqual(by('Amazon Ads')?.derived, { tagId: 'tag-987' });
+  assert.deepEqual(by('Amazon Ads')?.derived, { tagIds: ['tag-987'] }, 'keyed + shaped as the typed tool takes it');
   assert.deepEqual(by('Amazon Ads')?.requires, []);
   assert.equal(by('StackAdapt')?.serverTool, 'create_stackadapt_server_tag');
   assert.deepEqual(by('StackAdapt')?.derived, { pixelID: 'SA-55' });
@@ -4076,7 +4076,7 @@ test('planWebToServerMigration: the Tier-1 pixels are planned to their typed too
   assert.equal(by('X (Twitter)')?.status, 'typed-tool', 'X has a typed builder now');
   assert.deepEqual(by('X (Twitter)')?.derived, { pixelId: 'o1abc' });
   assert.deepEqual(by('X (Twitter)')?.requires, ['eventId', 'pixelAccessToken']);
-  assert.deepEqual(by('Quora')?.derived, { accountId: 'QP123' });
+  assert.deepEqual(by('Quora')?.derived, { pixelId: 'QP123' }, 'the typed tool field, not the GTM accountId arg');
   assert.deepEqual(by('AdRoll')?.derived, { advertisableId: 'ADV9', pixelId: 'PIX9' }, 'both AdRoll ids come off the snippet');
   assert.deepEqual(by('Nextdoor')?.derived, { pixelId: 'NDP77' });
   assert.deepEqual(by('Nextdoor')?.requires, ['clientId', 'accessToken']);
