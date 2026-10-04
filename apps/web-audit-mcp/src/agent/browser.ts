@@ -13,8 +13,11 @@ import { createRequestGuard } from '../utils/safeFetch.js';
 
 export interface PwResponse {
   status(): number;
-  /** Response headers, lower-cased keys (Playwright shape). Read to classify a WAF / bot-challenge page. */
+  /** Response headers, lower-cased keys (Playwright shape). Read to classify a WAF / bot-challenge page.
+   *  Playwright leaves security-related headers out of this, Set-Cookie included. */
   headers(): Record<string, string>;
+  /** All response headers, Set-Cookie included (multiple values joined with "\n"). */
+  allHeaders(): Promise<Record<string, string>>;
 }
 export interface PwRequest {
   url(): string;

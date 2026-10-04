@@ -16,6 +16,9 @@ export type HeaderBag = Record<string, string | string[] | undefined>;
 /** Statuses a WAF uses for a block / challenge. 401 is deliberately NOT here: that is auth, not a bot check. */
 const BLOCK_STATUSES = new Set([403, 429, 503]);
 
+/** True for a status botBlockReason may classify as a block, so a caller fetches headers only for those. */
+export const isBlockStatus = (status: number | null): boolean => status !== null && BLOCK_STATUSES.has(status);
+
 const lower = (bag: HeaderBag): Record<string, string> => {
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(bag)) {
