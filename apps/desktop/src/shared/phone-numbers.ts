@@ -80,8 +80,15 @@ export function normalizePhone(raw: string, defaultCountry?: 'US' | 'CA' | null)
   const input = String(raw ?? '').trim();
   const withoutExt = input.replace(EXT_RE, '').trim();
   // "00" is the international access prefix in most of the world; treat it exactly like "+".
-  const international = /^\+/.test(withoutExt) || /^00\d/.test(withoutExt);
-  const digits = withoutExt.replace(/\D/g, '').replace(/^00/, international && /^00\d/.test(withoutExt) ? '' : '');
+  // Leading punctuation must not hide the prefix: "(+44) 20 ..." and "(0044) 20 ..." are international.
+  const lead = withoutExt.replace(/^[^\d+]+/, '');
+  const plusPrefix = /^\+/.test(lead);
+  const zeroZeroPrefix = !plusPrefix && /^00\d/.test(lead);
+  const international = plusPrefix || zeroZeroPrefix;
+  // The "00" is dialing syntax, not part of the number, so it is dropped ONLY when it was detected as
+  // the international prefix above.
+  const allDigits = withoutExt.replace(/\D/g, '');
+  const digits = zeroZeroPrefix ? allDigits.slice(2) : allDigits;
 
   if (digits.length < MIN_DIGITS) {
     return { e164: null, digits, confident: false, reason: `Only ${digits.length} digits, too short to be a dialable number.` };
