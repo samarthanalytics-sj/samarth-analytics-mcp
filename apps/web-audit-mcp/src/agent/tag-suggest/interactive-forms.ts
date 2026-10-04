@@ -4,17 +4,26 @@
 // per-scan `interactiveForms` option), this clicks the page's "open-a-form" CTAs — and ONLY those — waits
 // for a modal to appear, and re-runs the form scan on the revealed DOM.
 //
-// SAFETY: before any click, navigation is neutralised IN THE PAGE — window.open is stubbed, and anchor
-// navigations + form submits are preventDefault'd at capture phase — so a click can only open an in-page
-// modal, never leave the page, open a tab, or submit anything. Only form-intent buttons / modal-declaring
-// controls are clicked (never a submit/reset/pay control), the click count is capped, and nothing is ever
-// filled or submitted. All interaction runs via page.evaluate() — no Playwright-level navigation or click.
-//
-// WHICH controls are clicked is decided in Node by the pure ctaRank/selectCtas below, from facts the page
-// reports (gatherCtaFacts), so the rule that keeps a submit/cart/nav control from ever being clicked is
-// unit-tested rather than living only inside a stringified in-page routine.
+// SAFETY — it clicks the LIVE page, so each layer assumes the one before it can miss something:
+//  - WHAT is clicked: only form-intent CTAs and declared dialog openers, capped (ctaRank/selectCtas, decided
+//    in Node from facts the page reports, so the rule is unit-tested). Never a control a form owns or a JS
+//    form's own submit, never nav / menu / tab / consent-banner controls, never cart / purchase / payment /
+//    destructive / account controls, never a javascript: URL that is itself the action.
+//  - IN THE PAGE, before any click (armInteractionGuards): window.open returns an inert stand-in (a null
+//    return triggers the common "popup blocked → location.href = url" fallback); form.submit() and
+//    requestSubmit() are no-ops (submit() fires no event a listener could cancel); submit events are
+//    cancelled AND stopped at window capture, so the site's own AJAX submit handlers never run; anchor
+//    activation other than an in-page #hash is cancelled, javascript: included; fetch/XHR writes (anything
+//    but GET/HEAD) and sendBeacon are refused.
+//  - AT THE NETWORK, for the whole pass (blockDuringDiscovery): main-frame navigations, every non-GET/HEAD
+//    request and every measurement hit (GA4 / Ads / Meta / ...) are aborted, so a click can neither leave
+//    the page, write to the site, nor send a conversion from bot traffic.
+//  - AFTER each click: if the page URL changed anyway (an SPA router push), the pass stops and that click's
+//    forms are discarded, so another page's form is never reported as a popup on this one.
+// Nothing is ever filled. All interaction runs via page.evaluate() — no Playwright-level click.
 
 import type { PwPage } from '../browser.js';
+import { classifyUrl, MEASUREMENT_GROUPS } from '../browser.js';
 import { scanForms, type FormAnalysis } from '../forms.js';
 
 /** A stable-ish identity for a detected form, to tell a newly-revealed form from the baseline ones. PURE. */
@@ -135,26 +144,61 @@ export function selectCtas(facts: CtaFacts[], max = MAX_INTERACTIVE_CLICKS): num
 
 // ── in-browser routines (self-contained: stringified and run inside the page via evaluate) ────────────
 
-/** Neutralise navigation before any click. Returns true once the guards are in place. */
-function armInteractionGuards(): boolean {
+/**
+ * Neutralise navigation, submits and network writes before any click. Returns true once the guards are in
+ * place. Exported for its browser-free test only; it runs inside the page.
+ */
+export function armInteractionGuards(): boolean {
   const w = window as unknown as { __sxArmed?: boolean };
   if (!w.__sxArmed) {
     w.__sxArmed = true;
     // A click may open an in-page modal but must never navigate, open a tab, or submit a form.
-    window.open = () => null;
-    document.addEventListener(
+    // Not null: "if (!popup) location.href = url" is the usual popup-blocked fallback, and it leaves the page.
+    const inert = { closed: false, close() {}, focus() {}, blur() {}, postMessage() {}, location: {} };
+    window.open = (() => inert) as unknown as typeof window.open;
+    // form.submit() fires no submit event, so no listener can see it: disarm the methods themselves.
+    HTMLFormElement.prototype.submit = function () {};
+    HTMLFormElement.prototype.requestSubmit = function () {};
+    // window capture is the first stop: cancel the default AND keep the site's own (AJAX) handlers from running.
+    window.addEventListener(
+      'submit',
+      (e) => {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+      },
+      true,
+    );
+    // Any anchor activation but an in-page #hash is cancelled, javascript: URLs included.
+    window.addEventListener(
       'click',
       (e) => {
         const t = e.target as Element | null;
         const a = t && t.closest ? t.closest('a[href]') : null;
-        if (a) {
-          const h = a.getAttribute('href') || '';
-          if (h && !h.startsWith('#') && !h.startsWith('javascript:')) e.preventDefault();
-        }
+        if (a && !(a.getAttribute('href') || '').trim().startsWith('#')) e.preventDefault();
       },
       true,
     );
-    document.addEventListener('submit', (e) => e.preventDefault(), true);
+    // No writes from the page: only GET/HEAD may leave, and beacons (always POST) never do.
+    const isRead = (m: unknown): boolean => {
+      const s = String(m || 'GET').toUpperCase();
+      return s === 'GET' || s === 'HEAD';
+    };
+    const realFetch = window.fetch;
+    window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const method = (init && init.method) || (typeof Request !== 'undefined' && input instanceof Request ? input.method : 'GET');
+      return isRead(method) ? realFetch.call(window, input, init) : Promise.reject(new TypeError('blocked: no network writes during form discovery'));
+    }) as typeof window.fetch;
+    const xhr = XMLHttpRequest.prototype as unknown as { open: (...a: unknown[]) => unknown; send: (...a: unknown[]) => unknown };
+    const realOpen = xhr.open;
+    const realSend = xhr.send;
+    xhr.open = function (this: { __sxMethod?: unknown }, ...a: unknown[]) {
+      this.__sxMethod = a[0];
+      return realOpen.apply(this, a);
+    };
+    xhr.send = function (this: { __sxMethod?: unknown }, ...a: unknown[]) {
+      return isRead(this.__sxMethod) ? realSend.apply(this, a) : undefined;
+    };
+    (navigator as unknown as { sendBeacon: () => boolean }).sendBeacon = () => false;
   }
   return true;
 }
@@ -262,46 +306,125 @@ function closeModals(): void {
   document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
 }
 
+// ── network guard for the click window (Node side) ─────────────────────────────────────────────────
+
+/**
+ * Whether a request made while discovery is clicking must be refused at the network. PURE.
+ * A main-frame navigation would leave the page; anything but GET/HEAD is a write (a form POST, a lead or
+ * cart API call, a beacon); a measurement hit would send the site's analytics a conversion from bot clicks.
+ */
+export function blockDuringDiscovery(req: { method: string; url: string; mainFrameNavigation: boolean }): boolean {
+  if (req.mainFrameNavigation) return true;
+  const method = req.method.toUpperCase();
+  if (method !== 'GET' && method !== 'HEAD') return true;
+  return classifyUrl(req.url).groups.some((g) => MEASUREMENT_GROUPS.has(g));
+}
+
+// The Playwright surface the network guard needs (real objects carry these at runtime).
+interface PwRequestEx {
+  url(): string;
+  method(): string;
+  isNavigationRequest(): boolean;
+  frame(): unknown;
+}
+interface PwRouteEx {
+  request(): PwRequestEx;
+  abort(errorCode?: string): Promise<void>;
+  fallback(): Promise<void>;
+}
+interface PwPageRouteEx {
+  mainFrame(): unknown;
+  route(url: string, handler: (route: PwRouteEx) => unknown): Promise<void>;
+  unroute(url: string, handler?: (route: PwRouteEx) => unknown): Promise<void>;
+}
+
 export interface InteractiveFormsResult {
   /** Newly-revealed forms not already in the read-only baseline (flagged hidden → "opens in a modal"). */
   forms: FormAnalysis[];
   /** How many CTAs were actually clicked (for debug/telemetry). */
   clicked: number;
+  /** A click changed the page URL despite the guards; the pass stopped and that click's forms were dropped. */
+  navigated: boolean;
 }
 
 /**
  * Reveal and scan forms that only appear after clicking an "open-a-form" CTA. `baseline` is what the
  * read-only pass already found, so only NEW forms are returned. Bounded and best-effort: a click or
- * re-scan that fails just yields no extra form — it never throws out to the scan.
+ * re-scan that fails just yields no extra form — it never throws out to the scan. Fails CLOSED: if the
+ * network guard or the in-page guards cannot be installed, nothing is clicked.
  */
 export async function discoverInteractiveForms(page: PwPage, pageUrl: string, baseline: FormAnalysis[]): Promise<InteractiveFormsResult> {
   const seen = new Set(baseline.map(formSignature));
   const forms: FormAnalysis[] = [];
   let clicked = 0;
-  let order: number[] = [];
+  let navigated = false;
+  const pageOnly = (u: string): string => u.split('#')[0];
+  const startUrl = pageOnly(page.url());
+
+  const routed = page as unknown as PwPageRouteEx;
+  let guard: ((route: PwRouteEx) => Promise<void>) | undefined;
   try {
-    if ((await page.evaluate<boolean>(armInteractionGuards)) !== true) return { forms, clicked };
-    const facts = await page.evaluate<CtaFacts[]>(gatherCtaFacts);
-    order = selectCtas(Array.isArray(facts) ? facts : []);
-  } catch {
-    return { forms, clicked };
-  }
-  for (const i of order) {
-    try {
-      const ok = await page.evaluate<boolean>(clickCta, i);
-      if (!ok) continue;
-      clicked += 1;
-      await page.waitForTimeout(600);
-      for (const f of await scanForms(page, pageUrl)) {
-        const sig = formSignature(f);
-        if (seen.has(sig)) continue;
-        seen.add(sig);
-        forms.push({ ...f, hidden: true }); // only appears on click → hidden at load; feeds the modal/popup note
+    const mainFrame = routed.mainFrame();
+    const isMainNav = (req: PwRequestEx): boolean => {
+      try {
+        if (!req.isNavigationRequest()) return false;
+      } catch {
+        return false;
       }
-      await page.evaluate(closeModals).catch(() => undefined);
-    } catch {
-      /* one CTA failing must never fail the scan */
-    }
+      try {
+        return req.frame() === mainFrame;
+      } catch {
+        return true; // a navigation whose frame cannot be told apart is refused
+      }
+    };
+    guard = (route: PwRouteEx): Promise<void> => {
+      const req = route.request();
+      const block = blockDuringDiscovery({ method: req.method(), url: req.url(), mainFrameNavigation: isMainNav(req) });
+      return (block ? route.abort('aborted') : route.fallback()).catch(() => undefined);
+    };
+    await routed.route('**/*', guard);
+  } catch {
+    return { forms, clicked, navigated };
   }
-  return { forms, clicked };
+
+  try {
+    let order: number[];
+    try {
+      if ((await page.evaluate<boolean>(armInteractionGuards)) !== true) return { forms, clicked, navigated };
+      const facts = await page.evaluate<CtaFacts[]>(gatherCtaFacts);
+      order = selectCtas(Array.isArray(facts) ? facts : []);
+    } catch {
+      return { forms, clicked, navigated };
+    }
+    for (const i of order) {
+      try {
+        const ok = await page.evaluate<boolean>(clickCta, i);
+        if (!ok) continue;
+        clicked += 1;
+        await page.waitForTimeout(600);
+        // An SPA router push needs no network request, so neither guard sees it: the URL is the backstop.
+        if (pageOnly(page.url()) !== startUrl) {
+          navigated = true;
+          break;
+        }
+        const found = await scanForms(page, pageUrl);
+        if (pageOnly(page.url()) !== startUrl) {
+          navigated = true;
+          break;
+        }
+        for (const f of found) {
+          const sig = formSignature(f);
+          if (seen.has(sig)) continue;
+          seen.add(sig);
+          forms.push({ ...f, hidden: true }); // only appears on click → hidden at load; feeds the modal/popup note
+        }
+        await page.evaluate(closeModals).catch(() => undefined);
+      } catch {
+        /* one CTA failing must never fail the scan */
+      }
+    }
+  } finally {
+    await routed.unroute('**/*', guard).catch(() => undefined);
+  }
+  return { forms, clicked, navigated };
 }

@@ -9,7 +9,10 @@
 // READ-ONLY. The only page interaction is page.goto + read-only DOM evaluate
 // (collectPageRaw / scanForms). It never clicks or submits anything — the
 // web-audit server's sole permitted interaction (consent banners) is not used
-// here. Each emitted suggestion is already the exact shape the GTM MCP's
+// here — except the opt-in interactive form pass (interactive-forms.ts,
+// WEB_AUDIT_ENABLE_INTERACTIVE_FORMS, off by default), which clicks
+// form-opening CTAs with navigation, submits and network writes blocked.
+// Each emitted suggestion is already the exact shape the GTM MCP's
 // create_gtm_tracking_tag tool accepts, so it drops straight into that
 // draft-only, approval-gated create flow (Phase 3's desktop one-click create).
 //
