@@ -34,21 +34,10 @@ import {
   type RuntimeInput,
   type RuntimePage,
 } from "../shared/consent-audit";
+// Tolerant of malformed percent-encoding (one bad cookie must not 500 every route).
+import { parseCookies } from "./gtm/vercel-helpers";
 
 const SESSION_COOKIE = "samarth_portal_sid";
-
-function parseCookies(header: string | undefined): Record<string, string> {
-  const out: Record<string, string> = {};
-  if (!header) return out;
-  for (const part of header.split(";")) {
-    const idx = part.indexOf("=");
-    if (idx === -1) continue;
-    const k = part.slice(0, idx).trim();
-    const v = decodeURIComponent(part.slice(idx + 1).trim());
-    if (k) out[k] = v;
-  }
-  return out;
-}
 
 function getSid(req: Request): string | undefined {
   const cookies = parseCookies(req.headers.cookie);

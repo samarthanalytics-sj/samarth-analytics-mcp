@@ -1,6 +1,7 @@
 /**
  * Storage-foundation suite: token vault (../token-vault.ts), DB config + store
- * factory (../db/*). Pure-logic + in-memory only — no live DB, no real secret
+ * factory (../db/*), and the session-cookie parsing the Express server uses
+ * (../../server/gtm). Pure-logic + in-memory only — no live DB, no real secret
  * manager, no network.
  *
  * Encodes the security contract:
@@ -29,6 +30,7 @@ import {
   PostgresStore,
   StoreNotWiredError,
 } from "../db/index";
+import { parseCookies } from "../../server/gtm/vercel-helpers";
 
 let passed = 0;
 let failed = 0;
@@ -221,6 +223,20 @@ testAsync("F04 skeleton methods fail LOUD (never silent empty data)", async () =
     () => store.listGtmContainers("org-1", "acct-1"),
     StoreNotWiredError,
   );
+});
+
+// ── G. session cookie parsing (server/gtm, used by the Express server) ──────
+
+test("G01 parseCookies keeps a malformed %-escape raw instead of throwing", () => {
+  // Regression: decodeURIComponent threw URIError on `x=%E0`, so one bad cookie
+  // 500'd every Express session route (getSid → parseCookies).
+  let out: Record<string, string> = {};
+  assert.doesNotThrow(() => {
+    out = parseCookies("x=%E0; samarth_portal_sid=abc%20def; other=ok");
+  });
+  assert.strictEqual(out.x, "%E0");
+  assert.strictEqual(out.samarth_portal_sid, "abc def");
+  assert.strictEqual(out.other, "ok");
 });
 
 // ── runner ────────────────────────────────────────────────────────────────--
