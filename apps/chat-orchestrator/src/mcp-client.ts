@@ -201,10 +201,18 @@ export class McpConnection {
    *
    * A tool-level error is returned rather than thrown: the model needs to see the failure so it can
    * correct its arguments, and a thrown error would abort the whole turn.
+   *
+   * A name this server never listed is refused here rather than forwarded. Callers are expected to
+   * check their own permitted set first (the chat loop does); this is the backstop for one that
+   * does not, so no caller can reach a tool the catalog does not account for.
    */
   async callTool(name: string, args: Record<string, unknown>): Promise<{ ok: boolean; text: string }> {
     try {
-      const result = await this.requireClient().callTool({ name, arguments: args });
+      const client = this.requireClient();
+      if (!this.tools.some((t) => t.name === name)) {
+        return { ok: false, text: `Tool call refused: "${name}" is not a tool this server provides.` };
+      }
+      const result = await client.callTool({ name, arguments: args });
       const blocks = Array.isArray(result.content) ? result.content : [];
       const text = blocks
         .map((c: { type?: string; text?: string }) => (c.type === 'text' ? (c.text ?? '') : ''))

@@ -6,7 +6,7 @@ import { capToolResult, compactToolHistory, productOf, scopeTools, toOpenAiTools
 import { runTurn } from '../loop.js';
 import { ApprovalBroker } from '../approvals.js';
 import type { OrchestratorConfig } from '../config.js';
-import type { McpConnection } from '../mcp-client.js';
+import { McpConnection } from '../mcp-client.js';
 import type { OpenAiClient } from '../openai.js';
 import type { UsageMeter } from '../usage.js';
 import type { StreamEvent, ToolDef } from '../types.js';
@@ -251,6 +251,8 @@ test('a seven-call turn is bounded instead of growing without limit', () => {
   assert.ok(after < 30_000, `expected the turn to fit its budget, got ${after}`);
 });
 
+console.log('the turn enforces the scoped set at call time');
+
 const TURN_CFG = {
   enableWriteTools: true,
   enableDeleteTools: false,
@@ -317,6 +319,61 @@ const results = (events: StreamEvent[]) =>
   events.filter((e): e is Extract<StreamEvent, { type: 'tool_result' }> => e.type === 'tool_result');
 const doneReason = (events: StreamEvent[]) =>
   events.find((e): e is Extract<StreamEvent, { type: 'done' }> => e.type === 'done')?.reason;
+
+await testAsync('a hidden publish called by name never reaches the MCP, confirm or not', async () => {
+  // versions_publish is in the catalog but never offered. Before the guard, a model that named it
+  // anyway skipped the approval gate (it keys off the scoped entry) and was forwarded verbatim.
+  const { forwarded, events } = await turnWith([
+    { name: 'versions_publish', arguments: '{"versionId":"7","confirm":true}' },
+  ]);
+  assert.deepEqual(forwarded, [], 'an unscoped tool was forwarded to the MCP');
+  assert.equal(results(events)[0]?.ok, false);
+  assert.equal(doneReason(events), 'complete', 'a refusal is an answer the model reads, not a crash');
+});
+
+await testAsync('a delete this deployment switched off is refused, not run without its card', async () => {
+  const { forwarded } = await turnWith([{ name: 'tags_delete', arguments: '{"tagId":"1","confirm":true}' }]);
+  assert.deepEqual(forwarded, []);
+});
+
+await testAsync('another product\'s tool and an invented name are refused the same way', async () => {
+  const { forwarded, events } = await turnWith([
+    { name: 'ga4_create_property', arguments: '{"confirm":true}' },
+    { name: 'tags_nuke_everything', arguments: '{}' },
+  ]);
+  assert.deepEqual(forwarded, []);
+  assert.deepEqual(results(events).map((r) => r.ok), [false, false]);
+});
+
+await testAsync('a tool in the scoped set still runs, with the confirm a guarded write needs', async () => {
+  const { forwarded } = await turnWith([
+    { name: 'tags_list', arguments: '{}' },
+    { name: 'tags_create', arguments: '{"name":"x"}' },
+  ]);
+  assert.deepEqual(forwarded.map((f) => f.name), ['tags_list', 'tags_create']);
+  assert.equal(forwarded[1].args.confirm, true);
+});
+
+await testAsync('the connection itself refuses a name its server never listed', async () => {
+  // The backstop for any caller that skips its own permitted-set check.
+  const sent: string[] = [];
+  const conn = new McpConnection({} as OrchestratorConfig);
+  Object.assign(conn as unknown as Record<string, unknown>, {
+    client: {
+      async callTool({ name }: { name: string }) {
+        sent.push(name);
+        return { content: [{ type: 'text', text: 'ran' }] };
+      },
+    },
+    tools: [tool('tags_list')],
+  });
+  const refused = await conn.callTool('tags_nuke_everything', { confirm: true });
+  assert.equal(refused.ok, false);
+  assert.match(refused.text, /not a tool this server provides/);
+  const ran = await conn.callTool('tags_list', {});
+  assert.equal(ran.ok, true);
+  assert.deepEqual(sent, ['tags_list'], 'only the listed tool may reach the server');
+});
 
 console.log('tool arguments that are JSON but not an object');
 

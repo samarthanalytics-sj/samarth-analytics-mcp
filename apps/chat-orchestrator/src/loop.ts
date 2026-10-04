@@ -649,7 +649,20 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
         });
       };
 
-      if (tool?.isWrite) {
+      // The permission check. `scoped` is what this user MAY call, and a name outside it (a publish,
+      // a delete or write this deployment has switched off, another product's tool, or one the model
+      // invented) must never reach the MCP. Everything below keys off the catalog entry, so an
+      // unknown name used to skip the approval card AND the read-only refusal and be forwarded with
+      // whatever arguments the model wrote, `confirm: true` included.
+      if (!tool) {
+        const refusal = `"${call.function.name}" is not a tool available in this conversation. Use only the tools you were given.`;
+        messages.push({ role: 'tool', tool_call_id: call.id, name: call.function.name, content: refusal });
+        emit({ type: 'tool_result', id: call.id, name: call.function.name, ok: false, summary: 'Not an available tool' });
+        record(false, `Refused: ${call.function.name} is not in this conversation's tool set`);
+        continue;
+      }
+
+      if (tool.isWrite) {
         if (!args.approvals) {
           // Belt and braces: no write tool should have been visible without a broker.
           messages.push({
