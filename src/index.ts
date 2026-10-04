@@ -29,7 +29,7 @@ import { resolveHttpBinding, bindingBanner } from './utils/httpBinding.js';
 import { getGuardrailConfig } from './utils/guardrails.js';
 import { guardrailBanner, guardrailStatus } from './utils/guardrailMode.js';
 import { decidePostRoute, UNKNOWN_SESSION_MESSAGE } from './utils/mcpSession.js';
-import { createStytchTokenValidator } from './auth/stytchTokenValidator.js';
+import { createStytchTokenValidator, resolveStytchTokenPins } from './auth/stytchTokenValidator.js';
 import type { StytchClaims } from './auth/stytchTokenValidator.js';
 
 async function main(): Promise<void> {
@@ -159,19 +159,23 @@ async function startHttpServer(auth: OAuth2Client): Promise<void> {
     registrationEndpoint =
       process.env.STYTCH_REGISTRATION_ENDPOINT ??
       `${apiBase}/v1/public/${stytchProjectId}/oauth2/register`;
+    // Issuer/audience are ALWAYS pinned. Unset env vars used to mean no pinning at all (any token
+    // signed by the project key passed); they now default to the values Stytch Connected Apps
+    // mints for this project, and the env vars still override.
+    const pins = resolveStytchTokenPins(stytchProjectId, process.env);
     validator = createStytchTokenValidator({
       jwksUrl: jwksUri,
-      issuer: process.env.STYTCH_JWT_ISSUER || undefined,
-      audience: process.env.STYTCH_JWT_AUDIENCE || undefined,
+      issuer: pins.issuer,
+      audience: pins.audience,
       debugClaims: process.env.STYTCH_DEBUG_CLAIMS === 'true',
     });
-    if (!process.env.STYTCH_JWT_ISSUER || !process.env.STYTCH_JWT_AUDIENCE) {
-      console.error(
-        '[samarth-gtm-mcp] WARNING: STYTCH_JWT_ISSUER / STYTCH_JWT_AUDIENCE are not both set — ' +
-          'tokens are accepted on JWKS signature + expiry alone, without issuer/audience pinning. ' +
-          'Read the values from a STYTCH_DEBUG_CLAIMS log once, set both, then disable debug.'
-      );
-    }
+    console.error(
+      `[samarth-gtm-mcp] Stytch token pins: iss=${pins.issuer} ` +
+        `(${pins.issuerDerived ? 'derived from STYTCH_PROJECT_ID' : 'STYTCH_JWT_ISSUER'}), ` +
+        `aud=${pins.audience} ` +
+        `(${pins.audienceDerived ? 'derived from STYTCH_PROJECT_ID' : 'STYTCH_JWT_AUDIENCE'}); ` +
+        'only Connected App access tokens (client_id, no session claim) are accepted.'
+    );
     // Require the grant to carry at least one scope we actually use, so an
     // incomplete Google consent fails at sign-in resolution with a clear 403
     // rather than as a raw Google 403 inside a tool call. GTM_SCOPES[0] is

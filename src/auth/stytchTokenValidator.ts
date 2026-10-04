@@ -3,7 +3,8 @@
  *
  * Validates the JWT an MCP client presents on /mcp (issued by Stytch as the
  * Authorization Server). Dependency-free: uses Node's built-in crypto to verify
- * the RS256 signature against Stytch's JWKS, then checks expiry/issuer/audience
+ * the RS256 signature against Stytch's JWKS, then checks expiry/issuer/audience,
+ * requires a Connected App access token (client_id present, no session claim)
  * and extracts the member + organization + scopes.
  *
  * Why no library: keeps the MCP server's dependency surface minimal (matching
@@ -73,6 +74,34 @@ export interface StytchTokenValidator {
   validate(token: string): Promise<StytchClaims>;
 }
 
+export interface StytchTokenPins {
+  issuer: string;
+  audience: string;
+  /** True when the value was derived from the project id (env var unset or blank). */
+  issuerDerived: boolean;
+  audienceDerived: boolean;
+}
+
+/**
+ * Issuer/audience pins for a Stytch project. STYTCH_JWT_ISSUER / STYTCH_JWT_AUDIENCE win when set;
+ * otherwise they default to what Stytch Connected Apps actually mints for the project
+ * (iss = "stytch.com/<projectId>", aud = ["<projectId>"], confirmed against a live token). The pins
+ * used to be optional, and unset meant a token was accepted on JWKS signature + expiry alone.
+ */
+export function resolveStytchTokenPins(
+  projectId: string,
+  env: { STYTCH_JWT_ISSUER?: string; STYTCH_JWT_AUDIENCE?: string }
+): StytchTokenPins {
+  const envIssuer = (env.STYTCH_JWT_ISSUER ?? '').trim();
+  const envAudience = (env.STYTCH_JWT_AUDIENCE ?? '').trim();
+  return {
+    issuer: envIssuer || `stytch.com/${projectId}`,
+    audience: envAudience || projectId,
+    issuerDerived: !envIssuer,
+    audienceDerived: !envAudience,
+  };
+}
+
 export function createStytchTokenValidator(cfg: ValidatorConfig): StytchTokenValidator {
   const now = cfg.now ?? (() => Date.now());
   const fetchImpl = cfg.fetchImpl ?? fetch;
@@ -140,6 +169,21 @@ export function createStytchTokenValidator(cfg: ValidatorConfig): StytchTokenVal
     if (cfg.debugClaims) {
       // stderr only — never the JSON-RPC stdout channel.
       console.error('[samarth-gtm-mcp] Stytch token claims:', JSON.stringify(payload));
+    }
+    // Only Connected App access tokens may authenticate /mcp. A B2B session JWT is signed by the
+    // same project key and also carries sub + the nested organization claim, so signature and
+    // expiry alone used to accept it. Session JWTs carry the session claim and no client_id;
+    // Connected App access tokens carry client_id (the registered client) and no session claim.
+    if (payload['https://stytch.com/session'] !== undefined) {
+      throw new TokenValidationError(
+        'session JWTs are not accepted; present a Connected App access token'
+      );
+    }
+    const clientId = payload['client_id'];
+    if (typeof clientId !== 'string' || clientId.trim() === '') {
+      throw new TokenValidationError(
+        'token has no client_id claim (not a Connected App access token)'
+      );
     }
     if (!sub) throw new TokenValidationError('token has no sub (member id)');
     if (!orgClaim) throw new TokenValidationError('token has no organization_id claim');
