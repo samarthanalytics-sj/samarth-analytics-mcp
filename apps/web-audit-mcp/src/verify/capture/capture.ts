@@ -40,6 +40,8 @@ interface PwRequestEx {
   method(): string;
   resourceType(): string;
   postData(): string | null;
+  isNavigationRequest(): boolean;
+  frame(): { parentFrame(): unknown | null };
 }
 interface PwRouteEx {
   request(): PwRequestEx;
@@ -69,6 +71,11 @@ export interface VerifyCaptureOptions {
   headless: boolean;
   navTimeoutMs: number;
   settle: SettleOptions;
+  /**
+   * Host suffixes the PAGE may navigate to: the start URL, redirects, navigate steps, and link or
+   * form-submit navigations. Subresources and iframes are not bound by it. Empty means any public
+   * host.
+   */
   allowlist: string[];
   /** Test-only offline fixtures — serves every request in-memory, no network. */
   fixtures?: FixtureProvider | null;
@@ -102,6 +109,24 @@ function hostMatches(url: string, domains: Set<string>): boolean {
     if (host === d || host.endsWith(`.${d}`)) return true;
   }
   return false;
+}
+
+/**
+ * A navigation of a top-level page (not an iframe). Playwright throws from frame() when a
+ * navigation is issued before its frame exists, which for a navigation means a new top-level page
+ * (a popup / target=_blank), so that case counts as top-level.
+ */
+function isTopLevelNavigation(req: PwRequestEx): boolean {
+  try {
+    if (!req.isNavigationRequest()) return false;
+  } catch {
+    return false;
+  }
+  try {
+    return req.frame().parentFrame() === null;
+  } catch {
+    return true;
+  }
 }
 
 function collectLinkerDomains(spec: VerifySpec): Set<string> {
@@ -168,6 +193,12 @@ export async function runCapture(
       // Abort top-level navigations to a cross-domain-linker target so the probe
       // can read the decorated URL without actually leaving the page.
       if (req.resourceType() === 'document' && linkerDomains.size > 0 && hostMatches(url, linkerDomains)) {
+        return route.abort();
+      }
+      // The operator allowlist bounds where the page itself may go, so a redirect, a link or a
+      // REAL form submit can never carry the journey onto an off-allowlist host. Only top-level
+      // navigations: CMP banners, payment and video embeds live in third-party iframes.
+      if (opts.allowlist.length > 0 && isTopLevelNavigation(req) && !urlAllowed(url, opts.allowlist).ok) {
         return route.abort();
       }
       // Named hosts are DNS-resolved: the string check above passes a name that resolves inside
@@ -257,7 +288,7 @@ export async function runCapture(
     for (const check of spec.checks) {
       if (check.type === 'event_on_interaction' && check.action) {
         const atTMs = Date.now() - state.navStart;
-        const { kind, outcome } = await runInteraction(page, check.action, opts.navTimeoutMs);
+        const { kind, outcome } = await runInteraction(page, check.action, opts.navTimeoutMs, opts.allowlist);
         actions.push({
           checkId: check.id,
           kind,
@@ -343,10 +374,18 @@ async function runInteraction(
   page: PwPage,
   action: { click?: string; submit?: string; navigate?: string },
   navTimeoutMs: number,
+  allowlist: string[],
 ): Promise<{ kind: ActionResult['kind']; outcome: { found: boolean; performed: boolean; note?: string } }> {
   if (action.click) return { kind: 'click', outcome: await clickSelector(page, action.click) };
   if (action.submit) return { kind: 'submit', outcome: await submitForm(page, action.submit) };
-  if (action.navigate) return { kind: 'navigate', outcome: await navigateTo(page, action.navigate, navTimeoutMs) };
+  if (action.navigate) {
+    // Admission-check the spec's target the way the tool boundary checks the start URL.
+    const verdict = urlAllowed(action.navigate, allowlist);
+    if (!verdict.ok) {
+      return { kind: 'navigate', outcome: { found: false, performed: false, note: `navigate refused: ${verdict.reason}` } };
+    }
+    return { kind: 'navigate', outcome: await navigateTo(page, action.navigate, navTimeoutMs) };
+  }
   return { kind: 'click', outcome: { found: false, performed: false, note: 'interaction had no click/submit/navigate' } };
 }
 

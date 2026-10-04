@@ -8,6 +8,11 @@
  * (parseGtmContainer + reconciled-coverage escalation in runConsentEngine).
  */
 
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { urlAllowed } from '../utils/urlGuard.js';
 import { createRequestGuard } from '../utils/safeFetch.js';
 import {
@@ -314,6 +319,104 @@ const verifyOpts = (extra: Record<string, unknown> = {}) => ({
   );
   check('verify route guard: fixture mode serves from memory', (await fx.decide({ url: 'https://x.example/' })) === 'fulfill');
   check('verify route guard: fixture mode never consults the DNS guard', guardCalls === 0);
+}
+
+// verify allowlist — it used to be declared and never read, so a spec could navigate, redirect or
+// REAL-submit a form onto any public host whatever the operator allowlisted.
+{
+  const fb = fakeVerifyBrowser();
+  const cap = await runCapture(
+    fb.browser,
+    {
+      url: 'https://shop.example.com/',
+      checks: [
+        { id: 'nav-off', type: 'event_on_interaction', event: 'x', action: { navigate: 'https://evil.test/landing' } },
+        { id: 'nav-on', type: 'event_on_interaction', event: 'y', action: { navigate: 'https://shop.example.com/next' } },
+      ],
+    },
+    verifyOpts({ allowlist: ['example.com'], requestGuard: createRequestGuard(fakeLookup(dnsTable).lookup) }),
+  );
+  check('verify allowlist: an allowlisted start URL loads', cap.loaded === true, cap.notes.join('; '));
+  const off = cap.actions.find((a) => a.checkId === 'nav-off');
+  check(
+    'verify allowlist: an off-allowlist navigate step is refused',
+    off?.performed === false && /refused/.test(off?.note ?? ''),
+    JSON.stringify(off),
+  );
+  check('verify allowlist: the off-allowlist navigate target is never opened', !fb.gotos.includes('https://evil.test/landing'));
+  const on = cap.actions.find((a) => a.checkId === 'nav-on');
+  check('verify allowlist: an allowlisted navigate step runs', on?.performed === true, JSON.stringify(on));
+  // What a link click, a redirect or a real form submit produces at the route.
+  check(
+    'verify allowlist: a top-level navigation off the allowlist is aborted',
+    (await fb.decide({ url: 'https://evil.test/thanks', nav: true })) === 'abort',
+  );
+  check(
+    'verify allowlist: a popup navigation off the allowlist is aborted',
+    (await fb.decide({ url: 'https://evil.test/thanks', nav: true, popup: true })) === 'abort',
+  );
+  check(
+    'verify allowlist: an allowlisted top-level navigation continues',
+    (await fb.decide({ url: 'https://shop.example.com/thanks', nav: true })) === 'continue',
+  );
+  check(
+    'verify allowlist: a third-party iframe (CMP banner, embed) still loads',
+    (await fb.decide({ url: 'https://evil.test/cmp-banner', nav: true, iframe: true })) === 'continue',
+  );
+  check(
+    'verify allowlist: a third-party subresource still loads',
+    (await fb.decide({ url: 'https://evil.test/pixel.js' })) === 'continue',
+  );
+}
+{
+  const fb = fakeVerifyBrowser();
+  const cap = await runCapture(
+    fb.browser,
+    { url: 'https://evil.test/', checks: [] },
+    verifyOpts({ allowlist: ['example.com'], requestGuard: createRequestGuard(fakeLookup(dnsTable).lookup) }),
+  );
+  check('verify allowlist: an off-allowlist start URL does not load', cap.loaded === false, cap.notes.join('; '));
+}
+{
+  const fb = fakeVerifyBrowser();
+  await runCapture(
+    fb.browser,
+    { url: 'https://shop.example.com/', checks: [] },
+    verifyOpts({ requestGuard: createRequestGuard(fakeLookup(dnsTable).lookup) }),
+  );
+  check(
+    'verify allowlist: an empty allowlist still means any public host',
+    (await fb.decide({ url: 'https://evil.test/thanks', nav: true })) === 'continue',
+  );
+}
+
+// verify CLI — `--allowlist` was parsed and then ignored, and the start URL was never checked.
+{
+  const dir = mkdtempSync(join(tmpdir(), 'verify-cli-'));
+  const specPath = join(dir, 'spec.json');
+  writeFileSync(
+    specPath,
+    JSON.stringify({ url: 'https://evil.test/', checks: [{ id: 'pv', type: 'event_fired', event: 'page_view' }] }),
+  );
+  const cli = fileURLToPath(new URL('../verify/cli.ts', import.meta.url));
+  const run = (...args: string[]) =>
+    spawnSync(process.execPath, [...process.execArgv, cli, '--spec', specPath, ...args], {
+      encoding: 'utf8',
+      timeout: 60_000,
+    });
+  const offList = run('--allowlist', 'Example.com');
+  check(
+    'verify cli: a start URL off --allowlist is rejected before anything loads',
+    offList.status === 2 && /URL rejected/.test(offList.stderr),
+    `status=${offList.status} stderr=${String(offList.stderr).slice(0, 200)}`,
+  );
+  const loopback = run('--url', 'http://localhost./');
+  check(
+    'verify cli: a private start URL is rejected without --allowlist',
+    loopback.status === 2 && /URL rejected/.test(loopback.stderr),
+    `status=${loopback.status} stderr=${String(loopback.stderr).slice(0, 200)}`,
+  );
+  rmSync(dir, { recursive: true, force: true });
 }
 
 // ── tracker classification ─────────────────────────────────────────────────
