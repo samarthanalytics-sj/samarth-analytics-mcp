@@ -10,6 +10,8 @@
  * expected result. Deletes are not journaled (they need a second confirmation to run).
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
+
 export type EntityKind = 'tag' | 'trigger' | 'variable';
 
 export interface ChangeRef {
@@ -25,17 +27,25 @@ export interface ChangeRef {
 class ChangeJournal {
   private turns: ChangeRef[][] = [];
   private readonly maxTurns = 30;
+  /** The turn whose async call tree is running. record() files into THIS, not "the newest turn". */
+  private readonly current = new AsyncLocalStorage<ChangeRef[]>();
 
-  /** Open a new turn. Called once per chat query before any writes. */
-  beginTurn(): void {
-    this.turns.push([]);
+  /** Run one chat query as a turn: open a new turn, then run `fn` with it bound to fn's async call
+   *  tree, so every record() made by that query lands in its own turn. Nothing serializes chat turns
+   *  (an account switch remounts the chat view while the old turn keeps writing), and with a single
+   *  process-wide "current turn" a second query's beginTurn captured the first query's later writes
+   *  into its own revert set. */
+  runTurn<T>(fn: () => Promise<T>): Promise<T> {
+    const turn: ChangeRef[] = [];
+    this.turns.push(turn);
     if (this.turns.length > this.maxTurns) this.turns.shift();
+    return this.current.run(turn, fn);
   }
 
-  /** Record an entity a write just touched (no-op if no turn is open, e.g. non-chat writes). */
+  /** Record an entity a write just touched, into the turn that made the write (no-op outside a turn,
+   *  e.g. non-chat writes). */
   record(ref: ChangeRef): void {
-    const cur = this.turns[this.turns.length - 1];
-    if (cur) cur.push(ref);
+    this.current.getStore()?.push(ref);
   }
 
   /** The MOST RECENT turn's writes (deduped), or null if the last query changed nothing.
@@ -49,8 +59,10 @@ class ChangeJournal {
   takeLast(): ChangeRef[] | null {
     const last = this.turns[this.turns.length - 1];
     if (last && last.length) {
-      this.turns[this.turns.length - 1] = [];
-      return dedupe(last);
+      const taken = dedupe(last);
+      // Clear IN PLACE: a turn still running holds this same array, so its later writes stay revertable.
+      last.length = 0;
+      return taken;
     }
     return null;
   }

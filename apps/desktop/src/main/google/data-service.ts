@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { tagmanager } from '@googleapis/tagmanager';
 import { analyticsadmin } from '@googleapis/analyticsadmin';
 import { analyticsdata } from '@googleapis/analyticsdata';
@@ -322,6 +323,14 @@ export interface Ga4ReportResult {
   completeness: ReportCompleteness;
 }
 
+/** One chat turn's GTM write-quota accounting (see GoogleDataService.withQuotaScope). */
+export interface QuotaBackoffScope {
+  /** 429s waited out by this turn's creates. */
+  backoffs: number;
+  /** Fired before each quota wait, so the wait can be shown in the UI. */
+  onBackoff?: (info: { attempt: number; delayMs: number }) => void;
+}
+
 // Read-only GTM/GA4 fetches for the ACTIVE account, using the small per-API
 // @googleapis packages. This proves the vaulted token reaches the real APIs and
 // is the seam the GTM/GA4 UI views read from. (The full MCP tool surface is
@@ -346,13 +355,19 @@ export class GoogleDataService {
     this.containerCache.clear();
   }
 
-  /** Count of GTM write-quota backoffs (429s waited out) since it was last reset. The chat turn resets
-   *  it at the start of a build and reads it for the build-stats line, so the user can see whether a
-   *  slow bulk build was quota-limited. Incremented by qCreate's onBackoff. */
-  quotaBackoffs = 0;
-  /** Optional per-turn hook so a quota wait can reach the UI ("waiting Ns for the write limit to
-   *  reset") instead of a silent pause. Set by the chat service around a turn, cleared after. */
-  onQuotaBackoff?: (info: { attempt: number; delayMs: number }) => void;
+  /** GTM write-quota accounting, PER CHAT TURN. A turn runs its tool calls inside withQuotaScope, and
+   *  qCreate's onBackoff finds that turn's scope through the async call tree: it counts the 429s waited
+   *  out (the build-stats line shows whether a slow bulk build was quota-limited) and calls the turn's
+   *  hook, so a quota wait reaches the UI instead of a silent pause. These used to be fields on this
+   *  shared service. A second turn (an account switch remounts the chat view, and nothing serializes
+   *  turns) then reset the first turn's count and replaced its hook, and whichever turn finished first
+   *  cleared the hook for both. */
+  private readonly quotaScope = new AsyncLocalStorage<QuotaBackoffScope>();
+
+  /** Run `fn` with `scope` as the quota-backoff counter + hook for every create it makes. */
+  withQuotaScope<T>(scope: QuotaBackoffScope, fn: () => Promise<T>): Promise<T> {
+    return this.quotaScope.run(scope, fn);
+  }
 
   /** Resilient retry for the INDIVIDUAL chat create path (tags/triggers/variables/built-ins). Three
    *  classes of transient GTM error, each with its own budget:
@@ -374,8 +389,11 @@ export class GoogleDataService {
       ],
       onBackoff: ({ rule, attempt, delayMs }) => {
         if (rule === 'quota') {
-          this.quotaBackoffs += 1;
-          this.onQuotaBackoff?.({ attempt, delayMs });
+          const scope = this.quotaScope.getStore();
+          if (scope) {
+            scope.backoffs += 1;
+            scope.onBackoff?.({ attempt, delayMs });
+          }
         }
         const why =
           rule === 'quota' ? 'write quota reached - waiting for the per-minute limit to reset'
