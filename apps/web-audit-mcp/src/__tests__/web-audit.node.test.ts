@@ -206,23 +206,40 @@ async function decide(
   return outcome;
 }
 
-/** A fake browser for runCapture: records goto() calls and routes them through the handler. */
-function fakeVerifyBrowser() {
+/**
+ * A fake browser for runCapture: records goto() calls and routes them through the handler.
+ * `redirects` maps a URL to where a server redirect lands; like real Playwright, only the first URL
+ * reaches the route handler. `elements` makes every selector resolve, and `interactions` records
+ * each click and in-page submit/href script that actually ran.
+ */
+function fakeVerifyBrowser(fake: { redirects?: Record<string, string>; elements?: boolean } = {}) {
   const box: { handler?: (route: never) => unknown } = {};
   const gotos: string[] = [];
+  const interactions: string[] = [];
   let current = 'about:blank';
   const page = {
     goto: async (url: string) => {
       gotos.push(url);
       if ((await decide(box.handler, { url, nav: true })) === 'abort') throw new Error(`net::ERR_FAILED at ${url}`);
-      current = url;
+      current = fake.redirects?.[url] ?? url;
       return { status: () => 200, headers: () => ({}) };
     },
-    evaluate: async () => [],
+    evaluate: async (_fn: unknown, arg?: unknown) => {
+      if (typeof arg !== 'string') return [];
+      interactions.push(`script ${arg}`);
+      return undefined;
+    },
     addInitScript: async () => {},
     on: () => {},
     frames: () => [],
-    $: async () => null,
+    $: async (sel: string) =>
+      fake.elements
+        ? {
+            click: async () => {
+              interactions.push(`click ${sel}`);
+            },
+          }
+        : null,
     title: async () => '',
     url: () => current,
     waitForTimeout: async () => {},
@@ -238,7 +255,7 @@ function fakeVerifyBrowser() {
     close: async () => {},
   };
   const browser = { newContext: async () => context, close: async () => {} } as unknown as PwBrowser;
-  return { browser, box, gotos, decide: (r: FakeReq) => decide(box.handler, r) };
+  return { browser, box, gotos, interactions, decide: (r: FakeReq) => decide(box.handler, r) };
 }
 
 function fakeClock() {
@@ -347,7 +364,8 @@ const verifyOpts = (extra: Record<string, unknown> = {}) => ({
   check('verify allowlist: the off-allowlist navigate target is never opened', !fb.gotos.includes('https://evil.test/landing'));
   const on = cap.actions.find((a) => a.checkId === 'nav-on');
   check('verify allowlist: an allowlisted navigate step runs', on?.performed === true, JSON.stringify(on));
-  // What a link click, a redirect or a real form submit produces at the route.
+  // What a link click or a real form submit produces at the route. (A redirect hop never reaches
+  // the route handler; see the page-URL re-check below.)
   check(
     'verify allowlist: a top-level navigation off the allowlist is aborted',
     (await fb.decide({ url: 'https://evil.test/thanks', nav: true })) === 'abort',
@@ -388,6 +406,80 @@ const verifyOpts = (extra: Record<string, unknown> = {}) => ({
   check(
     'verify allowlist: an empty allowlist still means any public host',
     (await fb.decide({ url: 'https://evil.test/thanks', nav: true })) === 'continue',
+  );
+}
+
+// verify allowlist vs redirects — Playwright never routes a redirect hop, so a start URL that
+// 302s off the allowlist used to be driven anyway: the consent click, a REAL submit, clicks and
+// linker probes all ran on the off-allowlist host. The page URL is now re-checked before each one.
+{
+  const redirectSpec = {
+    url: 'https://shop.example.com/start',
+    consent: { acceptSelector: '#accept' },
+    checks: [
+      { id: 'sub', type: 'event_on_interaction', event: 'generate_lead', action: { submit: '#lead' } },
+      { id: 'clk', type: 'event_on_interaction', event: 'cta', action: { click: '#cta' } },
+      { id: 'nav', type: 'event_on_interaction', event: 'pv', action: { navigate: 'https://shop.example.com/next' } },
+      { id: 'lnk', type: 'cross_domain_linker', expectedDomains: ['partner.example.org'] },
+    ],
+  } as never;
+  const fb = fakeVerifyBrowser({ redirects: { 'https://shop.example.com/start': 'https://evil.test/form' }, elements: true });
+  const cap = await runCapture(
+    fb.browser,
+    redirectSpec,
+    verifyOpts({ allowlist: ['example.com'], requestGuard: createRequestGuard(fakeLookup(dnsTable).lookup) }),
+  );
+  check('verify redirect: the page is left where the unrouted redirect landed', cap.finalUrl === 'https://evil.test/form', cap.finalUrl);
+  check(
+    'verify redirect: an off-allowlist final URL is noted',
+    cap.notes.some((n) => /start URL ended outside the allowlist/.test(n) && /evil\.test/.test(n)),
+    cap.notes.join('; '),
+  );
+  check(
+    'verify redirect: the consent click is refused',
+    cap.consentAction?.clicked === false && /refused: page is on evil\.test/.test(cap.consentAction?.note ?? ''),
+    JSON.stringify(cap.consentAction),
+  );
+  for (const id of ['sub', 'clk', 'nav', 'lnk']) {
+    const a = cap.actions.find((x) => x.checkId === id);
+    check(
+      `verify redirect: the ${id} step is not performed on the off-allowlist page`,
+      a?.performed === false && /refused: page is on evil\.test, outside the allowlist/.test(a?.note ?? ''),
+      JSON.stringify(a),
+    );
+  }
+  check('verify redirect: nothing was clicked or submitted', fb.interactions.length === 0, fb.interactions.join(', '));
+  check('verify redirect: the refused navigate step was not opened', !fb.gotos.includes('https://shop.example.com/next'));
+
+  // Control: the same journey on a redirect that stays on the allowlist is driven as before.
+  const ok = fakeVerifyBrowser({ redirects: { 'https://shop.example.com/start': 'https://www.example.com/form' }, elements: true });
+  const okCap = await runCapture(
+    ok.browser,
+    redirectSpec,
+    verifyOpts({ allowlist: ['example.com'], requestGuard: createRequestGuard(fakeLookup(dnsTable).lookup) }),
+  );
+  check(
+    'verify redirect: an on-allowlist redirect is still driven (consent, submit, click)',
+    okCap.consentAction?.clicked === true &&
+      ['sub', 'clk', 'nav'].every((id) => okCap.actions.find((x) => x.checkId === id)?.performed === true) &&
+      ok.interactions.includes('click #accept') &&
+      ok.interactions.includes('script #lead') &&
+      ok.interactions.includes('click #cta'),
+    JSON.stringify({ actions: okCap.actions, interactions: ok.interactions }),
+  );
+  check('verify redirect: no off-allowlist note when the redirect stays on the list', !okCap.notes.some((n) => /outside the allowlist/.test(n)));
+
+  // An empty allowlist still means open: the off-site redirect target is driven as before.
+  const open = fakeVerifyBrowser({ redirects: { 'https://shop.example.com/start': 'https://evil.test/form' }, elements: true });
+  const openCap = await runCapture(
+    open.browser,
+    redirectSpec,
+    verifyOpts({ requestGuard: createRequestGuard(fakeLookup(dnsTable).lookup) }),
+  );
+  check(
+    'verify redirect: an empty allowlist does not refuse interactions',
+    openCap.actions.find((x) => x.checkId === 'sub')?.performed === true && open.interactions.includes('script #lead'),
+    JSON.stringify(openCap.actions),
   );
 }
 

@@ -66,8 +66,10 @@ Options:
   --settle-quiet  Stop capturing after this many ms with no new GA4 collect (default 2000).
   --settle-max    Hard cap on capture time in ms (default 10000).
   --allowlist     Comma-separated host suffixes the page may navigate to (start URL,
-                  redirects, navigate steps, link/form navigations). Subresources and
-                  iframes are not restricted.
+                  navigate steps, link/form navigations). A server redirect off the list
+                  cannot be blocked, but no click, submit, navigate or consent step is
+                  performed on the page it lands on. Subresources and iframes are not
+                  restricted.
 `;
 
 async function main(): Promise<number> {
