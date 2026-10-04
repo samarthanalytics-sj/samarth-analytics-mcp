@@ -5,13 +5,13 @@ import type { OAuth2Client } from 'google-auth-library';
 import type { AccountClientManager } from './account-clients';
 import type { RegistryService } from '../services/registry-service';
 import type { ContainerSnapshot, ServerContainerSnapshot } from './gtm-builders';
-import { serverTagParam, ga4TagFields, readGa4EventParameters, applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, normalizeTriggerType, setCustomEventName, customEventNameOf, describeTriggerConditions, buildGa4Client, buildGa4ServerTag, buildStapeDataTag, buildStapeDataClient, buildServerAllEventsTrigger, buildServerEventTrigger, buildAdsConversionServerTag, buildMetaEmqVariables, buildTikTokEmqVariables, buildEcommerceDlvVariables, buildGa4EventTag, buildTrigger, planTriggerRetarget, type TriggerInput, buildGtmClient, buildVariable, sanitizeName, matchesServerContainer, customTemplateType, upsertGoogleTagConfig, taggingUrlFirstPartyIssue, parseTemplateParameters, summariseTagTypes, type TemplateField, type TagTypeProfile, triggerUsageBreakdown, detectMetaTags, planWebToServerMigration, evaluateTrackingSetup, GA4_ECOMMERCE_FUNNEL_EVENTS, type TrackingSetupReport, type TrackingSetupCheck } from './gtm-builders';
+import { ga4TagFields, readGa4EventParameters, applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, normalizeTriggerType, setCustomEventName, customEventNameOf, describeTriggerConditions, buildGa4Client, buildGa4ServerTag, buildStapeDataTag, buildStapeDataClient, buildServerAllEventsTrigger, buildServerEventTrigger, buildAdsConversionServerTag, buildMetaEmqVariables, buildTikTokEmqVariables, buildEcommerceDlvVariables, buildGa4EventTag, buildTrigger, planTriggerRetarget, type TriggerInput, buildGtmClient, buildVariable, sanitizeName, matchesServerContainer, customTemplateType, upsertGoogleTagConfig, taggingUrlFirstPartyIssue, parseTemplateParameters, summariseTagTypes, type TemplateField, type TagTypeProfile, triggerUsageBreakdown, detectMetaTags, planWebToServerMigration, evaluateTrackingSetup, GA4_ECOMMERCE_FUNNEL_EVENTS, type TrackingSetupReport, type TrackingSetupCheck } from './gtm-builders';
 import {
   galleryCoordinatesFor, matchInstalledTemplate, templateInstallError,
 } from '../../../../../src/shared/gtm-template-sources';
 import { installTemplateFromSource, type TemplateCreateApi } from '../../../../../src/shared/gtm-template-install';
 import { capiPlatform, capiCredentials } from '../../../../../src/shared/capi-platforms';
-import { buildProbeHit, probeSuffix, probeVerdict, describeProbe, type ProbeResult } from './runtime-probe';
+import { buildProbeHit, probeSuffix, probeVerdict, describeProbe, probeTargets, probeTargetRefusal, type ProbeResult } from './runtime-probe';
 import { resolveGa4MeasurementIds } from './gtm-ga4-check';
 import { withQuotaRetry, withRetry, QUOTA_RE, TRANSIENT_5XX_RE, NOT_FOUND_OR_PERMISSION_RE } from './quota-retry';
 import { log } from '../logger';
@@ -2342,13 +2342,10 @@ export class GoogleDataService {
     if (!taggingUrl) throw new Error('This server container has no https tagging server URL recorded, so there is nothing to send the probe to. Record it first (set_server_container_tagging_url).');
     // Which id to probe: the explicit one, else the single id the active relays forward. Several
     // ids means the caller must choose; guessing would probe a property the user did not mean.
+    const targets = probeTargets(server);
     let measurementId = (opts?.measurementId ?? '').trim();
     if (!measurementId) {
-      const relayIds = [...new Set(server.tags
-        .filter((t) => t.type === 'sgtmgaaw' && !t.paused && (t.firingTriggerId ?? []).length > 0)
-        .map((t) => serverTagParam(t, 'measurementId').trim())
-        .map((v) => { const m = v.match(/^\{\{(.+)\}\}$/); if (!m) return v; const c = (server.variables ?? []).find((x) => x.name.trim().toLowerCase() === m[1].trim().toLowerCase() && (x.type ?? '').toLowerCase() === 'c'); return c ? String(((c.parameter ?? []) as Array<{ key?: string; value?: unknown }>).find((pp) => pp.key === 'value')?.value ?? '') : v; })
-        .filter((v) => /^G-/i.test(v)))];
+      const relayIds = [...targets.forwarded];
       if (relayIds.length === 1) measurementId = relayIds[0];
       else if (relayIds.length === 0) throw new Error('No active GA4 relay with a literal Measurement ID was found; pass measurementId explicitly.');
       else throw new Error(`This server forwards ${relayIds.length} Measurement IDs (${relayIds.join(', ')}); pass measurementId to say which one to probe.`);
@@ -2356,6 +2353,10 @@ export class GoogleDataService {
     // The property to read back from: found through the ids the user can actually access.
     const known = await this.listGa4MeasurementIds();
     const hit0 = known.find((k) => k.measurementId.toUpperCase() === measurementId.toUpperCase());
+    // Refuse BEFORE sending an id this server would not deliver to (a literal relay re-routes it into
+    // another production property) or one nothing corroborates and this account cannot read back.
+    const refusal = probeTargetRefusal(targets, measurementId, Boolean(hit0));
+    if (refusal) throw new Error(refusal);
     const hit = buildProbeHit({ taggingUrl, measurementId, suffix: probeSuffix() });
     const taggingHost = new URL(taggingUrl).host;
     const { requestAllowed } = await import('../suggestions/ssrf');
