@@ -445,7 +445,15 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
       let parsedArgs: Record<string, unknown> = {};
       let parseError: string | null = null;
       try {
-        parsedArgs = call.function.arguments ? JSON.parse(call.function.arguments) : {};
+        const parsed: unknown = call.function.arguments ? JSON.parse(call.function.arguments) : {};
+        // Valid JSON is not enough. `null`, `"x"` and `5` all parse, and every path below reads or
+        // writes properties on the result (`parsedArgs.confirm = true` throws a TypeError for them),
+        // which used to kill the turn before finish() could bill it. Refused like a syntax error.
+        if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          parseError = 'Arguments must be a JSON object';
+        } else {
+          parsedArgs = parsed as Record<string, unknown>;
+        }
       } catch (err) {
         parseError = `Arguments were not valid JSON: ${err instanceof Error ? err.message : String(err)}`;
       }
@@ -457,7 +465,7 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
           role: 'tool',
           tool_call_id: call.id,
           name: call.function.name,
-          content: `${parseError}. Retry this call with valid JSON arguments.`,
+          content: `${parseError}. Retry this call with a valid JSON object as its arguments.`,
         });
         emit({
           type: 'tool_result',

@@ -3,11 +3,22 @@
  */
 import assert from 'node:assert/strict';
 import { capToolResult, compactToolHistory, productOf, scopeTools, toOpenAiTools } from '../tools.js';
-import type { ToolDef } from '../types.js';
+import { runTurn } from '../loop.js';
+import { ApprovalBroker } from '../approvals.js';
+import type { OrchestratorConfig } from '../config.js';
+import type { McpConnection } from '../mcp-client.js';
+import type { OpenAiClient } from '../openai.js';
+import type { UsageMeter } from '../usage.js';
+import type { StreamEvent, ToolDef } from '../types.js';
 
 let passed = 0;
 function test(name: string, fn: () => void): void {
   fn();
+  passed++;
+  console.log(`  ok  ${name}`);
+}
+async function testAsync(name: string, fn: () => Promise<void>): Promise<void> {
+  await fn();
   passed++;
   console.log(`  ok  ${name}`);
 }
@@ -238,6 +249,87 @@ test('a seven-call turn is bounded instead of growing without limit', () => {
   const after = compactToolHistory(msgs, 24_000).reduce((n, m) => n + (m.content?.length ?? 0), 0);
   assert.equal(before, 112_000);
   assert.ok(after < 30_000, `expected the turn to fit its budget, got ${after}`);
+});
+
+const TURN_CFG = {
+  enableWriteTools: true,
+  enableDeleteTools: false,
+  approveLiveWrites: false,
+  openai: { model: 'test-model' },
+  limits: {
+    maxToolCallsPerTurn: 10,
+    maxTurnMs: 60_000,
+    maxHistoryMessages: 20,
+    maxToolResultChars: 10_000,
+    maxToolHistoryChars: 50_000,
+  },
+} as unknown as OrchestratorConfig;
+
+/**
+ * Runs one real turn against stubs: the model makes exactly `calls`, then answers. Returns what
+ * reached the MCP, what was streamed, and what was billed.
+ */
+async function turnWith(
+  calls: { name: string; arguments: string }[],
+): Promise<{ forwarded: { name: string; args: Record<string, unknown> }[]; events: StreamEvent[]; billed: number | null }> {
+  const forwarded: { name: string; args: Record<string, unknown> }[] = [];
+  const events: StreamEvent[] = [];
+  let billed: number | null = null;
+  const mcp = {
+    listTools: () => CATALOG,
+    getInstructions: () => '',
+    async callTool(name: string, args: Record<string, unknown>) {
+      forwarded.push({ name, args });
+      return { ok: true, text: '{}' };
+    },
+  } as unknown as McpConnection;
+  let round = 0;
+  const llm = {
+    async streamChat() {
+      round++;
+      if (round > 1) return { content: 'done', toolCalls: [], finishReason: 'stop' };
+      return {
+        content: '',
+        finishReason: 'tool_calls',
+        toolCalls: calls.map((c, i) => ({ id: `call_${i}`, type: 'function' as const, function: c })),
+      };
+    },
+  } as unknown as OpenAiClient;
+
+  await runTurn({
+    cfg: TURN_CFG,
+    mcp,
+    llm,
+    history: [{ role: 'user', content: 'zzz' }],
+    context: { product: 'gtm' },
+    user: { id: 'user-1' },
+    emit: (e) => events.push(e),
+    signal: new AbortController().signal,
+    // A broker, so a write can run at all. No delete is in scope and approveLiveWrites is off, so
+    // nothing in these turns parks on a card.
+    approvals: new ApprovalBroker(),
+    usage: { record: (_user: string, tokens: number) => (billed = tokens) } as unknown as UsageMeter,
+  });
+  return { forwarded, events, billed };
+}
+
+const results = (events: StreamEvent[]) =>
+  events.filter((e): e is Extract<StreamEvent, { type: 'tool_result' }> => e.type === 'tool_result');
+const doneReason = (events: StreamEvent[]) =>
+  events.find((e): e is Extract<StreamEvent, { type: 'done' }> => e.type === 'done')?.reason;
+
+console.log('tool arguments that are JSON but not an object');
+
+await testAsync('null, a string, a number or an array is an invalid-arguments result, not a dead turn', async () => {
+  // Each of these parses. `parsedArgs.confirm = true` then threw a TypeError for the first three,
+  // which ended the turn as internal_error before finish() billed it.
+  for (const raw of ['null', '"x"', '5', '[1]']) {
+    const { forwarded, events, billed } = await turnWith([{ name: 'tags_create', arguments: raw }]);
+    assert.deepEqual(forwarded, [], `${raw} reached the MCP`);
+    assert.equal(results(events)[0]?.summary, 'Invalid arguments', `${raw} was not refused as invalid`);
+    assert.equal(doneReason(events), 'complete', `${raw} did not let the turn finish`);
+    assert.notEqual(billed, null, `${raw} skipped billing`);
+  }
 });
 
 console.log(`\n${passed} assertions passed`);
