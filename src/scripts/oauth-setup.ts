@@ -6,7 +6,8 @@
  *   1. Generates authorization URL
  *   2. You visit the URL in a browser and authorize
  *   3. Paste the authorization code back here
- *   4. Tokens are printed — add them to your .env
+ *   4. Tokens are saved to the local token file (never printed); exits 1 if
+ *      Google returned no refresh token, since then nothing was saved
  *
  * Usage:
  *   npx tsx src/scripts/oauth-setup.ts
@@ -16,7 +17,11 @@
 
 import 'dotenv/config';
 import readline from 'readline';
-import { getOAuthAuthorizationUrl, exchangeCodeForTokens } from '../auth/googleAuth.js';
+import {
+  getOAuthAuthorizationUrl,
+  exchangeCodeForTokens,
+  getTokenFilePath,
+} from '../auth/googleAuth.js';
 
 async function main(): Promise<void> {
   console.log('=== Samarth GTM MCP — OAuth Setup ===');
@@ -64,15 +69,32 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  let stored: Awaited<ReturnType<typeof exchangeCodeForTokens>>;
   try {
-    await exchangeCodeForTokens(code);
-    console.log('');
-    console.log('Step 3: Copy the GOOGLE_ACCESS_TOKEN and GOOGLE_REFRESH_TOKEN values above');
-    console.log('        into your .env file. The refresh token is used to auto-renew access.');
+    stored = await exchangeCodeForTokens(code);
   } catch (err) {
     console.error('Token exchange failed:', String(err));
     process.exit(1);
   }
+
+  // exchangeCodeForTokens only writes the token file when Google returned a refresh_token; without
+  // one it logs a warning and returns. This used to exit 0 regardless, telling the user to copy token
+  // values "above" that were never printed, so setup looked done with nothing saved.
+  if (!stored.refresh_token) {
+    console.error('');
+    console.error('No refresh token was returned, so nothing was saved. Setup is NOT complete.');
+    console.error(
+      'Revoke this app at https://myaccount.google.com/permissions, then run this setup again.'
+    );
+    process.exit(1);
+  }
+
+  console.log('');
+  console.log(`Step 3: Done. Tokens were saved to ${getTokenFilePath()} (mode 0600, gitignored).`);
+  console.log('        The server reads them from there; the refresh token auto-renews access.');
 }
 
-main();
+main().catch((err) => {
+  console.error('OAuth setup failed:', String(err));
+  process.exit(1);
+});

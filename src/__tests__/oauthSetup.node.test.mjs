@@ -21,8 +21,9 @@
 
 import assert from 'assert';
 import { spawnSync } from 'child_process';
-import { existsSync } from 'fs';
-import { fileURLToPath } from 'url';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import os from 'os';
+import { fileURLToPath, pathToFileURL } from 'url';
 import path from 'path';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -43,10 +44,10 @@ const childEnv = {
   GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET ?? 'test-secret',
 };
 
-function runSetup(stdin) {
+function runSetup(stdin, extraEnv = {}) {
   const res = spawnSync(process.execPath, [tsxCli, script], {
     cwd: repoRoot,
-    env: childEnv,
+    env: { ...childEnv, ...extraEnv },
     input: stdin,
     encoding: 'utf8',
     timeout: 120000,
@@ -94,6 +95,66 @@ test('a pasted code is not discarded by the close handler', () => {
     'expected the script to carry the answer into exchangeCodeForTokens'
   );
 });
+
+// ── what the script reports after the exchange ───────────────────────────────
+// It used to ignore exchangeCodeForTokens' result, exit 0, and tell the user to copy token values
+// "above" that were never printed. With no refresh_token nothing is saved at all, so that was a
+// silent failure. Google is stubbed with a preload (NODE_OPTIONS reaches the tsx child) that replaces
+// OAuth2Client.prototype.getToken, so no network is involved, and GTM_MCP_TOKEN_FILE points at a temp
+// file so a real token file is never touched.
+const tmp = mkdtempSync(path.join(os.tmpdir(), 'oauth-setup-test-'));
+const preload = path.join(tmp, 'stub-google.mjs');
+const galPath = path.join(repoRoot, 'node_modules/google-auth-library/build/src/index.js');
+writeFileSync(
+  preload,
+  [
+    "import { createRequire } from 'node:module';",
+    `const { OAuth2Client } = createRequire(import.meta.url)(${JSON.stringify(galPath)});`,
+    'OAuth2Client.prototype.getToken = async function () {',
+    '  return { tokens: JSON.parse(process.env.STUB_GOOGLE_TOKENS), res: null };',
+    '};',
+  ].join('\n')
+);
+
+function runWithStubbedTokens(tokens) {
+  const tokenFile = path.join(tmp, `tokens-${Math.random().toString(36).slice(2)}.json`);
+  const res = runSetup('4/stubbed-code\n', {
+    NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --import=${pathToFileURL(preload).href}`.trim(),
+    STUB_GOOGLE_TOKENS: JSON.stringify(tokens),
+    GTM_MCP_TOKEN_FILE: tokenFile,
+  });
+  return { ...res, tokenFile };
+}
+
+const ACCESS = 'ya29.stub-access-token-value';
+const REFRESH = '1//stub-refresh-token-value';
+
+test('REGRESSION: no refresh_token returned → exits 1 and says nothing was saved', () => {
+  const res = runWithStubbedTokens({ access_token: ACCESS, expiry_date: Date.now() + 3600_000 });
+  assert.ok(!res.stderr.includes('Token exchange failed'), `the stub did not apply: ${res.stderr}`);
+  assert.strictEqual(res.status, 1, `expected exit 1, got ${res.status}\n${res.stdout}\n${res.stderr}`);
+  assert.ok(res.stderr.includes('No refresh token was returned'), res.stderr);
+  assert.ok(!existsSync(res.tokenFile), 'nothing may be written without a refresh token');
+  assert.ok(!res.stdout.includes('Step 3'), 'must not announce success');
+});
+
+test('a refresh_token is saved to the token file, the script exits 0, and no secret is printed', () => {
+  const res = runWithStubbedTokens({
+    access_token: ACCESS,
+    refresh_token: REFRESH,
+    expiry_date: Date.now() + 3600_000,
+  });
+  assert.strictEqual(res.status, 0, `expected exit 0, got ${res.status}\n${res.stdout}\n${res.stderr}`);
+  assert.ok(existsSync(res.tokenFile), 'the token file must be written');
+  assert.strictEqual(JSON.parse(readFileSync(res.tokenFile, 'utf8')).refresh_token, REFRESH);
+  assert.ok(res.stdout.includes(res.tokenFile), 'Step 3 must say where the tokens went');
+  assert.ok(!/Copy the GOOGLE_ACCESS_TOKEN/.test(res.stdout), 'the stale "copy the values above" text is back');
+  for (const secret of [ACCESS, REFRESH]) {
+    assert.ok(!res.stdout.includes(secret) && !res.stderr.includes(secret), 'a token value was printed');
+  }
+});
+
+rmSync(tmp, { recursive: true, force: true });
 
 console.log(`\noauth-setup: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
