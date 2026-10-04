@@ -16,7 +16,7 @@ There are two ways to use it:
 
 ## Quick start (run from source)
 
-Already have **Node.js 18+** and **Git**? Clone into your **home folder** and run:
+Already have **Node.js 22.12+** and **Git**? Clone into your **home folder** and run:
 
 **macOS / Linux**
 ```bash
@@ -55,10 +55,10 @@ cd ~\samarth-analytics-mcp\apps\desktop; npm run dev
 
 ## 1. Prerequisites (both OS)
 
-- **Node.js 18 or newer** and **Git**
+- **Node.js 22.12 or newer** (required by Electron 42) and **Git**
   - **Windows:** install from <https://nodejs.org> and <https://git-scm.com>
   - **macOS:** `brew install node git` (and `xcode-select --install` for build tools)
-  - Verify: `node -v` → `v18.x` or higher
+  - Verify: `node -v` → `v22.12` or higher
 - A **Google "Desktop app" OAuth client** (Client ID + Secret) — see [Appendix A](#appendix-a--create-a-google-oauth-client)
 - At least one **LLM API key** (OpenAI / Anthropic / Gemini)
 
@@ -115,7 +115,8 @@ npm run dev
 ```
 
 If the cache is empty/corrupt (no `electron-v*.zip` under the cache folder, or
-the fix above still fails), force a clean re-download, then re-run `npm install`:
+the fix above still fails), force a clean re-download, then re-run `npm run dev`
+(since Electron 42 the binary is fetched on first run, not by `npm install`):
 ```bash
 # Windows:  Remove-Item -Recurse -Force "$env:LOCALAPPDATA\electron\Cache"
 # macOS:    rm -rf ~/Library/Caches/electron
