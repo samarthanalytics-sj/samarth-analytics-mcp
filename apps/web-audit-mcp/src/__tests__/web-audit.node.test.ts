@@ -41,7 +41,15 @@ import {
   extractObservedDestinations,
   reconcile,
 } from '../agent/reconcile.js';
-import { isAuthorized, buildHealthBody } from '../http.js';
+import { readFileSync } from 'node:fs';
+import {
+  isAuthorized,
+  buildHealthBody,
+  isInitializeRequest,
+  decidePostRoute,
+  startHttpServer,
+} from '../http.js';
+import { createWebAuditMcpServer } from '../server.js';
 import { loadConfig } from '../utils/config.js';
 import { runConsentRuntimeRules } from '../../../portal/shared/consent-audit.js';
 import { detectEmbeddedForm } from '../agent/tag-suggest/providers.js';
@@ -529,6 +537,119 @@ check('http: health status ok', health.status === 'ok' && health.transport === '
 check('http: health reports sessions', health.activeSessions === 2);
 check('http: health reports playwright + auth', health.playwrightAvailable === true && health.authRequired === true);
 check('http: health surfaces config', typeof health.config.interactionEnabled === 'boolean' && Array.isArray(health.config.allowlist));
+
+// ── HTTP transport: sessions ────────────────────────────────────────────────
+// REGRESSION: one McpServer was shared by every HTTP session, and McpServer.connect() throws
+// "Already connected to a transport" the second time. That throw landed in an Express 4 async
+// handler with no try/catch and no process-level net, so a second client's initialize took the
+// whole process (and the first client's session) down. Any non-initialize POST without a known
+// session id also minted a transport, so it hit the same throw.
+
+check('http: initialize detected', isInitializeRequest({ jsonrpc: '2.0', id: 1, method: 'initialize' }));
+check('http: initialize detected inside a batch', isInitializeRequest([{ method: 'tools/list' }, { method: 'initialize' }]));
+check(
+  'http: non-initialize bodies not detected',
+  !isInitializeRequest({ method: 'tools/list' }) && !isInitializeRequest(null) && !isInitializeRequest('initialize'),
+);
+check('http: known session resumes', decidePostRoute('s1', true, { method: 'tools/list' }).kind === 'resume');
+check('http: initialize without session creates', decidePostRoute(undefined, false, { method: 'initialize' }).kind === 'create');
+check('http: initialize with a stale session creates', decidePostRoute('gone', false, { method: 'initialize' }).kind === 'create');
+check('http: non-initialize without session → unknown', decidePostRoute(undefined, false, { method: 'tools/list' }).kind === 'unknown-session');
+check('http: non-initialize with a stale session → unknown', decidePostRoute('gone', false, { method: 'tools/list' }).kind === 'unknown-session');
+
+const webAuditIndexSrc = readFileSync(new URL('../index.ts', import.meta.url), 'utf8');
+check('http: index hands startHttpServer a factory, not a shared server', /startHttpServer\(createWebAuditMcpServer\)/.test(webAuditIndexSrc));
+check('http: index registers an unhandledRejection net', webAuditIndexSrc.includes("process.on('unhandledRejection'"));
+check('http: index registers an uncaughtException net', webAuditIndexSrc.includes("process.on('uncaughtException'"));
+
+// Live: a real listener on an ephemeral port, driven over loopback. No browser is launched.
+const HTTP_ENV_KEYS = ['WEB_AUDIT_HTTP_AUTH_TOKEN', 'WEB_AUDIT_HTTP_ALLOW_UNAUTHENTICATED', 'WEB_AUDIT_HTTP_PORT', 'PORT'];
+const httpLogs: string[] = [];
+async function withHttpEnv(env: Record<string, string>, fn: () => Promise<void>): Promise<void> {
+  const saved = HTTP_ENV_KEYS.map((k) => [k, process.env[k]] as const);
+  for (const k of HTTP_ENV_KEYS) delete process.env[k];
+  Object.assign(process.env, env);
+  const origError = console.error;
+  // The server logs every session open/close to stderr; keep it for assertions, not the console.
+  console.error = (...args: unknown[]) => { httpLogs.push(args.map(String).join(' ')); };
+  try {
+    await fn();
+  } finally {
+    console.error = origError;
+    for (const [k, v] of saved) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+}
+
+const TEST_HTTP_TOKEN = 'web-audit-test-token';
+const MCP_HEADERS: Record<string, string> = {
+  'content-type': 'application/json',
+  accept: 'application/json, text/event-stream',
+  authorization: `Bearer ${TEST_HTTP_TOKEN}`,
+};
+const initBody = (id: number): string =>
+  JSON.stringify({
+    jsonrpc: '2.0',
+    id,
+    method: 'initialize',
+    params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'web-audit-test', version: '0.0.0' } },
+  });
+
+await withHttpEnv({ WEB_AUDIT_HTTP_AUTH_TOKEN: TEST_HTTP_TOKEN, WEB_AUDIT_HTTP_PORT: '0' }, async () => {
+  const handle = await startHttpServer(createWebAuditMcpServer);
+  const base = `http://127.0.0.1:${handle.port}`;
+  const post = (body: string, extra: Record<string, string> = {}): Promise<Response> =>
+    fetch(`${base}/mcp`, { method: 'POST', headers: { ...MCP_HEADERS, ...extra }, body });
+  const activeSessions = async (): Promise<number> =>
+    ((await (await fetch(`${base}/health`)).json()) as { activeSessions: number }).activeSessions;
+  try {
+    const a = await post(initBody(1));
+    const aText = await a.text();
+    const sidA = a.headers.get('mcp-session-id') ?? '';
+    check('http live: first initialize → 200 + session id', a.status === 200 && sidA !== '', `${a.status} ${aText.slice(0, 200)}`);
+
+    const b = await post(initBody(1));
+    const bText = await b.text();
+    const sidB = b.headers.get('mcp-session-id') ?? '';
+    check(
+      'http live: SECOND initialize → its own session (was: "Already connected", process exit)',
+      b.status === 200 && sidB !== '' && sidB !== sidA,
+      `${b.status} ${bText.slice(0, 200)}`,
+    );
+
+    const sessionHeaders = (sid: string) => ({ 'mcp-session-id': sid, 'mcp-protocol-version': '2025-06-18' });
+    const listA = await post(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' }), sessionHeaders(sidA));
+    const listAText = await listA.text();
+    check('http live: first session still serves tools/list', listA.status === 200 && listAText.includes('site_crawl'), `${listA.status} ${listAText.slice(0, 200)}`);
+    const listB = await post(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' }), sessionHeaders(sidB));
+    const listBText = await listB.text();
+    check('http live: second session serves tools/list', listB.status === 200 && listBText.includes('site_crawl'), `${listB.status} ${listBText.slice(0, 200)}`);
+
+    const orphan = await post(JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/list' }));
+    const orphanBody = (await orphan.json()) as { jsonrpc?: string; error?: { code?: number } };
+    check('http live: non-initialize without a session → 404 JSON-RPC -32001', orphan.status === 404 && orphanBody.jsonrpc === '2.0' && orphanBody.error?.code === -32001);
+
+    const stale = await post(JSON.stringify({ jsonrpc: '2.0', id: 4, method: 'tools/list' }), sessionHeaders('no-such-session'));
+    const staleBody = (await stale.json()) as { error?: { code?: number } };
+    check('http live: stale session id → 404 JSON-RPC -32001', stale.status === 404 && staleBody.error?.code === -32001);
+
+    const before = await activeSessions();
+    check('http live: only initialize mints sessions', before === 2, String(before));
+
+    const del = await fetch(`${base}/mcp`, { method: 'DELETE', headers: { ...MCP_HEADERS, ...sessionHeaders(sidA) } });
+    await del.text();
+    const after = await activeSessions();
+    check('http live: DELETE releases that session only', del.status === 200 && after === 1, `${del.status} active=${after}`);
+
+    const listBAfter = await post(JSON.stringify({ jsonrpc: '2.0', id: 5, method: 'tools/list' }), sessionHeaders(sidB));
+    const listBAfterText = await listBAfter.text();
+    check('http live: the other session survives the DELETE', listBAfter.status === 200 && listBAfterText.includes('site_crawl'), `${listBAfter.status}`);
+  } finally {
+    await handle.close();
+  }
+});
 
 // ── tag-presence reconciliation (configured vs fired) ───────────────────────
 
