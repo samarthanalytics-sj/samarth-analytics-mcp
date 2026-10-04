@@ -3,11 +3,23 @@
  */
 import assert from 'node:assert/strict';
 import { capToolResult, compactToolHistory, productOf, scopeTools, toOpenAiTools } from '../tools.js';
-import type { ToolDef } from '../types.js';
+import { runTurn } from '../loop.js';
+import { ApprovalBroker } from '../approvals.js';
+import { approvalGate } from '../writeTiers.js';
+import type { OrchestratorConfig } from '../config.js';
+import { McpConnection } from '../mcp-client.js';
+import type { OpenAiClient } from '../openai.js';
+import type { UsageMeter } from '../usage.js';
+import type { StreamEvent, ToolDef } from '../types.js';
 
 let passed = 0;
 function test(name: string, fn: () => void): void {
   fn();
+  passed++;
+  console.log(`  ok  ${name}`);
+}
+async function testAsync(name: string, fn: () => Promise<void>): Promise<void> {
+  await fn();
   passed++;
   console.log(`  ok  ${name}`);
 }
@@ -152,6 +164,45 @@ test('truncation drops deletes first, then writes, then reads', () => {
   assert.equal(scoped.some((t) => t.isDelete), false, 'a delete survived truncation ahead of a read');
 });
 
+await testAsync('the catalog reads the MCP\'s [DELETE] label, not only the tool name', async () => {
+  // built_in_variables_disable is gated by the server as a delete, and no word in its name says so.
+  // Classified by name alone it was offered with deletes off and ran with confirm=true, no card.
+  const listed = [
+    { name: 'built_in_variables_disable', description: '[DELETE] Disable one or more built-in variables in a GTM workspace.' },
+    { name: 'built_in_variables_enable', description: '[WRITE] Enable one or more built-in variables in a GTM workspace.' },
+    { name: 'tags_delete', description: '[DELETE] Delete a GTM tag.' },
+    { name: 'ga4_trash_thing', description: '[GA4 DELETE] Soft-delete (trash) a thing.' },
+    { name: 'versions_publish', description: '[PUBLISH] Publish a container version.' },
+  ].map((t) => ({
+    ...t,
+    inputSchema: { type: 'object', properties: { workspaceId: { type: 'string' }, confirm: { type: 'boolean' } } },
+  }));
+  const conn = new McpConnection({} as OrchestratorConfig);
+  Object.assign(conn as unknown as Record<string, unknown>, {
+    client: {
+      listTools: async () => ({ tools: listed }),
+      listPrompts: async () => ({ prompts: [] }),
+    },
+  });
+  await (conn as unknown as { refreshCatalog(): Promise<void> }).refreshCatalog();
+  const byName = new Map(conn.listTools().map((t) => [t.name, t]));
+
+  assert.equal(byName.get('built_in_variables_disable')?.isDelete, true, 'a [DELETE]-tier tool is a delete');
+  assert.equal(byName.get('ga4_trash_thing')?.isDelete, true, 'the GA4 label counts too');
+  assert.equal(byName.get('tags_delete')?.isDelete, true);
+  assert.equal(byName.get('built_in_variables_enable')?.isDelete, false, 'its [WRITE] twin is not');
+  assert.equal(byName.get('versions_publish')?.isDelete, false, 'publish stays never-offered, not a delete');
+
+  const offered = scopeTools(conn.listTools(), { product: 'gtm', includeWrites: true }).map((t) => t.name);
+  assert.equal(offered.includes('built_in_variables_disable'), false, 'offered with deletes off');
+  assert.ok(offered.includes('built_in_variables_enable'));
+  assert.deepEqual(
+    approvalGate(byName.get('built_in_variables_disable')!, false),
+    { confirmWord: 'DELETE' },
+    'once offered, it stops for the typed confirmation like any delete',
+  );
+});
+
 console.log('openai mapping');
 
 test('schemas are normalized to a valid function-calling shape', () => {
@@ -238,6 +289,248 @@ test('a seven-call turn is bounded instead of growing without limit', () => {
   const after = compactToolHistory(msgs, 24_000).reduce((n, m) => n + (m.content?.length ?? 0), 0);
   assert.equal(before, 112_000);
   assert.ok(after < 30_000, `expected the turn to fit its budget, got ${after}`);
+});
+
+console.log('the turn enforces the scoped set at call time');
+
+const TURN_CFG = {
+  enableWriteTools: true,
+  enableDeleteTools: false,
+  approveLiveWrites: false,
+  openai: { model: 'test-model' },
+  limits: {
+    maxToolCallsPerTurn: 10,
+    maxTurnMs: 60_000,
+    maxHistoryMessages: 20,
+    maxToolResultChars: 10_000,
+    maxToolHistoryChars: 50_000,
+  },
+} as unknown as OrchestratorConfig;
+
+/**
+ * Runs one real turn against stubs: the model makes exactly `calls`, then answers. Returns what
+ * reached the MCP, what was streamed, and what was billed.
+ */
+async function turnWith(
+  calls: { name: string; arguments: string }[],
+  opts: {
+    cfg?: OrchestratorConfig;
+    signal?: AbortSignal;
+    approvals?: ApprovalBroker;
+    /** Replaces the scripted model, e.g. with one that never finishes. */
+    llm?: OpenAiClient;
+    /** Sees each event as it is streamed, e.g. to act like the user when a card appears. */
+    onEmit?: (e: StreamEvent) => void;
+  } = {},
+): Promise<{ forwarded: { name: string; args: Record<string, unknown> }[]; events: StreamEvent[]; billed: number | null }> {
+  const forwarded: { name: string; args: Record<string, unknown> }[] = [];
+  const events: StreamEvent[] = [];
+  let billed: number | null = null;
+  const mcp = {
+    listTools: () => CATALOG,
+    getInstructions: () => '',
+    async callTool(name: string, args: Record<string, unknown>) {
+      forwarded.push({ name, args });
+      return { ok: true, text: '{}' };
+    },
+  } as unknown as McpConnection;
+  let round = 0;
+  const llm = {
+    async streamChat() {
+      round++;
+      if (round > 1) return { content: 'done', toolCalls: [], finishReason: 'stop' };
+      return {
+        content: '',
+        finishReason: 'tool_calls',
+        toolCalls: calls.map((c, i) => ({ id: `call_${i}`, type: 'function' as const, function: c })),
+      };
+    },
+  } as unknown as OpenAiClient;
+
+  await runTurn({
+    cfg: opts.cfg ?? TURN_CFG,
+    mcp,
+    llm: opts.llm ?? llm,
+    history: [{ role: 'user', content: 'zzz' }],
+    context: { product: 'gtm' },
+    user: { id: 'user-1' },
+    emit: (e) => {
+      events.push(e);
+      opts.onEmit?.(e);
+    },
+    signal: opts.signal ?? new AbortController().signal,
+    // A broker, so a write can run at all. With the default config no delete is in scope and
+    // approveLiveWrites is off, so nothing parks on a card unless a test opts in.
+    approvals: opts.approvals ?? new ApprovalBroker(),
+    usage: { record: (_user: string, tokens: number) => (billed = tokens) } as unknown as UsageMeter,
+  });
+  return { forwarded, events, billed };
+}
+
+const results = (events: StreamEvent[]) =>
+  events.filter((e): e is Extract<StreamEvent, { type: 'tool_result' }> => e.type === 'tool_result');
+const doneReason = (events: StreamEvent[]) =>
+  events.find((e): e is Extract<StreamEvent, { type: 'done' }> => e.type === 'done')?.reason;
+
+await testAsync('a hidden publish called by name never reaches the MCP, confirm or not', async () => {
+  // versions_publish is in the catalog but never offered. Before the guard, a model that named it
+  // anyway skipped the approval gate (it keys off the scoped entry) and was forwarded verbatim.
+  const { forwarded, events } = await turnWith([
+    { name: 'versions_publish', arguments: '{"versionId":"7","confirm":true}' },
+  ]);
+  assert.deepEqual(forwarded, [], 'an unscoped tool was forwarded to the MCP');
+  assert.equal(results(events)[0]?.ok, false);
+  assert.equal(doneReason(events), 'complete', 'a refusal is an answer the model reads, not a crash');
+});
+
+await testAsync('a delete this deployment switched off is refused, not run without its card', async () => {
+  const { forwarded } = await turnWith([{ name: 'tags_delete', arguments: '{"tagId":"1","confirm":true}' }]);
+  assert.deepEqual(forwarded, []);
+});
+
+await testAsync('another product\'s tool and an invented name are refused the same way', async () => {
+  const { forwarded, events } = await turnWith([
+    { name: 'ga4_create_property', arguments: '{"confirm":true}' },
+    { name: 'tags_nuke_everything', arguments: '{}' },
+  ]);
+  assert.deepEqual(forwarded, []);
+  assert.deepEqual(results(events).map((r) => r.ok), [false, false]);
+});
+
+await testAsync('a tool in the scoped set still runs, with the confirm a guarded write needs', async () => {
+  const { forwarded } = await turnWith([
+    { name: 'tags_list', arguments: '{}' },
+    { name: 'tags_create', arguments: '{"name":"x"}' },
+  ]);
+  assert.deepEqual(forwarded.map((f) => f.name), ['tags_list', 'tags_create']);
+  assert.equal(forwarded[1].args.confirm, true);
+});
+
+await testAsync('the connection itself refuses a name its server never listed', async () => {
+  // The backstop for any caller that skips its own permitted-set check.
+  const sent: string[] = [];
+  const conn = new McpConnection({} as OrchestratorConfig);
+  Object.assign(conn as unknown as Record<string, unknown>, {
+    client: {
+      async callTool({ name }: { name: string }) {
+        sent.push(name);
+        return { content: [{ type: 'text', text: 'ran' }] };
+      },
+    },
+    tools: [tool('tags_list')],
+  });
+  const refused = await conn.callTool('tags_nuke_everything', { confirm: true });
+  assert.equal(refused.ok, false);
+  assert.match(refused.text, /not a tool this server provides/);
+  const ran = await conn.callTool('tags_list', {});
+  assert.equal(ran.ok, true);
+  assert.deepEqual(sent, ['tags_list'], 'only the listed tool may reach the server');
+});
+
+console.log('tool arguments that are JSON but not an object');
+
+await testAsync('null, a string, a number or an array is an invalid-arguments result, not a dead turn', async () => {
+  // Each of these parses. `parsedArgs.confirm = true` then threw a TypeError for the first three,
+  // which ended the turn as internal_error before finish() billed it.
+  for (const raw of ['null', '"x"', '5', '[1]']) {
+    const { forwarded, events, billed } = await turnWith([{ name: 'tags_create', arguments: raw }]);
+    assert.deepEqual(forwarded, [], `${raw} reached the MCP`);
+    assert.equal(results(events)[0]?.summary, 'Invalid arguments', `${raw} was not refused as invalid`);
+    assert.equal(doneReason(events), 'complete', `${raw} did not let the turn finish`);
+    assert.notEqual(billed, null, `${raw} skipped billing`);
+  }
+});
+
+console.log('a turn that ends early withdraws its own card');
+
+await testAsync('aborting the turn declines the card it parked, and runs nothing', async () => {
+  // The broker is handed the turn's signal, so the card goes when this turn goes, not when any turn
+  // of the same user does.
+  const turn = new AbortController();
+  const approvals = new ApprovalBroker();
+  const { forwarded, events, billed } = await turnWith(
+    [{ name: 'tags_delete', arguments: '{"tagId":"9"}' }],
+    {
+      cfg: { ...TURN_CFG, enableDeleteTools: true } as OrchestratorConfig,
+      signal: turn.signal,
+      approvals,
+      onEmit: (e) => {
+        if (e.type === 'approval_required') turn.abort(); // the user closed the tab
+      },
+    },
+  );
+  assert.deepEqual(forwarded, [], 'a write ran after its turn was abandoned');
+  assert.match(results(events)[0]?.summary ?? '', /stopped the request/);
+  assert.equal(doneReason(events), 'aborted');
+  assert.equal(approvals.stats().pending, 0, 'the card was left parked');
+  assert.notEqual(billed, null);
+});
+
+await testAsync('a stopped turn runs none of the calls queued behind its card', async () => {
+  const turn = new AbortController();
+  const { forwarded } = await turnWith(
+    [
+      { name: 'tags_delete', arguments: '{"tagId":"9"}' },
+      { name: 'tags_create', arguments: '{"name":"after"}' },
+    ],
+    {
+      cfg: { ...TURN_CFG, enableDeleteTools: true } as OrchestratorConfig,
+      signal: turn.signal,
+      onEmit: (e) => {
+        if (e.type === 'approval_required') turn.abort();
+      },
+    },
+  );
+  assert.deepEqual(forwarded, [], 'a write queued in the same batch ran after the turn stopped');
+});
+
+console.log('the time budget is enforced while waiting, not only between round trips');
+
+/** A budget short enough to run out inside a test. */
+const SHORT_TURN = { ...TURN_CFG, limits: { ...TURN_CFG.limits, maxTurnMs: 50 } } as OrchestratorConfig;
+
+/** Awaits `work`, failing instead of hanging if it is still going after `ms`. */
+async function within<T>(ms: number, work: Promise<T>, what: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${what} was still running after ${ms}ms`)), ms);
+  });
+  try {
+    return await Promise.race([work, late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+await testAsync('a model stream that stalls ends the turn at its budget, billed', async () => {
+  // The budget was checked only at the top of the loop, so a call that never returned never got
+  // there; and nothing else aborted the signal. Here the model behaves like a fetch: it answers
+  // only by rejecting when its signal aborts.
+  const stalled = {
+    streamChat: (_m: unknown, _t: unknown, _c: unknown, signal: AbortSignal) =>
+      new Promise((_, reject) =>
+        signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true }),
+      ),
+  } as unknown as OpenAiClient;
+  const { events, billed } = await within(2_000, turnWith([], { cfg: SHORT_TURN, llm: stalled }), 'the stalled turn');
+  assert.equal(doneReason(events), 'time_budget', 'a stopped stream must close the turn the tidy way');
+  assert.notEqual(billed, null);
+});
+
+await testAsync('a card nobody answers is withdrawn when the budget runs out', async () => {
+  const approvals = new ApprovalBroker();
+  const { forwarded, events } = await within(
+    2_000,
+    turnWith([{ name: 'tags_delete', arguments: '{"tagId":"9"}' }], {
+      cfg: { ...SHORT_TURN, enableDeleteTools: true } as OrchestratorConfig,
+      approvals,
+    }),
+    'the turn waiting on a card',
+  );
+  assert.deepEqual(forwarded, []);
+  assert.match(results(events)[0]?.summary ?? '', /ran out of time/, 'not blamed on the user');
+  assert.equal(doneReason(events), 'time_budget');
+  assert.equal(approvals.stats().pending, 0);
 });
 
 console.log(`\n${passed} assertions passed`);

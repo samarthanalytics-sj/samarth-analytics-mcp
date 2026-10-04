@@ -16,6 +16,9 @@ export default defineConfig({
   build: {
     outDir: path.resolve(import.meta.dirname, "dist/public"),
     emptyOutDir: true,
+    // Vite 8's default lightningcss minifier rejects the Tailwind-generated
+    // `.after\:border.toggle-elevate::after::before` selector ("Invalid state").
+    cssMinify: "esbuild",
   },
   server: {
     fs: {

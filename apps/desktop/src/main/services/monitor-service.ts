@@ -1,4 +1,5 @@
 import { readJsonFile, writeJsonFileAtomic } from '../storage/json-file';
+import { MAX_INTERVAL_MINUTES, assertTimerMs } from './timer-limits';
 import { auditChanges } from '../google/audit-runner';
 import type { GoogleDataService } from '../google/data-service';
 import type { AuditHistoryStore } from '../storage/audit-history';
@@ -56,7 +57,8 @@ export class MonitorService {
   private normalize(c: Partial<MonitorConfig> | null): MonitorConfig {
     return {
       enabled: Boolean(c?.enabled),
-      intervalMinutes: Math.max(MIN_INTERVAL_MINUTES, Math.floor(Number(c?.intervalMinutes) || DEFAULT_CONFIG.intervalMinutes)),
+      // Ceiling too: an interval past setInterval's limit (or Infinity) would fire every 1 ms.
+      intervalMinutes: Math.min(MAX_INTERVAL_MINUTES, Math.max(MIN_INTERVAL_MINUTES, Math.floor(Number(c?.intervalMinutes) || DEFAULT_CONFIG.intervalMinutes))),
     };
   }
 
@@ -85,7 +87,7 @@ export class MonitorService {
 
   start(runNow = false): void {
     if (this.timer) return;
-    const ms = this.config.intervalMinutes * 60_000;
+    const ms = assertTimerMs(this.config.intervalMinutes * 60_000);
     this.timer = setInterval(() => void this.runOnce(), ms);
     if (typeof this.timer.unref === 'function') this.timer.unref(); // don't keep the app alive
     if (runNow) void this.runOnce(); // establish the baseline (won't alert on first run)

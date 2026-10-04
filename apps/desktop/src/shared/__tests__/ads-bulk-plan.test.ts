@@ -87,6 +87,21 @@ check('anything else falls back to the same default the single-row picker uses',
 check('the event name is considered too, not just the tag name',
   categoryForRow({ tagName: 'Untitled Tag', eventName: 'phone_click' }) === 'PHONE_CALL_LEAD');
 check('every planned item carries a category', planAdsConversionActions([row(), row({ id: 'r2' })]).create.every((c) => !!c.category));
+// A keyword must START a word. The old ungrouped alternations let "tel"/"call"/"demo" match anywhere,
+// so a hotel booking became a phone lead, a product recall became a phone lead, and a demolition
+// quote became an appointment.
+check('"hotel" is not "tel": a hotel booking is an appointment, not a phone lead',
+  categoryForRow({ tagName: 'Hotel Booking Form Tag' }) === 'BOOK_APPOINTMENT', categoryForRow({ tagName: 'Hotel Booking Form Tag' }));
+check('"recall" is not "call"',
+  categoryForRow({ tagName: 'Product Recall Notice Form Tag' }) === 'SUBMIT_LEAD_FORM', categoryForRow({ tagName: 'Product Recall Notice Form Tag' }));
+check('"demolition" is not "demo"',
+  categoryForRow({ tagName: 'Demolition Quote Form Tag' }) === 'REQUEST_QUOTE', categoryForRow({ tagName: 'Demolition Quote Form Tag' }));
+check('"tell" is not "tel"',
+  categoryForRow({ tagName: 'Tell Us About Your Project Form Tag' }) === 'SUBMIT_LEAD_FORM', categoryForRow({ tagName: 'Tell Us About Your Project Form Tag' }));
+check('a snake_case event name still matches at a word start', categoryForRow({ tagName: 'Untitled Tag', eventName: 'request_demo' }) === 'BOOK_APPOINTMENT');
+check('a word that starts with a keyword still counts (booking, subscribed)',
+  categoryForRow({ tagName: 'Booking Confirmed Tag' }) === 'BOOK_APPOINTMENT' && categoryForRow({ tagName: 'Untitled Tag', eventName: 'subscribed_to_updates' }) === 'SIGNUP');
+check('a hyphenated sign-up still counts as signup', categoryForRow({ tagName: 'Sign-Up Form Tag' }) === 'SIGNUP');
 
 // ── Mixed selection: the realistic case ────────────────────────────────────────
 {

@@ -69,3 +69,31 @@ jobs:
 
       - name: Test desktop
         run: npm --prefix apps/desktop test
+
+      # Customer portal (Vite client + Express server + Vercel api/**). It has its own package
+      # and tsconfig, so the root typecheck never covered it, and nothing built it before deploy.
+      - name: Install portal dependencies
+        run: npm ci --prefix apps/portal
+
+      - name: Typecheck portal
+        run: npm run portal:check
+
+      - name: Build portal
+        run: npm run portal:build
+
+      # Web audit MCP. Its pure-logic suite already runs in `npm test` via tsx, which transpiles
+      # without checking, so only `tsc` against its own deps catches a type error in it.
+      - name: Install web-audit dependencies
+        run: npm ci --prefix apps/web-audit-mcp
+
+      - name: Typecheck web-audit
+        run: npm run webaudit:check
+
+      # Runtime worker. It has no lockfile in git, so nothing is installed: the syntax check and
+      # the SSRF guard tests use only Node built-ins.
+      - name: Check runtime worker
+        run: npm --prefix apps/runtime-worker run check
+
+      - name: Test runtime worker SSRF guard
+        working-directory: apps/runtime-worker
+        run: node --test url-guard.test.mjs

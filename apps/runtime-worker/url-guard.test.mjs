@@ -1,7 +1,7 @@
 // SSRF guard unit tests. Run with: node --test url-guard.test.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { urlAllowed } from "./url-guard.mjs";
+import { urlAllowed, createRequestGuard } from "./url-guard.mjs";
 
 test("allows ordinary public http(s) URLs", () => {
   assert.equal(urlAllowed("https://example.com/").ok, true);
@@ -31,6 +31,22 @@ test("blocks loopback by name and IP", () => {
   ]) {
     assert.equal(urlAllowed(u).ok, false, u);
   }
+});
+
+test("blocks the trailing-dot (FQDN) spelling of loopback names", () => {
+  for (const u of [
+    "http://localhost./",
+    "http://foo.localhost./",
+    "http://ip6-localhost./",
+    "http://LOCALHOST../",
+  ]) {
+    assert.equal(urlAllowed(u).ok, false, u);
+  }
+});
+
+test("matches the allowlist against the trailing-dot spelling", () => {
+  assert.equal(urlAllowed("https://client.com./", ["client.com"]).ok, true);
+  assert.equal(urlAllowed("https://evilclient.com./", ["client.com"]).ok, false);
 });
 
 test("blocks RFC-1918 and CGNAT ranges", () => {
@@ -95,4 +111,70 @@ test("allowlist never overrides the private-IP block", () => {
   // Even if an attacker controls a host in the allowlist that points internal,
   // an explicit internal IP target is still rejected.
   assert.equal(urlAllowed("http://127.0.0.1/", ["127.0.0.1"]).ok, false);
+});
+
+// A fake resolver: answers from a table, counts calls, throws for unknown names.
+function fakeLookup(table) {
+  const calls = [];
+  const lookup = async (hostname) => {
+    calls.push(hostname);
+    const addrs = table[hostname];
+    if (!addrs) throw Object.assign(new Error(`ENOTFOUND ${hostname}`), { code: "ENOTFOUND" });
+    return addrs;
+  };
+  return { lookup, calls };
+}
+
+test("request guard blocks a public-looking NAME that resolves to a private address", async () => {
+  const { lookup } = fakeLookup({
+    "metadata.google.internal": [{ address: "169.254.169.254", family: 4 }],
+    "127.0.0.1.nip.io": [{ address: "127.0.0.1", family: 4 }],
+    "db": [{ address: "172.18.0.3", family: 4 }],
+    "v6-loop.example.com": [{ address: "::1", family: 6 }],
+    "mixed.example.com": [
+      { address: "93.184.216.34", family: 4 },
+      { address: "10.0.0.7", family: 4 },
+    ],
+  });
+  const allowed = createRequestGuard(lookup);
+  // The string check alone lets every one of these through.
+  for (const u of [
+    "http://metadata.google.internal/computeMetadata/v1/",
+    "http://127.0.0.1.nip.io/",
+    "http://db:5432/",
+    "http://v6-loop.example.com/",
+    "http://mixed.example.com/",
+  ]) {
+    assert.equal(urlAllowed(u).ok, true, `string check passes ${u}`);
+    assert.equal(await allowed(u), false, u);
+  }
+});
+
+test("request guard admits public names and IP literals, and fails closed on lookup errors", async () => {
+  const { lookup, calls } = fakeLookup({
+    "example.com": [{ address: "93.184.216.34", family: 4 }],
+  });
+  const allowed = createRequestGuard(lookup);
+  assert.equal(await allowed("https://example.com/"), true);
+  assert.equal(await allowed("http://93.184.216.34/"), true);
+  assert.equal(await allowed("https://does-not-resolve.example/"), false);
+  // String-check failures never reach DNS, and neither does an IP literal.
+  assert.equal(await allowed("http://169.254.169.254/"), false);
+  assert.equal(await allowed("file:///etc/passwd"), false);
+  assert.deepEqual(calls, ["example.com", "does-not-resolve.example"]);
+});
+
+test("request guard resolves each host once per guard", async () => {
+  const { lookup, calls } = fakeLookup({
+    "cdn.example.com": [{ address: "93.184.216.34", family: 4 }],
+  });
+  const allowed = createRequestGuard(lookup);
+  const verdicts = await Promise.all(
+    Array.from({ length: 20 }, (_, i) => allowed(`https://cdn.example.com/asset-${i}.js`)),
+  );
+  assert.ok(verdicts.every(Boolean));
+  assert.equal(calls.length, 1);
+  // A fresh guard (a new browser context) resolves again.
+  await createRequestGuard(lookup)("https://cdn.example.com/x.js");
+  assert.equal(calls.length, 2);
 });

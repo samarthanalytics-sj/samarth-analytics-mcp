@@ -53,7 +53,8 @@ Fill in `.env.docker`:
 - `GOOGLE_REFRESH_TOKEN` - from step 2.
 - `GTM_MCP_HTTP_AUTH_TOKEN` - a strong secret; clients send it as a bearer token.
   Generate one: `openssl rand -hex 32`.
-- `WEB_AUDIT_HTTP_AUTH_TOKEN` - same idea for the web-audit server.
+- `WEB_AUDIT_HTTP_AUTH_TOKEN` - same idea for the web-audit server. Required:
+  left blank, the web-audit server refuses to start.
 - `WEB_AUDIT_ALLOWLIST` / `RUNTIME_WORKER_ALLOWLIST` - comma-separated host
   suffixes each browser service may visit. **Keep these tight.** An empty
   allowlist means OPEN (any host), which you do not want on a public box.
@@ -183,7 +184,9 @@ so use one or the other.
 ## Security checklist
 
 - [ ] `GTM_MCP_HTTP_AUTH_TOKEN` and `WEB_AUDIT_HTTP_AUTH_TOKEN` are set to strong
-      random values - the servers warn and run open without them.
+      random values - without them the servers refuse to start (the
+      `*_HTTP_ALLOW_UNAUTHENTICATED=true` opt-ins are for local development
+      only and bind loopback).
 - [ ] `WEB_AUDIT_ALLOWLIST` and `RUNTIME_WORKER_ALLOWLIST` are set (never left
       empty/OPEN on a reachable host).
 - [ ] Write guardrails are off unless you intend writes.

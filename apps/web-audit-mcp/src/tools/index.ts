@@ -8,7 +8,11 @@
  *    read-only toward the audited site's data — the ONLY interaction it ever
  *    performs is clicking consent-banner accept/reject controls inside an
  *    ephemeral, cookie-isolated browser context. Forms are inventoried, never
- *    submitted.
+ *    submitted. One opt-in exception, OFF by default: when the server sets
+ *    WEB_AUDIT_ENABLE_INTERACTIVE_FORMS=true, gtm_tag_suggestions also clicks a
+ *    few form-opening CTAs per page to reveal popup forms, with navigation,
+ *    form submits, network writes and measurement hits blocked while it does
+ *    (agent/tag-suggest/interactive-forms.ts).
  *
  * 2. The `verify` TOOL (tag verification engine) is OPERATOR-DRIVEN: it performs
  *    exactly the selectors/actions listed in the operator's spec, INCLUDING real
@@ -221,7 +225,9 @@ export function registerAllTools(server: McpServer): void {
         'Enhanced Measurement ALREADY auto-tracks (file ' +
         'downloads, outbound clicks) is flagged enhancedMeasurementOverlap:true rather than pushed, so you do not ' +
         'double-track. Read-only and bounded by maxPages/scanPages and a private-network guard; forms are ' +
-        'inventoried, never filled or submitted, and no element other than the page itself is ever interacted with. ' +
+        'inventoried, never filled or submitted, and no element other than the page itself is ever interacted with ' +
+        '(unless the server operator enabled WEB_AUDIT_ENABLE_INTERACTIVE_FORMS, off by default: then a few ' +
+        'form-opening CTAs are clicked to reveal popup forms, with navigation, submits and network writes blocked). ' +
         'Pass debug:true to add a `debug` block (browser console/page errors + run mode) when a scan comes back empty.',
       inputSchema: z.object({
         url: urlField,

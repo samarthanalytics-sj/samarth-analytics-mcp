@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { buildServerPlan, planReadiness, findStapeDataTag, findStapeDataClient, type ServerPlanInput } from '../server-plan';
+import { buildServerPlan, planReadiness, findStapeDataTag, findStapeDataClient, eventTriggerFor, type ListedTrigger, type ServerPlanInput } from '../server-plan';
 import { buildStapeDataTag } from '../gtm-builders';
 import type { AuditTag, AuditTrigger, ContainerSnapshot, ServerContainerSnapshot } from '../gtm-builders';
 
@@ -82,7 +82,7 @@ test('CAPI items: per web pixel event; every platform executable by the app, eac
   assert.ok(capi.every((i) => i.requires.every((r) => r.startsWith(`${i.id.slice(0, i.id.indexOf('_capi:'))}.`))),
     'an item only ever asks for its OWN platform credentials');
   const linkedin = plan.items.find((i) => i.id.startsWith('linkedin_capi:'));
-  if (linkedin) assert.deepEqual(linkedin.requires, ['linkedin.conversionRuleUrn', 'linkedin.accessToken'], 'LinkedIn fires on a conversion rule URN, not the web partner id');
+  if (linkedin) assert.deepEqual(linkedin.requires, [`linkedin.conversionRuleUrn@${linkedin.id.slice(linkedin.id.indexOf(':') + 1)}`, 'linkedin.accessToken'], 'LinkedIn fires on a conversion rule URN, not the web partner id');
 });
 
 test('CAPI items: GTM built-in LinkedIn Insight tag (bzi) is recognised by its native type, not by name', () => {
@@ -274,7 +274,8 @@ test('CAPI items: platforms beyond the original four are planned, with their own
   assert.deepEqual(req('yelp'), ['yelp.accessToken']);
   // Nextdoor and LINE Yahoo take three fields, which a two-credential model could never express.
   assert.deepEqual(req('nextdoor'), ['nextdoor.pixelId', 'nextdoor.clientId', 'nextdoor.accessToken']);
-  assert.deepEqual(req('lineyahoo'), ['lineyahoo.tagId', 'lineyahoo.accessToken', 'lineyahoo.channelId']);
+  // ...plus, for any event but page_view, Yahoo's per-conversion Event Snippet ID for THIS event.
+  assert.deepEqual(req('lineyahoo'), ['lineyahoo.tagId', 'lineyahoo.accessToken', 'lineyahoo.channelId', 'lineyahoo.eventSnippetId@purchase']);
   assert.deepEqual(req('reddit'), ['reddit.accountId', 'reddit.accessToken']);
   for (const p of ['yelp', 'nextdoor', 'lineyahoo', 'reddit']) {
     const item = plan.items.find((i) => i.id === `${p}_capi:purchase`)!;
@@ -283,6 +284,59 @@ test('CAPI items: platforms beyond the original four are planned, with their own
   }
 });
 
+test('apply: an existing Custom Event trigger (listGtmTriggers row) is REUSED, not duplicated', () => {
+  // applyServerPlan reads triggers through listGtmTriggers, whose rows carry customEventName and
+  // conditions but no raw customEventFilter. The old match read customEventFilter, so it never found
+  // a trigger from an earlier run and created "ce - purchase (server)" next to "ce - purchase".
+  const rows: ListedTrigger[] = [
+    { triggerId: '7', name: 'ce - purchase', type: 'customEvent', customEventName: 'purchase', conditions: [] },
+    { triggerId: '8', name: 'All Pages', type: 'pageview', customEventName: '', conditions: [] },
+  ];
+  assert.deepEqual(eventTriggerFor(rows, 'purchase'), { reuse: '7' });
+  assert.deepEqual(eventTriggerFor(rows, 'lead'), { create: 'ce - lead' }, 'a missing event gets the plain name');
+});
+
+test('apply: a trigger with extra conditions is not reused, and a new one always gets a FREE name', () => {
+  // Run 1 left "ce - purchase" with a page condition; run 2 created "ce - purchase (server)". A third
+  // create must not re-offer "(server)", which GTM rejects as a duplicate name.
+  const rows: ListedTrigger[] = [
+    { triggerId: '7', name: 'ce - purchase', type: 'customEvent', customEventName: 'purchase', conditions: ['{{Page Path}} equals /thanks'] },
+  ];
+  assert.deepEqual(eventTriggerFor(rows, 'purchase'), { create: 'ce - purchase (server)' }, 'a conditioned trigger fires on less than the event');
+  rows.push({ triggerId: '9', name: 'CE - Purchase (Server)', type: 'customEvent', customEventName: 'purchase_refund', conditions: [] });
+  assert.deepEqual(eventTriggerFor(rows, 'purchase'), { create: 'ce - purchase (server 3)' }, 'taken names are compared case-insensitively');
+  rows.push({ triggerId: '10', name: 'ce - purchase (server 3)', type: 'customEvent', customEventName: 'other', conditions: [] });
+  assert.deepEqual(eventTriggerFor(rows, 'purchase'), { create: 'ce - purchase (server 4)' });
+  // A trigger on a different event with the same base name is not reused either.
+  assert.deepEqual(eventTriggerFor([{ triggerId: '1', name: 'ce - lead', type: 'customEvent', customEventName: 'generate_lead', conditions: [] }], 'lead'), { create: 'ce - lead (server)' });
+});
+
+
+test('CAPI items: a per-conversion id is required PER EVENT, so two X / LinkedIn events never share one conversion', () => {
+  const pixel = (tagId: string, name: string, type: string, trig: string) =>
+    tag({ tagId, name, type, firingTriggerId: [trig], parameter: [{ type: 'template', key: 'html', value: '<script>x()</script>' }] });
+  const input = emptyInput();
+  input.web = {
+    tags: [
+      pixel('x1', 'X pixel - purchase', 'html', '1'), pixel('x2', 'X pixel - lead', 'html', '2'),
+      pixel('l1', 'Insight', 'bzi', '1'), pixel('l2', 'Insight 2', 'bzi', '2'),
+      pixel('y1', 'LINE Yahoo PV', 'html', '3'),
+    ],
+    triggers: [evTrigger('1', 'purchase'), evTrigger('2', 'generate_lead'), evTrigger('3', 'page_view')],
+    variables: [],
+  } as ContainerSnapshot;
+  const plan = buildServerPlan(input);
+  const req = (id: string) => plan.items.find((i) => i.id === id)?.requires;
+  assert.deepEqual(req('x_capi:purchase'), ['x.pixelId', 'x.eventId@purchase', 'x.pixelAccessToken']);
+  assert.deepEqual(req('x_capi:generate_lead'), ['x.pixelId', 'x.eventId@generate_lead', 'x.pixelAccessToken']);
+  assert.deepEqual(req('linkedin_capi:purchase'), ['linkedin.conversionRuleUrn@purchase', 'linkedin.accessToken']);
+  assert.deepEqual(req('linkedin_capi:generate_lead'), ['linkedin.conversionRuleUrn@generate_lead', 'linkedin.accessToken']);
+  assert.deepEqual(req('lineyahoo_capi:page_view'), ['lineyahoo.tagId', 'lineyahoo.accessToken', 'lineyahoo.channelId'], 'page_view needs no Yahoo snippet');
+  // Filling only the purchase X Event ID leaves the lead item not ready rather than reusing it.
+  const r = planReadiness(plan.items, new Set(['x_capi:purchase', 'x_capi:generate_lead', 'ga4_client']),
+    { 'x.pixelId': 'P', 'x.pixelAccessToken': 'T', 'x.eventId@purchase': 'tw-a' } as never);
+  assert.deepEqual(r.map((x) => [x.id, x.missingValues]), [['x_capi:generate_lead', ['x.eventId@generate_lead']]]);
+});
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

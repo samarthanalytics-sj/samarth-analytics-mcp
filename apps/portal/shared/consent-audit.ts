@@ -688,8 +688,12 @@ function ruleRuntimeGrantedExpectsHit(rt: RuntimeInput, out: ConsentFinding[]) {
 
 /** Cookies set before consent (timing) where cookie snapshots exist. */
 function ruleRuntimeCookiesBeforeConsent(rt: RuntimeInput, out: ConsentFinding[]) {
+  // Anchored per cookie name (not bare prefixes), so first-party cookies such as
+  // `identity_session`, `ident` or `li_session` are not flagged. Based on the
+  // verify engine's list (web-audit-mcp/src/verify/assert/helpers.ts) plus the
+  // GA/DoubleClick/LinkedIn cookies the previous prefix list already covered.
   const TRACKING_COOKIE =
-    /^(_ga|_gid|_gcl|_fbp|_fbc|_uet|IDE|test_cookie|_ttp|li_|_pin_|_scid)/i;
+    /^(_ga($|_)|_gat($|_)|_gid$|_gac_|_gcl_|_fbp$|_fbc$|_uetsid$|_uetvid$|_uetmsclkid$|_ttp$|_scid$|_tt_|IDE$|MUID$|test_cookie$|li_gc$|li_sugr$|li_fat_id$|_pin_unauth$)/i;
   for (const page of rt.pages) {
     const cookies = page.cookies ?? [];
     if (cookies.length === 0) continue;

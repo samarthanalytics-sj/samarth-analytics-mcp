@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { TagWatchService, buildTagWatchSlack } from '../tag-watch-service';
+import { MAX_TIMER_MS, MAX_INTERVAL_HOURS } from '../timer-limits';
 import type { TagWatchTarget } from '../../google/tag-watch-core';
 
 let passed = 0;
@@ -80,7 +84,32 @@ test('remove + enable/interval mutate config; dedupe by id', async () => {
   assert.equal(svc.getConfig().targets.length, 1, 'deduped by id');
   assert.equal(svc.setInterval(6).intervalHours, 6);
   assert.equal(svc.setInterval(0).intervalHours, 1, 'floored at 1h');
+  // Ceiling: past setInterval's 2^31-1 ms limit (596 h) Node fires every 1 ms.
+  assert.equal(svc.setInterval(24 * 365).intervalHours, MAX_INTERVAL_HOURS, 'capped at the timer ceiling');
   assert.equal(svc.removeTarget('G-SVC').targets.length, 0);
+});
+
+// Regression: normalize (the load path) only floor-clamped, so a persisted interval past the timer limit
+// armed a setInterval that Node replaces with 1 ms, scanning gtag.js and posting Slack nonstop.
+test('a persisted interval past the timer limit loads clamped, and the armed delay fits', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'samarth-tagwatch-'));
+  const file = join(dir, 'tag-watch.json');
+  const target = { measurementId: 'G-SVC', lastSnapshot: null, timeline: [], lastScanAt: null, lastParsed: false };
+  writeFileSync(file, JSON.stringify({ enabled: true, intervalHours: 1e9, targets: [target] }));
+  const delays: number[] = [];
+  const realSetInterval = globalThis.setInterval;
+  globalThis.setInterval = ((fn: () => void, ms?: number) => { delays.push(Number(ms)); return realSetInterval(fn, 3_600_000); }) as typeof setInterval;
+  let svc: TagWatchService | null = null;
+  try {
+    svc = new TagWatchService({ fetchGtagJs: async () => gtagJs(['purchase']), configPath: file, now: () => 1 });
+    assert.equal(svc.getConfig().intervalHours, MAX_INTERVAL_HOURS, 'loaded interval clamped to the ceiling');
+    assert.equal(delays.length, 1, 'enabled + a target arms the timer on load');
+    assert.ok(delays[0] >= 1 && delays[0] <= MAX_TIMER_MS, `armed delay ${delays[0]} must fit in a 32-bit timer`);
+  } finally {
+    svc?.stop();
+    globalThis.setInterval = realSetInterval;
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('buildTagWatchSlack: change list with field arrows; unparsed is a warning', async () => {

@@ -39,10 +39,11 @@ export interface ServerPlanItem {
 /**
  * Config values the plan can use; `detected` carries what the audit already found.
  *
- * Conversion-API credentials live in `capi`, keyed "<platform>.<field>" exactly as capiValueKeys()
- * spells them, because the platforms do not share a shape: Yelp needs a token alone, Nextdoor and
- * LINE Yahoo take three fields each. Naming a field per platform on this interface is what
- * previously capped the flow at four destinations.
+ * Conversion-API credentials live in `capi`, keyed "<platform>.<field>" (or "<platform>.<field>@<event>"
+ * for a per-conversion id such as the X Event ID) exactly as capiValueKeys() spells them, because
+ * the platforms do not share a shape: Yelp needs a token alone, Nextdoor and LINE Yahoo take three
+ * fields each. Naming a field per platform on this interface is what previously capped the flow at
+ * four destinations.
  */
 export interface ServerPlanValues {
   measurementId?: string;
@@ -99,6 +100,28 @@ export function findStapeDataClient(server: ServerContainerSnapshot | null): { c
   }
   return null;
 }
+/** A trigger row as GoogleDataService.listGtmTriggers returns it (no raw customEventFilter). */
+export interface ListedTrigger { triggerId: string; name: string; type: string; customEventName: string; conditions: string[] }
+
+/**
+ * The apply step's Custom Event trigger for one CAPI event: REUSE an existing trigger that fires on
+ * exactly that event with no extra conditions, else CREATE one under a name no trigger already has.
+ * Reads the fields listGtmTriggers actually returns (customEventName is decoded from the {{_event}}
+ * filter; conditions excludes it), so a trigger made by an earlier run is found again instead of
+ * being duplicated. The name loop never re-offers a taken name, so a later run cannot hit GTM's
+ * duplicate-name error. PURE.
+ */
+export function eventTriggerFor(triggers: readonly ListedTrigger[], eventName: string): { reuse: string } | { create: string } {
+  const hit = triggers.find((t) => t.type === 'customEvent' && t.customEventName === eventName && t.conditions.length === 0);
+  if (hit) return { reuse: hit.triggerId };
+  const nrm = (x: string): string => x.trim().toLowerCase();
+  const taken = new Set(triggers.map((t) => nrm(t.name)));
+  const baseName = `ce - ${eventName}`;
+  let name = baseName;
+  for (let i = 2; taken.has(nrm(name)); i++) name = i === 2 ? `${baseName} (server)` : `${baseName} (server ${i})`;
+  return { create: name };
+}
+
 const hostOf = (u: string): string => {
   try { return new URL(u).hostname.toLowerCase(); } catch { return ''; }
 };
@@ -301,7 +324,8 @@ export function buildServerPlan(input: ServerPlanInput): ServerPlan {
     const spec = capiPlatform(platform);
     if (!spec) continue;
     const label = spec.label;
-    const requires = capiValueKeys(spec);
+    // Per-conversion ids (X Event ID, LinkedIn conversion rule, Yahoo snippet) are keyed by this event.
+    const requires = capiValueKeys(spec, event);
     const extra = spec.emqVariables ? ' Auto-provisions its match-quality variables.' : '';
     push({
       id: `${platform}_capi:${event}`,

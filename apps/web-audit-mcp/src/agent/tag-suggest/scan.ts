@@ -9,7 +9,10 @@
 // READ-ONLY. The only page interaction is page.goto + read-only DOM evaluate
 // (collectPageRaw / scanForms). It never clicks or submits anything — the
 // web-audit server's sole permitted interaction (consent banners) is not used
-// here. Each emitted suggestion is already the exact shape the GTM MCP's
+// here — except the opt-in interactive form pass (interactive-forms.ts,
+// WEB_AUDIT_ENABLE_INTERACTIVE_FORMS, off by default), which clicks
+// form-opening CTAs with navigation, submits and network writes blocked.
+// Each emitted suggestion is already the exact shape the GTM MCP's
 // create_gtm_tracking_tag tool accepts, so it drops straight into that
 // draft-only, approval-gated create flow (Phase 3's desktop one-click create).
 //
@@ -34,7 +37,7 @@ import { buildSuggestions } from './suggest.js';
 import { BLOG_RE } from './blog-paths.js';
 import { detectExistingTracking, type ExistingTracking } from './existing-tracking.js';
 import type { SuggestedTag, FormPurpose, SuggestPlatform } from './types.js';
-import { isBotBlockReason, blockedStartWarning } from '../bot-block.js';
+import { botBlockReason, isBotBlockReason, blockedStartWarning, type HeaderBag } from '../bot-block.js';
 
 /** A page that was discovered but not turned into suggestions, with the reason. */
 export interface NotScanned {
@@ -168,7 +171,7 @@ export function attachRects(suggestions: SuggestedTag[], pageScans: PageScan[]):
     if (candidates.length === 0) return s;
 
     for (const scan of candidates) {
-      const found = rectIn(scan, t);
+      const found = rectIn(scan, t, s.page !== 'site-wide');
       if (found) {
         return {
           ...s,
@@ -182,16 +185,22 @@ export function attachRects(suggestions: SuggestedTag[], pageScans: PageScan[]):
 }
 
 /** The one element or form on this page that a trigger points at, or nothing when it is not one. */
-function rectIn(scan: PageScan, t: Record<string, unknown>): Rect | undefined {
+function rectIn(scan: PageScan, t: Record<string, unknown>, onePage: boolean): Rect | undefined {
   {
     const only = <T>(list: T[]): T | undefined => (list.length === 1 ? list[0] : undefined);
 
     let rect: Rect | undefined;
 
-    if (t.kind === 'form_submit' || (t.kind === 'custom_event' && scan.forms.length > 0)) {
+    // A custom_event is about a form only when a form produced it. Every page-specific one did (a
+    // provider/dataLayer form listener, an AJAX search box), but a site-wide one need not: the
+    // ecommerce funnel events fire on a dataLayer push unrelated to any form, and the trigger has no
+    // {{Form ID}} left to tell the two apart. So a site-wide custom_event never takes the form branch,
+    // rather than ringing whichever form happens to be alone on the first page that has one.
+    if (t.kind === 'form_submit' || (t.kind === 'custom_event' && onePage && scan.forms.length > 0)) {
       const id = String(t.formIdValue ?? '').trim();
-      const withRect = scan.forms.filter((f) => f.rect);
-      const matched = id ? withRect.filter((f) => f.formId === id) : withRect;
+      // Every form counts toward ambiguity, measured or not: a form revealed by an interactive click has
+      // no rect on the picture, and must not leave the one measured form looking like the only match.
+      const matched = id ? scan.forms.filter((f) => f.formId === id) : scan.forms;
       rect = only(matched)?.rect;
     }
 
@@ -275,6 +284,18 @@ export function accountNotScanned(
   }
   out.push(...crawlSkipped);
   return out;
+}
+
+/**
+ * Why a scan worker's navigation response must not be read as a page, or null when it can be. PURE.
+ *
+ * Playwright's goto does not throw on a 403 / 429 / 503, so without this a WAF challenge page was read
+ * as a real page with no forms and no elements. The crawl already drops pages at 400 and above; the
+ * workers are the only navigation in chosen-pages mode, and open fresh contexts in crawl mode.
+ */
+export function scanResponseFailure(status: number | null, headers: HeaderBag): string | null {
+  if (status === null || status < 400) return null;
+  return botBlockReason(status, headers) ?? `http ${status}`;
 }
 
 const CREATE_NOTE =
@@ -595,19 +616,21 @@ export async function scanSiteForTagSuggestions(
         for (let target = claim(); target; target = claim()) {
           try {
             inst.markNavigationStart();
-            await page.goto(entryNavUrl(target.url, startNormUrl, startHash), { waitUntil: 'domcontentloaded', timeout: config.navTimeoutMs });
+            const resp = await page.goto(entryNavUrl(target.url, startNormUrl, startHash), { waitUntil: 'domcontentloaded', timeout: config.navTimeoutMs });
+            // A bot challenge or an error page is not a page with no forms: name it, and do not scan it.
+            const failure = resp ? scanResponseFailure(resp.status(), resp.headers()) : null;
+            if (failure) {
+              collectFailures.push({ url: target.url, reason: failure });
+              continue;
+            }
             await page.waitForTimeout(settleMs);
             const raw = await collectPageRaw(page);
             const forms = await scanForms(page, page.url());
-            // Opt-in: reveal popup/modal forms that only exist after clicking an "open-a-form" CTA. Runs
-            // AFTER the read-only element/form collection so it can't disturb them; best-effort + bounded.
-            if (discoverInteractive) {
-              const revealed = await discoverInteractiveForms(page, page.url(), forms).catch(() => null);
-              if (revealed && revealed.forms.length) forms.push(...revealed.forms);
-            }
             if (options.captureImages && totalImageBytes < MAX_TOTAL_IMAGE_BYTES) {
               // After the collect, never before: the screenshot must show the page the suggestions
-              // were read from, including anything the settle time brought in.
+              // were read from, including anything the settle time brought in. And before any
+              // interactive click, never after: an accordion or tab a click opened, or a modal that
+              // Escape did not close, would shift or cover what the element and form rects measured.
               //
               // A capture failure is swallowed on purpose. A screenshot is supporting evidence, and
               // losing the scan of a page because its picture did not take would be the wrong trade.
@@ -624,6 +647,15 @@ export async function scanSiteForTagSuggestions(
               } catch {
                 /* no proof for this page; the suggestions from it still stand */
               }
+            }
+            // Opt-in: reveal popup/modal forms that only exist after clicking an "open-a-form" CTA. Runs
+            // AFTER the read-only element/form collection and the screenshot so it can't disturb them;
+            // best-effort + bounded.
+            if (discoverInteractive) {
+              const revealed = await discoverInteractiveForms(page, page.url(), forms).catch(() => null);
+              // A revealed form was measured inside its open modal, which the screenshot never shows, so it
+              // has no position on that picture to be ringed at.
+              if (revealed && revealed.forms.length) forms.push(...revealed.forms.map((f) => ({ ...f, rect: undefined })));
             }
             pageScans.push(
               toPageScan(target.url, raw, forms.map((f) => ({ purpose: f.purpose, action: f.action, method: f.method, formId: f.formId, providerFormId: f.providerFormId, formClasses: f.formClasses, title: f.title, fields: f.fields.map((x) => ({ type: x.type, name: x.name, required: x.required })), hidden: f.hidden, rect: f.rect })), siteHost),

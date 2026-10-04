@@ -1,7 +1,8 @@
 /**
  * Storage-foundation suite: token vault (../token-vault.ts), DB config + store
- * factory (../db/*). Pure-logic + in-memory only — no live DB, no real secret
- * manager, no network.
+ * factory (../db/*), and the session-cookie parsing + browser-bound OAuth state
+ * the Express server uses (../../server/gtm). Pure-logic + in-memory only — no
+ * live DB, no real secret manager, no network.
  *
  * Encodes the security contract:
  *   - the in-memory vault is INERT unless explicitly enabled (no accidental
@@ -29,6 +30,8 @@ import {
   PostgresStore,
   StoreNotWiredError,
 } from "../db/index";
+import { parseCookies } from "../../server/gtm/vercel-helpers";
+import { consumeOAuthState, newOAuthState } from "../../server/gtm/oauth";
 
 let passed = 0;
 let failed = 0;
@@ -221,6 +224,41 @@ testAsync("F04 skeleton methods fail LOUD (never silent empty data)", async () =
     () => store.listGtmContainers("org-1", "acct-1"),
     StoreNotWiredError,
   );
+});
+
+// ── G. session cookie parsing (server/gtm, used by the Express server) ──────
+
+test("G01 parseCookies keeps a malformed %-escape raw instead of throwing", () => {
+  // Regression: decodeURIComponent threw URIError on `x=%E0`, so one bad cookie
+  // 500'd every Express session route (getSid → parseCookies).
+  let out: Record<string, string> = {};
+  assert.doesNotThrow(() => {
+    out = parseCookies("x=%E0; samarth_portal_sid=abc%20def; other=ok");
+  });
+  assert.strictEqual(out.x, "%E0");
+  assert.strictEqual(out.samarth_portal_sid, "abc def");
+  assert.strictEqual(out.other, "ok");
+});
+
+// ── H. Express OAuth state is bound to the browser that started sign-in ─────
+
+test("H01 a state minted in another browser is rejected (login CSRF)", () => {
+  // Regression: the callback only checked a process-global map, so a state the
+  // attacker minted at /api/oauth/start completed sign-in in a victim's browser.
+  const attackerState = newOAuthState();
+  const victimState = newOAuthState();
+  assert.strictEqual(consumeOAuthState(attackerState, undefined), false, "no state cookie");
+  assert.strictEqual(consumeOAuthState(attackerState, victimState), false, "victim's own cookie");
+  assert.strictEqual(consumeOAuthState(attackerState, ""), false, "empty cookie");
+});
+test("H02 the state matching this browser's cookie is accepted once", () => {
+  const state = newOAuthState();
+  assert.strictEqual(consumeOAuthState(state, state), true);
+  assert.strictEqual(consumeOAuthState(state, state), false, "state must be single-use");
+});
+test("H03 a state this server never minted is rejected even with a matching cookie", () => {
+  const forged = "f".repeat(48);
+  assert.strictEqual(consumeOAuthState(forged, forged), false);
 });
 
 // ── runner ────────────────────────────────────────────────────────────────--

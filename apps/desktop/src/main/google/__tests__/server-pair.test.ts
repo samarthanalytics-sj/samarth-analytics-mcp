@@ -5,7 +5,7 @@
  * Run: tsx src/main/google/__tests__/server-pair.test.ts
  */
 import assert from 'node:assert/strict';
-import { pairDriftFindings, pairedWebContainers, withPairFindings, type WebPair } from '../server-pair';
+import { isPairFinding, pairDriftFindings, pairedWebContainers, withPairFindings, type WebPair } from '../server-pair';
 import type { AuditReport, AuditTag, ServerContainerSnapshot } from '../gtm-builders';
 
 let passed = 0, failed = 0;
@@ -46,6 +46,12 @@ test('a region the server has NO relay for is left direct in silence: that is a 
   assert.deepEqual(fs, [], 'US sends direct and the server never claimed it');
 });
 
+test('a region left direct is silent whatever the tag order, and with an inheriting relay too', () => {
+  const tags = [googleTag('t2', 'US GA4', 'G-USUSUS1'), googleTag('t1', 'AUS GA4', 'G-AUAUAU1', HOST)];
+  assert.deepEqual(pairDriftFindings(server(), [web(tags)], SUMMARY), [], 'the direct US tag listed first must not decide the container\'s wiring');
+  assert.deepEqual(pairDriftFindings(server({ tags: [relay('s1', 'Relay', '')] }), [web(tags)], SUMMARY), [], 'an inheriting relay cannot double a direct tag');
+});
+
 test('a wired tag LOSING its server URL surfaces as pair_relay_without_wiring (high)', () => {
   const fs = pairDriftFindings(server(), [web([googleTag('t1', 'AUS GA4', 'G-AUAUAU1')])], SUMMARY);
   assert.deepEqual(ids(fs), ['pair_relay_without_wiring']);
@@ -69,6 +75,13 @@ test('an INHERITING relay forwards whatever arrives, so a wired tag is never "un
   assert.deepEqual(fs, []);
 });
 
+test('a relay whose Measurement ID is a non-Constant variable forwards an unknown set: no "certain" blackhole', () => {
+  for (const mid of ['{{ed - measurement_id}}', '{{Lookup - GA4 ID}}']) {
+    const fs = pairDriftFindings(server({ tags: [relay('s1', 'Relay', mid)] }), [web([googleTag('t1', 'AUS GA4', 'G-AUAUAU1', HOST)])], SUMMARY);
+    assert.deepEqual(fs, [], mid);
+  }
+});
+
 test('Constant-backed ids match on both sides', () => {
   const srv = server({
     tags: [relay('s1', 'AU relay', '{{AU ID}}')],
@@ -79,6 +92,31 @@ test('Constant-backed ids match on both sides', () => {
     variables: [{ variableId: 'v9', name: 'GA4 AU', type: 'c', parameter: [{ key: 'value', value: 'G-AUAUAU1' }] }],
   } };
   assert.deepEqual(pairDriftFindings(srv, [w], SUMMARY), [], 'both sides resolve to G-AUAUAU1');
+});
+
+test('a server URL held in a Constant or a Configuration Settings (gtcs) variable is resolved, so the tag is wired and paired', () => {
+  const urlConst = { variableId: 'v1', name: 'sGTM URL', type: 'c', parameter: [{ key: 'value', value: HOST }] };
+  const viaConst: WebPair = { containerId: 'w', name: 'web', snapshot: {
+    tags: [googleTag('t1', 'AUS GA4', 'G-AUAUAU1', '{{sGTM URL}}')], triggers: [], variables: [urlConst],
+  } };
+  assert.equal(pairedWebContainers(server(), [viaConst]).length, 1, 'Constant-wired container is paired');
+  assert.deepEqual(pairDriftFindings(server(), [viaConst], SUMMARY), [], 'not reported as sending direct');
+  const pausedRelay = pairDriftFindings(server({ tags: [relay('s1', 'AU relay', 'G-AUAUAU1', true)] }), [viaConst], SUMMARY);
+  assert.deepEqual(ids(pausedRelay), ['pair_wired_but_unforwarded'], 'a relay paused under it is still caught');
+
+  const gtcsTag = { ...googleTag('t1', 'AUS GA4', 'G-AUAUAU1'), parameter: [
+    { type: 'template', key: 'tagId', value: 'G-AUAUAU1' }, { type: 'template', key: 'configSettingsVariable', value: '{{GT Settings}}' },
+  ] } as unknown as AuditTag;
+  const viaGtcs: WebPair = { containerId: 'w', name: 'web', snapshot: {
+    tags: [gtcsTag], triggers: [], variables: [{ variableId: 'v2', name: 'GT Settings', type: 'gtcs', parameter: [wired('{{sGTM URL}}')] }, urlConst],
+  } };
+  assert.equal(pairedWebContainers(server(), [viaGtcs]).length, 1, 'gtcs-wired container is paired');
+  assert.deepEqual(pairDriftFindings(server(), [viaGtcs], SUMMARY), []);
+});
+
+test('a server URL in a variable that cannot be resolved is not "sends direct"', () => {
+  const fs = pairDriftFindings(server(), [web([googleTag('t1', 'AUS GA4', 'G-AUAUAU1', '{{Lookup - sGTM URL}}')])], SUMMARY);
+  assert.deepEqual(fs, [], 'no pair_relay_without_wiring, and no blackhole claim either');
 });
 
 test('pairing is by tagging host; a web tag pointing at a DIFFERENT host is not this server\'s pair', () => {
@@ -110,6 +148,17 @@ test('withPairFindings appends and recounts, and is a no-op with nothing to add'
   assert.equal(out.findings.length, 2);
   assert.deepEqual(out.summary, { critical: 1, high: 1, medium: 0, low: 0, info: 0 });
   assert.equal(out.counts.findings, 2);
+});
+
+test('every pair finding is marked origin=pair (so a failed pair read can carry them forward)', () => {
+  // Section 3 reuses the coverage engine's checkIds (duplicate_web_ga4_config), so a `pair_` prefix
+  // alone would miss them; the marker covers all three sections.
+  const w = web([googleTag('t1', 'AUS GA4', 'G-AUAUAU1', HOST), googleTag('t2', 'AUS GA4 (plugin)', 'G-AUAUAU1')]);
+  const fs = [...pairDriftFindings(server(), [w], SUMMARY), ...pairDriftFindings(server({ tags: [] }), [web([googleTag('t1', 'AUS GA4', 'G-AUAUAU1', HOST)])], SUMMARY)];
+  assert.ok(fs.some((f) => !(f.checkId ?? '').startsWith('pair_')), 'the fixture includes a coverage-engine finding');
+  assert.ok(fs.length > 0 && fs.every((f) => f.origin === 'pair' && isPairFinding(f)), ids(fs).join(','));
+  assert.equal(isPairFinding({ severity: 'high', confidence: 'certain', category: 'firing', message: 'x', recommendation: 'y', autoFixable: false }), false, 'a container-audit finding is not a pair finding');
+  assert.equal(isPairFinding({ severity: 'critical', confidence: 'certain', category: 'coverage', checkId: 'pair_wired_but_unforwarded', message: 'x', recommendation: 'y', autoFixable: false }), true, 'history stored before the marker is still recognised');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

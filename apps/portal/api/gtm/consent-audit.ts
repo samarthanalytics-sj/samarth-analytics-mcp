@@ -11,18 +11,17 @@ import type {
   RuntimeInput as ConsentRuntimeInput,
   RuntimePage as ConsentRuntimePage,
 } from "../../shared/consent-audit";
-// Pure, dependency-free accuracy invariants. Safe to import at the top level on
-// Vercel (imports nothing — no node:*, no engine, no googleapis), same contract
-// as shared/cache-keys.ts. The consent-only route MUST hold its findings to the
-// exact same evidence-scoped invariants as /api/gtm/audit so the two paths can
-// never drift (CONFIG-only confidence cap, runtime-wording guard, downgrade
-// notes). See docs/AUDIT_ACCURACY.md.
-import {
-  normalizeFindingAccuracy,
-  deriveEvidence,
-  type AccuracySource,
-  type EvidenceItem,
+// Accuracy invariants (shared/audit-accuracy.ts). The consent-only route MUST
+// hold its findings to the exact same evidence-scoped invariants as
+// /api/gtm/audit so the two paths can never drift (CONFIG-only confidence cap,
+// runtime-wording guard, downgrade notes). See docs/AUDIT_ACCURACY.md. Types
+// only here: the module is loaded lazily in the handler after session validation.
+import type {
+  AccuracySource,
+  EvidenceItem,
 } from "../../shared/audit-accuracy";
+
+type AccuracyModule = typeof import("../../shared/audit-accuracy");
 
 /**
  * /api/gtm/consent-audit
@@ -268,15 +267,21 @@ export default async function handler(
       // Pure consent engine — loaded lazily, only after the session has been
       // validated, so an import failure surfaces as JSON (not a crash).
       const { runConsentAudit } = await import("../../shared/consent-audit");
+      const accuracy = await import("../../shared/audit-accuracy");
       const result = runConsentAudit(
         toConsentConfigInput(state),
         toConsentRuntimeInput(runtime),
       );
 
-      const response = buildResponse(state, result, {
-        containerId,
-        containerPublicId: containerPublicId ?? containerId,
-      });
+      const response = buildResponse(
+        state,
+        result,
+        {
+          containerId,
+          containerPublicId: containerPublicId ?? containerId,
+        },
+        accuracy,
+      );
       return sendJson(res, 200, response);
     } catch (e) {
       return sendGtmError(res, e, "Failed to run Consent Mode v2 audit");
@@ -363,6 +368,7 @@ function buildResponse(
   state: ConsentAuditState,
   result: ConsentAuditResult,
   opts: { containerId: string; containerPublicId?: string },
+  accuracy: AccuracyModule,
 ): ConsentAuditResponse {
   const severityCounts: Record<ConsentFinding["severity"], number> = {
     critical: 0,
@@ -377,7 +383,7 @@ function buildResponse(
     // ever tightens (caps CONFIG-only confidence at medium, lowers manual-review
     // findings, flags runtime wording without a RUNTIME source) and records any
     // change as accuracyNotes / confidenceDowngraded.
-    const acc = normalizeFindingAccuracy({
+    const acc = accuracy.normalizeFindingAccuracy({
       finding: f.finding,
       severity: f.severity,
       sources: f.sources as AccuracySource[],
@@ -389,7 +395,11 @@ function buildResponse(
     severityCounts[acc.severity] += 1;
     // Structured evidence: prefer the engine's free-text snippets (mapped onto
     // the source that produced the finding), else derive a provenance row.
-    const evidenceItems = buildConsentEvidenceItems(f, acc.sources as AccuracySource[]);
+    // (shared with /api/gtm/audit — see shared/audit-accuracy.ts).
+    const evidenceItems = accuracy.buildConsentEvidenceItems(
+      f,
+      acc.sources as AccuracySource[],
+    );
     return {
       id: fid(`consent:${f.id}`),
       severity: acc.severity,
@@ -436,47 +446,6 @@ function fid(seed: string): string {
   return (
     "f_" + crypto.createHash("sha1").update(seed).digest("hex").slice(0, 10)
   );
-}
-
-/**
- * Build structured, source-scoped evidence rows for a consent finding. The
- * consent engine emits free-text snippets (`evidence: string[]` — redacted hit
- * URLs, console lines); we map each onto the source that produced the finding
- * (RUNTIME when present, else CONFIG) as a short "Observed" row, and always
- * include the finding's entity/parameter provenance. Values are already short
- * (the engine slices to ~160 chars). Never empty — falls back to provenance.
- */
-function buildConsentEvidenceItems(
-  f: ConsentFinding,
-  sources: AccuracySource[],
-): EvidenceItem[] {
-  const primary = sources[0] ?? "CONFIG";
-  const observedSource: AccuracySource = sources.includes("RUNTIME")
-    ? "RUNTIME"
-    : primary;
-  const items: EvidenceItem[] = [];
-  for (const snippet of f.evidence ?? []) {
-    if (!snippet) continue;
-    items.push({
-      source: observedSource,
-      label: observedSource === "RUNTIME" ? "Captured signal" : "Config signal",
-      value: snippet.length > 160 ? `${snippet.slice(0, 159)}…` : snippet,
-    });
-    if (items.length >= 5) break; // keep the row count bounded
-  }
-  // Always carry entity/parameter provenance so the row set is never empty.
-  const provenance = deriveEvidence({
-    sources,
-    entity: f.entity,
-    parameter: f.parameter,
-  });
-  // Avoid duplicating a bare "Evidence source" provenance row when we already
-  // have concrete snippets.
-  for (const p of provenance) {
-    if (items.length > 0 && p.label === "Evidence source") continue;
-    items.push(p);
-  }
-  return items;
 }
 
 // ════════════════════════════════════════════════════════════════════════════

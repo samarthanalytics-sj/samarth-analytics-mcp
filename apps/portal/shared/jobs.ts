@@ -287,14 +287,21 @@ export class InMemoryJobQueue implements JobQueue {
 
   async lease(workerId: string, leaseSeconds: number): Promise<QueuedJob | null> {
     const t = this.now();
-    // Reclaim expired leases first so abandoned jobs become runnable again.
+    // Reclaim expired leases first so abandoned jobs become runnable again. An
+    // expired lease counts as a failed attempt (attempts was incremented on
+    // lease): once maxAttempts is used up the job lands terminal `failed`, so a
+    // job whose worker keeps crashing cannot be re-queued forever.
     for (const job of Array.from(this.jobs.values())) {
       if (
         job.status === "leased" &&
         job.leaseExpiresAt !== null &&
         job.leaseExpiresAt <= t
       ) {
-        this.applyWorkerTransition(job, "queued");
+        job.lastError = "lease expired";
+        this.applyWorkerTransition(
+          job,
+          job.attempts < job.maxAttempts ? "queued" : "failed",
+        );
         job.leasedBy = null;
         job.leaseExpiresAt = null;
       }

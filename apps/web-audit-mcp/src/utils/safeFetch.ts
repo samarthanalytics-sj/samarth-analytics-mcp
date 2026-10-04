@@ -14,6 +14,23 @@ import { urlAllowed } from './urlGuard.js';
 
 const isIpLiteral = (hostname: string): boolean => /^[\d.]+$/.test(hostname) || hostname.includes(':');
 
+/** The slice of dns.promises.lookup this module uses; injectable so the guard is testable offline. */
+export type HostLookup = (hostname: string, options: { all: true }) => Promise<{ address: string; family: number }[]>;
+
+/** True when every address `hostname` resolves to is public. Fails closed on a resolution error. */
+async function resolvesPublic(hostname: string, lookup: HostLookup): Promise<boolean> {
+  try {
+    const addrs = await lookup(hostname, { all: true });
+    for (const { address, family } of addrs) {
+      const probe = family === 6 ? `http://[${address}]` : `http://${address}`;
+      if (!urlAllowed(probe, []).ok) return false; // resolves to a private IP -> block
+    }
+    return addrs.length > 0;
+  } catch {
+    return false; // fail closed on resolution error
+  }
+}
+
 /** True if rawUrl is allowed AND (for named hosts) every resolved IP is public. */
 export async function requestAllowed(rawUrl: string): Promise<boolean> {
   // String check first: scheme, allowlist, IP-LITERAL private ranges.
@@ -25,16 +42,43 @@ export async function requestAllowed(rawUrl: string): Promise<boolean> {
     return false;
   }
   if (isIpLiteral(hostname)) return true; // already covered by urlAllowed above
-  try {
-    const addrs = await dnsLookup(hostname, { all: true });
-    for (const { address, family } of addrs) {
-      const probe = family === 6 ? `http://[${address}]` : `http://${address}`;
-      if (!urlAllowed(probe, []).ok) return false; // resolves to a private IP -> block
+  return resolvesPublic(hostname, dnsLookup);
+}
+
+/** Bound on remembered hosts, so a page that fans out to thousands of hosts cannot grow it forever. */
+const MAX_GUARDED_HOSTS = 500;
+
+/**
+ * requestAllowed for a browser route interceptor, which sees every subresource: same verdict, but
+ * the DNS answer is remembered per host (in-flight lookups shared), so a page pulling 200 assets
+ * from one CDN costs one lookup rather than 200. Create one per browser context so the memo lives
+ * no longer than the page load it serves.
+ *
+ * This checks the name before Chromium resolves it itself, so a host that re-points between the
+ * two lookups (DNS rebinding) is still not fully closed; that needs Chromium's own resolver pinned
+ * (--host-resolver-rules) or an egress proxy. What it does close is the common case the string
+ * check misses: a public-looking NAME that resolves inside (metadata.google.internal,
+ * 127.0.0.1.nip.io, a docker service name).
+ */
+export function createRequestGuard(lookup: HostLookup = dnsLookup): (rawUrl: string) => Promise<boolean> {
+  const byHost = new Map<string, Promise<boolean>>();
+  return async (rawUrl: string): Promise<boolean> => {
+    if (!urlAllowed(rawUrl, []).ok) return false;
+    let hostname: string;
+    try {
+      hostname = new URL(rawUrl).hostname;
+    } catch {
+      return false;
     }
-    return addrs.length > 0;
-  } catch {
-    return false; // fail closed on resolution error
-  }
+    if (isIpLiteral(hostname)) return true; // already covered by urlAllowed above
+    let verdict = byHost.get(hostname);
+    if (!verdict) {
+      if (byHost.size >= MAX_GUARDED_HOSTS) byHost.clear();
+      verdict = resolvesPublic(hostname, lookup);
+      byHost.set(hostname, verdict);
+    }
+    return verdict;
+  };
 }
 
 const UA = 'Mozilla/5.0 (compatible; SamarthTagSuggest/1.0; +read-only scan)';

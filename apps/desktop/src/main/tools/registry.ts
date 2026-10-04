@@ -596,7 +596,14 @@ const GTM_NAMED_TOOLS_READING_GA4 = new Set([
   'check_gtm_measurement_ids',
   'analytics_scorecard',
   'generate_analytics_report',
+  // Lists GA4 measurement ids and reads the property's realtime report to prove the probe arrived.
+  'probe_server_runtime',
 ]);
+
+// GTM-filed WRITE tools whose effect lands in a LIVE GA4 property rather than a GTM draft workspace.
+// productOf() files them under 'gtm', which would make the approval card claim "draft workspace - not
+// published"; the card must instead say the write is live in GA4 and cannot be undone here.
+const LIVE_GA4_HIT_TOOLS = new Set(['probe_server_runtime']);
 
 /**
  * Record the resources a WEB setup tool created into the per-container install
@@ -4429,7 +4436,10 @@ export function buildToolRegistry(
         additionalProperties: false,
       },
       write: true,
-      summarize: (a) => `Send ONE synthetic GA4 probe event through server container ${s(a.containerId)}'s tagging server${a.measurementId ? ` for ${s(a.measurementId)}` : ''} and read it back from realtime`,
+      // The hit is LIVE in a production GA4 property the moment it is sent and this app cannot remove
+      // it, so it takes the one-click approval card rather than the draft-workspace auto-apply path.
+      approval: true,
+      summarize: (a) => `Send ONE live synthetic GA4 event (samarth_probe_*) through server container ${s(a.containerId)}'s tagging server into the production GA4 property${a.measurementId ? ` ${s(a.measurementId)}` : ''}, then read it back from realtime. It cannot be removed from GA4`,
       handler: (a) => data.runServerRuntimeProbe(s(a.accountId), s(a.containerId), s(a.workspaceId), a.measurementId ? { measurementId: s(a.measurementId) } : undefined),
     },
     {
@@ -7094,9 +7104,9 @@ export function buildToolRegistry(
           return JSON.stringify({ declined: true, message: 'Write tools are disabled.' });
         }
         // The live surface this write lands on, so the approval card can tell the truth about
-        // reversibility (GTM = draft workspace; GA4/Ads = live + immediate). Ads tools are named
-        // by an explicit set; everything else is GTM vs GA4 by productOf.
-        const writePlatform: GoogleProduct | 'ads' = adsToolNames.has(name) ? 'ads' : productOf(name);
+        // reversibility (GTM = draft workspace; GA4/Ads = live + immediate). Ads tools and the
+        // GTM-named live GA4 hits are named by explicit sets; everything else is GTM vs GA4 by productOf.
+        const writePlatform: GoogleProduct | 'ads' = adsToolNames.has(name) ? 'ads' : LIVE_GA4_HIT_TOOLS.has(name) ? 'ga4' : productOf(name);
         // Approval is DELETE-ONLY (user decision 2026-07-03): non-destructive writes (create/edit
         // tags, triggers, variables, folders, …) apply directly — they land in a DRAFT workspace,
         // are never published by us, and are reversible there. Destructive tools keep the full

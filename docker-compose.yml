@@ -45,6 +45,8 @@ services:
   # ── Web-audit MCP (crawl, consent audit, tag verify) ─────────────────────
   # Build context is the repo root: this server compiles in the shared consent
   # engine from apps/portal/shared (see apps/web-audit-mcp/Dockerfile).
+  # WEB_AUDIT_HTTP_AUTH_TOKEN (from .env.docker) is required: without it the
+  # server refuses to start, so this service restart-loops until it is set.
   web-audit:
     build:
       context: .

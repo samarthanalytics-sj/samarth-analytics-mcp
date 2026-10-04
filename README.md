@@ -222,7 +222,7 @@ For Google Workspace organizations:
 | `GTM_MCP_HTTP_AUTH_TOKEN` | — | Bearer token gating `/mcp` (http transport). With neither this nor `STYTCH_PROJECT_ID` set, the HTTP transport **refuses to start**. |
 | `GTM_MCP_HTTP_ALLOW_UNAUTHENTICATED` | `false` | Local-dev opt-in to start without auth. Binds loopback only unless `GTM_MCP_HTTP_HOST` overrides. |
 | `GTM_MCP_HTTP_HOST` | — | Bind host. Defaults to loopback when unauthenticated, all interfaces when authenticated. |
-| `STYTCH_PROJECT_ID` | — | Setting this switches the HTTP transport to **multi-user mode**: each `/mcp` request carries a Stytch JWT resolved to that user's own Google identity. Unset = single-identity mode. Pin `STYTCH_JWT_ISSUER` / `STYTCH_JWT_AUDIENCE` in production (see `.env.example`). |
+| `STYTCH_PROJECT_ID` | — | Setting this switches the HTTP transport to **multi-user mode**: each `/mcp` request carries a Stytch JWT resolved to that user's own Google identity. Unset = single-identity mode. Only Connected App access tokens are accepted (`client_id` required, session JWTs rejected), and issuer/audience are always pinned: `STYTCH_JWT_ISSUER` / `STYTCH_JWT_AUDIENCE` default to `stytch.com/<project id>` / `<project id>` (see `.env.example`). |
 | `STYTCH_SECRET` | — | Stytch project secret (server-only). Required when `STYTCH_PROJECT_ID` is set — the server exits without it. |
 | `STYTCH_PUBLIC_TOKEN` | — | Publishable token powering the `/oauth/authorize` page. Not a secret. |
 | `GTM_MCP_PUBLIC_URL` | `http://localhost:<port>` | This server's public origin, advertised in the OAuth Protected Resource Metadata document. |

@@ -72,6 +72,28 @@ check('joins event + filter conditions with AND', auditT.conditions === 'Event e
 const allClicks = inv.triggers.find((t) => t.name === 'All Elements Click Trigger')!;
 check('empty-filter click trigger reads "None (all clicks)"', allClicks.conditions === 'None (all clicks)', allClicks.conditions);
 
+// Trigger Groups: a member is Used only when its group is itself reached (the same rule as
+// collectUsedTriggerIds / findUnusedTriggers). Regression: every group member used to be marked Used,
+// so a dead group's member read "Used" here while the unused-trigger audit listed it as an orphan.
+{
+  const groupRef = (id: string): Record<string, unknown> => ({ type: 'list', key: 'triggerIds', list: [{ type: 'triggerReference', value: id }] });
+  const grouped: ContainerSnapshot = {
+    tags: [{ tagId: '1', name: 'Fires the live group', type: 'html', firingTriggerId: ['g-live'], paused: false, parameter: [] }],
+    triggers: [
+      { triggerId: 'g-live', name: 'Live Group', type: 'triggerGroup', parameter: [groupRef('30')] },
+      { triggerId: '30', name: 'Live Member', type: 'customEvent' },
+      { triggerId: 'g-dead', name: 'Dead Group', type: 'triggerGroup', parameter: [groupRef('31')] },
+      { triggerId: '31', name: 'Dead Member', type: 'customEvent' },
+    ],
+    variables: [],
+  } as unknown as ContainerSnapshot;
+  const usage = new Map(buildContainerInventory(grouped).triggers.map((t) => [t.name, t.usage]));
+  check('trigger group: a group a tag fires is Used', usage.get('Live Group') === 'Used', usage.get('Live Group'));
+  check('trigger group: the member of a LIVE group is Used', usage.get('Live Member') === 'Used', usage.get('Live Member'));
+  check('trigger group: a group no tag uses is Unused', usage.get('Dead Group') === 'Unused', usage.get('Dead Group'));
+  check('trigger group: the member of a DEAD group is Unused (agrees with findUnusedTriggers)', usage.get('Dead Member') === 'Unused', usage.get('Dead Member'));
+}
+
 // Variable table
 const ga4v = inv.variables.find((v) => v.name === 'GA4 Variable')!;
 check('constant type + literal value', ga4v.type === 'Constant' && ga4v.value === 'G-5LWQWGXHMD', `${ga4v.type} / ${ga4v.value}`);

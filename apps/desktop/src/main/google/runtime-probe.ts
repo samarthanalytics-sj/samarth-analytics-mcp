@@ -17,7 +17,70 @@
 // A hit that never shows up is reported as NOT VERIFIED, not as a failure: realtime has a short
 // lag and a property can filter or sample. Only a hit that DOES show up proves anything. PURE.
 
+import type { ServerContainerSnapshot } from './gtm-builders';
+import { serverTagParam } from './gtm-builders';
+
 const GA4_ID = /^G-[A-Z0-9]{4,}$/i;
+
+/** Where this server's ACTIVE GA4 relays (unpaused sgtmgaaw tags with a firing trigger) send a hit,
+ *  mirroring server-pair.ts so the probe and the pair findings agree on what the server forwards. */
+export interface ProbeTargets {
+  /** Literal Measurement IDs (a `{{Constant}}` resolved), upper-cased. A relay with a literal id
+   *  overrides the hit's tid, so a probe for any OTHER id lands in one of these properties instead. */
+  forwarded: Set<string>;
+  /** A relay with a blank Measurement ID: it forwards whatever tid the incoming hit carries. */
+  inherits: boolean;
+  /** A relay whose id is a non-Constant variable (lookup table, event data, ...): decided at runtime,
+   *  so the config can neither confirm nor rule out a given id. */
+  dynamic: boolean;
+}
+
+/** The ids this server's active GA4 relays forward. PURE. */
+export function probeTargets(server: Pick<ServerContainerSnapshot, 'tags' | 'variables'>): ProbeTargets {
+  const constants = new Map<string, string>();
+  for (const v of server.variables ?? []) {
+    if ((v.type ?? '').toLowerCase() !== 'c') continue;
+    const val = String(((v.parameter ?? []) as Array<{ key?: string; value?: unknown }>).find((p) => p.key === 'value')?.value ?? '').trim();
+    if (val) constants.set(v.name.trim().toLowerCase(), val);
+  }
+  const forwarded = new Set<string>();
+  let inherits = false;
+  let dynamic = false;
+  for (const t of server.tags) {
+    if (t.type !== 'sgtmgaaw' || t.paused || (t.firingTriggerId ?? []).length === 0) continue;
+    const raw = serverTagParam(t, 'measurementId').trim();
+    if (!raw) { inherits = true; continue; }
+    const ref = raw.match(/^\{\{([^}]+)\}\}$/);
+    const val = ref ? constants.get(ref[1].trim().toLowerCase()) : raw;
+    if (val === undefined) { dynamic = true; continue; }
+    if (GA4_ID.test(val.trim())) forwarded.add(val.trim().toUpperCase());
+  }
+  return { forwarded, inherits, dynamic };
+}
+
+/**
+ * Why a probe for `measurementId` must NOT be sent, or null when it may be. Decided BEFORE anything
+ * is delivered, because a probe cannot be taken back out of a GA4 property:
+ *   - an id a relay forwards literally is the server's own configured destination: allowed (if this
+ *     account cannot read that property the probe is still sent, and reported as not read back);
+ *   - an id only an inheriting/dynamic relay would carry is allowed only when this account can read
+ *     a property with that stream, since nothing else corroborates it (a typo or another client's id
+ *     would otherwise be delivered straight into a property no one here can see);
+ *   - any other id is refused: a literal relay would re-route the hit into ITS property, so the probe
+ *     would land in a different production property than the one named, and read back nothing. PURE.
+ */
+export function probeTargetRefusal(targets: ProbeTargets, measurementId: string, readable: boolean): string | null {
+  const id = measurementId.trim().toUpperCase();
+  if (targets.forwarded.has(id)) return null;
+  if (targets.inherits || targets.dynamic) {
+    if (readable) return null;
+    return `No GA4 property this account can read has the stream ${id}, and no relay on this server names ${id} literally (it would only be carried by a relay that ${targets.inherits ? 'inherits the incoming id' : 'derives the id from a variable'}). Nothing corroborates that ${id} is the intended property and the arrival could not be read back, so no probe was sent. Check the id, or pass one the server forwards${targets.forwarded.size ? ` (${[...targets.forwarded].join(', ')})` : ''}.`;
+  }
+  const list = [...targets.forwarded].join(', ');
+  return list
+    ? `This server does not forward ${id}: its active GA4 relays forward ${list} and none inherits the id, so a probe for ${id} would be re-routed into ${list} instead. No probe was sent. Pass one of the forwarded ids.`
+    : `This server has no active GA4 relay (an unpaused GA4 tag with a firing trigger), so a probe for ${id} has nowhere to go. No probe was sent.`;
+}
 
 export interface ProbeHit {
   /** Full URL the hit is sent to (GET; the GA4 client accepts GET with query params). */
@@ -51,7 +114,11 @@ export function buildProbeHit(input: { taggingUrl: string; measurementId: string
   const eventName = `samarth_probe_${input.suffix.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 8)}`;
   // A throwaway client id in gtag's own "<random>.<epoch>" shape.
   const clientId = input.clientId ?? `${Math.floor(1e9 + Number.parseInt(input.suffix.slice(0, 6), 16) % 9e8)}.${Math.floor(Date.now() / 1000)}`;
-  const u = new URL('/g/collect', `${base.protocol}//${base.host}`);
+  // Keep the configured path prefix: a same-origin setup (https://www.example.com/metrics) routes
+  // only that path to the tagging server, and gtag sends to `${server_container_url}/g/collect`.
+  // Query and hash are dropped.
+  const prefix = base.pathname.replace(/\/+$/, '');
+  const u = new URL(`${base.protocol}//${base.host}${prefix}/g/collect`);
   const q = u.searchParams;
   q.set('v', '2');
   q.set('tid', mid);
@@ -67,6 +134,23 @@ export function buildProbeHit(input: { taggingUrl: string; measurementId: string
   q.set('seg', '0');
   q.set('_p', String(Date.now()));
   return { url: u.toString(), eventName, clientId, measurementId: mid };
+}
+
+/** The realtime read-back for one probe: an EXACT filter on its unique event name, so the row comes
+ *  back however many other event names the property saw in the window (an unfiltered report returns
+ *  one capped page of rows and can cut a count-1 probe off a busy property). PURE. */
+export function probeRealtimeQuery(property: string, eventName: string): {
+  property: string;
+  dimensions: string[];
+  metrics: string[];
+  dimensionFilter: Record<string, unknown>;
+} {
+  return {
+    property,
+    dimensions: ['eventName'],
+    metrics: ['eventCount'],
+    dimensionFilter: { filter: { fieldName: 'eventName', stringFilter: { matchType: 'EXACT', value: eventName } } },
+  };
 }
 
 export interface RealtimeRow { dimensions: string[]; metrics: string[] }
@@ -108,7 +192,8 @@ export interface ProbeResult {
 export function describeProbe(r: Omit<ProbeResult, 'boundary' | 'note'>): Pick<ProbeResult, 'boundary' | 'note'> {
   const boundary =
     'This proves the round trip web -> tagging server -> GA4 relay -> GA4 property for ONE synthetic event. It does not prove ' +
-    'that the site\'s real tags send to this server (see the pair findings), nor anything about non-GA4 destinations.';
+    'that the site\'s real tags send to this server (see the pair findings), nor anything about non-GA4 destinations. ' +
+    'Any other server tag whose trigger matches the event (another GA4 relay, a CAPI tag on an all-events trigger) receives it too.';
   if (r.status === 'send_failed') {
     return { boundary, note: `The tagging server did not accept the hit (HTTP ${r.sendStatus ?? 'no response'}). A 400 here means no client claimed /g/collect; check the GA4 client and its default paths.` };
   }

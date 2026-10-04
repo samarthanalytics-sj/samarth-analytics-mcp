@@ -85,7 +85,21 @@ export function newOAuthState(): string {
   return s;
 }
 
-export function consumeOAuthState(state: string): boolean {
+/**
+ * Validate and consume an OAuth `state` at the callback. Besides having been
+ * minted here (single-use), the state must equal `boundState` — the HttpOnly
+ * state cookie /api/oauth/start set on the browser that began the flow. That
+ * binds the flow to one browser, so a state minted in an attacker's browser
+ * cannot complete sign-in in a victim's (login CSRF).
+ */
+export function consumeOAuthState(
+  state: string,
+  boundState: string | undefined,
+): boolean {
+  if (!boundState) return false;
+  const a = Buffer.from(state);
+  const b = Buffer.from(boundState);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return false;
   const ok = pendingStates.delete(state);
   return ok;
 }

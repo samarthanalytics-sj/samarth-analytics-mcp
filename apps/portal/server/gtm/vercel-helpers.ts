@@ -3,6 +3,7 @@
  *
  * Wraps cookie parsing, signed-cookie session reads/writes, and a tiny
  * Express-compatible Request/Response surface so the handlers stay short.
+ * The Express server (server/routes.ts) also uses parseCookies from here.
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -28,7 +29,15 @@ export function parseCookies(header: string | undefined): Record<string, string>
     const idx = part.indexOf("=");
     if (idx === -1) continue;
     const k = part.slice(0, idx).trim();
-    const v = decodeURIComponent(part.slice(idx + 1).trim());
+    const rawV = part.slice(idx + 1).trim();
+    // One malformed value (e.g. `x=%E0`) must not throw URIError and fail every
+    // session route — keep it raw, like the inlined api/** copies do.
+    let v = rawV;
+    try {
+      v = decodeURIComponent(rawV);
+    } catch {
+      v = rawV;
+    }
     if (k) out[k] = v;
   }
   return out;

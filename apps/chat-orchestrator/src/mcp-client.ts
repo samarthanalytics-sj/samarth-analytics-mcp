@@ -40,6 +40,13 @@ const NEVER_OFFERED = /publish|reauthorize/i;
  */
 const DESTRUCTIVE = /(^|_)(delete|remove|archive)(_|$)/i;
 
+/**
+ * The MCP's own tier label, which its descriptions lead with. Read alongside the name because a name
+ * can miss: `built_in_variables_disable` is gated by the server as a delete and its name carries
+ * none of the words above, so it used to be offered with deletes off and run without a card.
+ */
+const DELETE_TIER_LABEL = /^\[(GA4 )?DELETE\]/;
+
 export class McpConnection {
   private client: Client | null = null;
   private tools: ToolDef[] = [];
@@ -148,7 +155,9 @@ export class McpConnection {
           inputSchema: schema,
           isWrite,
           isDestructive: NEVER_OFFERED.test(t.name),
-          isDelete: !NEVER_OFFERED.test(t.name) && DESTRUCTIVE.test(t.name),
+          isDelete:
+            !NEVER_OFFERED.test(t.name) &&
+            (DESTRUCTIVE.test(t.name) || DELETE_TIER_LABEL.test(t.description ?? '')),
           surface: isWrite ? classifyWriteSurface(t.name, properties) : undefined,
         });
       }
@@ -201,10 +210,18 @@ export class McpConnection {
    *
    * A tool-level error is returned rather than thrown: the model needs to see the failure so it can
    * correct its arguments, and a thrown error would abort the whole turn.
+   *
+   * A name this server never listed is refused here rather than forwarded. Callers are expected to
+   * check their own permitted set first (the chat loop does); this is the backstop for one that
+   * does not, so no caller can reach a tool the catalog does not account for.
    */
   async callTool(name: string, args: Record<string, unknown>): Promise<{ ok: boolean; text: string }> {
     try {
-      const result = await this.requireClient().callTool({ name, arguments: args });
+      const client = this.requireClient();
+      if (!this.tools.some((t) => t.name === name)) {
+        return { ok: false, text: `Tool call refused: "${name}" is not a tool this server provides.` };
+      }
+      const result = await client.callTool({ name, arguments: args });
       const blocks = Array.isArray(result.content) ? result.content : [];
       const text = blocks
         .map((c: { type?: string; text?: string }) => (c.type === 'text' ? (c.text ?? '') : ''))

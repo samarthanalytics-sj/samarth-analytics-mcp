@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { MonitorService } from '../monitor-service';
+import { MAX_TIMER_MS, MAX_INTERVAL_MINUTES, MAX_INTERVAL_HOURS, assertTimerMs } from '../timer-limits';
 import { AuditHistoryStore } from '../../storage/audit-history';
 import type { GoogleDataService } from '../../google/data-service';
 import type { AccountView, MonitorAlert } from '../../../shared/ipc';
@@ -184,6 +185,37 @@ async function main(): Promise<void> {
     // A fresh instance loads the persisted config.
     const s2 = make();
     assert.equal(s2.status().intervalMinutes, 5);
+  });
+
+  // Regression: the interval was only floor-clamped. Past 2^31-1 ms (35791 min) Node replaces the delay
+  // with 1 ms, so a "monthly" monitor would re-audit the container a thousand times a second.
+  await test('configure clamps the interval to the setInterval ceiling, and the armed delay fits', async () => {
+    const h = harness('ceiling.json');
+    const delays: number[] = [];
+    const realSetInterval = globalThis.setInterval;
+    // Record the delay; arm a harmless timer so an overflowing delay cannot flood the test.
+    globalThis.setInterval = ((fn: () => void, ms?: number) => { delays.push(Number(ms)); return realSetInterval(fn, 3_600_000); }) as typeof setInterval;
+    try {
+      assert.equal(h.service.configure({ intervalMinutes: 60 * 24 * 30 }).intervalMinutes, MAX_INTERVAL_MINUTES, '30 days is past the timer limit → clamped');
+      assert.equal(h.service.configure({ intervalMinutes: Infinity }).intervalMinutes, MAX_INTERVAL_MINUTES, 'Infinity → clamped, not passed through');
+      const st = h.service.configure({ enabled: true, intervalMinutes: 1e9 });
+      assert.equal(st.intervalMinutes, MAX_INTERVAL_MINUTES);
+      assert.equal(st.running, true);
+      assert.equal(delays.length, 1, 'one timer armed');
+      assert.ok(delays[0] >= 1 && delays[0] <= MAX_TIMER_MS, `armed delay ${delays[0]} must fit in a 32-bit timer`);
+    } finally {
+      h.service.stop();
+      globalThis.setInterval = realSetInterval;
+    }
+    assert.equal(h.service.configure({ intervalMinutes: 120 }).intervalMinutes, 120, 'a normal interval is untouched');
+  });
+
+  await test('assertTimerMs: accepts 1..2^31-1 ms, rejects what Node would turn into 1 ms', () => {
+    assert.equal(assertTimerMs(MAX_TIMER_MS), MAX_TIMER_MS);
+    assert.equal(assertTimerMs(60_000), 60_000);
+    for (const bad of [MAX_TIMER_MS + 1, Infinity, NaN, 0, -5]) assert.throws(() => assertTimerMs(bad), RangeError, String(bad));
+    assert.ok(MAX_INTERVAL_MINUTES * 60_000 <= MAX_TIMER_MS && (MAX_INTERVAL_MINUTES + 1) * 60_000 > MAX_TIMER_MS, 'minute ceiling is the largest that fits');
+    assert.ok(MAX_INTERVAL_HOURS * 3_600_000 <= MAX_TIMER_MS && (MAX_INTERVAL_HOURS + 1) * 3_600_000 > MAX_TIMER_MS, 'hour ceiling is the largest that fits');
   });
 
   await test('configure({enabled:true}) reports running, then stop() clears it', async () => {

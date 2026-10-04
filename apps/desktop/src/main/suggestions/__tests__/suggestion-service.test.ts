@@ -8,7 +8,7 @@
 import { crawlAndSuggest, scanUrls, assembleResult, dedupSuggestions, detectInstalled, urlPriority, prioritizeUrls, contentLikely, crawlRank, distinctFormCount, SCAN_URLS_CAP, type PageDriver, type DrivenPage, type ScanProgress } from '../scan-core';
 import type { SuggestedTag } from '../../../../../web-audit-mcp/src/agent/tag-suggest/types.js';
 import { mergeDriven } from '../multi-driver';
-import { parseSitemapLocs, extractCrawlLinks } from '../discover';
+import { parseSitemapLocs, extractCrawlLinks, discoverSite } from '../discover';
 import { parseSuggestions, suggestionsFromData, createSuggestedTags, planGoogleTagVars, planAdsIdentity, provisionVariables } from '../suggestion-service';
 import type { ContainerSnapshot } from '../../google/gtm-builders';
 import type { PageScanRaw, RawElement } from '../../../../../web-audit-mcp/src/agent/tag-suggest/collect.js';
@@ -298,6 +298,43 @@ async function main(): Promise<void> {
     check('crawl-links: same-site only, absolute, no mailto/offsite',
       links.includes('https://acme.com/contact') && links.includes('https://acme.com/pricing') &&
       !links.some((l) => l.includes('other.com')) && !links.some((l) => l.startsWith('mailto')));
+  }
+
+  // ── discoverSite: a failed CHILD sitemap of an index makes the count a floor ('partial') ──
+  // Regression: the fail tracker was only passed to the top-level collectSitemap call, so a 503 on a
+  // sub-sitemap of a sitemapindex was swallowed and the result claimed a complete 'found' count.
+  // A public IP literal host skips the SSRF guard's DNS lookup, and fetch is stubbed, so no network.
+  {
+    const origin = 'http://203.0.113.10';
+    const realFetch = globalThis.fetch;
+    const serve = (childStatus: number): void => {
+      globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
+        const path = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url).pathname;
+        if (path === '/') return new Response('<html><body>home</body></html>', { status: 200 });
+        if (path === '/sitemap.xml') {
+          return new Response(`<sitemapindex><sitemap><loc>${origin}/sm-ok.xml</loc></sitemap><sitemap><loc>${origin}/sm-child.xml</loc></sitemap></sitemapindex>`, { status: 200 });
+        }
+        if (path === '/sm-ok.xml') return new Response(`<urlset><url><loc>${origin}/a</loc></url><url><loc>${origin}/b</loc></url></urlset>`, { status: 200 });
+        if (path === '/sm-child.xml') return new Response(childStatus < 400 ? `<urlset><url><loc>${origin}/c</loc></url></urlset>` : '', { status: childStatus });
+        return new Response('', { status: 404 }); // robots.txt, sitemap_index.xml
+      }) as typeof fetch;
+    };
+    try {
+      serve(503);
+      const throttled = await discoverSite(`${origin}/`);
+      check('discover: a 503 on a CHILD sitemap reports sitemapStatus "partial", not "found"',
+        throttled.viaSitemap && throttled.sitemapStatus === 'partial', `${throttled.sitemapStatus}`);
+      check('discover: the partial result says the count is a floor', /FLOOR/.test(throttled.note ?? ''), throttled.note);
+      check('discover: urls from the child that DID answer are still returned', throttled.urls.includes(`${origin}/a`) && throttled.urls.includes(`${origin}/b`));
+      serve(404);
+      const missing = await discoverSite(`${origin}/`);
+      check('discover: a 404 child sitemap is a clean absence, so the result stays "found"', missing.sitemapStatus === 'found', `${missing.sitemapStatus}`);
+      serve(200);
+      const whole = await discoverSite(`${origin}/`);
+      check('discover: every child answering → "found" with all child urls', whole.sitemapStatus === 'found' && whole.urls.includes(`${origin}/c`), `${whole.sitemapStatus}`);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   }
 
   // ── scanUrls: deep-scan a chosen list (no BFS) ─────────────────────────────

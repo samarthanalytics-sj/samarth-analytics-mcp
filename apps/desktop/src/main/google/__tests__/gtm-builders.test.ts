@@ -1034,6 +1034,34 @@ test('audit: Consent Mode v2 + missing event name flagged on bare GA4/Ads tags',
   assert.deepEqual(adsConsent?.fix?.args.consentTypes, ['ad_storage', 'ad_user_data', 'ad_personalization'], 'Ads → ad signals');
 });
 
+test('audit: a CMP template on the BUILT-IN Consent Initialization trigger means Consent Mode is in use', () => {
+  // triggers.list never returns GTM's built-in triggers, so the CMP tag's firingTriggerId
+  // (2147479572) is the only sign of the consent initialisation.
+  const cmp = { tagId: '9', name: 'Cookiebot CMP', type: 'cvt_123_45', firingTriggerId: ['2147479572'], paused: false, parameter: [], consentSettings: { consentStatus: 'notSet' } };
+  const senders = [
+    { tagId: '1', name: 'Bing UET', type: 'baut', firingTriggerId: ['2147479553'], paused: false, parameter: [], consentSettings: { consentStatus: 'notSet' } },
+    { tagId: '2', name: 'LinkedIn Insight', type: 'bzi', firingTriggerId: ['2147479553'], paused: false, parameter: [], consentSettings: { consentStatus: 'notSet' } },
+  ];
+  const r = auditContainer({ tags: [cmp, ...senders], triggers: [], variables: [] });
+  const consent = r.findings.filter((f) => f.category === 'consent');
+  assert.equal(consent.some((f) => f.checkId === 'consent-mode-not-configured'), false, 'a consent initialisation exists');
+  assert.equal(consent.length, 2, 'per-tag gaps when Consent Mode is in use');
+  for (const f of consent) {
+    assert.equal(f.severity, 'high');
+    assert.equal(f.autoFixable, true);
+    assert.equal(f.fix?.tool, 'set_gtm_tag_consent');
+  }
+
+  // The same container with the CMP tag PAUSED has no live consent initialisation: one medium finding.
+  const paused = auditContainer({ tags: [{ ...cmp, paused: true }, ...senders], triggers: [], variables: [] });
+  const pausedConsent = paused.findings.filter((f) => f.category === 'consent');
+  assert.deepEqual(pausedConsent.map((f) => f.checkId), ['consent-mode-not-configured']);
+
+  // A data-sending tag placed on Consent Initialization is not a consent setup.
+  const misplaced = auditContainer({ tags: [{ ...senders[0], firingTriggerId: ['2147479572'] }, senders[1]], triggers: [], variables: [] });
+  assert.deepEqual(misplaced.findings.filter((f) => f.category === 'consent').map((f) => f.checkId), ['consent-mode-not-configured']);
+});
+
 test('audit: an event tag whose {{Constant}} Measurement ID matches the Google tag literal is NOT "Cannot detect the Google tag"', () => {
   const base = {
     triggers: [{ triggerId: 'T1', name: 'All Pages', type: 'pageview' }, { triggerId: 'T0', name: 'Consent Initialization', type: 'consentInit' }],
@@ -3854,7 +3882,7 @@ test('planWebToServerMigration: classifies GA4/Ads/Floodlight/Linker natives + M
 
   // Builders that existed but were never planned, and the X generic path.
   assert.equal(by('Amazon Ads')?.serverTool, 'create_amazon_capi_server_tag');
-  assert.deepEqual(by('Amazon Ads')?.derived, { tagId: 'tag-987' });
+  assert.deepEqual(by('Amazon Ads')?.derived, { tagIds: ['tag-987'] }, 'keyed + shaped as the typed tool takes it');
   assert.deepEqual(by('Amazon Ads')?.requires, []);
   assert.equal(by('StackAdapt')?.serverTool, 'create_stackadapt_server_tag');
   assert.deepEqual(by('StackAdapt')?.derived, { pixelID: 'SA-55' });
@@ -4076,7 +4104,7 @@ test('planWebToServerMigration: the Tier-1 pixels are planned to their typed too
   assert.equal(by('X (Twitter)')?.status, 'typed-tool', 'X has a typed builder now');
   assert.deepEqual(by('X (Twitter)')?.derived, { pixelId: 'o1abc' });
   assert.deepEqual(by('X (Twitter)')?.requires, ['eventId', 'pixelAccessToken']);
-  assert.deepEqual(by('Quora')?.derived, { accountId: 'QP123' });
+  assert.deepEqual(by('Quora')?.derived, { pixelId: 'QP123' }, 'the typed tool field, not the GTM accountId arg');
   assert.deepEqual(by('AdRoll')?.derived, { advertisableId: 'ADV9', pixelId: 'PIX9' }, 'both AdRoll ids come off the snippet');
   assert.deepEqual(by('Nextdoor')?.derived, { pixelId: 'NDP77' });
   assert.deepEqual(by('Nextdoor')?.requires, ['clientId', 'accessToken']);
@@ -4140,6 +4168,37 @@ test('server audit P0: an ungated vendor CAPI tag is critical, a consent-gated o
   } as never);
   assert.equal(consentOf(many).length, 1, 'aggregated');
   assert.match(consentOf(many)[0].message, /3 third-party/);
+
+  // The Stape template's OWN gate (adStorageConsent='required', what requireConsent:true writes) is a
+  // gate even with no tag-level Consent Settings. 'optional' is not.
+  const withTplConsent = (tagId: string, name: string, value: string) => {
+    const t = capi(tagId, name, null);
+    return { ...t, parameter: [...t.parameter, { type: 'template', key: 'adStorageConsent', value }] };
+  };
+  const tplGated = auditServerContainer({ ...base, tags: [withTplConsent('t1', 'Meta CAPI', 'required')], triggers: [] } as never);
+  assert.equal(consentOf(tplGated).length, 0, 'adStorageConsent=required is the template\'s ad_storage gate');
+  const tplOptional = auditServerContainer({ ...base, tags: [withTplConsent('t1', 'Meta CAPI', 'optional')], triggers: [] } as never);
+  assert.equal(consentOf(tplOptional).length, 1, 'adStorageConsent=optional gates nothing');
+  assert.equal(consentOf(tplOptional)[0].severity, 'critical');
+  // Tags produced by the app's own builders with requireConsent:true are not reported; the same
+  // builders with requireConsent:false still are (so they are recognised as vendor CAPI tags).
+  const builtWith = (requireConsent: boolean) => auditServerContainer({
+    ...base,
+    tags: [
+      { ...buildLinkedInCapiServerTag('cvt_LI01', 'LI built', 'T', 'R', { requireConsent, firingTriggerId: ['1'] }), tagId: 't1', paused: false, blockingTriggerId: [], consentSettings: null },
+      { ...buildTikTokCapiServerTag('cvt_TT01', 'TikTok built', 'PIX', 'TOK', 'CompletePayment', { requireConsent, firingTriggerId: ['1'] }), tagId: 't2', paused: false, blockingTriggerId: [], consentSettings: null },
+    ],
+    triggers: [],
+  } as never);
+  assert.equal(consentOf(builtWith(true)).length, 0, 'builder-written template gate is honoured');
+  assert.equal(consentOf(builtWith(false)).length, 1);
+  assert.match(consentOf(builtWith(false))[0].message, /2 third-party/);
+
+  // A paused or trigger-less CAPI tag never fires, so it sends nothing for anyone.
+  const paused = auditServerContainer({ ...base, tags: [{ ...capi('t1', 'Meta CAPI paused', null), paused: true }], triggers: [] } as never);
+  assert.equal(consentOf(paused).length, 0, 'paused tags are not counted');
+  const noTrigger = auditServerContainer({ ...base, tags: [capi('t1', 'Meta CAPI no trigger', null, [])], triggers: [] } as never);
+  assert.equal(consentOf(noTrigger).length, 0, 'trigger-less tags are not counted');
 });
 
 test('server audit P0: the GA4 client that cannot claim, and the malformed tagging URL', () => {

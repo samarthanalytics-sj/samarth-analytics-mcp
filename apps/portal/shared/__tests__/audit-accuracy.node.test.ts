@@ -23,10 +23,18 @@ import {
   coverageIsConfigOnly,
   configOnlyCoverageWarning,
   defaultConfidence,
+  buildConsentEvidenceItems,
   type AccuracyFinding,
   type AccuracySource,
   type AccuracySeverity,
 } from "../audit-accuracy";
+import {
+  auditDeepLinkHref,
+  readAuditDeepLink,
+  stripAuditDeepLink,
+  hoistHashQuery,
+  pickAutoSelected,
+} from "../audit-deep-link";
 
 // ── tiny test harness (mirrors consent-audit.node.test.ts) ──────────────────
 
@@ -310,6 +318,126 @@ test("J02 runtime finding round-trips unchanged in severity/confidence", () => {
   const r = normalizeFindingAccuracy(input);
   assert.equal(r.severity, "high");
   assert.equal(r.confidence, "high");
+});
+
+// ── K. consent evidence rows (shared by /api/gtm/audit + /api/gtm/consent-audit)
+
+test("K01 CONFIG-only consent finding without snippets -> CONFIG provenance rows", () => {
+  const rows = buildConsentEvidenceItems(
+    { entity: { name: "GA4 - purchase", path: "tags/12" }, parameter: "consentSettings" },
+    CONFIG,
+  );
+  assert.ok(rows.length > 0);
+  for (const r of rows) assert.equal(r.source, "CONFIG");
+  assert.ok(rows.some((r) => r.label === "GTM entity" && r.entityPath === "tags/12"));
+  assert.ok(rows.some((r) => r.parameter === "consentSettings"));
+});
+test("K02 runtime snippets become RUNTIME 'Captured signal' rows (no bare provenance row)", () => {
+  const rows = buildConsentEvidenceItems(
+    { evidence: ["https://region1.google-analytics.com/g/collect?gcs=G100"] },
+    ["CONFIG", "RUNTIME"],
+  );
+  assert.equal(rows[0].source, "RUNTIME");
+  assert.equal(rows[0].label, "Captured signal");
+  assert.ok(!rows.some((r) => r.label === "Evidence source"));
+});
+test("K03 snippet rows are bounded (<= 5 rows, <= 160 chars)", () => {
+  const rows = buildConsentEvidenceItems(
+    { evidence: ["x".repeat(300), "a", "b", "c", "d", "e", "f"] },
+    RUNTIME,
+  );
+  const snippets = rows.filter((r) => r.label === "Captured signal");
+  assert.equal(snippets.length, 5);
+  assert.equal(snippets[0].value!.length, 160);
+  assert.ok(snippets[0].value!.endsWith("…"));
+});
+test("K04 never empty: no snippets/entity/parameter -> one provenance row", () => {
+  const rows = buildConsentEvidenceItems({}, CONFIG);
+  assert.deepEqual(rows, [{ source: "CONFIG", label: "Evidence source" }]);
+});
+
+// ── L. Containers -> Audit deep link (../audit-deep-link) ───────────────────
+// Regression: the Containers page linked to /audit?c=<publicId> but the Audit
+// page never read it and always auto-selected the first account/container.
+
+type Acct = { accountId: string };
+type Ctr = { accountId: string; containerId: string; publicId: string };
+const ACCTS: Acct[] = [{ accountId: "100" }, { accountId: "200" }];
+const CTRS: Ctr[] = [
+  { accountId: "200", containerId: "11", publicId: "GTM-FIRST" },
+  { accountId: "200", containerId: "22", publicId: "GTM-LINKED" },
+  { accountId: "200", containerId: "33", publicId: "GTM-SERVER" },
+];
+/** What wouter's hash `navigate` writes to location.search for a Link href. */
+const searchAfterClick = (href: string) => `?${href.split("?")[1] ?? ""}`;
+
+test("L01 audit link carries the account and the container", () => {
+  const href = auditDeepLinkHref({ accountId: "200", publicId: "GTM-LINKED" });
+  assert.equal(href, "/audit?a=200&c=GTM-LINKED");
+  assert.deepEqual(readAuditDeepLink(searchAfterClick(href)), {
+    accountId: "200",
+    publicId: "GTM-LINKED",
+  });
+});
+test("L02 audit link round-trips ids that need encoding", () => {
+  const href = auditDeepLinkHref({ accountId: "2 0", publicId: "GTM-A&c=B" });
+  assert.deepEqual(readAuditDeepLink(searchAfterClick(href)), {
+    accountId: "2 0",
+    publicId: "GTM-A&c=B",
+  });
+});
+test("L03 no or empty deep-link params read as no deep link", () => {
+  assert.equal(readAuditDeepLink(""), undefined);
+  assert.equal(readAuditDeepLink("?connected=1"), undefined);
+  assert.equal(readAuditDeepLink("?a=&c=%20"), undefined);
+  assert.deepEqual(readAuditDeepLink("?c=GTM-LINKED"), {
+    accountId: undefined,
+    publicId: "GTM-LINKED",
+  });
+});
+test("L04 strip drops only the deep-link keys", () => {
+  assert.equal(stripAuditDeepLink("?a=200&c=GTM-LINKED"), "");
+  assert.equal(stripAuditDeepLink("?connected=1&a=200&c=GTM-LINKED"), "?connected=1");
+  assert.equal(stripAuditDeepLink(""), "");
+});
+test("L05 new-tab hash query is hoisted into the search", () => {
+  const out = hoistHashQuery("", "#/audit?a=200&c=GTM-LINKED");
+  assert.deepEqual(out, { search: "?a=200&c=GTM-LINKED", hash: "#/audit" });
+  assert.deepEqual(readAuditDeepLink(out!.search), {
+    accountId: "200",
+    publicId: "GTM-LINKED",
+  });
+});
+test("L06 hoist keeps other search keys, hash keys win, bare hash becomes #/", () => {
+  assert.deepEqual(hoistHashQuery("?x=1&c=OLD", "#/audit?c=NEW"), {
+    search: "?x=1&c=NEW",
+    hash: "#/audit",
+  });
+  assert.deepEqual(hoistHashQuery("", "#?connected=1"), {
+    search: "?connected=1",
+    hash: "#/",
+  });
+  assert.equal(hoistHashQuery("?a=1", "#/audit"), null);
+  assert.equal(hoistHashQuery("", ""), null);
+});
+test("L07 the linked account and container are preselected, not the first", () => {
+  assert.equal(pickAutoSelected(ACCTS, (a) => a.accountId === "200").accountId, "200");
+  assert.equal(
+    pickAutoSelected(CTRS, (c) => c.publicId === "GTM-LINKED", CTRS[2]).containerId,
+    "22",
+  );
+});
+test("L08 a link id missing from the list falls back to the preference, then the first", () => {
+  assert.equal(pickAutoSelected(ACCTS, (a) => a.accountId === "999").accountId, "100");
+  assert.equal(
+    pickAutoSelected(CTRS, (c) => c.publicId === "GTM-GONE", CTRS[2]).containerId,
+    "33",
+  );
+  assert.equal(pickAutoSelected(CTRS, (c) => c.publicId === "GTM-GONE").containerId, "11");
+});
+test("L09 without a deep link the auto-pick is unchanged (preference, else first)", () => {
+  assert.equal(pickAutoSelected(CTRS, undefined, CTRS[2]).containerId, "33");
+  assert.equal(pickAutoSelected(CTRS, undefined).containerId, "11");
 });
 
 // ── run summary ──────────────────────────────────────────────────────────--

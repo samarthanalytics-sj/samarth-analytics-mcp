@@ -7,8 +7,15 @@ import { shell } from 'electron';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
 import { spawn, execFileSync } from 'node:child_process';
+import { resolveDetectedExe } from './browser-allowlist';
+import { log } from '../logger';
 
 export interface DetectedBrowser { id: string; name: string; exe: string }
+
+// What the last detectBrowsers() sweep found: the only exes openInBrowser will spawn. The renderer
+// lists browsers (shell:listBrowsers) before it can offer one, so this is normally warm; a cold call
+// runs the sweep once. A miss is NOT re-swept, so a bogus path cannot force repeated registry sweeps.
+let lastDetected: DetectedBrowser[] | null = null;
 
 // Standard install paths for the common browsers, per platform. Best-effort: a hit is only kept if the
 // exe actually exists (checked in detectBrowsers). The LAST path segment is the exe, not the name.
@@ -95,18 +102,26 @@ export function detectBrowsers(): DetectedBrowser[] {
     seen.add(key);
     out.push({ id: key, name: b.name, exe: b.exe });
   }
+  lastDetected = out;
   return out;
 }
 
 // Open a URL in a SPECIFIC browser exe (empty exe = the OS default). http(s) only, so a value can never
-// become a browser flag. Falls back to the default browser if the exe is missing or won't launch.
+// become a browser flag. Only an exe detectBrowsers() found is ever spawned (the value comes from the
+// renderer); anything else, or an exe that is missing or won't launch, falls back to the default browser.
 export function openInBrowser(url: string, exe: string): boolean {
   const safe = /^https?:\/\//i.test(url) ? url : '';
   if (!safe) return false;
   if (!exe) { void shell.openExternal(safe); return true; }
-  try { if (!existsSync(exe)) { void shell.openExternal(safe); return false; } } catch { void shell.openExternal(safe); return false; }
+  const known = resolveDetectedExe(exe, lastDetected ?? detectBrowsers());
+  if (!known) {
+    log.warn('[browser] refused to launch an executable that browser detection did not find; opening the default browser instead');
+    void shell.openExternal(safe);
+    return false;
+  }
+  try { if (!existsSync(known)) { void shell.openExternal(safe); return false; } } catch { void shell.openExternal(safe); return false; }
   try {
-    const child = spawn(exe, [safe], { detached: true, stdio: 'ignore' });
+    const child = spawn(known, [safe], { detached: true, stdio: 'ignore' });
     child.unref();
     return true;
   } catch {

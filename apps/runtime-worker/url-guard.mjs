@@ -11,6 +11,8 @@
 // It is intentionally dependency-free (only `node:*`) so it can be `node --check`ed
 // and unit-tested without installing the browser.
 
+import { lookup as dnsLookup } from "node:dns/promises";
+
 // Literal private/loopback/link-local IP ranges we never load, independent of
 // any allowlist. Link-local 169.254.0.0/16 includes the cloud metadata endpoint
 // 169.254.169.254 (AWS/GCP/Azure), the highest-value SSRF target.
@@ -110,8 +112,11 @@ export function urlAllowed(rawUrl, allowlist = []) {
   }
 
   let host = parsed.hostname.toLowerCase();
-  // Strip IPv6 brackets for the literal-name comparisons below.
-  const bareHost = host.replace(/^\[/, "").replace(/\]$/, "");
+  // Strip IPv6 brackets for the literal-name comparisons below. Trailing dots
+  // name the same host in absolute (FQDN) form — "localhost." and
+  // "foo.localhost.." resolve to loopback — so strip them too, before the name
+  // and allowlist checks.
+  const bareHost = host.replace(/^\[/, "").replace(/\]$/, "").replace(/\.+$/, "");
 
   if (
     bareHost === "localhost" ||
@@ -144,4 +149,64 @@ export function urlAllowed(rawUrl, allowlist = []) {
     }
   }
   return { ok: true };
+}
+
+const isIpLiteral = (hostname) => /^[\d.]+$/.test(hostname) || hostname.includes(":");
+
+// Bound on remembered hosts, so a page that fans out to thousands of hosts
+// cannot grow the memo forever.
+const MAX_GUARDED_HOSTS = 500;
+
+/**
+ * Build the per-request guard for the in-browser route interceptor.
+ *
+ * urlAllowed is a hostname-STRING check, so a public-looking NAME that resolves
+ * inside (metadata.google.internal, 127.0.0.1.nip.io, a docker service name)
+ * passes it. This guard additionally DNS-resolves named hosts and refuses the
+ * request when any resolved address is private/loopback/metadata. It fails
+ * closed on a resolution error. The answer is remembered per host (in-flight
+ * lookups shared) because the interceptor sees every subresource; create one
+ * guard per browser context so the memo lives no longer than the capture.
+ *
+ * The name is checked before Chromium resolves it itself, so a host that
+ * re-points between the two lookups (DNS rebinding) is not fully closed; that
+ * needs Chromium's resolver pinned (--host-resolver-rules) or an egress proxy.
+ *
+ * Mirrors createRequestGuard in apps/web-audit-mcp/src/utils/safeFetch.ts.
+ *
+ * @param {(hostname: string, options: { all: true }) => Promise<{ address: string, family: number }[]>} [lookup]
+ *   injectable resolver (defaults to node:dns lookup) so this is testable offline.
+ * @returns {(rawUrl: string) => Promise<boolean>}
+ */
+export function createRequestGuard(lookup = dnsLookup) {
+  const byHost = new Map();
+  const resolvesPublic = async (hostname) => {
+    try {
+      const addrs = await lookup(hostname, { all: true });
+      for (const { address, family } of addrs) {
+        const probe = family === 6 ? `http://[${address}]` : `http://${address}`;
+        if (!urlAllowed(probe, []).ok) return false; // resolves to a private IP -> block
+      }
+      return addrs.length > 0;
+    } catch {
+      return false; // fail closed on resolution error
+    }
+  };
+  return async (rawUrl) => {
+    if (!urlAllowed(rawUrl, []).ok) return false;
+    let hostname;
+    try {
+      hostname = new URL(rawUrl).hostname;
+    } catch {
+      return false;
+    }
+    if (isIpLiteral(hostname)) return true; // already covered by urlAllowed above
+    let verdict = byHost.get(hostname);
+    if (!verdict) {
+      if (byHost.size >= MAX_GUARDED_HOSTS) byHost.clear();
+      verdict = resolvesPublic(hostname);
+      byHost.set(hostname, verdict);
+    }
+    return verdict;
+  };
 }

@@ -169,6 +169,10 @@ check('form: title already ending "Form" is not doubled ("Newsletter Form", not 
 const untitled = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/', purpose: 'contact', action: '', provider: prov0, method: 'post', formId: 'c2' }], elements: [] });
 check('form: no title → falls back to the purpose label ("Contact Form")', untitled[0].tagName === 'GA4 - Event - Contact Form Tag');
 check('form: evidence lists the field signature', /fields: email, message/.test(formWithId[0].evidence) && /id=#contact-form/.test(formWithId[0].evidence));
+// A dropdown is extracted with its DOM type ('select-one' / 'select-multiple'): it stays out of the
+// text-field signature like the checkbox/radio it sits beside (was: listed, since 'select' never matched).
+const formWithSelect = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/contact', purpose: 'contact', action: 'https://a.com/x', provider: prov0, method: 'post', formId: 'contact-form', fields: [{ type: 'email', name: 'email', required: true }, { type: 'select-one', name: 'topic', required: false }, { type: 'select-multiple', name: 'products', required: false }, { type: 'textarea', name: 'message', required: false }] }], elements: [] });
+check('form: evidence field signature leaves out select-one / select-multiple dropdowns', /fields: email, message(;|$)/.test(formWithSelect[0].evidence), formWithSelect[0].evidence);
 
 // Instance-unique class (numeric instance, e.g. gform_1) → {{Form Classes}} contains.
 const formInstanceClass = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/c', purpose: 'contact', action: '', provider: prov0, method: 'post', formClasses: 'row gform_1 gform_wrapper', fields: [{ type: 'email', name: 'email', required: true }] }], elements: [] });

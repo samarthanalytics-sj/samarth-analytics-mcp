@@ -1197,6 +1197,35 @@ test("G18 _gcl cookie under denial flagged", () => {
   const f = runConsentRuntimeRules(rt([{ requestedUrl: "https://e/", consentState: "default_denied", cookies: [{ name: "_gcl_au" }] }]));
   assert.ok(has(f, "consent-runtime-cookie-before"));
 });
+test("G18a first-party cookies that merely share a tracker prefix are NOT flagged", () => {
+  // Regression: the old unanchored /^(…|IDE|…|li_|…)/i matched identity_session,
+  // ident (IDE) and li_session (li_) and raised a HIGH cookie-before finding.
+  const f = runConsentRuntimeRules(
+    rt([{
+      requestedUrl: "https://e/",
+      consentState: "default_denied",
+      cookies: ["identity_session", "ident", "li_session", "_gatsby_session", "_gidx", "_fbp_pref", "test_cookie_consent"]
+        .map((name) => ({ name })),
+    }]),
+  );
+  assert.ok(hasNo(f, "consent-runtime-cookie-before"));
+});
+test("G18b anchored tracker cookie names (incl. _ga_<id>, _gat_*, _gcl_*) are still flagged", () => {
+  const names = [
+    "_ga", "_ga_ABC123", "_gat", "_gat_UA-1-1", "_gac_UA-1-1", "_gid", "_gcl_au", "_gcl_aw",
+    "_fbp", "_fbc", "_uetsid", "_uetvid", "_ttp", "_scid", "IDE", "MUID", "test_cookie",
+    "li_sugr", "li_fat_id", "_pin_unauth",
+  ];
+  const f = runConsentRuntimeRules(
+    rt([{ requestedUrl: "https://e/", consentState: "default_denied", cookies: names.map((name) => ({ name })) }]),
+  );
+  const m = has(f, "consent-runtime-cookie-before");
+  assert.ok(m);
+  assert.ok(
+    m!.id.endsWith(`:${[...names].sort().join(",")}`),
+    `every tracker cookie should be an offender, got id ${m!.id}`,
+  );
+});
 test("G19 audit with runtime ok but empty states -> stateCoverage all false", () => {
   const r = runConsentAudit(cfg({ textBlob: blobWith({ hasDefault: true }) }), { pages: [], states: [], ok: true });
   assert.deepEqual(r.stateCoverage, { denied: false, granted: false, partial: false });

@@ -6,12 +6,31 @@
  * analysis, the banner compliance rules over fixture captures, the RuntimeInput
  * bridge into the shared Consent Mode v2 engine, and the GTM container bridge
  * (parseGtmContainer + reconciled-coverage escalation in runConsentEngine).
+ * A few in-page form-extraction checks run in Chromium when Playwright is installed and self-skip
+ * otherwise.
  */
 
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { urlAllowed } from '../utils/urlGuard.js';
-import { classifyUrl, parseQuery, MEASUREMENT_GROUPS } from '../agent/browser.js';
+import { createRequestGuard } from '../utils/safeFetch.js';
+import {
+  classifyUrl,
+  parseQuery,
+  MEASUREMENT_GROUPS,
+  openInstrumentedPage,
+  loadPlaywright,
+  type PwBrowser,
+  type PwContext,
+  type PwPage,
+  type PwRoute,
+} from '../agent/browser.js';
+import { runCapture } from '../verify/capture/capture.js';
 import { CMP_VENDORS, ACCEPT_TEXT_RE, REJECT_TEXT_RE } from '../agent/cmp.js';
-import { analyzeForms, classifyFieldPii, type RawForm, type RawFormField } from '../agent/forms.js';
+import { analyzeForms, classifyFieldPii, extractFormsInPage, type RawForm, type RawFormField } from '../agent/forms.js';
 import { buildFillPlan, classifyFieldRole, selectorFor, localeById, US_LOCALE } from '../agent/form-fill.js';
 import { sameSite, normalizeUrl, urlPriority } from '../agent/crawler.js';
 import { buildExclude, attachRects, resolvePageList } from '../agent/tag-suggest/scan.js';
@@ -21,6 +40,7 @@ import {
   sitemapsInRobots,
   prioritize,
   pathOf,
+  discoverSitePages,
 } from '../agent/tag-suggest/discover.js';
 import { isBlogLike } from '../agent/tag-suggest/blog-paths.js';
 import type { PageScan } from '../agent/tag-suggest/collect.js';
@@ -41,7 +61,17 @@ import {
   extractObservedDestinations,
   reconcile,
 } from '../agent/reconcile.js';
-import { isAuthorized, buildHealthBody } from '../http.js';
+import { readFileSync } from 'node:fs';
+import {
+  isAuthorized,
+  buildHealthBody,
+  isInitializeRequest,
+  decidePostRoute,
+  resolveHttpBinding,
+  bindingBanner,
+  startHttpServer,
+} from '../http.js';
+import { createWebAuditMcpServer } from '../server.js';
 import { loadConfig } from '../utils/config.js';
 import { runConsentRuntimeRules } from '../../../portal/shared/consent-audit.js';
 import { detectEmbeddedForm } from '../agent/tag-suggest/providers.js';
@@ -87,6 +117,403 @@ check('guard: allowlist match', urlAllowed('https://shop.example.com', ['example
 check('guard: allowlist exact', urlAllowed('https://example.com', ['example.com']).ok);
 check('guard: allowlist miss', !urlAllowed('https://notexample.com', ['example.com']).ok);
 check('guard: allowlist no suffix-confusion', !urlAllowed('https://evilexample.com', ['example.com']).ok);
+// A trailing dot is the absolute (FQDN) spelling of the same host, and resolves the same way.
+check('guard: localhost. (trailing dot) blocked', !urlAllowed('http://localhost./').ok);
+check('guard: .localhost. (trailing dot) blocked', !urlAllowed('http://foo.localhost./').ok);
+check('guard: ip6-localhost. blocked', !urlAllowed('http://ip6-localhost./').ok);
+check('guard: LOCALHOST.. (repeated dots) blocked', !urlAllowed('http://LOCALHOST../').ok);
+check('guard: allowlist matches the FQDN spelling', urlAllowed('https://client.com./', ['client.com']).ok);
+check('guard: FQDN spelling is no suffix-confusion', !urlAllowed('https://evilclient.com./', ['client.com']).ok);
+
+// ── in-browser request guard (DNS-resolving) ─────────────────────────────────
+// The Playwright route guards used to run only the string check above, which passes a
+// public-looking NAME that resolves inside. These drive the real guard on a fake resolver.
+
+function fakeLookup(table: Record<string, string[]>) {
+  const calls: string[] = [];
+  const lookup = async (hostname: string) => {
+    calls.push(hostname);
+    const addrs = table[hostname];
+    if (!addrs) throw new Error(`ENOTFOUND ${hostname}`);
+    return addrs.map((address) => ({ address, family: address.includes(':') ? 6 : 4 }));
+  };
+  return { lookup, calls };
+}
+
+const PUBLIC_IP = '93.184.216.34';
+const dnsTable: Record<string, string[]> = {
+  'metadata.google.internal': ['169.254.169.254'],
+  '127.0.0.1.nip.io': ['127.0.0.1'],
+  db: ['172.18.0.3'],
+  'v6-loop.example.com': ['::1'],
+  'mixed.example.com': [PUBLIC_IP, '10.0.0.7'],
+  'example.com': [PUBLIC_IP],
+  'shop.example.com': [PUBLIC_IP],
+  'cdn.example.com': [PUBLIC_IP],
+  'evil.test': [PUBLIC_IP],
+};
+
+{
+  const { lookup, calls } = fakeLookup(dnsTable);
+  const allowed = createRequestGuard(lookup);
+  for (const u of [
+    'http://metadata.google.internal/computeMetadata/v1/',
+    'http://127.0.0.1.nip.io/',
+    'http://db:5432/',
+    'http://v6-loop.example.com/',
+    'http://mixed.example.com/',
+  ]) {
+    check(`request guard: string check alone passes ${u}`, urlAllowed(u, []).ok);
+    check(`request guard: blocks ${u} (resolves private)`, (await allowed(u)) === false);
+  }
+  check('request guard: public name allowed', (await allowed('https://example.com/')) === true);
+  check('request guard: unresolvable name fails closed', (await allowed('https://nope.example/')) === false);
+  const before = calls.length;
+  check('request guard: public IP literal allowed', (await allowed(`http://${PUBLIC_IP}/`)) === true);
+  check('request guard: private IP literal blocked', (await allowed('http://10.0.0.1/')) === false);
+  check('request guard: IP literals and string-check failures never hit DNS', calls.length === before);
+  const many = await Promise.all(Array.from({ length: 20 }, (_, i) => allowed(`https://cdn.example.com/a${i}.js`)));
+  check('request guard: one lookup per host', many.every(Boolean) && calls.filter((h) => h === 'cdn.example.com').length === 1);
+}
+
+/** Drive a captured Playwright route handler with a fake route; returns what it decided. */
+type FakeReq = { url: string; nav?: boolean; iframe?: boolean; popup?: boolean };
+async function decide(
+  handler: ((route: never) => unknown) | undefined,
+  r: FakeReq,
+): Promise<'continue' | 'abort' | 'fulfill' | 'none'> {
+  let outcome: 'continue' | 'abort' | 'fulfill' | 'none' = 'none';
+  const route = {
+    request: () => ({
+      url: () => r.url,
+      method: () => 'GET',
+      resourceType: () => (r.nav ? 'document' : 'script'),
+      postData: () => null,
+      isNavigationRequest: () => Boolean(r.nav),
+      frame: () => {
+        if (r.popup) throw new Error('Frame for this navigation request is not available');
+        return { parentFrame: () => (r.iframe ? {} : null) };
+      },
+    }),
+    continue: async () => {
+      outcome = 'continue';
+    },
+    abort: async () => {
+      outcome = 'abort';
+    },
+    fulfill: async () => {
+      outcome = 'fulfill';
+    },
+  };
+  await handler?.(route as never);
+  return outcome;
+}
+
+/**
+ * A fake browser for runCapture: records goto() calls and routes them through the handler.
+ * `redirects` maps a URL to where a server redirect lands; like real Playwright, only the first URL
+ * reaches the route handler. `elements` makes every selector resolve, and `interactions` records
+ * each click and in-page submit/href script that actually ran.
+ */
+function fakeVerifyBrowser(fake: { redirects?: Record<string, string>; elements?: boolean } = {}) {
+  const box: { handler?: (route: never) => unknown } = {};
+  const gotos: string[] = [];
+  const interactions: string[] = [];
+  let current = 'about:blank';
+  const page = {
+    goto: async (url: string) => {
+      gotos.push(url);
+      if ((await decide(box.handler, { url, nav: true })) === 'abort') throw new Error(`net::ERR_FAILED at ${url}`);
+      current = fake.redirects?.[url] ?? url;
+      return { status: () => 200, headers: () => ({}) };
+    },
+    evaluate: async (_fn: unknown, arg?: unknown) => {
+      if (typeof arg !== 'string') return [];
+      interactions.push(`script ${arg}`);
+      return undefined;
+    },
+    addInitScript: async () => {},
+    on: () => {},
+    frames: () => [],
+    $: async (sel: string) =>
+      fake.elements
+        ? {
+            click: async () => {
+              interactions.push(`click ${sel}`);
+            },
+          }
+        : null,
+    title: async () => '',
+    url: () => current,
+    waitForTimeout: async () => {},
+    screenshot: async () => Buffer.alloc(0),
+    close: async () => {},
+  };
+  const context = {
+    route: async (_pattern: string, handler: (route: never) => unknown) => {
+      box.handler = handler;
+    },
+    newPage: async () => page,
+    cookies: async () => [],
+    close: async () => {},
+  };
+  const browser = { newContext: async () => context, close: async () => {} } as unknown as PwBrowser;
+  return { browser, box, gotos, interactions, decide: (r: FakeReq) => decide(box.handler, r) };
+}
+
+function fakeClock() {
+  let t = 0;
+  return {
+    now: () => t,
+    sleep: async (ms: number) => {
+      t += ms;
+    },
+  };
+}
+
+const verifyOpts = (extra: Record<string, unknown> = {}) => ({
+  headless: true,
+  navTimeoutMs: 1000,
+  settle: { quietMs: 10, maxMs: 20 },
+  allowlist: [] as string[],
+  clock: fakeClock(),
+  ...extra,
+});
+
+// openInstrumentedPage (audit agent, crawler, tag-suggest scan).
+{
+  const box: { handler?: (route: never) => unknown } = {};
+  const ctx = {
+    route: async (_p: string, h: (route: PwRoute) => unknown) => {
+      box.handler = h as (route: never) => unknown;
+    },
+    newPage: async () => ({ addInitScript: async () => {}, on: () => {} }) as unknown as PwPage,
+    cookies: async () => [],
+    close: async () => {},
+  } as PwContext;
+  await openInstrumentedPage(ctx, createRequestGuard(fakeLookup(dnsTable).lookup));
+  check(
+    'audit route guard: aborts a name that resolves to metadata',
+    (await decide(box.handler, { url: 'http://metadata.google.internal/computeMetadata/v1/' })) === 'abort',
+  );
+  check(
+    'audit route guard: aborts a nip.io loopback name',
+    (await decide(box.handler, { url: 'http://127.0.0.1.nip.io/', nav: true })) === 'abort',
+  );
+  check(
+    'audit route guard: a public subresource continues',
+    (await decide(box.handler, { url: 'https://cdn.example.com/gtm.js' })) === 'continue',
+  );
+}
+
+// verify capture (TagDrishti) — the third copy of the route guard.
+{
+  const fb = fakeVerifyBrowser();
+  const cap = await runCapture(
+    fb.browser,
+    { url: 'https://shop.example.com/', checks: [] },
+    verifyOpts({ requestGuard: createRequestGuard(fakeLookup(dnsTable).lookup) }),
+  );
+  check('verify route guard: the start page on a public name loads', cap.loaded === true, cap.notes.join('; '));
+  check(
+    'verify route guard: aborts a name that resolves to metadata',
+    (await fb.decide({ url: 'http://metadata.google.internal/computeMetadata/v1/' })) === 'abort',
+  );
+  check(
+    'verify route guard: a public subresource continues',
+    (await fb.decide({ url: 'https://cdn.example.com/gtm.js' })) === 'continue',
+  );
+
+  // Fixture mode is offline: it never consults the (DNS) guard.
+  const fx = fakeVerifyBrowser();
+  let guardCalls = 0;
+  await runCapture(
+    fx.browser,
+    { url: 'https://fixtures.example/', checks: [] },
+    verifyOpts({
+      fixtures: { resolve: () => ({ body: '<html></html>' }) },
+      requestGuard: async () => {
+        guardCalls += 1;
+        return true;
+      },
+    }),
+  );
+  check('verify route guard: fixture mode serves from memory', (await fx.decide({ url: 'https://x.example/' })) === 'fulfill');
+  check('verify route guard: fixture mode never consults the DNS guard', guardCalls === 0);
+}
+
+// verify allowlist — it used to be declared and never read, so a spec could navigate, redirect or
+// REAL-submit a form onto any public host whatever the operator allowlisted.
+{
+  const fb = fakeVerifyBrowser();
+  const cap = await runCapture(
+    fb.browser,
+    {
+      url: 'https://shop.example.com/',
+      checks: [
+        { id: 'nav-off', type: 'event_on_interaction', event: 'x', action: { navigate: 'https://evil.test/landing' } },
+        { id: 'nav-on', type: 'event_on_interaction', event: 'y', action: { navigate: 'https://shop.example.com/next' } },
+      ],
+    },
+    verifyOpts({ allowlist: ['example.com'], requestGuard: createRequestGuard(fakeLookup(dnsTable).lookup) }),
+  );
+  check('verify allowlist: an allowlisted start URL loads', cap.loaded === true, cap.notes.join('; '));
+  const off = cap.actions.find((a) => a.checkId === 'nav-off');
+  check(
+    'verify allowlist: an off-allowlist navigate step is refused',
+    off?.performed === false && /refused/.test(off?.note ?? ''),
+    JSON.stringify(off),
+  );
+  check('verify allowlist: the off-allowlist navigate target is never opened', !fb.gotos.includes('https://evil.test/landing'));
+  const on = cap.actions.find((a) => a.checkId === 'nav-on');
+  check('verify allowlist: an allowlisted navigate step runs', on?.performed === true, JSON.stringify(on));
+  // What a link click or a real form submit produces at the route. (A redirect hop never reaches
+  // the route handler; see the page-URL re-check below.)
+  check(
+    'verify allowlist: a top-level navigation off the allowlist is aborted',
+    (await fb.decide({ url: 'https://evil.test/thanks', nav: true })) === 'abort',
+  );
+  check(
+    'verify allowlist: a popup navigation off the allowlist is aborted',
+    (await fb.decide({ url: 'https://evil.test/thanks', nav: true, popup: true })) === 'abort',
+  );
+  check(
+    'verify allowlist: an allowlisted top-level navigation continues',
+    (await fb.decide({ url: 'https://shop.example.com/thanks', nav: true })) === 'continue',
+  );
+  check(
+    'verify allowlist: a third-party iframe (CMP banner, embed) still loads',
+    (await fb.decide({ url: 'https://evil.test/cmp-banner', nav: true, iframe: true })) === 'continue',
+  );
+  check(
+    'verify allowlist: a third-party subresource still loads',
+    (await fb.decide({ url: 'https://evil.test/pixel.js' })) === 'continue',
+  );
+}
+{
+  const fb = fakeVerifyBrowser();
+  const cap = await runCapture(
+    fb.browser,
+    { url: 'https://evil.test/', checks: [] },
+    verifyOpts({ allowlist: ['example.com'], requestGuard: createRequestGuard(fakeLookup(dnsTable).lookup) }),
+  );
+  check('verify allowlist: an off-allowlist start URL does not load', cap.loaded === false, cap.notes.join('; '));
+}
+{
+  const fb = fakeVerifyBrowser();
+  await runCapture(
+    fb.browser,
+    { url: 'https://shop.example.com/', checks: [] },
+    verifyOpts({ requestGuard: createRequestGuard(fakeLookup(dnsTable).lookup) }),
+  );
+  check(
+    'verify allowlist: an empty allowlist still means any public host',
+    (await fb.decide({ url: 'https://evil.test/thanks', nav: true })) === 'continue',
+  );
+}
+
+// verify allowlist vs redirects — Playwright never routes a redirect hop, so a start URL that
+// 302s off the allowlist used to be driven anyway: the consent click, a REAL submit, clicks and
+// linker probes all ran on the off-allowlist host. The page URL is now re-checked before each one.
+{
+  const redirectSpec = {
+    url: 'https://shop.example.com/start',
+    consent: { acceptSelector: '#accept' },
+    checks: [
+      { id: 'sub', type: 'event_on_interaction', event: 'generate_lead', action: { submit: '#lead' } },
+      { id: 'clk', type: 'event_on_interaction', event: 'cta', action: { click: '#cta' } },
+      { id: 'nav', type: 'event_on_interaction', event: 'pv', action: { navigate: 'https://shop.example.com/next' } },
+      { id: 'lnk', type: 'cross_domain_linker', expectedDomains: ['partner.example.org'] },
+    ],
+  } as never;
+  const fb = fakeVerifyBrowser({ redirects: { 'https://shop.example.com/start': 'https://evil.test/form' }, elements: true });
+  const cap = await runCapture(
+    fb.browser,
+    redirectSpec,
+    verifyOpts({ allowlist: ['example.com'], requestGuard: createRequestGuard(fakeLookup(dnsTable).lookup) }),
+  );
+  check('verify redirect: the page is left where the unrouted redirect landed', cap.finalUrl === 'https://evil.test/form', cap.finalUrl);
+  check(
+    'verify redirect: an off-allowlist final URL is noted',
+    cap.notes.some((n) => /start URL ended outside the allowlist/.test(n) && /evil\.test/.test(n)),
+    cap.notes.join('; '),
+  );
+  check(
+    'verify redirect: the consent click is refused',
+    cap.consentAction?.clicked === false && /refused: page is on evil\.test/.test(cap.consentAction?.note ?? ''),
+    JSON.stringify(cap.consentAction),
+  );
+  for (const id of ['sub', 'clk', 'nav', 'lnk']) {
+    const a = cap.actions.find((x) => x.checkId === id);
+    check(
+      `verify redirect: the ${id} step is not performed on the off-allowlist page`,
+      a?.performed === false && /refused: page is on evil\.test, outside the allowlist/.test(a?.note ?? ''),
+      JSON.stringify(a),
+    );
+  }
+  check('verify redirect: nothing was clicked or submitted', fb.interactions.length === 0, fb.interactions.join(', '));
+  check('verify redirect: the refused navigate step was not opened', !fb.gotos.includes('https://shop.example.com/next'));
+
+  // Control: the same journey on a redirect that stays on the allowlist is driven as before.
+  const ok = fakeVerifyBrowser({ redirects: { 'https://shop.example.com/start': 'https://www.example.com/form' }, elements: true });
+  const okCap = await runCapture(
+    ok.browser,
+    redirectSpec,
+    verifyOpts({ allowlist: ['example.com'], requestGuard: createRequestGuard(fakeLookup(dnsTable).lookup) }),
+  );
+  check(
+    'verify redirect: an on-allowlist redirect is still driven (consent, submit, click)',
+    okCap.consentAction?.clicked === true &&
+      ['sub', 'clk', 'nav'].every((id) => okCap.actions.find((x) => x.checkId === id)?.performed === true) &&
+      ok.interactions.includes('click #accept') &&
+      ok.interactions.includes('script #lead') &&
+      ok.interactions.includes('click #cta'),
+    JSON.stringify({ actions: okCap.actions, interactions: ok.interactions }),
+  );
+  check('verify redirect: no off-allowlist note when the redirect stays on the list', !okCap.notes.some((n) => /outside the allowlist/.test(n)));
+
+  // An empty allowlist still means open: the off-site redirect target is driven as before.
+  const open = fakeVerifyBrowser({ redirects: { 'https://shop.example.com/start': 'https://evil.test/form' }, elements: true });
+  const openCap = await runCapture(
+    open.browser,
+    redirectSpec,
+    verifyOpts({ requestGuard: createRequestGuard(fakeLookup(dnsTable).lookup) }),
+  );
+  check(
+    'verify redirect: an empty allowlist does not refuse interactions',
+    openCap.actions.find((x) => x.checkId === 'sub')?.performed === true && open.interactions.includes('script #lead'),
+    JSON.stringify(openCap.actions),
+  );
+}
+
+// verify CLI — `--allowlist` was parsed and then ignored, and the start URL was never checked.
+{
+  const dir = mkdtempSync(join(tmpdir(), 'verify-cli-'));
+  const specPath = join(dir, 'spec.json');
+  writeFileSync(
+    specPath,
+    JSON.stringify({ url: 'https://evil.test/', checks: [{ id: 'pv', type: 'event_fired', event: 'page_view' }] }),
+  );
+  const cli = fileURLToPath(new URL('../verify/cli.ts', import.meta.url));
+  const run = (...args: string[]) =>
+    spawnSync(process.execPath, [...process.execArgv, cli, '--spec', specPath, ...args], {
+      encoding: 'utf8',
+      timeout: 60_000,
+    });
+  const offList = run('--allowlist', 'Example.com');
+  check(
+    'verify cli: a start URL off --allowlist is rejected before anything loads',
+    offList.status === 2 && /URL rejected/.test(offList.stderr),
+    `status=${offList.status} stderr=${String(offList.stderr).slice(0, 200)}`,
+  );
+  const loopback = run('--url', 'http://localhost./');
+  check(
+    'verify cli: a private start URL is rejected without --allowlist',
+    loopback.status === 2 && /URL rejected/.test(loopback.stderr),
+    `status=${loopback.status} stderr=${String(loopback.stderr).slice(0, 200)}`,
+  );
+  rmSync(dir, { recursive: true, force: true });
+}
 
 // ── tracker classification ─────────────────────────────────────────────────
 
@@ -264,6 +691,14 @@ check('forms: email+name "Join our newsletter" → newsletter (subscription join
 // A passwordless / magic-link login (lone email, "log in" copy, no password) → login, NOT newsletter.
 const magicLink = form({ index: 18, fields: [field({ type: 'email', name: 'email' })], fieldCount: 1, text: 'log in — email me a login link' });
 check('forms: lone email magic-link login ("log in") → login, not newsletter', analyzeForms([magicLink], 'https://example.com')[0].purpose === 'login');
+// A <select> is extracted with its DOM type ('select-one' / 'select-multiple'), never a bare 'select'.
+// It is not a text input, so a dropdown must not tip the one-/two-input purpose rules (was: counted).
+const searchWithCategory = form({ index: 19, fields: [field({ type: 'text', name: 's' }), field({ tag: 'select', type: 'select-one', name: 'category' })], action: 'https://example.com/?s=', text: '' });
+check('forms: a search box with a category dropdown → still search', analyzeForms([searchWithCategory], 'https://example.com')[0].purpose === 'search');
+const emailWithCountry = form({ index: 20, fields: [field({ type: 'email', name: 'email' }), field({ tag: 'select', type: 'select-one', name: 'country' })], text: '' });
+check('forms: a lone email plus a country dropdown → newsletter, not contact', analyzeForms([emailWithCountry], 'https://example.com')[0].purpose === 'newsletter');
+const magicLinkWithSelects = form({ index: 21, fields: [field({ type: 'email', name: 'email' }), field({ tag: 'select', type: 'select-one', name: 'region' }), field({ tag: 'select', type: 'select-multiple', name: 'workspace' })], text: 'log in with a magic link' });
+check('forms: a magic-link login with two dropdowns → still login', analyzeForms([magicLinkWithSelects], 'https://example.com')[0].purpose === 'login');
 
 const noticedForm = form({ index: 1, fields: contactForm.fields, hasPrivacyLink: true });
 check(
@@ -530,6 +965,209 @@ check('http: health reports sessions', health.activeSessions === 2);
 check('http: health reports playwright + auth', health.playwrightAvailable === true && health.authRequired === true);
 check('http: health surfaces config', typeof health.config.interactionEnabled === 'boolean' && Array.isArray(health.config.allowlist));
 
+// ── HTTP transport: sessions ────────────────────────────────────────────────
+// REGRESSION: one McpServer was shared by every HTTP session, and McpServer.connect() throws
+// "Already connected to a transport" the second time. That throw landed in an Express 4 async
+// handler with no try/catch and no process-level net, so a second client's initialize took the
+// whole process (and the first client's session) down. Any non-initialize POST without a known
+// session id also minted a transport, so it hit the same throw.
+
+check('http: initialize detected', isInitializeRequest({ jsonrpc: '2.0', id: 1, method: 'initialize' }));
+check('http: initialize detected inside a batch', isInitializeRequest([{ method: 'tools/list' }, { method: 'initialize' }]));
+check(
+  'http: non-initialize bodies not detected',
+  !isInitializeRequest({ method: 'tools/list' }) && !isInitializeRequest(null) && !isInitializeRequest('initialize'),
+);
+check('http: known session resumes', decidePostRoute('s1', true, { method: 'tools/list' }).kind === 'resume');
+check('http: initialize without session creates', decidePostRoute(undefined, false, { method: 'initialize' }).kind === 'create');
+check('http: initialize with a stale session creates', decidePostRoute('gone', false, { method: 'initialize' }).kind === 'create');
+check('http: non-initialize without session → unknown', decidePostRoute(undefined, false, { method: 'tools/list' }).kind === 'unknown-session');
+check('http: non-initialize with a stale session → unknown', decidePostRoute('gone', false, { method: 'tools/list' }).kind === 'unknown-session');
+
+const webAuditIndexSrc = readFileSync(new URL('../index.ts', import.meta.url), 'utf8');
+check('http: index hands startHttpServer a factory, not a shared server', /startHttpServer\(createWebAuditMcpServer\)/.test(webAuditIndexSrc));
+check('http: index registers an unhandledRejection net', webAuditIndexSrc.includes("process.on('unhandledRejection'"));
+check('http: index registers an uncaughtException net', webAuditIndexSrc.includes("process.on('uncaughtException'"));
+
+// Live: a real listener on an ephemeral port, driven over loopback. No browser is launched.
+const HTTP_ENV_KEYS = ['WEB_AUDIT_HTTP_AUTH_TOKEN', 'WEB_AUDIT_HTTP_ALLOW_UNAUTHENTICATED', 'WEB_AUDIT_HTTP_PORT', 'PORT'];
+const httpLogs: string[] = [];
+async function withHttpEnv(env: Record<string, string>, fn: () => Promise<void>): Promise<void> {
+  const saved = HTTP_ENV_KEYS.map((k) => [k, process.env[k]] as const);
+  for (const k of HTTP_ENV_KEYS) delete process.env[k];
+  Object.assign(process.env, env);
+  const origError = console.error;
+  // The server logs every session open/close to stderr; keep it for assertions, not the console.
+  console.error = (...args: unknown[]) => { httpLogs.push(args.map(String).join(' ')); };
+  try {
+    await fn();
+  } finally {
+    console.error = origError;
+    for (const [k, v] of saved) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+}
+
+const TEST_HTTP_TOKEN = 'web-audit-test-token';
+const MCP_HEADERS: Record<string, string> = {
+  'content-type': 'application/json',
+  accept: 'application/json, text/event-stream',
+  authorization: `Bearer ${TEST_HTTP_TOKEN}`,
+};
+const initBody = (id: number): string =>
+  JSON.stringify({
+    jsonrpc: '2.0',
+    id,
+    method: 'initialize',
+    params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'web-audit-test', version: '0.0.0' } },
+  });
+
+await withHttpEnv({ WEB_AUDIT_HTTP_AUTH_TOKEN: TEST_HTTP_TOKEN, WEB_AUDIT_HTTP_PORT: '0' }, async () => {
+  const handle = await startHttpServer(createWebAuditMcpServer);
+  const base = `http://127.0.0.1:${handle.port}`;
+  const post = (body: string, extra: Record<string, string> = {}): Promise<Response> =>
+    fetch(`${base}/mcp`, { method: 'POST', headers: { ...MCP_HEADERS, ...extra }, body });
+  const activeSessions = async (): Promise<number> =>
+    ((await (await fetch(`${base}/health`)).json()) as { activeSessions: number }).activeSessions;
+  try {
+    const a = await post(initBody(1));
+    const aText = await a.text();
+    const sidA = a.headers.get('mcp-session-id') ?? '';
+    check('http live: first initialize → 200 + session id', a.status === 200 && sidA !== '', `${a.status} ${aText.slice(0, 200)}`);
+
+    const b = await post(initBody(1));
+    const bText = await b.text();
+    const sidB = b.headers.get('mcp-session-id') ?? '';
+    check(
+      'http live: SECOND initialize → its own session (was: "Already connected", process exit)',
+      b.status === 200 && sidB !== '' && sidB !== sidA,
+      `${b.status} ${bText.slice(0, 200)}`,
+    );
+
+    const sessionHeaders = (sid: string) => ({ 'mcp-session-id': sid, 'mcp-protocol-version': '2025-06-18' });
+    const listA = await post(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' }), sessionHeaders(sidA));
+    const listAText = await listA.text();
+    check('http live: first session still serves tools/list', listA.status === 200 && listAText.includes('site_crawl'), `${listA.status} ${listAText.slice(0, 200)}`);
+    const listB = await post(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' }), sessionHeaders(sidB));
+    const listBText = await listB.text();
+    check('http live: second session serves tools/list', listB.status === 200 && listBText.includes('site_crawl'), `${listB.status} ${listBText.slice(0, 200)}`);
+
+    const orphan = await post(JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/list' }));
+    const orphanBody = (await orphan.json()) as { jsonrpc?: string; error?: { code?: number } };
+    check('http live: non-initialize without a session → 404 JSON-RPC -32001', orphan.status === 404 && orphanBody.jsonrpc === '2.0' && orphanBody.error?.code === -32001);
+
+    const stale = await post(JSON.stringify({ jsonrpc: '2.0', id: 4, method: 'tools/list' }), sessionHeaders('no-such-session'));
+    const staleBody = (await stale.json()) as { error?: { code?: number } };
+    check('http live: stale session id → 404 JSON-RPC -32001', stale.status === 404 && staleBody.error?.code === -32001);
+
+    const before = await activeSessions();
+    check('http live: only initialize mints sessions', before === 2, String(before));
+
+    const del = await fetch(`${base}/mcp`, { method: 'DELETE', headers: { ...MCP_HEADERS, ...sessionHeaders(sidA) } });
+    await del.text();
+    const after = await activeSessions();
+    check('http live: DELETE releases that session only', del.status === 200 && after === 1, `${del.status} active=${after}`);
+
+    const listBAfter = await post(JSON.stringify({ jsonrpc: '2.0', id: 5, method: 'tools/list' }), sessionHeaders(sidB));
+    const listBAfterText = await listBAfter.text();
+    check('http live: the other session survives the DELETE', listBAfter.status === 200 && listBAfterText.includes('site_crawl'), `${listBAfter.status}`);
+  } finally {
+    await handle.close();
+  }
+});
+
+// ── HTTP transport: binding ─────────────────────────────────────────────────
+// REGRESSION: with WEB_AUDIT_HTTP_AUTH_TOKEN unset, isAuthorized() admits every request and the
+// listener bound every interface behind one stderr warning, so /mcp was anonymous to the network.
+// Now the server refuses to start unless explicitly opted in, and then binds loopback only.
+// isAuthorized() itself is unchanged (the "no token → open" checks above still describe it); the
+// gate moved to startup.
+
+const bindNone = resolveHttpBinding({});
+check('http bind: no token → refuses to start', typeof bindNone.refuse === 'string' && /WEB_AUDIT_HTTP_AUTH_TOKEN/.test(bindNone.refuse ?? ''));
+check(
+  'http bind: opt-in must be exactly "true"',
+  typeof resolveHttpBinding({ WEB_AUDIT_HTTP_ALLOW_UNAUTHENTICATED: '1' }).refuse === 'string' &&
+    typeof resolveHttpBinding({ WEB_AUDIT_HTTP_ALLOW_UNAUTHENTICATED: 'TRUE' }).refuse === 'string',
+);
+const bindOptIn = resolveHttpBinding({ WEB_AUDIT_HTTP_ALLOW_UNAUTHENTICATED: 'true' });
+check('http bind: opt-in starts on loopback only', bindOptIn.refuse === undefined && bindOptIn.host === '127.0.0.1' && !bindOptIn.authRequired);
+const bindToken = resolveHttpBinding({ WEB_AUDIT_HTTP_AUTH_TOKEN: 's3cret' });
+check('http bind: token → starts with the unchanged default listen', bindToken.refuse === undefined && bindToken.host === undefined && bindToken.authRequired);
+check(
+  'http bind: a token makes the opt-in irrelevant',
+  resolveHttpBinding({ WEB_AUDIT_HTTP_AUTH_TOKEN: 's3cret', WEB_AUDIT_HTTP_ALLOW_UNAUTHENTICATED: 'true' }).host === undefined,
+);
+check('http bind: banner says all interfaces, not localhost', /all interfaces \(::\)/.test(bindingBanner('::', 8080, true)) && !/localhost/.test(bindingBanner('::', 8080, true)));
+check('http bind: banner names loopback and no auth', /127\.0\.0\.1/.test(bindingBanner('127.0.0.1', 8080, false)) && /NONE/.test(bindingBanner('127.0.0.1', 8080, false)));
+check('http live: token server banner printed the bound address, never localhost', httpLogs.some((l) => /listening on .*bearer token/.test(l)) && !httpLogs.some((l) => /localhost/.test(l)));
+
+await withHttpEnv({ WEB_AUDIT_HTTP_PORT: '0' }, async () => {
+  let refused: unknown = null;
+  try {
+    const h = await startHttpServer(createWebAuditMcpServer);
+    await h.close();
+  } catch (e) {
+    refused = e;
+  }
+  check('http live: no token → startHttpServer rejects before listening', refused instanceof Error && /refused to start/.test(refused.message));
+});
+
+await withHttpEnv({ WEB_AUDIT_HTTP_ALLOW_UNAUTHENTICATED: 'true', WEB_AUDIT_HTTP_PORT: '0' }, async () => {
+  const h = await startHttpServer(createWebAuditMcpServer);
+  try {
+    check('http live: unauthenticated opt-in binds 127.0.0.1', h.host === '127.0.0.1', h.host);
+    const body = (await (await fetch(`http://127.0.0.1:${h.port}/health`)).json()) as { authRequired: boolean };
+    check('http live: health reports authRequired=false under the opt-in', body.authRequired === false);
+  } finally {
+    await h.close();
+  }
+});
+
+// ── HTTP transport: body-parser errors ──────────────────────────────────────
+// REGRESSION: express.json({ limit: '8mb' }) had no error middleware, so an oversized or malformed
+// body got Express's HTML 413/400 page, which a JSON-RPC client cannot parse.
+
+type RpcErrorBody = { jsonrpc?: string; error?: { code?: number; message?: string } };
+const readRpcError = async (r: Response): Promise<RpcErrorBody & { contentType: string }> => {
+  const contentType = r.headers.get('content-type') ?? '';
+  const text = await r.text();
+  try {
+    return { ...(JSON.parse(text) as RpcErrorBody), contentType };
+  } catch {
+    return { contentType };
+  }
+};
+
+await withHttpEnv({ WEB_AUDIT_HTTP_AUTH_TOKEN: TEST_HTTP_TOKEN, WEB_AUDIT_HTTP_PORT: '0' }, async () => {
+  const h = await startHttpServer(createWebAuditMcpServer);
+  const url = `http://127.0.0.1:${h.port}/mcp`;
+  try {
+    const bad = await fetch(url, { method: 'POST', headers: MCP_HEADERS, body: '{"jsonrpc":"2.0",' });
+    const badBody = await readRpcError(bad);
+    check(
+      'http body: malformed JSON → 400 JSON-RPC parse error (-32700), not HTML',
+      bad.status === 400 && badBody.contentType.includes('json') && badBody.jsonrpc === '2.0' && badBody.error?.code === -32700,
+      `${bad.status} ${badBody.contentType}`,
+    );
+
+    const pad = 'a'.repeat(8 * 1024 * 1024);
+    const huge = `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"pad":"${pad}"}}`;
+    const big = await fetch(url, { method: 'POST', headers: MCP_HEADERS, body: huge });
+    const bigBody = await readRpcError(big);
+    check(
+      'http body: over 8mb → 413 JSON-RPC invalid request (-32600), not HTML',
+      big.status === 413 && bigBody.contentType.includes('json') && bigBody.jsonrpc === '2.0' &&
+        bigBody.error?.code === -32600 && /8mb/.test(bigBody.error?.message ?? ''),
+      `${big.status} ${bigBody.contentType}`,
+    );
+  } finally {
+    await h.close();
+  }
+});
+
 // ── tag-presence reconciliation (configured vs fired) ───────────────────────
 
 const reconContainer = {
@@ -721,6 +1359,34 @@ check('embed: HubSpot embed surfaces beside an unrelated search form', buildSugg
   );
   check('rect: two forms with nothing to tell them apart stay unringed', forms2[0].rect === undefined);
 
+  // A site-wide custom_event (an ecommerce funnel tag fires on a dataLayer push, not on any form) is
+  // not ringed around the one form that happens to be alone on a page (was: ringed + proofPage set).
+  const ecommerce = attachRects(
+    [sug({ page: 'site-wide', trigger: { name: 'Add To Cart (dataLayer) Trigger', kind: 'custom_event', eventName: 'add_to_cart' } })],
+    [page({ page: '/contact', forms: [{ purpose: 'contact', action: '/x', rect }] as never })],
+  );
+  check('rect: a site-wide custom_event is not ringed around an unrelated single form', ecommerce[0].rect === undefined && ecommerce[0].proofPage === undefined);
+
+  // A page-specific custom_event is a form's provider/dataLayer listener: its single form is still ringed.
+  const formEvent = attachRects(
+    [sug({ trigger: { name: 'Contact Form Trigger', kind: 'custom_event', eventName: 'hubspot-form-success' } })],
+    [page({ forms: [{ purpose: 'contact', action: '/x', rect }] as never })],
+  );
+  check('rect: a page-specific form custom_event still rings its single form', JSON.stringify(formEvent[0].rect) === JSON.stringify(rect));
+
+  // A popup form revealed by an interactive click has no rect on the picture (it was taken before the
+  // click). It still counts: the one measured form must not be ringed for a suggestion that could be either.
+  const revealed = attachRects(
+    [sug({ trigger: { name: 'Demo', kind: 'form_submit' } })],
+    [page({ forms: [{ purpose: 'contact', action: '/x', formId: 'contact', rect }, { purpose: 'demo', action: '', formId: '', hidden: true }] as never })],
+  );
+  check('rect: an unmeasured revealed form keeps the match ambiguous (no ring on the other form)', revealed[0].rect === undefined);
+  const byId = attachRects(
+    [sug({ trigger: { name: 'Contact', kind: 'form_submit', formIdValue: 'contact' } })],
+    [page({ forms: [{ purpose: 'contact', action: '/x', formId: 'contact', rect }, { purpose: 'demo', action: '', formId: '', hidden: true }] as never })],
+  );
+  check('rect: a form named by id is still ringed next to a revealed one', JSON.stringify(byId[0].rect) === JSON.stringify(rect));
+
   // An element the collector could not measure (the layout-less path) is not invented.
   const noRect = attachRects(
     [sug({ trigger: { name: 'Email', kind: 'link_click', clickUrlValue: 'mailto:' } })],
@@ -757,6 +1423,44 @@ check('embed: HubSpot embed surfaces beside an unrelated search form', buildSugg
   );
   check('robots: every Sitemap line is read, case and spacing insensitive', robots.length === 2);
   check('robots: a Disallow line is not mistaken for a sitemap', !robots.some((r) => r.includes('admin')));
+
+  // robots.txt Sitemap: entries are held to the same same-site rule as sitemapindex children and
+  // caller-named sitemaps. IP-literal hosts keep safeFetch off DNS; fetch is stubbed, so no network.
+  {
+    const site = 'http://203.0.113.10';
+    const offSite = 'http://198.51.100.7/sitemap.xml';
+    const served: Record<string, string> = {
+      [`${site}/robots.txt`]: `User-agent: *\nSitemap: ${offSite}\nSitemap: ${site}/custom-sitemap.xml\n`,
+      [`${site}/custom-sitemap.xml`]:
+        `<urlset><url><loc>${site}/contact</loc></url><url><loc>${site}/pricing</loc></url></urlset>`,
+    };
+    const fetched: string[] = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      fetched.push(url);
+      const body = served[url];
+      return body === undefined ? new Response('', { status: 404 }) : new Response(body, { status: 200 });
+    }) as typeof fetch;
+    try {
+      const found = await discoverSitePages(`${site}/`);
+      check('robots: an off-site Sitemap entry is never fetched', !fetched.includes(offSite), fetched.join(', '));
+      check('robots: an on-site Sitemap entry is still read', fetched.includes(`${site}/custom-sitemap.xml`));
+      check(
+        'robots: pages from the on-site sitemap are listed',
+        found.pages.some((p) => p.url === `${site}/contact`) && found.pages.some((p) => p.url === `${site}/pricing`),
+      );
+      const skipped = found.sitemapsRead.find((r) => r.url === offSite);
+      check(
+        'robots: the skipped off-site sitemap is recorded with its reason',
+        skipped?.ok === false && /same site/.test(skipped?.error ?? ''),
+        JSON.stringify(skipped),
+      );
+      check('robots: skipping an off-site sitemap does not mark the site unreachable', found.sitemapStatus === 'found');
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  }
 
   const links = extractLinks(
     '<a href="/contact">c</a><a href="https://example.com/pricing">p</a><a href="https://other.test/x">o</a><a href="/logo.png">i</a>',
@@ -852,6 +1556,46 @@ check('embed: HubSpot embed surfaces beside an unrelated search form', buildSugg
   const capped = resolvePageList('https://example.com/', chosen, 25);
   check('chosen: a real ceiling still applies', capped.targets.length === 25);
   check('chosen: and the pages it cut are named', capped.rejected.length === 15);
+}
+
+// ── form extraction in a real page: the generic cookie/consent CMP filter ──────────────────────────
+// extractFormsInPage runs IN the page, so these checks need Chromium. They self-skip when Playwright or
+// its browser is not installed (CI installs neither), so the suite still needs no browser.
+{
+  const pw = await loadPlaywright();
+  const launchOpts = { headless: true, timeout: 15_000 };
+  const browser = pw ? await pw.chromium.launch(launchOpts).catch(() => null) : null;
+  if (!browser) {
+    console.log('web-audit: in-page form extraction checks SKIPPED (playwright/chromium not installed)');
+  } else {
+    try {
+      const page = (await (await browser.newContext()).newPage()) as PwPage & { setContent(html: string): Promise<void> };
+      const formIdsOn = async (html: string): Promise<string[]> => {
+        await page.setContent(html);
+        // tsx (esbuild keepNames) wraps the function's inner helpers in __name(); the tsc build does not.
+        await page.evaluate('window.__name = (f) => f');
+        const raw = await page.evaluate<RawForm[]>(extractFormsInPage);
+        return raw.map((f) => f.formId || '(anon)');
+      };
+      const FORM = '<form id="contact" action="/c"><label>Email <input type="email" name="email"></label><button>Send</button></form>';
+      check('cmp-filter: a plain contact form is found', (await formIdsOn(`<html><body>${FORM}</body></html>`)).join() === 'contact');
+      // Consent tooling flags the page ROOT; the generic substring arm used to match it and drop every form.
+      check('cmp-filter: <body class="cookies-not-set"> (WordPress Cookie Notice) keeps the page\'s forms',
+        (await formIdsOn(`<html><body class="home cookies-not-set">${FORM}</body></html>`)).join() === 'contact');
+      check('cmp-filter: <html class="show--consent"> (cookieconsent) keeps the page\'s forms',
+        (await formIdsOn(`<html class="show--consent"><body>${FORM}</body></html>`)).join() === 'contact');
+      check('cmp-filter: <html class="js cookies"> (Modernizr) keeps the page\'s forms',
+        (await formIdsOn(`<html class="js cookies"><body>${FORM}</body></html>`)).join() === 'contact');
+      // A real banner is still excluded: by vendor id, and by the generic arm on a non-root container.
+      const bannerForm = '<form id="cmp"><input type="text" name="x"><button>Submit</button></form>';
+      check('cmp-filter: a form inside #onetrust-banner-sdk is still excluded',
+        (await formIdsOn(`<html><body>${FORM}<div id="onetrust-banner-sdk">${bannerForm}</div></body></html>`)).join() === 'contact');
+      check('cmp-filter: a form inside a generic .cookie-banner is still excluded, even under a flagged <body>',
+        (await formIdsOn(`<html><body class="cookies-not-set">${FORM}<div class="cookie-banner">${bannerForm}</div></body></html>`)).join() === 'contact');
+    } finally {
+      await browser.close();
+    }
+  }
 }
 
 console.log(`web-audit tests: ${passed} passed, ${failed} failed`);

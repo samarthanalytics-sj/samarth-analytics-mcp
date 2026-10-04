@@ -25,11 +25,23 @@ import {
   deriveApiBase,
   GoogleScopeError,
 } from './auth/googleIdentityResolver.js';
-import { resolveHttpBinding, bindingBanner } from './utils/httpBinding.js';
+import {
+  resolveHttpBinding,
+  resolveHttpPort,
+  bindingBanner,
+  needsRebindingGuard,
+  rebindingRejection,
+} from './utils/httpBinding.js';
 import { getGuardrailConfig } from './utils/guardrails.js';
 import { guardrailBanner, guardrailStatus } from './utils/guardrailMode.js';
-import { decidePostRoute, UNKNOWN_SESSION_MESSAGE } from './utils/mcpSession.js';
-import { createStytchTokenValidator } from './auth/stytchTokenValidator.js';
+import {
+  decidePostRoute,
+  decideSessionAccess,
+  sessionErrorResponse,
+  sessionOwnedBy,
+  redactSessionId,
+} from './utils/mcpSession.js';
+import { createStytchTokenValidator, resolveStytchTokenPins } from './auth/stytchTokenValidator.js';
 import type { StytchClaims } from './auth/stytchTokenValidator.js';
 
 async function main(): Promise<void> {
@@ -95,8 +107,13 @@ async function startHttpServer(auth: OAuth2Client): Promise<void> {
   );
 
   // PORT is the conventional env var injected by hosts like Render/Fly;
-  // GTM_MCP_HTTP_PORT takes precedence when explicitly set.
-  const port = parseInt(process.env.GTM_MCP_HTTP_PORT ?? process.env.PORT ?? '3001', 10);
+  // GTM_MCP_HTTP_PORT takes precedence when explicitly set (blank counts as unset).
+  const portChoice = resolveHttpPort(process.env);
+  if (portChoice.refuse) {
+    console.error(`[samarth-gtm-mcp] ${portChoice.refuse}`);
+    process.exit(1);
+  }
+  const port = portChoice.port;
 
   // ── Auth modes ─────────────────────────────────────────────────────────────
   // Multi-user mode (Stytch Connected Apps) activates when STYTCH_PROJECT_ID is
@@ -118,6 +135,18 @@ async function startHttpServer(auth: OAuth2Client): Promise<void> {
   }
   if (binding.warning) {
     console.error(`[samarth-gtm-mcp] WARNING: ${binding.warning}`);
+  }
+  // DNS-rebinding guard for the unauthenticated loopback server (see needsRebindingGuard). Registered
+  // before every route so POST, GET and DELETE /mcp are all covered.
+  if (needsRebindingGuard(binding)) {
+    app.use((req, res, next) => {
+      const reason = rebindingRejection(req.headers.host, req.headers.origin);
+      if (reason) {
+        res.status(403).json({ jsonrpc: '2.0', error: { code: -32000, message: reason }, id: null });
+        return;
+      }
+      next();
+    });
   }
   if (!multiUser && !staticToken) {
     console.error(
@@ -159,19 +188,23 @@ async function startHttpServer(auth: OAuth2Client): Promise<void> {
     registrationEndpoint =
       process.env.STYTCH_REGISTRATION_ENDPOINT ??
       `${apiBase}/v1/public/${stytchProjectId}/oauth2/register`;
+    // Issuer/audience are ALWAYS pinned. Unset env vars used to mean no pinning at all (any token
+    // signed by the project key passed); they now default to the values Stytch Connected Apps
+    // mints for this project, and the env vars still override.
+    const pins = resolveStytchTokenPins(stytchProjectId, process.env);
     validator = createStytchTokenValidator({
       jwksUrl: jwksUri,
-      issuer: process.env.STYTCH_JWT_ISSUER || undefined,
-      audience: process.env.STYTCH_JWT_AUDIENCE || undefined,
+      issuer: pins.issuer,
+      audience: pins.audience,
       debugClaims: process.env.STYTCH_DEBUG_CLAIMS === 'true',
     });
-    if (!process.env.STYTCH_JWT_ISSUER || !process.env.STYTCH_JWT_AUDIENCE) {
-      console.error(
-        '[samarth-gtm-mcp] WARNING: STYTCH_JWT_ISSUER / STYTCH_JWT_AUDIENCE are not both set — ' +
-          'tokens are accepted on JWKS signature + expiry alone, without issuer/audience pinning. ' +
-          'Read the values from a STYTCH_DEBUG_CLAIMS log once, set both, then disable debug.'
-      );
-    }
+    console.error(
+      `[samarth-gtm-mcp] Stytch token pins: iss=${pins.issuer} ` +
+        `(${pins.issuerDerived ? 'derived from STYTCH_PROJECT_ID' : 'STYTCH_JWT_ISSUER'}), ` +
+        `aud=${pins.audience} ` +
+        `(${pins.audienceDerived ? 'derived from STYTCH_PROJECT_ID' : 'STYTCH_JWT_AUDIENCE'}); ` +
+        'only Connected App access tokens (client_id, no session claim) are accepted.'
+    );
     // Require the grant to carry at least one scope we actually use, so an
     // incomplete Google consent fails at sign-in resolution with a clear 403
     // rather than as a raw Google 403 inside a tool call. GTM_SCOPES[0] is
@@ -194,12 +227,13 @@ async function startHttpServer(auth: OAuth2Client): Promise<void> {
     res.status(401).json({ error: reason });
   }
 
-  // Resolve the OAuth2Client to use for a request, applying the right gate.
-  // Returns undefined (and sends a 401) when the request is not authorized.
+  // Resolve the OAuth2Client to use for a request, applying the right gate, plus the principal the
+  // request authenticated as (sessions are bound to it; see sessionOwnedBy). Single-identity modes
+  // have one principal by construction. Returns undefined (and sends a 401) when not authorized.
   async function resolveAuthForRequest(
     req: import('express').Request,
     res: import('express').Response
-  ): Promise<OAuth2Client | undefined> {
+  ): Promise<{ client: OAuth2Client; principal: string } | undefined> {
     if (multiUser) {
       const m = /^Bearer (.+)$/.exec(req.headers.authorization ?? '');
       if (!m) {
@@ -225,7 +259,8 @@ async function startHttpServer(auth: OAuth2Client): Promise<void> {
       // (502). Either way we log the real cause for the Render logs.
       const who = `${claims.organizationId}:${claims.memberId}`;
       try {
-        return await resolver!.resolve(claims.organizationId, claims.memberId);
+        const client = await resolver!.resolve(claims.organizationId, claims.memberId);
+        return { client, principal: `stytch:${who}` };
       } catch (err) {
         if (err instanceof GoogleScopeError) {
           console.error(`[samarth-gtm-mcp] Google scope check failed for ${who}: ${err.message}`);
@@ -260,7 +295,7 @@ async function startHttpServer(auth: OAuth2Client): Promise<void> {
       // configured one in the logs.
       console.error('[samarth-gtm-mcp] serving an UNAUTHENTICATED /mcp request (no auth configured)');
     }
-    return auth;
+    return { client: auth, principal: staticToken ? 'static-token' : 'unauthenticated' };
   }
 
   /** Live stateful sessions, keyed by mcp-session-id, each with its OWN MCP server.
@@ -273,6 +308,9 @@ async function startHttpServer(auth: OAuth2Client): Promise<void> {
     {
       transport: InstanceType<typeof StreamableHTTPServerTransport>;
       server: ReturnType<typeof createGtmMcpServer>;
+      /** The principal that initialized this session. Only that principal may resume it, open its
+       *  event stream or DELETE it; anyone else gets the same 404 as an unknown id. */
+      principal: string;
       /** Epoch ms of the last request seen on this session. Drives the idle sweep below. */
       lastActivity: number;
       /** Requests currently being handled on this session (a POST, or an open SSE GET). A session
@@ -300,7 +338,7 @@ async function startHttpServer(auth: OAuth2Client): Promise<void> {
         // and if the transport was already closed the entry still goes away.
         sessions.delete(sid);
         console.error(
-          `[samarth-gtm-mcp] Closing idle HTTP session: ${sid} (active: ${sessions.size})`
+          `[samarth-gtm-mcp] Closing idle HTTP session: ${redactSessionId(sid)} (active: ${sessions.size})`
         );
         void Promise.resolve(entry.transport.close()).catch(() => undefined);
         void entry.server.close().catch(() => undefined);
@@ -334,13 +372,19 @@ async function startHttpServer(auth: OAuth2Client): Promise<void> {
     });
   };
 
+  /** Does this session exist AND belong to the requesting principal? A session owned by someone else
+   *  is reported exactly like an unknown one, so its existence is never confirmed. */
+  const ownsSession = (sessionId: string | undefined, principal: string): boolean =>
+    !!sessionId && sessionOwnedBy(sessions.get(sessionId)?.principal, principal);
+
   app.post('/mcp', async (req, res) => {
     try {
-      const reqAuth = await resolveAuthForRequest(req, res);
-      if (!reqAuth) return; // 401 already sent
+      const authed = await resolveAuthForRequest(req, res);
+      if (!authed) return; // 401 already sent
+      const { client: reqAuth, principal } = authed;
 
       const sessionId = req.headers['mcp-session-id'] as string | undefined;
-      const route = decidePostRoute(sessionId, !!sessionId && sessions.has(sessionId), req.body);
+      const route = decidePostRoute(sessionId, ownsSession(sessionId, principal), req.body);
 
       let transport: InstanceType<typeof StreamableHTTPServerTransport>;
 
@@ -349,11 +393,8 @@ async function startHttpServer(auth: OAuth2Client): Promise<void> {
         trackRequest(entry, res); // in-flight for the whole request, so a long call is never swept
         transport = entry.transport;
       } else if (route.kind === 'unknown-session') {
-        res.status(404).json({
-          jsonrpc: '2.0',
-          error: { code: -32001, message: UNKNOWN_SESSION_MESSAGE },
-          id: null,
-        });
+        const { status, body } = sessionErrorResponse('unknown-session');
+        res.status(status).json(body);
         return;
       } else {
         // New session: its own server instance, connected to its own transport.
@@ -362,8 +403,10 @@ async function startHttpServer(auth: OAuth2Client): Promise<void> {
         transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => newSessionId,
           onsessioninitialized: (sid) => {
-            sessions.set(sid, { transport, server: sessionServer, lastActivity: Date.now(), inFlight: 0 });
-            console.error(`[samarth-gtm-mcp] New HTTP session: ${sid} (active: ${sessions.size})`);
+            sessions.set(sid, { transport, server: sessionServer, principal, lastActivity: Date.now(), inFlight: 0 });
+            console.error(
+              `[samarth-gtm-mcp] New HTTP session: ${redactSessionId(sid)} (active: ${sessions.size})`
+            );
           },
         });
 
@@ -371,7 +414,9 @@ async function startHttpServer(auth: OAuth2Client): Promise<void> {
           const sid = transport.sessionId;
           if (sid) {
             sessions.delete(sid);
-            console.error(`[samarth-gtm-mcp] HTTP session closed: ${sid} (active: ${sessions.size})`);
+            console.error(
+              `[samarth-gtm-mcp] HTTP session closed: ${redactSessionId(sid)} (active: ${sessions.size})`
+            );
           }
           void sessionServer.close().catch(() => undefined); // release this session's server
         };
@@ -391,14 +436,17 @@ async function startHttpServer(auth: OAuth2Client): Promise<void> {
   // SSE stream endpoint (GET /mcp) — for clients that support SSE-style streaming
   app.get('/mcp', async (req, res) => {
     try {
-      const reqAuth = await resolveAuthForRequest(req, res);
-      if (!reqAuth) return;
+      const authed = await resolveAuthForRequest(req, res);
+      if (!authed) return;
+      const { client: reqAuth, principal } = authed;
       const sessionId = req.headers['mcp-session-id'] as string | undefined;
-      if (!sessionId || !sessions.has(sessionId)) {
-        res.status(400).json({ error: 'Missing or invalid mcp-session-id header.' });
+      const access = decideSessionAccess(sessionId, ownsSession(sessionId, principal));
+      if (access.kind !== 'ok') {
+        const { status, body } = sessionErrorResponse(access.kind);
+        res.status(status).json(body);
         return;
       }
-      const entry = sessions.get(sessionId)!;
+      const entry = sessions.get(access.sessionId)!;
       trackRequest(entry, res); // a held-open event stream stays in-flight until the client disconnects
       const { transport } = entry;
       await runWithAuth(reqAuth, () => transport.handleRequest(req, res));
@@ -411,16 +459,19 @@ async function startHttpServer(auth: OAuth2Client): Promise<void> {
   // DELETE /mcp — client-initiated session termination
   app.delete('/mcp', async (req, res) => {
     try {
-      const reqAuth = await resolveAuthForRequest(req, res);
-      if (!reqAuth) return;
+      const authed = await resolveAuthForRequest(req, res);
+      if (!authed) return;
+      const { client: reqAuth, principal } = authed;
       const sessionId = req.headers['mcp-session-id'] as string | undefined;
-      if (sessionId && sessions.has(sessionId)) {
-        const { transport } = sessions.get(sessionId)!;
-        await runWithAuth(reqAuth, () => transport.handleRequest(req, res));
-        sessions.delete(sessionId); // transport.onclose also fires and closes that session's server
-      } else {
-        res.status(404).json({ error: 'Session not found.' });
+      const access = decideSessionAccess(sessionId, ownsSession(sessionId, principal));
+      if (access.kind !== 'ok') {
+        const { status, body } = sessionErrorResponse(access.kind);
+        res.status(status).json(body);
+        return;
       }
+      const { transport } = sessions.get(access.sessionId)!;
+      await runWithAuth(reqAuth, () => transport.handleRequest(req, res));
+      sessions.delete(access.sessionId); // transport.onclose also fires and closes that session's server
     } catch (err) {
       console.error('[samarth-gtm-mcp] DELETE /mcp failed:', err instanceof Error ? err.message : String(err));
       rpcError(res, 'Internal server error closing the session.');

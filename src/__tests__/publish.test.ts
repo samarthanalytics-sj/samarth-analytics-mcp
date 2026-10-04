@@ -8,6 +8,10 @@
  * compilerError branch below it was unreachable in the one situation it was written for, and
  * syncStatus (syncError / mergeConflict) was never read in either branch.
  *
+ * Both publish paths (versions_publish and the publish step here) also used to answer
+ * success:true when the versions.publish response itself carried compilerError:true, i.e. when
+ * nothing went live.
+ *
  * Run: tsx src/__tests__/publish.test.ts
  */
 
@@ -19,8 +23,13 @@ import type { GtmClient } from '../utils/gtmClient.js';
 
 type Call = Record<string, unknown>;
 
-/** `createResponse` is the body GTM returns from workspaces.create_version. */
-function buildServer(createResponse: Record<string, unknown>) {
+const PUBLISH_OK = { compilerError: false, containerVersion: { containerVersionId: '42' } };
+
+/**
+ * `createResponse` is the body GTM returns from workspaces.create_version;
+ * `publishResponse` is the body GTM returns from versions.publish.
+ */
+function buildServer(createResponse: Record<string, unknown>, publishResponse: Record<string, unknown> = PUBLISH_OK) {
   const createCalls: Call[] = [];
   const publishCalls: Call[] = [];
   const workspaces = {
@@ -32,7 +41,7 @@ function buildServer(createResponse: Record<string, unknown>) {
   const versions = {
     publish: (params: Call) => {
       publishCalls.push(params);
-      return Promise.resolve({ data: { compilerError: false, containerVersion: { containerVersionId: '42' } } });
+      return Promise.resolve({ data: { ...publishResponse } });
     },
   };
   const client = { accounts: { containers: { workspaces, versions } } } as unknown as GtmClient;
@@ -43,9 +52,9 @@ function buildServer(createResponse: Record<string, unknown>) {
 
 const ARGS = { accountId: '1', containerId: '2', workspaceId: '5', confirm: true };
 
-async function run(server: McpServer, extra: Record<string, unknown> = {}) {
+async function run(server: McpServer, extra: Record<string, unknown> = {}, toolName = 'workspace_create_version_and_publish') {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const tool = (server as any)._registeredTools['workspace_create_version_and_publish'];
+  const tool = (server as any)._registeredTools[toolName];
   return (await tool.handler({ ...ARGS, ...extra }, { requestId: 'test' })) as {
     isError?: boolean;
     content: { text: string }[];
@@ -124,4 +133,57 @@ test('a clean create still publishes: the new diagnosis must not block the happy
   assert.equal(publishCalls.length, 1);
   assert.equal(publishCalls[0].path, 'accounts/1/containers/2/versions/42');
   assert.equal(JSON.parse(r.content[0].text).publishedVersionId, '42');
+});
+
+const CLEAN_CREATE = {
+  compilerError: false,
+  syncStatus: { mergeConflict: false, syncError: false },
+  containerVersion: { containerVersionId: '42' },
+};
+
+test('REGRESSION: a publish step that answers compilerError:true is an error, not success', async () => {
+  const { server, publishCalls } = buildServer(CLEAN_CREATE, {
+    compilerError: true,
+    containerVersion: { containerVersionId: '42' },
+  });
+  const r = await run(server);
+
+  assert.equal(publishCalls.length, 1, 'the publish call is still made');
+  assert.equal(r.isError, true, `compilerError on publish must not report success: ${r.content[0].text}`);
+  const text = r.content[0].text;
+  assert.ok(text.includes('NOT published'), text);
+  assert.ok(text.includes('Version created (42)'), text);
+  assert.ok(text.includes('"compilerError": true'), 'the publish response must be dumped');
+  assert.ok(!text.includes('"success": true'), text);
+});
+
+test('REGRESSION: versions_publish reports compilerError:true as an error, not success', async () => {
+  const { server, publishCalls } = buildServer(CLEAN_CREATE, {
+    compilerError: true,
+    containerVersion: { containerVersionId: '9' },
+  });
+  const r = await run(server, { containerVersionId: '9' }, 'versions_publish');
+
+  assert.equal(publishCalls.length, 1);
+  assert.equal(publishCalls[0].path, 'accounts/1/containers/2/versions/9');
+  assert.equal(r.isError, true, `compilerError on publish must not report success: ${r.content[0].text}`);
+  const text = r.content[0].text;
+  assert.ok(text.includes('Version 9 has compiler errors'), text);
+  assert.ok(text.includes('NOT published'), text);
+  assert.ok(text.includes('"compilerError": true'), 'the publish response must be dumped');
+});
+
+test('versions_publish still reports success when GTM publishes cleanly', async () => {
+  const { server, publishCalls } = buildServer(CLEAN_CREATE, {
+    compilerError: false,
+    containerVersion: { containerVersionId: '9' },
+  });
+  const r = await run(server, { containerVersionId: '9' }, 'versions_publish');
+
+  assert.ok(!r.isError, r.content[0].text);
+  assert.equal(publishCalls.length, 1);
+  const body = JSON.parse(r.content[0].text);
+  assert.equal(body.success, true);
+  assert.equal(body.compilerError, false);
+  assert.equal(body.containerVersion.containerVersionId, '9');
 });

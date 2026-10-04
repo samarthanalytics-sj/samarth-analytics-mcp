@@ -1,5 +1,5 @@
 import type { RegistryService } from './registry-service';
-import type { GoogleDataService } from '../google/data-service';
+import type { GoogleDataService, QuotaBackoffScope } from '../google/data-service';
 import { log } from '../logger';
 import type { GoogleAdsService } from '../google/ads-service';
 import type { ProviderKeyStore } from '../storage/provider-keys';
@@ -793,9 +793,6 @@ export class ChatService {
     ];
 
     const toolCalls: ChatToolCall[] = [];
-    // Open a fresh change-journal turn so the user can revert this query's GTM writes. A GA4 or Ads
-    // chat with GTM CONNECTED writes to a container too, so it needs the journal just as much.
-    if (covers('gtm')) changeJournal.beginTurn();
     // A real build is many tool calls: e.g. a Meta Pixel tag = list reads + a trigger + ~8 ecommerce
     // variables + import template + the tag (~13-16). Reasoning models (o4-mini) issue ONE tool call
     // per step, so a low cap truncated multi-item builds mid-flow ("stopped after N steps"). This is a
@@ -825,19 +822,28 @@ export class ChatService {
     const turnToolResults: Array<{ name: string; args?: Record<string, unknown>; content?: string; ok: boolean }> = [];
 
     // Build-throughput accounting: time the turn and count actual TAG creates, so a bulk build can
-    // report a real "N tags in Ms" rate. Reset the GTM quota-backoff counter and route any mid-build
-    // quota wait to the UI (reusing the rate-limit banner) so a pause-for-reset is explained, not a
-    // silent freeze. Cleared in the finally below.
+    // report a real "N tags in Ms" rate. This turn's own GTM quota-backoff counter, plus a hook that
+    // routes any mid-build quota wait to the UI (reusing the rate-limit banner) so a pause-for-reset is
+    // explained, not a silent freeze.
     const turnStart = Date.now();
-    if (covers('gtm')) {
-      this.data.quotaBackoffs = 0;
-      this.data.onQuotaBackoff = ({ attempt, delayMs }) =>
-        emit?.({ type: 'retry', provider: 'Google Tag Manager', status: 429, attempt, maxAttempts: 8, delayMs, reason: 'write quota per minute reached - waiting for it to reset, then resuming automatically' });
-    }
+    const quota: QuotaBackoffScope = {
+      backoffs: 0,
+      onBackoff: ({ attempt, delayMs }) =>
+        emit?.({ type: 'retry', provider: 'Google Tag Manager', status: 429, attempt, maxAttempts: 8, delayMs, reason: 'write quota per minute reached - waiting for it to reset, then resuming automatically' }),
+    };
+    // Open a fresh change-journal turn so the user can revert this query's GTM writes. A GA4 or Ads
+    // chat with GTM CONNECTED writes to a container too, so it needs the journal just as much.
+    // The journal turn and the quota scope are bound to THIS turn's async call tree, not set on
+    // process-wide singletons: nothing serializes chat turns (an account switch remounts the chat view
+    // while the old turn keeps running), so a second turn used to capture the first turn's later
+    // writes into its own revert set, reset its quota count and take over its quota hook.
+    const inGtmTurn = <T>(fn: () => Promise<T>): Promise<T> =>
+      covers('gtm') ? changeJournal.runTurn(turnAccountId, () => this.data.withQuotaScope(quota, fn)) : fn();
+    const model = active.llm.model; // read before the closure below, where the null-check narrowing is lost
 
     let result;
     try {
-      result = await runChat(client, { system, systemStatic: staticSystem, model: active.llm.model, apiKey, messages, signal }, gatedTools, {
+      result = await inGtmTurn(() => runChat(client, { system, systemStatic: staticSystem, model, apiKey, messages, signal }, gatedTools, {
         // House style: never surface an em OR en dash. Stripped from the live stream as a hard guarantee
         // on top of the system-prompt instruction. Safe per chunk because both are single UTF-16 code
         // units, so neither can be split across deltas. The final text is stripped the same way below;
@@ -867,7 +873,7 @@ export class ChatService {
                 ...(n.reason ? { reason: n.reason } : {}),
               })
           : undefined,
-      }, MAX_TOOL_STEPS, { hardMaxSteps: HARD_MAX_TOOL_STEPS });
+      }, MAX_TOOL_STEPS, { hardMaxSteps: HARD_MAX_TOOL_STEPS }));
     } finally {
       // In a finally so a turn that DIED on a rate limit still keeps what it already read: that is
       // exactly the turn whose reads we least want repeated. The key is recomputed because
@@ -877,8 +883,6 @@ export class ChatService {
       // them appends no `|+<targets>` suffix, so the keys never match once a chip is on and the whole
       // turn's tool results are silently dropped (the model then re-fetches everything next turn).
       if (this.threadKey(active, product, integrations) === threadKey) this.toolMemory.record(threadKey, turnToolResults);
-      // Stop routing quota waits once the turn is over (the callback closes over this turn's emit).
-      if (covers('gtm')) this.data.onQuotaBackoff = undefined;
     }
 
     // Build-throughput line: how many actual TAGS were created this turn and how fast. A tag-create
@@ -890,7 +894,7 @@ export class ChatService {
     if (tagsCreated > 0) {
       const secs = Math.max(1, Math.round((Date.now() - turnStart) / 1000));
       const perMin = (tagsCreated / secs) * 60;
-      const backoffs = this.data.quotaBackoffs;
+      const backoffs = quota.backoffs;
       log.success(`[chat] created ${tagsCreated} tag(s) in ${secs}s (${perMin.toFixed(1)}/min, ${backoffs} quota backoff(s))`);
       // User-visible one-liner only for a real BULK build (2+ tags), so ordinary single-tag chats
       // stay clean. Appended to the returned text AND streamed, so it shows live and persists.

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { tagmanager } from '@googleapis/tagmanager';
 import { analyticsadmin } from '@googleapis/analyticsadmin';
 import { analyticsdata } from '@googleapis/analyticsdata';
@@ -5,13 +6,13 @@ import type { OAuth2Client } from 'google-auth-library';
 import type { AccountClientManager } from './account-clients';
 import type { RegistryService } from '../services/registry-service';
 import type { ContainerSnapshot, ServerContainerSnapshot } from './gtm-builders';
-import { serverTagParam, ga4TagFields, readGa4EventParameters, applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, normalizeTriggerType, setCustomEventName, customEventNameOf, describeTriggerConditions, buildGa4Client, buildGa4ServerTag, buildStapeDataTag, buildStapeDataClient, buildServerAllEventsTrigger, buildServerEventTrigger, buildAdsConversionServerTag, buildMetaEmqVariables, buildTikTokEmqVariables, buildEcommerceDlvVariables, buildGa4EventTag, buildTrigger, planTriggerRetarget, type TriggerInput, buildGtmClient, buildVariable, sanitizeName, matchesServerContainer, customTemplateType, upsertGoogleTagConfig, taggingUrlFirstPartyIssue, parseTemplateParameters, summariseTagTypes, type TemplateField, type TagTypeProfile, triggerUsageBreakdown, detectMetaTags, planWebToServerMigration, evaluateTrackingSetup, GA4_ECOMMERCE_FUNNEL_EVENTS, type TrackingSetupReport, type TrackingSetupCheck } from './gtm-builders';
+import { ga4TagFields, readGa4EventParameters, applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, normalizeTriggerType, setCustomEventName, customEventNameOf, describeTriggerConditions, buildGa4Client, buildGa4ServerTag, buildStapeDataTag, buildStapeDataClient, buildServerAllEventsTrigger, buildServerEventTrigger, buildAdsConversionServerTag, buildMetaEmqVariables, buildTikTokEmqVariables, buildEcommerceDlvVariables, buildGa4EventTag, buildTrigger, planTriggerRetarget, type TriggerInput, buildGtmClient, buildVariable, sanitizeName, matchesServerContainer, customTemplateType, upsertGoogleTagConfig, taggingUrlFirstPartyIssue, parseTemplateParameters, summariseTagTypes, type TemplateField, type TagTypeProfile, triggerUsageBreakdown, detectMetaTags, planWebToServerMigration, evaluateTrackingSetup, GA4_ECOMMERCE_FUNNEL_EVENTS, type TrackingSetupReport, type TrackingSetupCheck } from './gtm-builders';
 import {
   galleryCoordinatesFor, matchInstalledTemplate, templateInstallError,
 } from '../../../../../src/shared/gtm-template-sources';
 import { installTemplateFromSource, type TemplateCreateApi } from '../../../../../src/shared/gtm-template-install';
 import { capiPlatform, capiCredentials } from '../../../../../src/shared/capi-platforms';
-import { buildProbeHit, probeSuffix, probeVerdict, describeProbe, type ProbeResult } from './runtime-probe';
+import { buildProbeHit, probeSuffix, probeVerdict, describeProbe, probeTargets, probeTargetRefusal, probeRealtimeQuery, type ProbeResult } from './runtime-probe';
 import { resolveGa4MeasurementIds } from './gtm-ga4-check';
 import { withQuotaRetry, withRetry, QUOTA_RE, TRANSIENT_5XX_RE, NOT_FOUND_OR_PERMISSION_RE } from './quota-retry';
 import { log } from '../logger';
@@ -322,6 +323,14 @@ export interface Ga4ReportResult {
   completeness: ReportCompleteness;
 }
 
+/** One chat turn's GTM write-quota accounting (see GoogleDataService.withQuotaScope). */
+export interface QuotaBackoffScope {
+  /** 429s waited out by this turn's creates. */
+  backoffs: number;
+  /** Fired before each quota wait, so the wait can be shown in the UI. */
+  onBackoff?: (info: { attempt: number; delayMs: number }) => void;
+}
+
 // Read-only GTM/GA4 fetches for the ACTIVE account, using the small per-API
 // @googleapis packages. This proves the vaulted token reaches the real APIs and
 // is the seam the GTM/GA4 UI views read from. (The full MCP tool surface is
@@ -346,13 +355,19 @@ export class GoogleDataService {
     this.containerCache.clear();
   }
 
-  /** Count of GTM write-quota backoffs (429s waited out) since it was last reset. The chat turn resets
-   *  it at the start of a build and reads it for the build-stats line, so the user can see whether a
-   *  slow bulk build was quota-limited. Incremented by qCreate's onBackoff. */
-  quotaBackoffs = 0;
-  /** Optional per-turn hook so a quota wait can reach the UI ("waiting Ns for the write limit to
-   *  reset") instead of a silent pause. Set by the chat service around a turn, cleared after. */
-  onQuotaBackoff?: (info: { attempt: number; delayMs: number }) => void;
+  /** GTM write-quota accounting, PER CHAT TURN. A turn runs its tool calls inside withQuotaScope, and
+   *  qCreate's onBackoff finds that turn's scope through the async call tree: it counts the 429s waited
+   *  out (the build-stats line shows whether a slow bulk build was quota-limited) and calls the turn's
+   *  hook, so a quota wait reaches the UI instead of a silent pause. These used to be fields on this
+   *  shared service. A second turn (an account switch remounts the chat view, and nothing serializes
+   *  turns) then reset the first turn's count and replaced its hook, and whichever turn finished first
+   *  cleared the hook for both. */
+  private readonly quotaScope = new AsyncLocalStorage<QuotaBackoffScope>();
+
+  /** Run `fn` with `scope` as the quota-backoff counter + hook for every create it makes. */
+  withQuotaScope<T>(scope: QuotaBackoffScope, fn: () => Promise<T>): Promise<T> {
+    return this.quotaScope.run(scope, fn);
+  }
 
   /** Resilient retry for the INDIVIDUAL chat create path (tags/triggers/variables/built-ins). Three
    *  classes of transient GTM error, each with its own budget:
@@ -374,8 +389,11 @@ export class GoogleDataService {
       ],
       onBackoff: ({ rule, attempt, delayMs }) => {
         if (rule === 'quota') {
-          this.quotaBackoffs += 1;
-          this.onQuotaBackoff?.({ attempt, delayMs });
+          const scope = this.quotaScope.getStore();
+          if (scope) {
+            scope.backoffs += 1;
+            scope.onBackoff?.({ attempt, delayMs });
+          }
         }
         const why =
           rule === 'quota' ? 'write quota reached - waiting for the per-minute limit to reset'
@@ -1324,33 +1342,27 @@ export class GoogleDataService {
 
   /** Revert the GTM entities the last chat query wrote to, using GTM's native per-entity
    *  revert (restores each to its last published version). Continues past per-entity
-   *  failures and returns a summary. The revert itself is NOT journaled (no undo-of-undo). */
+   *  failures and returns a summary. A ref that fails stays in the journal, so pressing Revert
+   *  again retries it. Each revert authenticates as the desktop account that MADE the change, not
+   *  the currently active one. The revert itself is NOT journaled (no undo-of-undo). */
   async revertLastChanges(): Promise<{ reverted: string[]; failed: Array<{ label: string; error: string }> }> {
-    const refs = changeJournal.takeLast();
-    if (!refs || !refs.length) return { reverted: [], failed: [] };
-    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
-    const gtm = tagmanager({ version: 'v2', auth });
+    const pending = changeJournal.peekLast();
+    if (!pending || !pending.length) return { reverted: [], failed: [] };
     const ws = (r: { accountId: string; containerId: string; workspaceId: string }): string =>
       `accounts/${r.accountId}/containers/${r.containerId}/workspaces/${r.workspaceId}`;
-    const reverted: string[] = [];
-    const failed: Array<{ label: string; error: string }> = [];
-    log.info(`[gtm] revertLastChanges: ${refs.length} entity(ies): ${refs.map((r) => r.label).join(' | ')}`);
-    for (const r of refs) {
-      try {
-        const path = `${ws(r)}/${r.kind}s/${r.id}`;
-        if (r.kind === 'tag') await gtm.accounts.containers.workspaces.tags.revert({ path });
-        else if (r.kind === 'trigger') await gtm.accounts.containers.workspaces.triggers.revert({ path });
-        else await gtm.accounts.containers.workspaces.variables.revert({ path });
-        reverted.push(r.label);
-        log.success(`[gtm] reverted ${r.kind} ${r.id}`);
-      } catch (e) {
-        const error = e instanceof Error ? e.message : String(e);
-        failed.push({ label: r.label, error });
-        log.error(`[gtm] revert ${r.kind} ${r.id}: ${error}`);
-      }
-    }
-    log.info(`[gtm] revertLastChanges DONE: ${reverted.length} reverted, ${failed.length} failed`);
-    return { reverted, failed };
+    log.info(`[gtm] revertLastChanges: ${pending.length} entity(ies): ${pending.map((r) => r.label).join(' | ')}`);
+    const { reverted, failed } = await changeJournal.revertLast(async (r) => {
+      const auth = this.clients.getClient(r.desktopAccountId) as unknown as Parameters<typeof tagmanager>[0]['auth'];
+      const gtm = tagmanager({ version: 'v2', auth });
+      const path = `${ws(r)}/${r.kind}s/${r.id}`;
+      if (r.kind === 'tag') await gtm.accounts.containers.workspaces.tags.revert({ path });
+      else if (r.kind === 'trigger') await gtm.accounts.containers.workspaces.triggers.revert({ path });
+      else await gtm.accounts.containers.workspaces.variables.revert({ path });
+      log.success(`[gtm] reverted ${r.kind} ${r.id}`);
+    });
+    for (const f of failed) log.error(`[gtm] revert ${f.ref.kind} ${f.ref.id}: ${f.error}`);
+    log.info(`[gtm] revertLastChanges DONE: ${reverted.length} reverted, ${failed.length} failed${failed.length ? ' (kept in the journal, so Revert can retry them)' : ''}`);
+    return { reverted: reverted.map((r) => r.label), failed: failed.map((f) => ({ label: f.ref.label, error: f.error })) };
   }
 
   /** Record a touched entity into the current chat turn's change journal (for Revert). */
@@ -2109,24 +2121,19 @@ export class GoogleDataService {
     const varsDone = new Set<string>();
     const localTriggers = triggers.slice();
     const localTags = tags.slice();
+    const { eventTriggerFor } = await import('./server-plan');
     const ensureEventTrigger = async (eventName: string): Promise<string> => {
-      const hit = localTriggers.find((tr) => {
-        if (tr.type !== 'customEvent') return false;
-        const fs = (tr as { customEventFilter?: Array<{ type?: string; parameter?: Array<{ key?: string; value?: unknown }> }> }).customEventFilter ?? [];
-        if (fs.length !== 1) return false;
-        const ps = fs[0].parameter ?? [];
-        return String(ps.find((x) => x.key === 'arg0')?.value ?? '') === '{{_event}}' && String(ps.find((x) => x.key === 'arg1')?.value ?? '') === eventName;
-      });
-      if (hit) return hit.triggerId;
-      const baseName = `ce - ${eventName}`;
-      const taken = new Set(localTriggers.map((t) => t.name));
-      const trName = taken.has(baseName) ? `${baseName} (server)` : baseName;
+      // Matches on the listGtmTriggers row shape (customEventName/conditions), so a trigger left by an
+      // earlier run is reused rather than duplicated, and a new one always gets a free name.
+      const pick = eventTriggerFor(localTriggers, eventName);
+      if ('reuse' in pick) return pick.reuse;
+      const trName = pick.create;
       const created = await this.q(() => gtm.accounts.containers.workspaces.triggers.create({
         parent,
         requestBody: { name: trName, type: 'customEvent', customEventFilter: [{ type: 'equals', parameter: [{ type: 'template', key: 'arg0', value: '{{_event}}' }, { type: 'template', key: 'arg1', value: eventName }] }] },
       }));
       const id = created.data.triggerId ?? '';
-      localTriggers.push({ triggerId: id, name: trName, type: 'customEvent', customEventFilter: [{ type: 'equals', parameter: [{ key: 'arg0', value: '{{_event}}' }, { key: 'arg1', value: eventName }] }], filter: [], autoEventFilter: [], parameter: [] } as unknown as (typeof localTriggers)[number]);
+      localTriggers.push({ triggerId: id, name: trName, type: 'customEvent', customEventName: eventName, conditions: [] });
       return id;
     };
     for (const id of capiIds) {
@@ -2136,7 +2143,8 @@ export class GoogleDataService {
       const event = id.slice(id.indexOf(':') + 1);
       // Missing credentials are reported by the vendor's own field names, never guessed or
       // part-filled: a half-configured CAPI tag fails silently at the destination.
-      const { creds, missing } = capiCredentials(spec, values.capi);
+      // Per-conversion ids are read for THIS event only, so two events never share one conversion.
+      const { creds, missing } = capiCredentials(spec, values.capi, event);
       if (missing.length) {
         skipped.push({ id, reason: `Missing ${missing.join(' / ')}.` });
         continue;
@@ -2341,13 +2349,10 @@ export class GoogleDataService {
     if (!taggingUrl) throw new Error('This server container has no https tagging server URL recorded, so there is nothing to send the probe to. Record it first (set_server_container_tagging_url).');
     // Which id to probe: the explicit one, else the single id the active relays forward. Several
     // ids means the caller must choose; guessing would probe a property the user did not mean.
+    const targets = probeTargets(server);
     let measurementId = (opts?.measurementId ?? '').trim();
     if (!measurementId) {
-      const relayIds = [...new Set(server.tags
-        .filter((t) => t.type === 'sgtmgaaw' && !t.paused && (t.firingTriggerId ?? []).length > 0)
-        .map((t) => serverTagParam(t, 'measurementId').trim())
-        .map((v) => { const m = v.match(/^\{\{(.+)\}\}$/); if (!m) return v; const c = (server.variables ?? []).find((x) => x.name.trim().toLowerCase() === m[1].trim().toLowerCase() && (x.type ?? '').toLowerCase() === 'c'); return c ? String(((c.parameter ?? []) as Array<{ key?: string; value?: unknown }>).find((pp) => pp.key === 'value')?.value ?? '') : v; })
-        .filter((v) => /^G-/i.test(v)))];
+      const relayIds = [...targets.forwarded];
       if (relayIds.length === 1) measurementId = relayIds[0];
       else if (relayIds.length === 0) throw new Error('No active GA4 relay with a literal Measurement ID was found; pass measurementId explicitly.');
       else throw new Error(`This server forwards ${relayIds.length} Measurement IDs (${relayIds.join(', ')}); pass measurementId to say which one to probe.`);
@@ -2355,6 +2360,10 @@ export class GoogleDataService {
     // The property to read back from: found through the ids the user can actually access.
     const known = await this.listGa4MeasurementIds();
     const hit0 = known.find((k) => k.measurementId.toUpperCase() === measurementId.toUpperCase());
+    // Refuse BEFORE sending an id this server would not deliver to (a literal relay re-routes it into
+    // another production property) or one nothing corroborates and this account cannot read back.
+    const refusal = probeTargetRefusal(targets, measurementId, Boolean(hit0));
+    if (refusal) throw new Error(refusal);
     const hit = buildProbeHit({ taggingUrl, measurementId, suffix: probeSuffix() });
     const taggingHost = new URL(taggingUrl).host;
     const { requestAllowed } = await import('../suggestions/ssrf');
@@ -2387,7 +2396,7 @@ export class GoogleDataService {
     while (Date.now() - sentAt < maxWaitMs) {
       await new Promise((r) => setTimeout(r, pollMs));
       polls += 1;
-      const rep = await this.runGa4RealtimeReport({ property: hit0.property, dimensions: ['eventName'], metrics: ['eventCount'] }).catch(() => null);
+      const rep = await this.runGa4RealtimeReport(probeRealtimeQuery(hit0.property, hit.eventName)).catch(() => null);
       const verdict = rep ? probeVerdict(rep.rows, hit.eventName) : { status: 'not_verified' as const };
       if (verdict.status === 'pass') {
         const seenAt = Date.now();
@@ -3513,7 +3522,8 @@ export class GoogleDataService {
     // Not installed yet. Import from the gallery when the template really is there, under
     // coordinates GTM accepts (some stape-io repos are FORKS whose gallery entry belongs to the
     // upstream author). A template that was never listed is installed by uploading its source
-    // instead, which is exactly what Templates > Import does by hand.
+    // instead, which is exactly what Templates > Import does by hand. That source is fetched only
+    // at its reviewed commit and refused unless its SHA-256 matches the pin (gtm-template-install).
     const coords = galleryCoordinatesFor(owner, repository);
     try {
       if (!coords) {
@@ -4634,6 +4644,8 @@ export class GoogleDataService {
     property: string;
     dimensions: string[];
     metrics: string[];
+    /** Optional Data API FilterExpression on dimensions; omitted from the request when absent. */
+    dimensionFilter?: Record<string, unknown>;
   }): Promise<Ga4ReportResult> {
     const auth = this.activeAuth() as unknown as Parameters<typeof analyticsdata>[0]['auth'];
     const data = analyticsdata({ version: 'v1beta', auth });
@@ -4642,6 +4654,7 @@ export class GoogleDataService {
       requestBody: {
         dimensions: input.dimensions.map((name) => ({ name })),
         metrics: input.metrics.map((name) => ({ name })),
+        ...(input.dimensionFilter ? { dimensionFilter: input.dimensionFilter } : {}),
         limit: '100',
       },
     });

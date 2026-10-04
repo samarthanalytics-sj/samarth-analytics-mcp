@@ -5,7 +5,9 @@
  * signs JWTs with Node crypto to exercise every path: valid token + claim
  * extraction, expiry, tampered signature, algorithm pinning (none/HS256),
  * issuer/audience enforcement, nested organization claim, and JWKS rotation
- * (unknown kid forces a refresh, but at most once per cooldown window).
+ * (unknown kid forces a refresh, but at most once per cooldown window), plus
+ * Connected-App-only token typing (client_id required, session JWTs rejected)
+ * and the issuer/audience pins derived from the project id.
  * No network, no Stytch, no extra deps.
  *
  * Run: node src/__tests__/stytchTokenValidator.node.test.mjs
@@ -23,7 +25,7 @@ if (!existsSync(distMod)) {
   console.error(`\n✗ validator test: ${distMod} not found. Run "npm run build" first.`);
   process.exit(1);
 }
-const { createStytchTokenValidator } = await import(pathToFileURL(distMod).href);
+const { createStytchTokenValidator, resolveStytchTokenPins } = await import(pathToFileURL(distMod).href);
 
 const b64url = (buf) => Buffer.from(buf).toString('base64url');
 
@@ -59,8 +61,10 @@ function jwksFetch(keysOverride) {
 
 const NOW = 1_000_000_000_000; // fixed clock (ms)
 const nowSec = Math.floor(NOW / 1000);
+// Every accepted token must be a Connected App access token, so fixtures carry client_id.
 const goodPayload = {
   sub: 'member-123',
+  client_id: 'connected-app-test-1',
   organization_id: 'org-abc',
   scope: 'openid profile',
   exp: nowSec + 3600,
@@ -156,6 +160,7 @@ await test('nested organization claim is extracted', async () => {
   const claims = await v.validate(
     signJwt({
       sub: 'm1',
+      client_id: 'connected-app-test-1',
       'https://stytch.com/organization': { organization_id: 'org-nested' },
       exp: nowSec + 3600,
     })
@@ -167,9 +172,122 @@ await test('missing organization_id → rejected', async () => {
   const { fetchImpl } = jwksFetch();
   const v = createStytchTokenValidator({ jwksUrl: 'https://x/jwks', fetchImpl, now: () => NOW });
   await assert.rejects(
-    () => v.validate(signJwt({ sub: 'm1', exp: nowSec + 3600 })),
+    () => v.validate(signJwt({ sub: 'm1', client_id: 'connected-app-test-1', exp: nowSec + 3600 })),
     /organization_id/
   );
+});
+
+// ── Token type + derived issuer/audience pins (REGRESSION) ───────────────────
+// Issuer/audience used to be pinned only when STYTCH_JWT_ISSUER / STYTCH_JWT_AUDIENCE were set
+// (the hosted server sets neither), and any project-signed JWT with sub + organization passed,
+// including a B2B session JWT. The shape below is a real Connected App access token minted by the
+// hosted deployment (values anonymised).
+const PROJECT_ID = 'project-test-11111111-2222-3333-4444-555555555555';
+const realShapedPayload = {
+  aud: [PROJECT_ID],
+  client_id: 'connected-app-test-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+  exp: nowSec + 8 * 3600,
+  'https://stytch.com/organization': {
+    organization_id: 'organization-test-org-1',
+    slug: 'acme',
+  },
+  iat: nowSec,
+  iss: `stytch.com/${PROJECT_ID}`,
+  jti: 'jti-1',
+  nbf: nowSec,
+  scope: 'email profile openid',
+  sub: 'member-test-member-1',
+};
+
+function pinnedValidator(fetchImpl) {
+  const pins = resolveStytchTokenPins(PROJECT_ID, {});
+  return createStytchTokenValidator({
+    jwksUrl: 'https://x/jwks', fetchImpl, now: () => NOW, issuer: pins.issuer, audience: pins.audience,
+  });
+}
+
+await test('pins default to the project id when STYTCH_JWT_ISSUER / AUDIENCE are unset or blank', async () => {
+  for (const env of [{}, { STYTCH_JWT_ISSUER: '', STYTCH_JWT_AUDIENCE: '  ' }]) {
+    const pins = resolveStytchTokenPins(PROJECT_ID, env);
+    assert.strictEqual(pins.issuer, `stytch.com/${PROJECT_ID}`);
+    assert.strictEqual(pins.audience, PROJECT_ID);
+    assert.strictEqual(pins.issuerDerived, true);
+    assert.strictEqual(pins.audienceDerived, true);
+  }
+});
+
+await test('env pins override the derived defaults', async () => {
+  const pins = resolveStytchTokenPins(PROJECT_ID, {
+    STYTCH_JWT_ISSUER: 'https://auth.example.com',
+    STYTCH_JWT_AUDIENCE: 'custom-aud',
+  });
+  assert.strictEqual(pins.issuer, 'https://auth.example.com');
+  assert.strictEqual(pins.audience, 'custom-aud');
+  assert.strictEqual(pins.issuerDerived, false);
+  assert.strictEqual(pins.audienceDerived, false);
+});
+
+await test('a token shaped exactly like the live Connected App token passes the derived pins', async () => {
+  const { fetchImpl } = jwksFetch();
+  const claims = await pinnedValidator(fetchImpl).validate(signJwt(realShapedPayload));
+  assert.strictEqual(claims.memberId, 'member-test-member-1');
+  assert.strictEqual(claims.organizationId, 'organization-test-org-1');
+  assert.deepStrictEqual(claims.scopes, ['email', 'profile', 'openid']);
+});
+
+await test('REGRESSION: a B2B session-JWT-shaped token is rejected', async () => {
+  const { fetchImpl } = jwksFetch();
+  const { client_id, scope, ...base } = realShapedPayload;
+  const sessionJwt = {
+    ...base,
+    'https://stytch.com/session': {
+      id: 'member-session-test-1',
+      started_at: '2026-10-04T00:00:00Z',
+      authentication_factors: [],
+    },
+  };
+  await assert.rejects(() => pinnedValidator(fetchImpl).validate(signJwt(sessionJwt)), /session/);
+  // Even if a session JWT somehow carried a client_id, the session claim alone disqualifies it.
+  await assert.rejects(
+    () => pinnedValidator(fetchImpl).validate(signJwt({ ...sessionJwt, client_id })),
+    /session/
+  );
+});
+
+await test('REGRESSION: a token without a client_id (or a blank one) is rejected', async () => {
+  const { fetchImpl } = jwksFetch();
+  const { client_id, ...noClient } = realShapedPayload;
+  await assert.rejects(() => pinnedValidator(fetchImpl).validate(signJwt(noClient)), /client_id/);
+  await assert.rejects(
+    () => pinnedValidator(fetchImpl).validate(signJwt({ ...noClient, client_id: '  ' })),
+    /client_id/
+  );
+  await assert.rejects(
+    () => pinnedValidator(fetchImpl).validate(signJwt({ ...noClient, client_id: 42 })),
+    /client_id/
+  );
+});
+
+await test('REGRESSION: wrong or missing iss is rejected under the derived pins', async () => {
+  const { fetchImpl } = jwksFetch();
+  const v = pinnedValidator(fetchImpl);
+  await assert.rejects(
+    () => v.validate(signJwt({ ...realShapedPayload, iss: 'stytch.com/project-test-other' })),
+    /issuer/
+  );
+  const { iss, ...noIss } = realShapedPayload;
+  await assert.rejects(() => v.validate(signJwt(noIss)), /issuer/);
+});
+
+await test('REGRESSION: wrong or missing aud is rejected under the derived pins', async () => {
+  const { fetchImpl } = jwksFetch();
+  const v = pinnedValidator(fetchImpl);
+  await assert.rejects(
+    () => v.validate(signJwt({ ...realShapedPayload, aud: ['project-test-other'] })),
+    /audience/
+  );
+  const { aud, ...noAud } = realShapedPayload;
+  await assert.rejects(() => v.validate(signJwt(noAud)), /audience/);
 });
 
 await test('unknown kid forces a JWKS refresh', async () => {

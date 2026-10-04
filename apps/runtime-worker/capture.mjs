@@ -20,7 +20,7 @@
 //
 // This module is shared by the HTTP worker (server.mjs) and the CLI wrapper.
 
-import { urlAllowed } from "./url-guard.mjs";
+import { createRequestGuard } from "./url-guard.mjs";
 
 export const CAPTURE_SCHEMA = "samarth.runtime-capture/v2";
 // v3 adds multi-consent-state grouping, parsed GA4 query params, hit timing,
@@ -515,15 +515,18 @@ async function captureUnderConsent(browser, urls, consentFields, stateLabel, opt
   // initial-URL admission check in server.mjs only inspects the requested host;
   // this catches a host that *resolves* or *redirects* to an internal target.
   // We enforce only the private-IP block here (not the allowlist suffix match)
-  // so legitimate third-party analytics beacons still load.
+  // so legitimate third-party analytics beacons still load. Named hosts are
+  // DNS-resolved (memoised per host for this context): a string check alone
+  // passes a name that resolves inside, e.g. metadata.google.internal.
+  const requestAllowed = createRequestGuard();
   await context.route("**/*", (route) => {
     const reqUrl = route.request().url();
-    const verdict = urlAllowed(reqUrl, []);
-    if (!verdict.ok) {
-      route.abort("blockedbyclient").catch(() => {});
-      return;
-    }
-    route.continue().catch(() => {});
+    requestAllowed(reqUrl)
+      .then(
+        (ok) => (ok ? route.continue() : route.abort("blockedbyclient")),
+        () => route.abort("blockedbyclient"),
+      )
+      .catch(() => {});
   }).catch(() => {});
   let note;
   if (consentFields) {

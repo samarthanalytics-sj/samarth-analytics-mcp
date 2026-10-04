@@ -34,21 +34,19 @@ import {
   type RuntimeInput,
   type RuntimePage,
 } from "../shared/consent-audit";
+import {
+  buildConsentEvidenceItems,
+  normalizeFindingAccuracy,
+} from "../shared/audit-accuracy";
+// Tolerant of malformed percent-encoding (one bad cookie must not 500 every route).
+import {
+  clearOAuthStateCookie,
+  OAUTH_STATE_COOKIE,
+  parseCookies,
+  setOAuthStateCookie,
+} from "./gtm/vercel-helpers";
 
 const SESSION_COOKIE = "samarth_portal_sid";
-
-function parseCookies(header: string | undefined): Record<string, string> {
-  const out: Record<string, string> = {};
-  if (!header) return out;
-  for (const part of header.split(";")) {
-    const idx = part.indexOf("=");
-    if (idx === -1) continue;
-    const k = part.slice(0, idx).trim();
-    const v = decodeURIComponent(part.slice(idx + 1).trim());
-    if (k) out[k] = v;
-  }
-  return out;
-}
 
 function getSid(req: Request): string | undefined {
   const cookies = parseCookies(req.headers.cookie);
@@ -64,7 +62,8 @@ function setSessionCookie(res: Response, sid: string) {
     "Max-Age=2592000",
   ];
   if (process.env.NODE_ENV === "production") parts.push("Secure");
-  res.setHeader("Set-Cookie", parts.join("; "));
+  // append, not set: the OAuth callback also clears the state cookie.
+  res.append("Set-Cookie", parts.join("; "));
 }
 
 function clearSessionCookie(res: Response) {
@@ -132,6 +131,9 @@ export async function registerRoutes(
       );
     }
     const state = newOAuthState();
+    // Bind this sign-in to the browser that started it (login-CSRF defence):
+    // the callback only accepts a state that matches this HttpOnly cookie.
+    setOAuthStateCookie(res, state);
     res.redirect(buildAuthUrl(client, state));
   });
 
@@ -147,9 +149,12 @@ export async function registerRoutes(
     if (error) {
       return res.status(400).send(renderConfigError(`Google returned an error: ${error}`));
     }
-    if (!code || !state || !consumeOAuthState(state)) {
+    const stateCookie = parseCookies(req.headers.cookie)[OAUTH_STATE_COOKIE];
+    if (!code || !state || !consumeOAuthState(state, stateCookie)) {
+      clearOAuthStateCookie(res);
       return res.status(400).send(renderConfigError("Invalid or expired OAuth state."));
     }
+    clearOAuthStateCookie(res);
     try {
       const tokens = await exchangeCodeForTokens(client, code);
       const sid = newSessionId();
@@ -360,26 +365,40 @@ export async function registerRoutes(
         info: 0,
       };
       const findings = result.findings.map((f) => {
-        severityCounts[f.severity] += 1;
+        // Same evidence-scoped invariants + structured evidence as the Vercel
+        // route (api/gtm/consent-audit.ts) so dev and prod output can't drift.
+        const acc = normalizeFindingAccuracy({
+          finding: f.finding,
+          severity: f.severity,
+          sources: f.sources,
+          confidence: f.confidence,
+          needsManualReview: f.needsManualReview ?? false,
+          entity: f.entity,
+          parameter: f.parameter,
+        });
+        severityCounts[acc.severity] += 1;
         const hasConfig = f.sources.includes("CONFIG");
         const hasRuntime = f.sources.includes("RUNTIME");
         const layer =
           hasConfig && hasRuntime ? "reconcile" : hasRuntime ? "runtime" : "config";
         return {
           id: f.id,
-          severity: f.severity,
-          confidence: f.confidence,
-          sources: f.sources,
+          severity: acc.severity,
+          confidence: acc.confidence,
+          sources: acc.sources,
           finding: f.finding,
           whyItMatters: f.whyItMatters,
           suggestedFix: f.suggestedFix,
           businessImpact: f.businessImpact,
           effort: f.effort,
-          needsManualReview: f.needsManualReview,
+          needsManualReview: acc.needsManualReview,
           parameter: f.parameter,
           entity: f.entity,
           affected: f.affected,
           evidence: f.evidence,
+          evidenceItems: buildConsentEvidenceItems(f, acc.sources),
+          accuracyNotes: acc.accuracyNotes,
+          confidenceDowngraded: acc.confidenceDowngraded,
           layer,
         };
       });

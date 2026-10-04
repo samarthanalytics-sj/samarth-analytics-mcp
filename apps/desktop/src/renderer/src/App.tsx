@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { capiPlatform } from '../../../../../src/shared/capi-platforms';
+import { capiPlatform, capiValueKey } from '../../../../../src/shared/capi-platforms';
 import { ThemeToggle, useTheme } from './ThemeToggle';
 import { ShortcutsOverlay, EmptyState } from './ui';
 import type { AppInfo } from '../../preload';
@@ -1554,7 +1554,9 @@ function ChatView({
       const parts = [`Reverted ${res.reverted.length} item(s)`];
       if (res.failed.length) parts.push(`${res.failed.length} failed: ${res.failed.map((f) => f.label).join(', ')}`);
       setMessages((m) => [...m, { role: 'assistant', text: `↩︎ ${parts.join(' · ')}.`, tools: [], ts: Date.now() }]);
-      setRevertable(null);
+      // Items that failed to revert stay in the journal: re-read it so Revert offers a retry of them.
+      const left = await window.desktop.data.peekLastChange().catch(() => null);
+      setRevertable(left && left.count > 0 ? left : null);
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -8988,6 +8990,11 @@ function ContainerAuditPanel({
   const [report, setReport] = useState<AuditReportView | null>(null);
   const [running, setRunning] = useState(false);
   const [fix, setFix] = useState<Record<number, { state: 'idle' | 'confirm' | 'fixing' | 'done' | 'err'; msg?: string }>>({});
+  // `fix` is a per-render snapshot: a batch loop keeps reading the map from the render it started in.
+  // fixRef always holds the latest map, so the in-flight / already-done checks run against what is
+  // true NOW (a row the user resolved by hand is never overwritten by a batch that reaches it later).
+  const fixRef = useRef(fix);
+  fixRef.current = fix;
   const [applyingAll, setApplyingAll] = useState(false);
   const [canceling, setCanceling] = useState(false);
   const cancelRef = useRef(false); // set by Cancel; the batch loop checks it between fixes
@@ -9070,13 +9077,13 @@ function ContainerAuditPanel({
     override?: { tool: string; args: Record<string, unknown> },
     opts?: { skipConfirm?: boolean }
   ): Promise<void> {
-    if (fix[i]?.state === 'fixing') return; // already in flight - never double-issue a write
+    if (fixRef.current[i]?.state === 'fixing') return; // already in flight - never double-issue a write
     const toRun = override ?? f.fix;
     if (!toRun) return;
     const destructive = toRun.tool.startsWith('delete');
     // A single delete needs its two-click per-row confirm; a bulk delete is confirmed once for the
     // whole batch up front, so it passes skipConfirm to run each one straight away.
-    if (destructive && !opts?.skipConfirm && fix[i]?.state !== 'confirm') {
+    if (destructive && !opts?.skipConfirm && fixRef.current[i]?.state !== 'confirm') {
       setFix((s) => ({ ...s, [i]: { state: 'confirm' } }));
       return;
     }
@@ -9215,6 +9222,14 @@ function ContainerAuditPanel({
       let done = 0;
       for (const i of targets) {
         if (cancelRef.current) break; // Cancel stops launching further fixes
+        // Re-check at execution time: `targets` was resolved from the click-time snapshot, and a row
+        // already applied or in flight since then must not be written again with the batch's choice.
+        const now = fixRef.current[i]?.state;
+        if (now === 'done' || now === 'fixing') {
+          done += 1;
+          setBatchProgress({ done, total: targets.length });
+          continue;
+        }
         if (done > 0) await new Promise((r) => setTimeout(r, 400)); // pace under the per-minute quota
         await applyFix(i, findings[i], override?.(findings[i])); // one workspace write at a time
         done += 1;
@@ -9241,7 +9256,7 @@ function ContainerAuditPanel({
     // Re-validate at execution time (mirrors applyBatch): drop any captured index already deleted or
     // in flight, so a row removed via a single per-row delete while the confirm banner was open is
     // never re-issued against an already-gone resource (and the m/n total stays honest).
-    const live = indices.filter((i) => fix[i]?.state !== 'done' && fix[i]?.state !== 'fixing');
+    const live = indices.filter((i) => fixRef.current[i]?.state !== 'done' && fixRef.current[i]?.state !== 'fixing');
     if (applyingAll || live.length === 0) return;
     cancelRef.current = false;
     setCanceling(false);
@@ -9632,7 +9647,7 @@ function ContainerAuditPanel({
                     <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
                       <button
                         style={styles.ghostBtn}
-                        disabled={st?.state === 'fixing'}
+                        disabled={st?.state === 'fixing' || applyingAll}
                         onClick={() => applyFix(i, f)}
                         title="Require these consent types before the tag fires"
                       >
@@ -9640,7 +9655,7 @@ function ContainerAuditPanel({
                       </button>
                       <button
                         style={styles.ghostBtn}
-                        disabled={st?.state === 'fixing'}
+                        disabled={st?.state === 'fixing' || applyingAll}
                         onClick={() =>
                           applyFix(i, f, { tool: 'set_gtm_tag_consent', args: { ...f.fix!.args, consentStatus: 'notNeeded', consentTypes: [] } })
                         }
@@ -9781,7 +9796,8 @@ function ServerContainerPanel({
         ...(targetId ? { serverContainerId: targetId } : { newName: name.trim() }),
         selected,
         // The inputs live in one flat map; the engine takes CAPI credentials in their own bag,
-        // keyed "<platform>.<field>" exactly as the shared spec spells them.
+        // keyed "<platform>.<field>" (or "<platform>.<field>@<event>" for a per-conversion id)
+        // exactly as the shared spec spells them.
         values: {
           measurementId: vals.measurementId,
           serverUrl: (vals.serverUrl ?? serverUrl).trim(),
@@ -9954,23 +9970,31 @@ function ServerContainerPanel({
                       {(missingValueKeys.includes('serverUrl') || plan.detected.serverUrl == null) && (
                         <input style={{ ...styles.input, flex: '1 1 220px' }} placeholder="https://sgtm.example.com" value={vals.serverUrl ?? serverUrl} onChange={(e) => setVals((v) => ({ ...v, serverUrl: e.target.value }))} />
                       )}
-                      {capiPlatformsNeeded.map((spec) => (
-                        <Fragment key={spec.platform}>
-                          {spec.fields.map((f) => {
-                            const k = `${spec.platform}.${f.key}`;
-                            return (
+                      {capiPlatformsNeeded.map((spec) => {
+                        // A per-conversion id (X Event ID, LinkedIn conversion rule, Yahoo event snippet)
+                        // gets one input per SELECTED event: one shared value would report every event
+                        // as the same conversion.
+                        const events = selectedIds
+                          .filter((id) => id.startsWith(`${spec.platform}_capi:`))
+                          .map((id) => id.slice(id.indexOf(':') + 1));
+                        const inputs = spec.fields.flatMap((f) => (f.perEvent
+                          ? events.filter((ev) => !f.notNeededFor?.(ev)).map((ev) => ({ f, k: capiValueKey(spec, f, ev), placeholder: `${f.label} for ${ev}` }))
+                          : [{ f, k: `${spec.platform}.${f.key}`, placeholder: f.label }]));
+                        return (
+                          <Fragment key={spec.platform}>
+                            {inputs.map(({ f, k, placeholder }) => (
                               <input
                                 key={k}
                                 style={{ ...styles.input, flex: f.secret ? '1 1 190px' : '1 1 160px' }}
                                 type={f.secret ? 'password' : 'text'}
-                                placeholder={f.label}
+                                placeholder={placeholder}
                                 value={vals[k] ?? ''}
                                 onChange={(e) => setVals((v) => ({ ...v, [k]: e.target.value }))}
                               />
-                            );
-                          })}
-                        </Fragment>
-                      ))}
+                            ))}
+                          </Fragment>
+                        );
+                      })}
                     </div>
                   )}
                   {notReady.length > 0 && (
@@ -10072,6 +10096,12 @@ function ServerAuditSection({
   // fixes are non-destructive (pause/unpause, clear testId) so there's no delete/confirm path here.
   const [fix, setFix] = useState<Record<number, { state: 'fixing' | 'done' | 'err'; msg?: string }>>({});
   const [applyingAll, setApplyingAll] = useState(false);
+  // `fix` and `running` are per-render snapshots, so an async loop or an awaited re-audit started
+  // several renders ago would read stale values. The refs hold what is true NOW, which is what the
+  // never-double-write and never-two-audits-at-once guards must check.
+  const fixRef = useRef(fix);
+  fixRef.current = fix;
+  const runningRef = useRef(false);
   // Web <-> Server coverage: the web side of the comparison + its result.
   const [allContainers, setAllContainers] = useState<GtmContainerView[]>([]);
   const [webContainerId, setWebContainerId] = useState('');
@@ -10189,7 +10219,8 @@ function ServerAuditSection({
   }, [containerId]);
 
   async function run(): Promise<void> {
-    if (!containerId || !workspaceId || running) return;
+    if (!containerId || !workspaceId || running || runningRef.current) return;
+    runningRef.current = true;
     onError('');
     setRunning(true);
     setReport(null);
@@ -10199,6 +10230,7 @@ function ServerAuditSection({
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {
+      runningRef.current = false;
       setRunning(false);
     }
   }
@@ -10207,7 +10239,7 @@ function ServerAuditSection({
   // fixes are non-destructive (e.g. set_gtm_tag_paused, clearing a stray testId), so this is a plain
   // one-click apply - no delete/confirm path (delete fixes are excluded at the button below).
   async function applyFix(i: number, f: AuditFindingView): Promise<void> {
-    if (!f.fix || fix[i]?.state === 'fixing') return; // never double-issue a write
+    if (!f.fix || fixRef.current[i]?.state === 'fixing') return; // never double-issue a write
     setFix((s) => ({ ...s, [i]: { state: 'fixing' } }));
     try {
       await window.desktop.gtm.applyFix(f.fix);
@@ -10223,13 +10255,16 @@ function ServerAuditSection({
   // Apply every non-destructive auto-fix in order, then re-audit ONCE (rather than per fix). Stops at
   // the first failure - the fixes already applied stand, and the re-audit reflects them.
   async function applyAllFixes(): Promise<void> {
-    if (!report || applyingAll || running) return;
+    if (!report || applyingAll || running || runningRef.current) return;
     onError('');
     setApplyingAll(true);
     try {
       for (let i = 0; i < report.findings.length; i += 1) {
         const f = report.findings[i];
-        if (!(f.autoFixable && f.fix && !f.fix.tool.startsWith('delete')) || fix[i]?.state === 'done') continue;
+        // Read the LIVE map, not the click-time snapshot: a row already applied or in flight is never
+        // written a second time.
+        const now = fixRef.current[i]?.state;
+        if (!(f.autoFixable && f.fix && !f.fix.tool.startsWith('delete')) || now === 'done' || now === 'fixing') continue;
         setFix((s) => ({ ...s, [i]: { state: 'fixing' } }));
         try {
           await window.desktop.gtm.applyFix(f.fix); // one workspace write at a time
@@ -10246,6 +10281,9 @@ function ServerAuditSection({
       setApplyingAll(false);
     }
   }
+  // True while a single-row write is in flight. Apply all, the other rows and Re-run wait for it, so
+  // that write's own re-audit is never raced by a second write or a second audit.
+  const anyFixing = Object.values(fix).some((s) => s?.state === 'fixing');
 
   const [docExporting, setDocExporting] = useState(false);
   const [docNote, setDocNote] = useState('');
@@ -10379,7 +10417,7 @@ function ServerAuditSection({
                 Read-only configuration audit: does a client claim incoming requests, do tags have triggers and destination ids, duplicate GA4 relays (double-counting), dead URL-encoded triggers, Meta CAPI pitfalls, legacy or duplicate clients, unused variables and broken {'{{references}}'}. It never reads server runtime logs.
               </div>
               <div>
-                <button style={styles.primaryBtn} disabled={running} onClick={() => void run()}>
+                <button style={styles.primaryBtn} disabled={running || applyingAll || anyFixing} onClick={() => void run()}>
                   {running ? 'Auditing…' : report ? '▶ Re-run audit' : '▶ Run audit'}
                 </button>
               </div>
@@ -10569,7 +10607,7 @@ function ServerAuditSection({
               <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
                 <span style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>{fixable} auto-fixable finding{fixable === 1 ? '' : 's'} - each can be applied below{fixable > 1 ? ', or all at once' : ''}.</span>
                 {fixable > 1 && (
-                  <button style={styles.primaryBtn} disabled={applyingAll || running} onClick={() => void applyAllFixes()}>
+                  <button style={styles.primaryBtn} disabled={applyingAll || running || anyFixing} onClick={() => void applyAllFixes()}>
                     {applyingAll ? 'Applying…' : `Apply all ${fixable} fixes`}
                   </button>
                 )}
@@ -10599,7 +10637,7 @@ function ServerAuditSection({
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8, flexWrap: 'wrap' }}>
                   <button
                     style={styles.ghostBtn}
-                    disabled={fix[i]?.state === 'fixing' || fix[i]?.state === 'done'}
+                    disabled={fix[i]?.state === 'fixing' || fix[i]?.state === 'done' || applyingAll || running || anyFixing}
                     onClick={() => void applyFix(i, f)}
                   >
                     {fix[i]?.state === 'fixing' ? 'Applying…' : fix[i]?.state === 'done' ? '✓ Applied' : 'Apply fix'}

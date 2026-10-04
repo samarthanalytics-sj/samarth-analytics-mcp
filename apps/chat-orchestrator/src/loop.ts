@@ -89,7 +89,30 @@ export interface RunTurnArgs {
   taskId?: string;
 }
 
+/**
+ * Runs one turn inside its time budget.
+ *
+ * The budget is a timer, not only a check at the top of the loop. A model stream that stalls, or an
+ * approval nobody answers, never gets back to that check, so a stuck turn used to hold its pool slot
+ * until undici's idle timeout or the approval's TTL. `turnSignal` aborts when the caller's signal
+ * does (the client left) or when the budget runs out; the caller's signal alone says which.
+ */
 export async function runTurn(args: RunTurnArgs): Promise<void> {
+  const turn = new AbortController();
+  // Clamped: past 2^31-1 ms setTimeout fires at once, which would end every turn immediately.
+  const timer = setTimeout(() => turn.abort(), Math.min(args.cfg.limits.maxTurnMs, 2_147_483_647));
+  const onCallerAbort = (): void => turn.abort();
+  args.signal.addEventListener('abort', onCallerAbort, { once: true });
+  if (args.signal.aborted) turn.abort();
+  try {
+    await runTurnWithin(args, turn.signal);
+  } finally {
+    clearTimeout(timer);
+    args.signal.removeEventListener('abort', onCallerAbort);
+  }
+}
+
+async function runTurnWithin(args: RunTurnArgs, turnSignal: AbortSignal): Promise<void> {
   const { cfg, llm, context, user, emit, signal } = args;
   const startedAt = Date.now();
   let mcp = args.mcp;
@@ -342,7 +365,7 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
       emit({ type: 'done', reason: 'aborted' });
       return;
     }
-    if (Date.now() - startedAt > cfg.limits.maxTurnMs) {
+    if (turnSignal.aborted || Date.now() - startedAt > cfg.limits.maxTurnMs) {
       args.onEvent?.({
         type: 'timeout',
         status: 'timeout',
@@ -408,8 +431,15 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
           });
         },
       },
-      signal,
-    );
+      turnSignal,
+    ).catch((err: unknown) => {
+      if (turnSignal.aborted) return null;
+      throw err;
+    });
+    // Stopped mid-call, by the client leaving or by the time budget. The top of the loop says which
+    // and closes the turn the same way as every other stop, billing included; letting the fetch's
+    // AbortError escape instead ended it as an internal error with nothing recorded.
+    if (!result) continue;
 
     if (result.toolCalls.length === 0) {
       assistantText += result.content ?? '';
@@ -440,12 +470,22 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
     });
 
     for (const call of result.toolCalls) {
+      // A stopped turn runs nothing more, including calls queued behind one that parked on a card.
+      if (turnSignal.aborted) break;
       toolCallsUsed++;
 
       let parsedArgs: Record<string, unknown> = {};
       let parseError: string | null = null;
       try {
-        parsedArgs = call.function.arguments ? JSON.parse(call.function.arguments) : {};
+        const parsed: unknown = call.function.arguments ? JSON.parse(call.function.arguments) : {};
+        // Valid JSON is not enough. `null`, `"x"` and `5` all parse, and every path below reads or
+        // writes properties on the result (`parsedArgs.confirm = true` throws a TypeError for them),
+        // which used to kill the turn before finish() could bill it. Refused like a syntax error.
+        if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          parseError = 'Arguments must be a JSON object';
+        } else {
+          parsedArgs = parsed as Record<string, unknown>;
+        }
       } catch (err) {
         parseError = `Arguments were not valid JSON: ${err instanceof Error ? err.message : String(err)}`;
       }
@@ -457,7 +497,7 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
           role: 'tool',
           tool_call_id: call.id,
           name: call.function.name,
-          content: `${parseError}. Retry this call with valid JSON arguments.`,
+          content: `${parseError}. Retry this call with a valid JSON object as its arguments.`,
         });
         emit({
           type: 'tool_result',
@@ -641,7 +681,20 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
         });
       };
 
-      if (tool?.isWrite) {
+      // The permission check. `scoped` is what this user MAY call, and a name outside it (a publish,
+      // a delete or write this deployment has switched off, another product's tool, or one the model
+      // invented) must never reach the MCP. Everything below keys off the catalog entry, so an
+      // unknown name used to skip the approval card AND the read-only refusal and be forwarded with
+      // whatever arguments the model wrote, `confirm: true` included.
+      if (!tool) {
+        const refusal = `"${call.function.name}" is not a tool available in this conversation. Use only the tools you were given.`;
+        messages.push({ role: 'tool', tool_call_id: call.id, name: call.function.name, content: refusal });
+        emit({ type: 'tool_result', id: call.id, name: call.function.name, ok: false, summary: 'Not an available tool' });
+        record(false, `Refused: ${call.function.name} is not in this conversation's tool set`);
+        continue;
+      }
+
+      if (tool.isWrite) {
         if (!args.approvals) {
           // Belt and braces: no write tool should have been visible without a broker.
           messages.push({
@@ -674,6 +727,9 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
                 surface,
               }),
             gate.confirmWord,
+            // This turn's own signal, so only this turn's card is withdrawn when it ends early,
+            // whether its client left or its time budget ran out.
+            turnSignal,
           );
 
           if (!outcome.approved) {
@@ -682,7 +738,9 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
               outcome.reason === 'timeout'
                 ? 'The user did not respond in time, so nothing was changed.'
                 : outcome.reason === 'aborted'
-                  ? 'The user stopped the request, so nothing was changed.'
+                  ? signal.aborted
+                    ? 'The user stopped the request, so nothing was changed.'
+                    : 'This turn ran out of time before the change was approved, so nothing was changed.'
                   : 'The user declined this change, so nothing was changed.';
             console.log(
               `[approval] ${call.function.name} ${outcome.reason} for user ${userRef(user.id)}`,

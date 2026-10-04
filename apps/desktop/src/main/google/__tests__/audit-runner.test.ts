@@ -9,7 +9,11 @@
  * Run: tsx src/main/google/__tests__/audit-runner.test.ts
  */
 import assert from 'node:assert/strict';
-import { auditWorkspace, auditServerWorkspace, containerKind } from '../audit-runner';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { auditWorkspace, auditServerWorkspace, auditChanges, containerKind, pairFindingsFor } from '../audit-runner';
+import { AuditHistoryStore } from '../../storage/audit-history';
 import type { GoogleDataService } from '../data-service';
 
 let passed = 0, failed = 0;
@@ -92,6 +96,79 @@ async function main(): Promise<void> {
     assert.ok(paused, 'the paused server tag carries a fix');
     assert.equal(paused!.fix!.args.containerId, 'C1');
     assert.equal(paused!.fix!.args.workspaceId, 'W');
+  });
+
+  await test('a failed PAIR read carries last run\'s pair findings forward: no false "resolved", no re-alert', async () => {
+    // Run 1 records a critical pair finding. Run 2's web read fails part-way (a quota error on web
+    // container 2 of 2): the pair leg used to return [], so the finding was stored as RESOLVED and
+    // run 3 re-reported it as NEW, firing a monitor alert for something that never changed.
+    const HOST = 'https://our.example.com';
+    const wiredGoogleTag = { tagId: 't1', name: 'AUS GA4', type: 'googtag', firingTriggerId: ['1'], blockingTriggerId: [], paused: false, consentSettings: null,
+      parameter: [{ type: 'template', key: 'tagId', value: 'G-AUAUAU1' }, { type: 'list', key: 'configSettingsTable', list: [{ type: 'map', map: [
+        { type: 'template', key: 'parameter', value: 'server_container_url' }, { type: 'template', key: 'parameterValue', value: HOST }] }] }] };
+    let failSecondWeb = false;
+    const reads: string[] = [];
+    const data = {
+      listGtmContainers: async () => [
+        { containerId: 'S1', name: 'server', publicId: 'GTM-S', usageContext: ['server'] },
+        { containerId: 'W1', name: 'web one', publicId: 'GTM-W1', usageContext: ['web'] },
+        { containerId: 'W2', name: 'web two', publicId: 'GTM-W2', usageContext: ['web'] },
+        { containerId: 'M1', name: 'app', publicId: 'GTM-M1', usageContext: ['android'] },
+      ],
+      getServerContainerSnapshot: async () => ({
+        taggingServerUrls: [HOST], clients: [{ clientId: '1', name: 'GA4', type: 'gaaw_client' }],
+        tags: [], triggers: [], variables: [], transformations: [], // the relay for G-AUAUAU1 is gone
+      }),
+      listGtmWorkspaces: async (_a: string, c: string) => { reads.push(`ws:${c}`); return [{ workspaceId: `${c}-ws`, name: 'Default Workspace', path: '' }]; },
+      getGtmContainerSnapshot: async (_a: string, c: string) => {
+        reads.push(`snap:${c}`);
+        if (c === 'W2' && failSecondWeb) throw new Error('GTM read failed: socket hang up');
+        return { tags: c === 'W1' ? [wiredGoogleTag] : [], triggers: [], variables: [] };
+      },
+    } as unknown as GoogleDataService;
+    const dir = mkdtempSync(join(tmpdir(), 'samarth-pair-hist-'));
+    try {
+      const history = new AuditHistoryStore(join(dir, 'h.json'));
+      const sctx = { accountId: 'A', containerId: 'S1', workspaceId: 'W' };
+      const isPair = (f: { checkId?: string }) => f.checkId === 'pair_wired_but_unforwarded';
+
+      const run1 = await auditChanges(data, history, sctx, 1);
+      assert.equal(run1.firstRun, true);
+      assert.equal(run1.pairUnavailable, false);
+      assert.ok(run1.report.findings.some(isPair), 'run 1 records the critical pair finding');
+      assert.ok(!reads.some((r) => r.endsWith(':M1')), 'a mobile container holds no Google tag and is never read');
+
+      failSecondWeb = true;
+      const run2 = await auditChanges(data, history, sctx, 2);
+      assert.equal(run2.pairUnavailable, true, 'the run says the pair could not be read');
+      assert.deepEqual(run2.drift.resolvedFindings.map((f) => f.checkId), [], 'nothing is falsely resolved');
+      assert.deepEqual(run2.drift.newFindings.map((f) => f.checkId), []);
+      assert.ok(run2.report.findings.some(isPair), 'the stored baseline still carries the pair finding');
+
+      failSecondWeb = false;
+      const run3 = await auditChanges(data, history, sctx, 3);
+      assert.equal(run3.pairUnavailable, false);
+      assert.deepEqual(run3.drift.newFindings.map((f) => f.checkId), [], 'the unchanged finding is NOT re-reported as new (no alert)');
+      assert.deepEqual(run3.drift.resolvedFindings.map((f) => f.checkId), []);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  await test('pairFindingsFor: null (unknown) when the type or the read fails, [] for a web container', async () => {
+    const rep = { summary: { critical: 0, high: 0, medium: 0, low: 0, info: 0 } } as never;
+    assert.deepEqual(await pairFindingsFor(stub(['web']).data, ctx, rep), [], 'a web container has no pair leg');
+    assert.equal(await pairFindingsFor(stub(['server'], { listFails: true }).data, ctx, rep), null, 'an undeterminable type is unknown, not "no findings"');
+    // A server container whose web read throws: unknown, not [].
+    const broken = {
+      listGtmContainers: async () => [
+        { containerId: 'C1', name: 'server', publicId: 'GTM-S', usageContext: ['server'] },
+        { containerId: 'W9', name: 'web', publicId: 'GTM-W9', usageContext: ['web'] },
+      ],
+      getServerContainerSnapshot: async () => ({ taggingServerUrls: ['https://s.example.com'], clients: [], tags: [], triggers: [], variables: [], transformations: [] }),
+      listGtmWorkspaces: async () => { throw new Error('boom'); },
+    } as unknown as GoogleDataService;
+    assert.equal(await pairFindingsFor(broken, ctx, rep), null, 'a failed web read is unknown, not "no findings"');
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);
