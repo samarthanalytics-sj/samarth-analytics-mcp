@@ -11,13 +11,10 @@ import type {
   RuntimeInput as ConsentRuntimeInput,
   RuntimePage as ConsentRuntimePage,
 } from "../../shared/consent-audit";
-// Pure, dependency-free accuracy invariants. Safe to import at the top level on
-// Vercel (no node:*, no engine, no googleapis) — same contract as
-// shared/cache-keys.ts. Centralizes the evidence-scoped rules so they can't drift.
-import {
-  normalizeFindingAccuracy,
-  type EvidenceItem as AccuracyEvidenceItem,
-} from "../../shared/audit-accuracy";
+// Accuracy invariants (shared/audit-accuracy.ts) centralize the evidence-scoped
+// rules so they can't drift. Types only here: the module itself is loaded lazily
+// by runAudit() after session validation (see `accuracyModule` below).
+import type { EvidenceItem as AccuracyEvidenceItem } from "../../shared/audit-accuracy";
 
 /**
  * /api/gtm/audit
@@ -2062,6 +2059,18 @@ function severityForResource(resource: string): AuditSeverity {
 
 // ── Findings helpers ─────────────────────────────────────────────────────
 
+// shared/audit-accuracy, loaded lazily by runAudit() (after the handler has
+// validated the session) and held here for the synchronous rule helpers.
+type AccuracyModule = typeof import("../../shared/audit-accuracy");
+let accuracyModule: AccuracyModule | null = null;
+
+function accuracy(): AccuracyModule {
+  if (!accuracyModule) {
+    throw new Error("audit-accuracy module not loaded (runAudit loads it)");
+  }
+  return accuracyModule;
+}
+
 function pushFinding(
   out: AuditFinding[],
   f: {
@@ -2089,7 +2098,7 @@ function pushFinding(
   // ever tightens severity/confidence, never the reverse. It also fills the
   // evidence floor and records any downgrade as accuracyNotes / confidenceDowngraded.
   // See shared/audit-accuracy.ts and docs/AUDIT_ACCURACY.md.
-  const acc = normalizeFindingAccuracy({
+  const acc = accuracy().normalizeFindingAccuracy({
     finding: f.finding,
     severity: f.severity,
     sources: f.sources ?? ["CONFIG"],
@@ -2272,6 +2281,11 @@ async function runAudit(
     dataApi?: DataApiState | null;
   },
 ): Promise<AuditSummary> {
+  // Lazy, post-auth load of the accuracy normalizer every rule's pushFinding()
+  // uses. An import failure throws into the handler's catch → JSON error.
+  if (!accuracyModule) {
+    accuracyModule = await import("../../shared/audit-accuracy");
+  }
   const runtime = opts.runtime ?? null;
   const sgtm = opts.sgtm ?? null;
   const dataApi = opts.dataApi ?? null;
