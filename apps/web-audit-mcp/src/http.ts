@@ -182,7 +182,31 @@ export async function startHttpServer(createServer: () => McpServer): Promise<Ht
   const { default: express } = await import('express');
 
   const app = express();
-  app.use(express.json({ limit: '8mb' })); // GTM container exports can be large.
+  const bodyLimit = '8mb'; // GTM container exports can be large. Kept in step with the root server.
+  app.use(express.json({ limit: bodyLimit }));
+  // Body-parser failures (oversized or malformed JSON) never reach a route, so convert them here
+  // into a JSON-RPC error body. Express's default error handler would send HTML, which a JSON-RPC
+  // client cannot parse. Mirrors the root server (src/index.ts).
+  app.use(
+    (
+      err: Error & { status?: number; type?: string },
+      _req: import('express').Request,
+      res: import('express').Response,
+      next: import('express').NextFunction,
+    ): void => {
+      if (res.headersSent) {
+        next(err);
+        return;
+      }
+      const tooLarge = err.type === 'entity.too.large';
+      const message = tooLarge
+        ? `Request body exceeds the ${bodyLimit} limit.`
+        : `Malformed request body: ${err.message}`;
+      res
+        .status(typeof err.status === 'number' ? err.status : 400)
+        .json({ jsonrpc: '2.0', error: { code: tooLarge ? -32600 : -32700, message }, id: null });
+    },
+  );
 
   // PORT is the conventional var injected by Render/Fly; the explicit
   // WEB_AUDIT_HTTP_PORT wins when set.

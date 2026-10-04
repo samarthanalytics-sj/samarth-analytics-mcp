@@ -701,6 +701,48 @@ await withHttpEnv({ WEB_AUDIT_HTTP_ALLOW_UNAUTHENTICATED: 'true', WEB_AUDIT_HTTP
   }
 });
 
+// ── HTTP transport: body-parser errors ──────────────────────────────────────
+// REGRESSION: express.json({ limit: '8mb' }) had no error middleware, so an oversized or malformed
+// body got Express's HTML 413/400 page, which a JSON-RPC client cannot parse.
+
+type RpcErrorBody = { jsonrpc?: string; error?: { code?: number; message?: string } };
+const readRpcError = async (r: Response): Promise<RpcErrorBody & { contentType: string }> => {
+  const contentType = r.headers.get('content-type') ?? '';
+  const text = await r.text();
+  try {
+    return { ...(JSON.parse(text) as RpcErrorBody), contentType };
+  } catch {
+    return { contentType };
+  }
+};
+
+await withHttpEnv({ WEB_AUDIT_HTTP_AUTH_TOKEN: TEST_HTTP_TOKEN, WEB_AUDIT_HTTP_PORT: '0' }, async () => {
+  const h = await startHttpServer(createWebAuditMcpServer);
+  const url = `http://127.0.0.1:${h.port}/mcp`;
+  try {
+    const bad = await fetch(url, { method: 'POST', headers: MCP_HEADERS, body: '{"jsonrpc":"2.0",' });
+    const badBody = await readRpcError(bad);
+    check(
+      'http body: malformed JSON → 400 JSON-RPC parse error (-32700), not HTML',
+      bad.status === 400 && badBody.contentType.includes('json') && badBody.jsonrpc === '2.0' && badBody.error?.code === -32700,
+      `${bad.status} ${badBody.contentType}`,
+    );
+
+    const pad = 'a'.repeat(8 * 1024 * 1024);
+    const huge = `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"pad":"${pad}"}}`;
+    const big = await fetch(url, { method: 'POST', headers: MCP_HEADERS, body: huge });
+    const bigBody = await readRpcError(big);
+    check(
+      'http body: over 8mb → 413 JSON-RPC invalid request (-32600), not HTML',
+      big.status === 413 && bigBody.contentType.includes('json') && bigBody.jsonrpc === '2.0' &&
+        bigBody.error?.code === -32600 && /8mb/.test(bigBody.error?.message ?? ''),
+      `${big.status} ${bigBody.contentType}`,
+    );
+  } finally {
+    await h.close();
+  }
+});
+
 // ── tag-presence reconciliation (configured vs fired) ───────────────────────
 
 const reconContainer = {
