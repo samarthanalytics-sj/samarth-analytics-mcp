@@ -89,7 +89,30 @@ export interface RunTurnArgs {
   taskId?: string;
 }
 
+/**
+ * Runs one turn inside its time budget.
+ *
+ * The budget is a timer, not only a check at the top of the loop. A model stream that stalls, or an
+ * approval nobody answers, never gets back to that check, so a stuck turn used to hold its pool slot
+ * until undici's idle timeout or the approval's TTL. `turnSignal` aborts when the caller's signal
+ * does (the client left) or when the budget runs out; the caller's signal alone says which.
+ */
 export async function runTurn(args: RunTurnArgs): Promise<void> {
+  const turn = new AbortController();
+  // Clamped: past 2^31-1 ms setTimeout fires at once, which would end every turn immediately.
+  const timer = setTimeout(() => turn.abort(), Math.min(args.cfg.limits.maxTurnMs, 2_147_483_647));
+  const onCallerAbort = (): void => turn.abort();
+  args.signal.addEventListener('abort', onCallerAbort, { once: true });
+  if (args.signal.aborted) turn.abort();
+  try {
+    await runTurnWithin(args, turn.signal);
+  } finally {
+    clearTimeout(timer);
+    args.signal.removeEventListener('abort', onCallerAbort);
+  }
+}
+
+async function runTurnWithin(args: RunTurnArgs, turnSignal: AbortSignal): Promise<void> {
   const { cfg, llm, context, user, emit, signal } = args;
   const startedAt = Date.now();
   let mcp = args.mcp;
@@ -342,7 +365,7 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
       emit({ type: 'done', reason: 'aborted' });
       return;
     }
-    if (Date.now() - startedAt > cfg.limits.maxTurnMs) {
+    if (turnSignal.aborted || Date.now() - startedAt > cfg.limits.maxTurnMs) {
       args.onEvent?.({
         type: 'timeout',
         status: 'timeout',
@@ -408,8 +431,15 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
           });
         },
       },
-      signal,
-    );
+      turnSignal,
+    ).catch((err: unknown) => {
+      if (turnSignal.aborted) return null;
+      throw err;
+    });
+    // Stopped mid-call, by the client leaving or by the time budget. The top of the loop says which
+    // and closes the turn the same way as every other stop, billing included; letting the fetch's
+    // AbortError escape instead ended it as an internal error with nothing recorded.
+    if (!result) continue;
 
     if (result.toolCalls.length === 0) {
       assistantText += result.content ?? '';
@@ -440,6 +470,8 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
     });
 
     for (const call of result.toolCalls) {
+      // A stopped turn runs nothing more, including calls queued behind one that parked on a card.
+      if (turnSignal.aborted) break;
       toolCallsUsed++;
 
       let parsedArgs: Record<string, unknown> = {};
@@ -695,8 +727,9 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
                 surface,
               }),
             gate.confirmWord,
-            // This turn's own signal, so only this turn's card is withdrawn when it ends early.
-            signal,
+            // This turn's own signal, so only this turn's card is withdrawn when it ends early,
+            // whether its client left or its time budget ran out.
+            turnSignal,
           );
 
           if (!outcome.approved) {
@@ -705,7 +738,9 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
               outcome.reason === 'timeout'
                 ? 'The user did not respond in time, so nothing was changed.'
                 : outcome.reason === 'aborted'
-                  ? 'The user stopped the request, so nothing was changed.'
+                  ? signal.aborted
+                    ? 'The user stopped the request, so nothing was changed.'
+                    : 'This turn ran out of time before the change was approved, so nothing was changed.'
                   : 'The user declined this change, so nothing was changed.';
             console.log(
               `[approval] ${call.function.name} ${outcome.reason} for user ${userRef(user.id)}`,

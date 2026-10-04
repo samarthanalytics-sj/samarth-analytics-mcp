@@ -317,6 +317,8 @@ async function turnWith(
     cfg?: OrchestratorConfig;
     signal?: AbortSignal;
     approvals?: ApprovalBroker;
+    /** Replaces the scripted model, e.g. with one that never finishes. */
+    llm?: OpenAiClient;
     /** Sees each event as it is streamed, e.g. to act like the user when a card appears. */
     onEmit?: (e: StreamEvent) => void;
   } = {},
@@ -348,7 +350,7 @@ async function turnWith(
   await runTurn({
     cfg: opts.cfg ?? TURN_CFG,
     mcp,
-    llm,
+    llm: opts.llm ?? llm,
     history: [{ role: 'user', content: 'zzz' }],
     context: { product: 'gtm' },
     user: { id: 'user-1' },
@@ -462,6 +464,73 @@ await testAsync('aborting the turn declines the card it parked, and runs nothing
   assert.equal(doneReason(events), 'aborted');
   assert.equal(approvals.stats().pending, 0, 'the card was left parked');
   assert.notEqual(billed, null);
+});
+
+await testAsync('a stopped turn runs none of the calls queued behind its card', async () => {
+  const turn = new AbortController();
+  const { forwarded } = await turnWith(
+    [
+      { name: 'tags_delete', arguments: '{"tagId":"9"}' },
+      { name: 'tags_create', arguments: '{"name":"after"}' },
+    ],
+    {
+      cfg: { ...TURN_CFG, enableDeleteTools: true } as OrchestratorConfig,
+      signal: turn.signal,
+      onEmit: (e) => {
+        if (e.type === 'approval_required') turn.abort();
+      },
+    },
+  );
+  assert.deepEqual(forwarded, [], 'a write queued in the same batch ran after the turn stopped');
+});
+
+console.log('the time budget is enforced while waiting, not only between round trips');
+
+/** A budget short enough to run out inside a test. */
+const SHORT_TURN = { ...TURN_CFG, limits: { ...TURN_CFG.limits, maxTurnMs: 50 } } as OrchestratorConfig;
+
+/** Awaits `work`, failing instead of hanging if it is still going after `ms`. */
+async function within<T>(ms: number, work: Promise<T>, what: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${what} was still running after ${ms}ms`)), ms);
+  });
+  try {
+    return await Promise.race([work, late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+await testAsync('a model stream that stalls ends the turn at its budget, billed', async () => {
+  // The budget was checked only at the top of the loop, so a call that never returned never got
+  // there; and nothing else aborted the signal. Here the model behaves like a fetch: it answers
+  // only by rejecting when its signal aborts.
+  const stalled = {
+    streamChat: (_m: unknown, _t: unknown, _c: unknown, signal: AbortSignal) =>
+      new Promise((_, reject) =>
+        signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true }),
+      ),
+  } as unknown as OpenAiClient;
+  const { events, billed } = await within(2_000, turnWith([], { cfg: SHORT_TURN, llm: stalled }), 'the stalled turn');
+  assert.equal(doneReason(events), 'time_budget', 'a stopped stream must close the turn the tidy way');
+  assert.notEqual(billed, null);
+});
+
+await testAsync('a card nobody answers is withdrawn when the budget runs out', async () => {
+  const approvals = new ApprovalBroker();
+  const { forwarded, events } = await within(
+    2_000,
+    turnWith([{ name: 'tags_delete', arguments: '{"tagId":"9"}' }], {
+      cfg: { ...SHORT_TURN, enableDeleteTools: true } as OrchestratorConfig,
+      approvals,
+    }),
+    'the turn waiting on a card',
+  );
+  assert.deepEqual(forwarded, []);
+  assert.match(results(events)[0]?.summary ?? '', /ran out of time/, 'not blamed on the user');
+  assert.equal(doneReason(events), 'time_budget');
+  assert.equal(approvals.stats().pending, 0);
 });
 
 console.log(`\n${passed} assertions passed`);

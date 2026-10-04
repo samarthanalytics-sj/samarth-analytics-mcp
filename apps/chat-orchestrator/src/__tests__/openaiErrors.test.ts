@@ -121,6 +121,57 @@ test('a spent TOKEN window is told apart from a request-rate limit', async () =>
   assert.equal(isTokenWindowSaturated('OpenAI returned 500: server error'), false);
 });
 
+// A stream that stops sending.
+//
+// The request budget was only checked BETWEEN attempts, so an upstream that sent a few tokens and
+// then went quiet held the turn, and its pool slot, until undici's own idle timer (300s).
+
+/** Answers 200, sends one delta, then nothing. Like undici, aborting the request errors the body. */
+function stallingFetch(): { fetchImpl: typeof fetch; calls: () => number } {
+  let calls = 0;
+  const fetchImpl = (async (_url: unknown, init?: RequestInit) => {
+    calls++;
+    const signal = init?.signal;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"Hel"}}]}\n\n'));
+        signal?.addEventListener('abort', () => controller.error(signal.reason), { once: true });
+      },
+    });
+    return new Response(body, { status: 200 });
+  }) as unknown as typeof fetch;
+  return { fetchImpl, calls: () => calls };
+}
+
+const shortBudget = {
+  openai: { ...cfg.openai, requestTimeoutMs: 50 },
+} as unknown as OrchestratorConfig;
+
+void test('a stalled stream is cut off at the request budget, not left to the socket', { timeout: 5_000 }, async () => {
+  const { fetchImpl, calls } = stallingFetch();
+  const client = new OpenAiClient(shortBudget, fetchImpl, async () => {});
+  await assert.rejects(
+    () => client.streamChat([], [], { onDelta() {} }, new AbortController().signal),
+    (err: unknown) => {
+      assert.ok(err instanceof OpenAiError, `expected an OpenAiError, got ${String(err)}`);
+      assert.equal(err.code, 'timeout');
+      return true;
+    },
+  );
+  assert.equal(calls(), 1, 'the attempt had the whole remaining budget, so it is not retried');
+});
+
+void test('the caller stopping a stream is still an abort, not a timeout', { timeout: 5_000 }, async () => {
+  const { fetchImpl } = stallingFetch();
+  const client = new OpenAiClient(cfg, fetchImpl, async () => {});
+  const caller = new AbortController();
+  setTimeout(() => caller.abort(), 20);
+  await assert.rejects(
+    () => client.streamChat([], [], { onDelta() {} }, caller.signal),
+    (err: unknown) => !(err instanceof OpenAiError && err.code === 'timeout'),
+  );
+});
+
 test('the caller is told it is waiting, and for how long', async () => {
   // A turn that pauses in silence is indistinguishable from one that has hung, and the reasonable
   // response to a hang is a reload - which throws away the turn that was about to succeed.

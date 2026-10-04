@@ -153,13 +153,16 @@ export class OpenAiClient {
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       if (signal.aborted) throw new OpenAiError('Aborted', 499, 'aborted');
       // Do not start an attempt we cannot afford to finish.
-      if (Date.now() - started > this.cfg.openai.requestTimeoutMs) break;
+      const remainingMs = this.cfg.openai.requestTimeoutMs - (Date.now() - started);
+      if (remainingMs <= 0) break;
 
       try {
-        return await this.attempt(messages, tools, cbs, signal);
+        return await this.attempt(messages, tools, cbs, signal, remainingMs);
       } catch (err) {
         if (!(err instanceof OpenAiError) || !RETRYABLE.has(err.status)) throw err;
         if (NEVER_RETRY.has(err.code)) throw err;
+        // The attempt was given everything left of the budget, so there is nothing to retry with.
+        if (err.code === 'timeout') throw err;
         lastError = err;
         if (attempt === MAX_RETRIES) break;
         const saturated = err.status === 429 && isTokenWindowSaturated(err.message);
@@ -182,7 +185,43 @@ export class OpenAiClient {
     throw lastError ?? new OpenAiError('Request failed', 500, 'unknown');
   }
 
+  /**
+   * One request, bounded while it is in flight.
+   *
+   * The budget used to be checked only between attempts, so a stream that stopped sending mid-answer
+   * held the turn (and its pool slot) until undici's own 300s idle timeout. The caller's signal still
+   * aborts it as before; running out of `timeoutMs` is reported as a timeout rather than an abort.
+   */
   private async attempt(
+    messages: ChatMessage[],
+    tools: OpenAiTool[],
+    cbs: StreamCallbacks,
+    signal: AbortSignal,
+    timeoutMs: number,
+  ): Promise<StreamResult> {
+    const bounded = new AbortController();
+    // Clamped: past 2^31-1 ms setTimeout fires at once, which would fail every request.
+    const timer = setTimeout(() => bounded.abort(), Math.min(timeoutMs, 2_147_483_647));
+    const onCallerAbort = (): void => bounded.abort();
+    signal.addEventListener('abort', onCallerAbort, { once: true });
+    try {
+      return await this.request(messages, tools, cbs, bounded.signal);
+    } catch (err) {
+      if (bounded.signal.aborted && !signal.aborted && !(err instanceof OpenAiError)) {
+        throw new OpenAiError(
+          `OpenAI did not finish within ${Math.round(this.cfg.openai.requestTimeoutMs / 1000)}s`,
+          504,
+          'timeout',
+        );
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', onCallerAbort);
+    }
+  }
+
+  private async request(
     messages: ChatMessage[],
     tools: OpenAiTool[],
     cbs: StreamCallbacks,
