@@ -313,6 +313,13 @@ const TURN_CFG = {
  */
 async function turnWith(
   calls: { name: string; arguments: string }[],
+  opts: {
+    cfg?: OrchestratorConfig;
+    signal?: AbortSignal;
+    approvals?: ApprovalBroker;
+    /** Sees each event as it is streamed, e.g. to act like the user when a card appears. */
+    onEmit?: (e: StreamEvent) => void;
+  } = {},
 ): Promise<{ forwarded: { name: string; args: Record<string, unknown> }[]; events: StreamEvent[]; billed: number | null }> {
   const forwarded: { name: string; args: Record<string, unknown> }[] = [];
   const events: StreamEvent[] = [];
@@ -339,17 +346,20 @@ async function turnWith(
   } as unknown as OpenAiClient;
 
   await runTurn({
-    cfg: TURN_CFG,
+    cfg: opts.cfg ?? TURN_CFG,
     mcp,
     llm,
     history: [{ role: 'user', content: 'zzz' }],
     context: { product: 'gtm' },
     user: { id: 'user-1' },
-    emit: (e) => events.push(e),
-    signal: new AbortController().signal,
-    // A broker, so a write can run at all. No delete is in scope and approveLiveWrites is off, so
-    // nothing in these turns parks on a card.
-    approvals: new ApprovalBroker(),
+    emit: (e) => {
+      events.push(e);
+      opts.onEmit?.(e);
+    },
+    signal: opts.signal ?? new AbortController().signal,
+    // A broker, so a write can run at all. With the default config no delete is in scope and
+    // approveLiveWrites is off, so nothing parks on a card unless a test opts in.
+    approvals: opts.approvals ?? new ApprovalBroker(),
     usage: { record: (_user: string, tokens: number) => (billed = tokens) } as unknown as UsageMeter,
   });
   return { forwarded, events, billed };
@@ -427,6 +437,31 @@ await testAsync('null, a string, a number or an array is an invalid-arguments re
     assert.equal(doneReason(events), 'complete', `${raw} did not let the turn finish`);
     assert.notEqual(billed, null, `${raw} skipped billing`);
   }
+});
+
+console.log('a turn that ends early withdraws its own card');
+
+await testAsync('aborting the turn declines the card it parked, and runs nothing', async () => {
+  // The broker is handed the turn's signal, so the card goes when this turn goes, not when any turn
+  // of the same user does.
+  const turn = new AbortController();
+  const approvals = new ApprovalBroker();
+  const { forwarded, events, billed } = await turnWith(
+    [{ name: 'tags_delete', arguments: '{"tagId":"9"}' }],
+    {
+      cfg: { ...TURN_CFG, enableDeleteTools: true } as OrchestratorConfig,
+      signal: turn.signal,
+      approvals,
+      onEmit: (e) => {
+        if (e.type === 'approval_required') turn.abort(); // the user closed the tab
+      },
+    },
+  );
+  assert.deepEqual(forwarded, [], 'a write ran after its turn was abandoned');
+  assert.match(results(events)[0]?.summary ?? '', /stopped the request/);
+  assert.equal(doneReason(events), 'aborted');
+  assert.equal(approvals.stats().pending, 0, 'the card was left parked');
+  assert.notEqual(billed, null);
 });
 
 console.log(`\n${passed} assertions passed`);

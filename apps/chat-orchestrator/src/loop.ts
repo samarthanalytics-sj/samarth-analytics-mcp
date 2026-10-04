@@ -695,6 +695,8 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
                 surface,
               }),
             gate.confirmWord,
+            // This turn's own signal, so only this turn's card is withdrawn when it ends early.
+            signal,
           );
 
           if (!outcome.approved) {

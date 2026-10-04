@@ -20,7 +20,7 @@ import { runTurn } from './loop.js';
 import { AuditRecorder } from './audit.js';
 import { UsageMeter, quotaMessage } from './usage.js';
 import { planFix, FIXABLE_CATEGORIES, type AuditFinding } from './audit-fix.js';
-import { SseStream } from './sse.js';
+import { onClientGone, SseStream } from './sse.js';
 import { deadline, DeadlineError } from './deadline.js';
 import { installTimestampedLogging } from './log-time.js';
 import { scopeTools } from './tools.js';
@@ -1969,11 +1969,12 @@ async function main(): Promise<void> {
 
     const stream = new SseStream(res);
     const controller = new AbortController();
-    req.on('close', () => {
+    // Not req.on('close'): that had already fired by here, so a client that left kept its turn
+    // running and spending tokens. And not per user: finishing one turn must not withdraw the cards
+    // of the same user's other conversation. Aborting this turn's signal stops its model call and
+    // declines only the approval it parked (the signal is passed to the broker in loop.ts).
+    onClientGone(res, () => {
       controller.abort();
-      // A parked write whose user has navigated away must not sit waiting for a decision that can
-      // no longer arrive.
-      approvals?.abortFor(user.id);
       stream.close();
     });
 

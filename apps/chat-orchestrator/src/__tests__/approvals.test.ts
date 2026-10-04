@@ -6,7 +6,12 @@
  * access defensible, so they are tested from the attacker's side as well as the happy path.
  */
 import assert from 'node:assert/strict';
+import http from 'node:http';
+import { once } from 'node:events';
+import type { AddressInfo } from 'node:net';
+import express from 'express';
 import { ApprovalBroker, ApprovalError, summarizeWrite } from '../approvals.js';
+import { onClientGone } from '../sse.js';
 
 let passed = 0;
 async function test(name: string, fn: () => Promise<void> | void): Promise<void> {
@@ -125,23 +130,59 @@ await test('without edits the original arguments are preserved', async () => {
 
 console.log('abandonment');
 
-await test('abandoning a session declines that user\'s parked writes only', async () => {
+await test('abandoning a turn declines that turn\'s parked write only', async () => {
+  // Scoped to the turn, not the user. It used to be abortFor(userId), so one tab closing (or, once
+  // the close listener was fixed, any turn simply finishing) declined the cards the same user had
+  // waiting in another conversation.
   const broker = new ApprovalBroker();
+  const turn = new AbortController();
   let mineId = '';
-  const mine = broker.request('user-1', 'tags_create', ARGS, (i) => (mineId = i));
+  const mine = broker.request('user-1', 'tags_create', ARGS, (i) => (mineId = i), undefined, turn.signal);
+  const otherConversation = broker.request(
+    'user-1',
+    'tags_create',
+    ARGS,
+    () => {},
+    undefined,
+    new AbortController().signal,
+  );
   const theirs = broker.request('user-2', 'tags_create', ARGS, () => {});
 
-  broker.abortFor('user-1');
+  turn.abort();
 
   const outcome = await mine;
   assert.equal(outcome.approved, false);
   assert.equal(outcome.approved === false && outcome.reason, 'aborted');
 
-  let theirsSettled = false;
-  void theirs.then(() => (theirsSettled = true));
+  let othersSettled = 0;
+  void otherConversation.then(() => othersSettled++);
+  void theirs.then(() => othersSettled++);
   await new Promise((r) => setTimeout(r, 20));
-  assert.equal(theirsSettled, false, 'another user\'s approval was collaterally cancelled');
+  assert.equal(othersSettled, 0, 'an approval outside the aborted turn was collaterally cancelled');
+  assert.equal(broker.stats().pending, 2);
   assert.equal(mineId.length > 0, true);
+});
+
+await test('a turn that has already ended parks nothing', async () => {
+  const broker = new ApprovalBroker();
+  const turn = new AbortController();
+  turn.abort();
+  let carded = false;
+  const outcome = await broker.request('user-1', 'tags_create', ARGS, () => (carded = true), undefined, turn.signal);
+  assert.equal(outcome.approved === false && outcome.reason, 'aborted');
+  assert.equal(carded, false, 'a card was shown for a turn nobody is watching');
+  assert.equal(broker.stats().pending, 0);
+});
+
+await test('an abort after the decision changes nothing', async () => {
+  const broker = new ApprovalBroker();
+  const turn = new AbortController();
+  let id = '';
+  const pending = broker.request('user-1', 'tags_create', ARGS, (i) => (id = i), undefined, turn.signal);
+  broker.resolve(id, 'user-1', 'approve');
+  assert.equal((await pending).approved, true);
+  turn.abort();
+  assert.equal(broker.stats().pending, 0);
 });
 
 await test('pending count reflects outstanding approvals', async () => {
@@ -153,6 +194,53 @@ await test('pending count reflects outstanding approvals', async () => {
   broker.resolve(id, 'user-1', 'decline');
   await pending;
   assert.equal(broker.stats().pending, 0);
+});
+
+console.log('noticing that the client left');
+
+/**
+ * Serves one POST the way the chat route does (body read by express.json(), then an SSE head) and
+ * reports how many times onClientGone fired. `leave` drops the connection mid-stream, as closing
+ * the tab does; otherwise the server ends the response normally.
+ */
+async function serveOnce(leave: boolean): Promise<number> {
+  const app = express();
+  app.use(express.json());
+  let gone = 0;
+  let closed!: () => void;
+  const handled = new Promise<void>((r) => (closed = r));
+  app.post('/chat', (_req, res) => {
+    onClientGone(res, () => gone++);
+    res.on('close', () => setImmediate(closed));
+    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    res.write('data: {}\n\n');
+    if (!leave) res.end();
+  });
+  const server = app.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const { port } = server.address() as AddressInfo;
+  const client = http.request(
+    { host: '127.0.0.1', port, method: 'POST', path: '/chat', headers: { 'content-type': 'application/json' } },
+    (res) => {
+      res.once('data', () => (leave ? client.destroy() : res.resume()));
+    },
+  );
+  client.on('error', () => {});
+  client.end(JSON.stringify({ messages: [] }));
+  await handled;
+  server.closeAllConnections();
+  server.close();
+  return gone;
+}
+
+await test('a client that leaves mid-stream is noticed, so its turn can be stopped', async () => {
+  // The listener used to be on the request, which had already closed by the time the handler ran,
+  // so a turn whose client was gone kept running and spending tokens.
+  assert.equal(await serveOnce(true), 1);
+});
+
+await test('a response that simply finished is not mistaken for a client leaving', async () => {
+  assert.equal(await serveOnce(false), 0);
 });
 
 console.log('typed confirmation for deletes');
