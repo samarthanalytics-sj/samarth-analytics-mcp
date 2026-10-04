@@ -1,6 +1,8 @@
 import type { GoogleDataService } from './data-service';
-import { auditContainer, auditServerContainer, type AuditReport } from './gtm-builders';
-import { pairDriftFindings, withPairFindings, type WebPair } from './server-pair';
+import { auditContainer, auditServerContainer, type AuditFinding, type AuditReport } from './gtm-builders';
+import { isPairFinding, pairDriftFindings, withPairFindings, type WebPair } from './server-pair';
+import { withQuotaRetry } from './quota-retry';
+import { log } from '../logger';
 import { buildContainerInventory, type ContainerInventory } from './gtm-inventory';
 import { diffAudits, type AuditDrift } from './gtm-monitor';
 import { AuditHistoryStore } from '../storage/audit-history';
@@ -108,6 +110,9 @@ export interface AuditChanges {
   since: number | null;
   firstRun: boolean;
   drift: AuditDrift;
+  /** True when the web + server pair could not be read this run: the previous run's pair findings
+   *  were carried forward unchanged, so they are neither "resolved" nor "new" here. */
+  pairUnavailable: boolean;
 }
 
 /**
@@ -118,27 +123,35 @@ export interface AuditChanges {
 /**
  * For a SERVER container, the findings only the web + server PAIR reveals: a wired web tag whose
  * relay is gone, a relay whose web tag went direct, both legs feeding one property. Every web
- * container in the account is read so pairing can be decided from the tagging host. Best effort:
- * if any of that fails the plain server report stands, so the monitor never breaks over a
- * pairing read. Returns [] for a web container.
+ * container in the account is read so pairing can be decided from the tagging host. Returns [] for
+ * a web container, and NULL when the pairing could not be read (a failed read, or a container whose
+ * type cannot be determined): "unknown" must never look like "no pair problems", or the drift diff
+ * records every pair finding as resolved and re-alerts on it as new on the next good read.
  */
-export async function pairFindingsFor(data: GoogleDataService, ctx: WorkspaceCtx, report: AuditReport): Promise<ReturnType<typeof pairDriftFindings>> {
+export async function pairFindingsFor(data: GoogleDataService, ctx: WorkspaceCtx, report: AuditReport): Promise<AuditFinding[] | null> {
   try {
-    if ((await containerKind(data, ctx)) !== 'server') return [];
+    const kind = await containerKind(data, ctx);
+    if (kind === null) return null;
+    if (kind !== 'server') return [];
     const server = await data.getServerContainerSnapshot(ctx.accountId, ctx.containerId, ctx.workspaceId);
     const containers = await data.listGtmContainers(ctx.accountId);
     const webs: WebPair[] = [];
     for (const c of containers) {
       if (c.containerId === ctx.containerId) continue;
-      if ((c.usageContext ?? []).some((u) => String(u ?? '').toLowerCase() === 'server')) continue;
-      const wss = await data.listGtmWorkspaces(ctx.accountId, c.containerId);
+      // Web containers only (no usageContext = web, as in containerKind): server, AMP and mobile
+      // containers hold no Google tag to pair, and skipping them saves reads against the GTM quota.
+      const usage = (c.usageContext ?? []).map((u) => String(u ?? '').toLowerCase());
+      if (usage.includes('server') || (usage.length > 0 && !usage.includes('web'))) continue;
+      // A short per-minute 429 waits for the quota to reset instead of dropping the whole pair leg.
+      const wss = await withQuotaRetry(() => data.listGtmWorkspaces(ctx.accountId, c.containerId));
       const ws = wss.find((w) => /default/i.test(w.name)) ?? wss[0];
       if (!ws) continue;
-      webs.push({ containerId: c.containerId, name: c.name, snapshot: await data.getGtmContainerSnapshot(ctx.accountId, c.containerId, ws.workspaceId) });
+      webs.push({ containerId: c.containerId, name: c.name, snapshot: await withQuotaRetry(() => data.getGtmContainerSnapshot(ctx.accountId, c.containerId, ws.workspaceId)) });
     }
     return pairDriftFindings(server, webs, report.summary);
-  } catch {
-    return [];
+  } catch (e) {
+    log.warn(`[audit] pair read for container ${ctx.containerId} failed - keeping last run's pair findings: ${e instanceof Error ? e.message : String(e)}`);
+    return null;
   }
 }
 
@@ -151,10 +164,13 @@ export async function auditChanges(
   // The pair findings ride along as ordinary findings, so history, drift and the alert need no
   // new shape: a regression in the pair is simply a NEW finding on the next scheduled run.
   const base = await auditWorkspace(data, ctx);
-  const report = withPairFindings(base, await pairFindingsFor(data, ctx, base));
   const key = AuditHistoryStore.key(ctx.accountId, ctx.containerId, ctx.workspaceId);
   const prev = history.last(key);
+  const pair = await pairFindingsFor(data, ctx, base);
+  // null = the pair could not be read this run: keep last run's pair findings rather than recording
+  // them as resolved (and re-alerting on them as new when the next read succeeds).
+  const report = withPairFindings(base, pair ?? (prev?.report.findings ?? []).filter(isPairFinding));
   const drift = diffAudits(prev?.report.findings ?? null, report.findings);
   history.append(key, { at: now, report });
-  return { report, since: prev?.at ?? null, firstRun: !prev, drift };
+  return { report, since: prev?.at ?? null, firstRun: !prev, drift, pairUnavailable: pair === null };
 }

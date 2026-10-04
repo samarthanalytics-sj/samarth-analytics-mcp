@@ -1061,6 +1061,10 @@ export interface AuditFinding {
   /** True when `fix` is a ready-to-run tool call the model can apply on approval. */
   autoFixable: boolean;
   fix?: AuditFix;
+  /** Set to 'pair' on findings from the web + server PAIR read (server-pair.ts), which can fail
+   *  independently of the container audit. Lets the monitor carry them forward when that read fails
+   *  instead of recording them as resolved. Not part of findingKey, so history keys are unchanged. */
+  origin?: 'pair';
 }
 
 /** Container-only boundary statement — what a config audit proves and what it cannot. */

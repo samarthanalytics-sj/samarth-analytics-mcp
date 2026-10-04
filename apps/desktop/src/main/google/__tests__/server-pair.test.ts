@@ -5,7 +5,7 @@
  * Run: tsx src/main/google/__tests__/server-pair.test.ts
  */
 import assert from 'node:assert/strict';
-import { pairDriftFindings, pairedWebContainers, withPairFindings, type WebPair } from '../server-pair';
+import { isPairFinding, pairDriftFindings, pairedWebContainers, withPairFindings, type WebPair } from '../server-pair';
 import type { AuditReport, AuditTag, ServerContainerSnapshot } from '../gtm-builders';
 
 let passed = 0, failed = 0;
@@ -148,6 +148,17 @@ test('withPairFindings appends and recounts, and is a no-op with nothing to add'
   assert.equal(out.findings.length, 2);
   assert.deepEqual(out.summary, { critical: 1, high: 1, medium: 0, low: 0, info: 0 });
   assert.equal(out.counts.findings, 2);
+});
+
+test('every pair finding is marked origin=pair (so a failed pair read can carry them forward)', () => {
+  // Section 3 reuses the coverage engine's checkIds (duplicate_web_ga4_config), so a `pair_` prefix
+  // alone would miss them; the marker covers all three sections.
+  const w = web([googleTag('t1', 'AUS GA4', 'G-AUAUAU1', HOST), googleTag('t2', 'AUS GA4 (plugin)', 'G-AUAUAU1')]);
+  const fs = [...pairDriftFindings(server(), [w], SUMMARY), ...pairDriftFindings(server({ tags: [] }), [web([googleTag('t1', 'AUS GA4', 'G-AUAUAU1', HOST)])], SUMMARY)];
+  assert.ok(fs.some((f) => !(f.checkId ?? '').startsWith('pair_')), 'the fixture includes a coverage-engine finding');
+  assert.ok(fs.length > 0 && fs.every((f) => f.origin === 'pair' && isPairFinding(f)), ids(fs).join(','));
+  assert.equal(isPairFinding({ severity: 'high', confidence: 'certain', category: 'firing', message: 'x', recommendation: 'y', autoFixable: false }), false, 'a container-audit finding is not a pair finding');
+  assert.equal(isPairFinding({ severity: 'critical', confidence: 'certain', category: 'coverage', checkId: 'pair_wired_but_unforwarded', message: 'x', recommendation: 'y', autoFixable: false }), true, 'history stored before the marker is still recognised');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

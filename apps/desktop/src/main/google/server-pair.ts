@@ -124,6 +124,7 @@ export function pairDriftFindings(
       message: `Web Google tag "${g.tag.name}" (${g.container}) sends ${g.id} to this server, but no active GA4 relay forwards ${g.id} and none inherits the id. Its hits are claimed by the GA4 client and dropped, so that property receives nothing.`,
       recommendation: `Restore or unpause the server relay for ${g.id}, or point the web tag back at Google until one exists. Check GA4 DebugView for ${g.id}: it will be empty while this stands.`,
       autoFixable: false,
+      origin: 'pair',
     });
   }
 
@@ -139,6 +140,7 @@ export function pairDriftFindings(
       message: `This server holds a GA4 relay for ${g.id}, but web Google tag "${g.tag.name}" (${g.container}) has no server container URL and sends ${g.id} straight to Google. The relay never receives anything, and none of the server-side benefits apply to that property.`,
       recommendation: `If ${g.id} is meant to be server-side, set the tag's server container URL to this tagging server. If it is meant to stay direct, remove the idle relay so the server reflects what it actually does.`,
       autoFixable: false,
+      origin: 'pair',
     });
   }
 
@@ -154,10 +156,17 @@ export function pairDriftFindings(
         message: `${w.name}: ${f.message}`,
         recommendation: f.recommendation,
         autoFixable: false,
+        origin: 'pair',
       });
     }
   }
   return out;
+}
+
+/** Did this finding come from the pair read? Section 3 reuses the coverage engine's checkIds, hence
+ *  the explicit marker; the `pair_` prefix also covers history stored before the marker existed. */
+export function isPairFinding(f: AuditFinding): boolean {
+  return f.origin === 'pair' || (f.checkId ?? '').startsWith('pair_');
 }
 
 /** The server report with pair findings appended and its summary recounted. PURE. */
