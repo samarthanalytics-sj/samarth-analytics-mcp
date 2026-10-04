@@ -2109,24 +2109,19 @@ export class GoogleDataService {
     const varsDone = new Set<string>();
     const localTriggers = triggers.slice();
     const localTags = tags.slice();
+    const { eventTriggerFor } = await import('./server-plan');
     const ensureEventTrigger = async (eventName: string): Promise<string> => {
-      const hit = localTriggers.find((tr) => {
-        if (tr.type !== 'customEvent') return false;
-        const fs = (tr as { customEventFilter?: Array<{ type?: string; parameter?: Array<{ key?: string; value?: unknown }> }> }).customEventFilter ?? [];
-        if (fs.length !== 1) return false;
-        const ps = fs[0].parameter ?? [];
-        return String(ps.find((x) => x.key === 'arg0')?.value ?? '') === '{{_event}}' && String(ps.find((x) => x.key === 'arg1')?.value ?? '') === eventName;
-      });
-      if (hit) return hit.triggerId;
-      const baseName = `ce - ${eventName}`;
-      const taken = new Set(localTriggers.map((t) => t.name));
-      const trName = taken.has(baseName) ? `${baseName} (server)` : baseName;
+      // Matches on the listGtmTriggers row shape (customEventName/conditions), so a trigger left by an
+      // earlier run is reused rather than duplicated, and a new one always gets a free name.
+      const pick = eventTriggerFor(localTriggers, eventName);
+      if ('reuse' in pick) return pick.reuse;
+      const trName = pick.create;
       const created = await this.q(() => gtm.accounts.containers.workspaces.triggers.create({
         parent,
         requestBody: { name: trName, type: 'customEvent', customEventFilter: [{ type: 'equals', parameter: [{ type: 'template', key: 'arg0', value: '{{_event}}' }, { type: 'template', key: 'arg1', value: eventName }] }] },
       }));
       const id = created.data.triggerId ?? '';
-      localTriggers.push({ triggerId: id, name: trName, type: 'customEvent', customEventFilter: [{ type: 'equals', parameter: [{ key: 'arg0', value: '{{_event}}' }, { key: 'arg1', value: eventName }] }], filter: [], autoEventFilter: [], parameter: [] } as unknown as (typeof localTriggers)[number]);
+      localTriggers.push({ triggerId: id, name: trName, type: 'customEvent', customEventName: eventName, conditions: [] });
       return id;
     };
     for (const id of capiIds) {
