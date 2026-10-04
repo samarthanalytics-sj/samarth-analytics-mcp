@@ -114,7 +114,11 @@ export function buildProbeHit(input: { taggingUrl: string; measurementId: string
   const eventName = `samarth_probe_${input.suffix.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 8)}`;
   // A throwaway client id in gtag's own "<random>.<epoch>" shape.
   const clientId = input.clientId ?? `${Math.floor(1e9 + Number.parseInt(input.suffix.slice(0, 6), 16) % 9e8)}.${Math.floor(Date.now() / 1000)}`;
-  const u = new URL('/g/collect', `${base.protocol}//${base.host}`);
+  // Keep the configured path prefix: a same-origin setup (https://www.example.com/metrics) routes
+  // only that path to the tagging server, and gtag sends to `${server_container_url}/g/collect`.
+  // Query and hash are dropped.
+  const prefix = base.pathname.replace(/\/+$/, '');
+  const u = new URL(`${base.protocol}//${base.host}${prefix}/g/collect`);
   const q = u.searchParams;
   q.set('v', '2');
   q.set('tid', mid);
@@ -130,6 +134,23 @@ export function buildProbeHit(input: { taggingUrl: string; measurementId: string
   q.set('seg', '0');
   q.set('_p', String(Date.now()));
   return { url: u.toString(), eventName, clientId, measurementId: mid };
+}
+
+/** The realtime read-back for one probe: an EXACT filter on its unique event name, so the row comes
+ *  back however many other event names the property saw in the window (an unfiltered report returns
+ *  one capped page of rows and can cut a count-1 probe off a busy property). PURE. */
+export function probeRealtimeQuery(property: string, eventName: string): {
+  property: string;
+  dimensions: string[];
+  metrics: string[];
+  dimensionFilter: Record<string, unknown>;
+} {
+  return {
+    property,
+    dimensions: ['eventName'],
+    metrics: ['eventCount'],
+    dimensionFilter: { filter: { fieldName: 'eventName', stringFilter: { matchType: 'EXACT', value: eventName } } },
+  };
 }
 
 export interface RealtimeRow { dimensions: string[]; metrics: string[] }

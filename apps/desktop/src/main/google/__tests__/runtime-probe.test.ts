@@ -4,7 +4,7 @@
  * Run: tsx src/main/google/__tests__/runtime-probe.test.ts
  */
 import assert from 'node:assert/strict';
-import { buildProbeHit, probeSuffix, probeVerdict, describeProbe, probeTargets, probeTargetRefusal } from '../runtime-probe';
+import { buildProbeHit, probeSuffix, probeVerdict, describeProbe, probeTargets, probeTargetRefusal, probeRealtimeQuery } from '../runtime-probe';
 import type { ServerContainerSnapshot } from '../gtm-builders';
 
 let passed = 0, failed = 0;
@@ -28,6 +28,30 @@ test('the hit is the GA4 collect request the server\'s GA4 client claims, on the
   assert.equal(u.searchParams.get('ep.probe_source'), 'samarth_runtime_probe', 'labelled so it is never mistaken for traffic');
   assert.match(u.searchParams.get('cid') ?? '', /^\d{9,10}\.\d{10}$/, 'a throwaway client id in gtag\'s own shape');
   assert.equal(h.eventName, 'samarth_probe_deadbeef');
+});
+
+test('a same-origin tagging URL keeps its path prefix (the hit goes where gtag would send it)', () => {
+  // Google's same-origin pattern routes only /metrics/* to the tagging server; the site root's
+  // /g/collect is the website itself, which 404s and was misreported as "no client claimed it".
+  const p = (taggingUrl: string): URL => new URL(buildProbeHit({ taggingUrl, measurementId: 'G-ABC1234', suffix: 'deadbeef' }).url);
+  assert.equal(p('https://www.example.com/metrics').pathname, '/metrics/g/collect');
+  assert.equal(p('https://www.example.com/metrics/').pathname, '/metrics/g/collect', 'a trailing slash is not doubled');
+  assert.equal(p('https://s.example.com/').pathname, '/g/collect', 'a bare host still uses the default path');
+  const q = p('https://www.example.com/metrics?x=1#frag');
+  assert.equal(q.pathname, '/metrics/g/collect');
+  assert.equal(q.searchParams.get('x'), null, 'the configured URL\'s query is not carried into the hit');
+  assert.equal(q.hash, '');
+  assert.equal(q.origin, 'https://www.example.com');
+});
+
+test('the realtime read-back filters on THIS probe\'s exact event name', () => {
+  // An unfiltered realtime report is one capped page: on a property with more event names than the
+  // page, the count-1 probe row could be cut and a working path reported as not_verified.
+  const q = probeRealtimeQuery('properties/9', 'samarth_probe_deadbeef');
+  assert.equal(q.property, 'properties/9');
+  assert.deepEqual(q.dimensions, ['eventName']);
+  assert.deepEqual(q.metrics, ['eventCount']);
+  assert.deepEqual(q.dimensionFilter, { filter: { fieldName: 'eventName', stringFilter: { matchType: 'EXACT', value: 'samarth_probe_deadbeef' } } });
 });
 
 test('each probe has its own event name, so a stale probe can never pass a new one', () => {
@@ -152,6 +176,24 @@ async function wiring(): Promise<void> {
     try { await svc.runServerRuntimeProbe('1', '2', '3', { measurementId: 'G-TYPO0000' }); } catch (e) { err = (e as Error).message; }
     if (/no probe was sent/i.test(err) && sent.length === 0) { passed += 1; console.log('  ✓ runServerRuntimeProbe refuses an unreadable id behind an inheriting relay, with nothing sent'); }
     else { failed += 1; console.log(`  ✗ runServerRuntimeProbe refuses an unreadable id behind an inheriting relay, with nothing sent: err="${err}" sent=${sent.length}`); }
+
+    // A same-origin tagging URL with a path, and the read-back: the hit goes to <prefix>/g/collect and
+    // the realtime query is filtered to this probe's exact name. (A public IP literal keeps the SSRF
+    // guard off the network; fetch is stubbed, so nothing leaves the machine.)
+    const svc2 = svc as typeof svc & { runGa4RealtimeReport: (q: Record<string, unknown>) => Promise<{ rows: Array<{ dimensions: string[]; metrics: string[] }> }> };
+    svc2.getServerContainerSnapshot = async () => ({ ...server, taggingServerUrls: ['https://8.8.8.8/metrics/'] }) as ServerContainerSnapshot;
+    svc2.listGa4MeasurementIds = async () => [{ measurementId: 'G-AAAA1111', property: 'properties/1', propertyDisplayName: 'A' }];
+    const queries: Array<Record<string, unknown>> = [];
+    svc2.runGa4RealtimeReport = async (q) => {
+      queries.push(q);
+      const f = (q.dimensionFilter as { filter?: { stringFilter?: { value?: string } } } | undefined)?.filter?.stringFilter?.value ?? 'unfiltered';
+      return { rows: [{ dimensions: [f], metrics: ['1'] }] };
+    };
+    const out = await (svc2.runServerRuntimeProbe as (a: string, c: string, w: string, o?: Record<string, unknown>) => Promise<{ status: string; eventName: string }>)('1', '2', '3', { pollMs: 2000, maxWaitMs: 2000 });
+    const okPath = sent.length === 1 && new URL(sent[0]).pathname === '/metrics/g/collect';
+    const okFilter = queries.length >= 1 && JSON.stringify(queries[0].dimensionFilter) === JSON.stringify({ filter: { fieldName: 'eventName', stringFilter: { matchType: 'EXACT', value: out.eventName } } });
+    if (okPath && okFilter && out.status === 'pass') { passed += 1; console.log('  ✓ runServerRuntimeProbe keeps the tagging URL path and reads back with an exact event-name filter'); }
+    else { failed += 1; console.log(`  ✗ runServerRuntimeProbe keeps the tagging URL path and reads back with an exact event-name filter: sent=${JSON.stringify(sent)} queries=${JSON.stringify(queries)} status=${out.status}`); }
   } finally {
     globalThis.fetch = realFetch;
   }

@@ -11,7 +11,7 @@ import {
 } from '../../../../../src/shared/gtm-template-sources';
 import { installTemplateFromSource, type TemplateCreateApi } from '../../../../../src/shared/gtm-template-install';
 import { capiPlatform, capiCredentials } from '../../../../../src/shared/capi-platforms';
-import { buildProbeHit, probeSuffix, probeVerdict, describeProbe, probeTargets, probeTargetRefusal, type ProbeResult } from './runtime-probe';
+import { buildProbeHit, probeSuffix, probeVerdict, describeProbe, probeTargets, probeTargetRefusal, probeRealtimeQuery, type ProbeResult } from './runtime-probe';
 import { resolveGa4MeasurementIds } from './gtm-ga4-check';
 import { withQuotaRetry, withRetry, QUOTA_RE, TRANSIENT_5XX_RE, NOT_FOUND_OR_PERMISSION_RE } from './quota-retry';
 import { log } from '../logger';
@@ -2389,7 +2389,7 @@ export class GoogleDataService {
     while (Date.now() - sentAt < maxWaitMs) {
       await new Promise((r) => setTimeout(r, pollMs));
       polls += 1;
-      const rep = await this.runGa4RealtimeReport({ property: hit0.property, dimensions: ['eventName'], metrics: ['eventCount'] }).catch(() => null);
+      const rep = await this.runGa4RealtimeReport(probeRealtimeQuery(hit0.property, hit.eventName)).catch(() => null);
       const verdict = rep ? probeVerdict(rep.rows, hit.eventName) : { status: 'not_verified' as const };
       if (verdict.status === 'pass') {
         const seenAt = Date.now();
@@ -4636,6 +4636,8 @@ export class GoogleDataService {
     property: string;
     dimensions: string[];
     metrics: string[];
+    /** Optional Data API FilterExpression on dimensions; omitted from the request when absent. */
+    dimensionFilter?: Record<string, unknown>;
   }): Promise<Ga4ReportResult> {
     const auth = this.activeAuth() as unknown as Parameters<typeof analyticsdata>[0]['auth'];
     const data = analyticsdata({ version: 'v1beta', auth });
@@ -4644,6 +4646,7 @@ export class GoogleDataService {
       requestBody: {
         dimensions: input.dimensions.map((name) => ({ name })),
         metrics: input.metrics.map((name) => ({ name })),
+        ...(input.dimensionFilter ? { dimensionFilter: input.dimensionFilter } : {}),
         limit: '100',
       },
     });
