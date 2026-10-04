@@ -79,7 +79,8 @@ class InMemoryJobQueue {
     const t = this.now();
     for (const job of this.jobs.values()) {
       if (job.status === "leased" && job.leaseExpiresAt !== null && job.leaseExpiresAt <= t) {
-        this._tx(job, "queued");
+        job.lastError = "lease expired";
+        this._tx(job, job.attempts < job.maxAttempts ? "queued" : "failed");
         job.leasedBy = null;
         job.leaseExpiresAt = null;
       }
@@ -263,6 +264,24 @@ await check("expired lease is reclaimed and re-leasable", async () => {
   assert.strictEqual(released.id, j.id, "expired job should be handed to the next worker");
   assert.strictEqual(released.leasedBy, "w2");
   assert.strictEqual(released.attempts, 2, "re-lease increments attempts again");
+});
+
+await check("expired lease with attempts exhausted lands failed, not re-queued", async () => {
+  clock = 0;
+  const q = new InMemoryJobQueue({ now });
+  const j = await q.enqueue({ orgId: "org1", kind: "runtime_capture", payload: PAYLOAD, maxAttempts: 2 });
+  await q.lease("w1", 30); // attempts = 1, lease until 30_000
+  clock = 31_000; // worker crashed; lease expired
+  const second = await q.lease("w2", 30); // reclaimed + re-leased: attempts = 2 (== maxAttempts)
+  assert.strictEqual(second.id, j.id);
+  assert.strictEqual(second.attempts, 2);
+  clock = 62_000; // second worker crashed too
+  assert.strictEqual(await q.lease("w3", 30), null, "exhausted job must not be leased again");
+  const got = await q.get("org1", j.id);
+  assert.strictEqual(got.status, "failed", "exhausted expired lease should be terminal");
+  assert.strictEqual(got.lastError, "lease expired");
+  assert.strictEqual(got.leasedBy, null);
+  assert.strictEqual(got.leaseExpiresAt, null);
 });
 
 // ── priority ordering ────────────────────────────────────────────────────────
