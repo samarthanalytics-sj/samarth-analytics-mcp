@@ -24,9 +24,14 @@ if (!existsSync(distPath)) {
   console.error(`\n✗ mcpSession test: ${distPath} not found. Run "npm run build" first.`);
   process.exit(1);
 }
-const { decidePostRoute, isInitializeRequest, UNKNOWN_SESSION_MESSAGE } = await import(
-  pathToFileURL(distPath).href
-);
+const {
+  decidePostRoute,
+  decideSessionAccess,
+  sessionErrorResponse,
+  isInitializeRequest,
+  UNKNOWN_SESSION_MESSAGE,
+  MISSING_SESSION_MESSAGE,
+} = await import(pathToFileURL(distPath).href);
 
 let passed = 0;
 let failed = 0;
@@ -112,6 +117,37 @@ test('the unknown-session message tells the client how to recover', () => {
   assert.match(UNKNOWN_SESSION_MESSAGE, /initialize/);
 });
 
+console.log('\nmcpSession: decideSessionAccess (GET / DELETE)');
+
+test('a known session id is served', () => {
+  assert.deepStrictEqual(decideSessionAccess('sess-1', true), { kind: 'ok', sessionId: 'sess-1' });
+});
+
+test('REGRESSION: an unknown session id is a 404 + -32001 (GET used to answer 400)', () => {
+  const access = decideSessionAccess('sess-from-before-the-restart', false);
+  assert.strictEqual(access.kind, 'unknown-session');
+  const { status, body } = sessionErrorResponse(access.kind);
+  assert.strictEqual(status, 404);
+  assert.deepStrictEqual(body, {
+    jsonrpc: '2.0',
+    error: { code: -32001, message: UNKNOWN_SESSION_MESSAGE },
+    id: null,
+  });
+});
+
+test('REGRESSION: a missing header is a 400 (DELETE used to answer 404), never a 404', () => {
+  for (const sid of [undefined, '']) {
+    const access = decideSessionAccess(sid, false);
+    assert.strictEqual(access.kind, 'missing-header', JSON.stringify(sid));
+    const { status, body } = sessionErrorResponse(access.kind);
+    assert.strictEqual(status, 400);
+    assert.strictEqual(body.jsonrpc, '2.0');
+    assert.strictEqual(body.error.message, MISSING_SESSION_MESSAGE);
+    assert.notStrictEqual(body.error.code, -32001);
+  }
+});
+
+
 console.log('\nindex.ts: HTTP transport session lifetime and body limit');
 
 // These two live in src/index.ts, which cannot be imported: it calls main() at module load, so
@@ -145,6 +181,26 @@ test('a body-parser failure is answered as JSON-RPC, not as Express HTML', () =>
   const at = indexCode.indexOf('Malformed request body');
   assert.ok(at >= 0, 'no body-parser error handler');
   assert.match(indexCode.slice(at, at + 400), /jsonrpc: '2\.0'/);
+});
+
+test('REGRESSION: GET and DELETE /mcp answer session errors through decideSessionAccess', () => {
+  // POST's unknown-session 404 shares the same envelope, so all three methods answer alike.
+  const post = indexCode.indexOf("app.post('/mcp'");
+  assert.ok(post >= 0, 'POST /mcp not found');
+  assert.match(
+    indexCode.slice(post, indexCode.indexOf('});', post)),
+    /sessionErrorResponse\('unknown-session'\)/,
+    'POST must answer an unknown session with sessionErrorResponse'
+  );
+  for (const route of ["app.get('/mcp'", "app.delete('/mcp'"]) {
+    const at = indexCode.indexOf(route);
+    assert.ok(at >= 0, `${route} not found`);
+    const handler = indexCode.slice(at, indexCode.indexOf('});', at));
+    assert.match(handler, /decideSessionAccess\(/, `${route} must use decideSessionAccess`);
+    assert.match(handler, /sessionErrorResponse\(/, `${route} must answer with sessionErrorResponse`);
+  }
+  assert.ok(!indexCode.includes('Missing or invalid mcp-session-id header.'), 'the GET 400-for-unknown body is back');
+  assert.ok(!indexCode.includes("'Session not found.'"), 'the non-JSON-RPC DELETE 404 body is back');
 });
 
 test('REGRESSION: every stored session records lastActivity', () => {

@@ -46,3 +46,35 @@ export function decidePostRoute(
 /** Message returned with the 404 for {@link PostRoute} `unknown-session`. */
 export const UNKNOWN_SESSION_MESSAGE =
   'Unknown or expired mcp-session-id. Start a new session with an initialize request.';
+
+/** Message returned with the 400 when a GET/DELETE carries no mcp-session-id header at all. */
+export const MISSING_SESSION_MESSAGE = 'Bad Request: the mcp-session-id header is required.';
+
+export type SessionAccess =
+  /** No mcp-session-id header: a malformed request, 400. */
+  | { kind: 'missing-header' }
+  /** A session id that names no live session: 404 + -32001, so the client re-initializes. */
+  | { kind: 'unknown-session' }
+  | { kind: 'ok'; sessionId: string };
+
+/**
+ * GET (event stream) and DELETE /mcp only ever address an EXISTING session. GET used to answer 400 for
+ * an unknown id while POST answered 404, and DELETE answered a non-JSON-RPC 404 even when the header
+ * was missing. The spec has a client re-initialize on 404, so an unknown id is 404 + -32001 on every
+ * method, and only a missing header is a 400.
+ */
+export function decideSessionAccess(sessionId: string | undefined, hasSession: boolean): SessionAccess {
+  if (!sessionId) return { kind: 'missing-header' };
+  if (!hasSession) return { kind: 'unknown-session' };
+  return { kind: 'ok', sessionId };
+}
+
+/** Status + JSON-RPC error body for a missing (400) or unknown/expired (404) session id. */
+export function sessionErrorResponse(kind: 'missing-header' | 'unknown-session'): {
+  status: number;
+  body: { jsonrpc: '2.0'; error: { code: number; message: string }; id: null };
+} {
+  return kind === 'missing-header'
+    ? { status: 400, body: { jsonrpc: '2.0', error: { code: -32000, message: MISSING_SESSION_MESSAGE }, id: null } }
+    : { status: 404, body: { jsonrpc: '2.0', error: { code: -32001, message: UNKNOWN_SESSION_MESSAGE }, id: null } };
+}

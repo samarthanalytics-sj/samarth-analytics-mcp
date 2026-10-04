@@ -34,7 +34,11 @@ import {
 } from './utils/httpBinding.js';
 import { getGuardrailConfig } from './utils/guardrails.js';
 import { guardrailBanner, guardrailStatus } from './utils/guardrailMode.js';
-import { decidePostRoute, UNKNOWN_SESSION_MESSAGE } from './utils/mcpSession.js';
+import {
+  decidePostRoute,
+  decideSessionAccess,
+  sessionErrorResponse,
+} from './utils/mcpSession.js';
 import { createStytchTokenValidator, resolveStytchTokenPins } from './auth/stytchTokenValidator.js';
 import type { StytchClaims } from './auth/stytchTokenValidator.js';
 
@@ -376,11 +380,8 @@ async function startHttpServer(auth: OAuth2Client): Promise<void> {
         trackRequest(entry, res); // in-flight for the whole request, so a long call is never swept
         transport = entry.transport;
       } else if (route.kind === 'unknown-session') {
-        res.status(404).json({
-          jsonrpc: '2.0',
-          error: { code: -32001, message: UNKNOWN_SESSION_MESSAGE },
-          id: null,
-        });
+        const { status, body } = sessionErrorResponse('unknown-session');
+        res.status(status).json(body);
         return;
       } else {
         // New session: its own server instance, connected to its own transport.
@@ -421,11 +422,13 @@ async function startHttpServer(auth: OAuth2Client): Promise<void> {
       const reqAuth = await resolveAuthForRequest(req, res);
       if (!reqAuth) return;
       const sessionId = req.headers['mcp-session-id'] as string | undefined;
-      if (!sessionId || !sessions.has(sessionId)) {
-        res.status(400).json({ error: 'Missing or invalid mcp-session-id header.' });
+      const access = decideSessionAccess(sessionId, !!sessionId && sessions.has(sessionId));
+      if (access.kind !== 'ok') {
+        const { status, body } = sessionErrorResponse(access.kind);
+        res.status(status).json(body);
         return;
       }
-      const entry = sessions.get(sessionId)!;
+      const entry = sessions.get(access.sessionId)!;
       trackRequest(entry, res); // a held-open event stream stays in-flight until the client disconnects
       const { transport } = entry;
       await runWithAuth(reqAuth, () => transport.handleRequest(req, res));
@@ -441,13 +444,15 @@ async function startHttpServer(auth: OAuth2Client): Promise<void> {
       const reqAuth = await resolveAuthForRequest(req, res);
       if (!reqAuth) return;
       const sessionId = req.headers['mcp-session-id'] as string | undefined;
-      if (sessionId && sessions.has(sessionId)) {
-        const { transport } = sessions.get(sessionId)!;
-        await runWithAuth(reqAuth, () => transport.handleRequest(req, res));
-        sessions.delete(sessionId); // transport.onclose also fires and closes that session's server
-      } else {
-        res.status(404).json({ error: 'Session not found.' });
+      const access = decideSessionAccess(sessionId, !!sessionId && sessions.has(sessionId));
+      if (access.kind !== 'ok') {
+        const { status, body } = sessionErrorResponse(access.kind);
+        res.status(status).json(body);
+        return;
       }
+      const { transport } = sessions.get(access.sessionId)!;
+      await runWithAuth(reqAuth, () => transport.handleRequest(req, res));
+      sessions.delete(access.sessionId); // transport.onclose also fires and closes that session's server
     } catch (err) {
       console.error('[samarth-gtm-mcp] DELETE /mcp failed:', err instanceof Error ? err.message : String(err));
       rpcError(res, 'Internal server error closing the session.');
