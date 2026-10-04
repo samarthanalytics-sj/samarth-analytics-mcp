@@ -257,14 +257,22 @@ export function extractFormsInPage(): RawForm[] {
   // category toggles) but collect NO lead data, so they must never surface as a trackable form. Match the
   // major CMPs by container id/class plus a generic cookie/consent id/class. `closest` (self-or-ancestor)
   // so a <form id="fast-cmp-form"> or a cluster inside #onetrust-banner-sdk is skipped.
-  const CMP_SEL =
+  const CMP_VENDOR_SEL =
     '#onetrust-banner-sdk, #onetrust-consent-sdk, #CybotCookiebotDialog, #usercentrics-root, #didomi-host, ' +
     '#qc-cmp2-container, #truste-consent-track, .cmplz-cookiebanner, .cky-consent-container, #iubenda-cs-banner, ' +
-    '.osano-cm-window, #cmpbox, #BorlabsCookieBox, #fast-cmp-form, ' +
-    '[class*="cookie" i], [id*="cookie" i], [class*="consent" i], [id*="consent" i]';
+    '.osano-cm-window, #cmpbox, #BorlabsCookieBox, #fast-cmp-form';
+  const CMP_GENERIC_SEL = '[class*="cookie" i], [id*="cookie" i], [class*="consent" i], [id*="consent" i]';
   const inCmp = (el: Element): boolean => {
     try {
-      return !!el.closest(CMP_SEL);
+      if (el.closest(CMP_VENDOR_SEL)) return true;
+      // The generic substring arms must not match the document ROOT: consent tooling routinely flags
+      // <body>/<html> itself (WordPress Cookie Notice's body.cookies-not-set, cookieconsent's
+      // html.show--consent, Modernizr's html.cookies), and closest() climbs that far, which dropped
+      // every form on the page. closest() returns the NEAREST match, so when that is body/html,
+      // nothing between the element and the root is a banner.
+      const g = el.closest(CMP_GENERIC_SEL);
+      const d = el.ownerDocument;
+      return !!g && g !== d.body && g !== d.documentElement;
     } catch {
       return false;
     }

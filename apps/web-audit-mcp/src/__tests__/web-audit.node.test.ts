@@ -6,6 +6,8 @@
  * analysis, the banner compliance rules over fixture captures, the RuntimeInput
  * bridge into the shared Consent Mode v2 engine, and the GTM container bridge
  * (parseGtmContainer + reconciled-coverage escalation in runConsentEngine).
+ * A few in-page form-extraction checks run in Chromium when Playwright is installed and self-skip
+ * otherwise.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -20,6 +22,7 @@ import {
   parseQuery,
   MEASUREMENT_GROUPS,
   openInstrumentedPage,
+  loadPlaywright,
   type PwBrowser,
   type PwContext,
   type PwPage,
@@ -27,7 +30,7 @@ import {
 } from '../agent/browser.js';
 import { runCapture } from '../verify/capture/capture.js';
 import { CMP_VENDORS, ACCEPT_TEXT_RE, REJECT_TEXT_RE } from '../agent/cmp.js';
-import { analyzeForms, classifyFieldPii, type RawForm, type RawFormField } from '../agent/forms.js';
+import { analyzeForms, classifyFieldPii, extractFormsInPage, type RawForm, type RawFormField } from '../agent/forms.js';
 import { buildFillPlan, classifyFieldRole, selectorFor, localeById, US_LOCALE } from '../agent/form-fill.js';
 import { sameSite, normalizeUrl, urlPriority } from '../agent/crawler.js';
 import { buildExclude, attachRects, resolvePageList } from '../agent/tag-suggest/scan.js';
@@ -1540,6 +1543,46 @@ check('embed: HubSpot embed surfaces beside an unrelated search form', buildSugg
   const capped = resolvePageList('https://example.com/', chosen, 25);
   check('chosen: a real ceiling still applies', capped.targets.length === 25);
   check('chosen: and the pages it cut are named', capped.rejected.length === 15);
+}
+
+// ── form extraction in a real page: the generic cookie/consent CMP filter ──────────────────────────
+// extractFormsInPage runs IN the page, so these checks need Chromium. They self-skip when Playwright or
+// its browser is not installed (CI installs neither), so the suite still needs no browser.
+{
+  const pw = await loadPlaywright();
+  const launchOpts = { headless: true, timeout: 15_000 };
+  const browser = pw ? await pw.chromium.launch(launchOpts).catch(() => null) : null;
+  if (!browser) {
+    console.log('web-audit: in-page form extraction checks SKIPPED (playwright/chromium not installed)');
+  } else {
+    try {
+      const page = (await (await browser.newContext()).newPage()) as PwPage & { setContent(html: string): Promise<void> };
+      const formIdsOn = async (html: string): Promise<string[]> => {
+        await page.setContent(html);
+        // tsx (esbuild keepNames) wraps the function's inner helpers in __name(); the tsc build does not.
+        await page.evaluate('window.__name = (f) => f');
+        const raw = await page.evaluate<RawForm[]>(extractFormsInPage);
+        return raw.map((f) => f.formId || '(anon)');
+      };
+      const FORM = '<form id="contact" action="/c"><label>Email <input type="email" name="email"></label><button>Send</button></form>';
+      check('cmp-filter: a plain contact form is found', (await formIdsOn(`<html><body>${FORM}</body></html>`)).join() === 'contact');
+      // Consent tooling flags the page ROOT; the generic substring arm used to match it and drop every form.
+      check('cmp-filter: <body class="cookies-not-set"> (WordPress Cookie Notice) keeps the page\'s forms',
+        (await formIdsOn(`<html><body class="home cookies-not-set">${FORM}</body></html>`)).join() === 'contact');
+      check('cmp-filter: <html class="show--consent"> (cookieconsent) keeps the page\'s forms',
+        (await formIdsOn(`<html class="show--consent"><body>${FORM}</body></html>`)).join() === 'contact');
+      check('cmp-filter: <html class="js cookies"> (Modernizr) keeps the page\'s forms',
+        (await formIdsOn(`<html class="js cookies"><body>${FORM}</body></html>`)).join() === 'contact');
+      // A real banner is still excluded: by vendor id, and by the generic arm on a non-root container.
+      const bannerForm = '<form id="cmp"><input type="text" name="x"><button>Submit</button></form>';
+      check('cmp-filter: a form inside #onetrust-banner-sdk is still excluded',
+        (await formIdsOn(`<html><body>${FORM}<div id="onetrust-banner-sdk">${bannerForm}</div></body></html>`)).join() === 'contact');
+      check('cmp-filter: a form inside a generic .cookie-banner is still excluded, even under a flagged <body>',
+        (await formIdsOn(`<html><body class="cookies-not-set">${FORM}<div class="cookie-banner">${bannerForm}</div></body></html>`)).join() === 'contact');
+    } finally {
+      await browser.close();
+    }
+  }
 }
 
 console.log(`web-audit tests: ${passed} passed, ${failed} failed`);
