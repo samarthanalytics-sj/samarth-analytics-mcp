@@ -37,6 +37,7 @@ import {
   sitemapsInRobots,
   prioritize,
   pathOf,
+  discoverSitePages,
 } from '../agent/tag-suggest/discover.js';
 import { isBlogLike } from '../agent/tag-suggest/blog-paths.js';
 import type { PageScan } from '../agent/tag-suggest/collect.js';
@@ -1291,6 +1292,44 @@ check('embed: HubSpot embed surfaces beside an unrelated search form', buildSugg
   );
   check('robots: every Sitemap line is read, case and spacing insensitive', robots.length === 2);
   check('robots: a Disallow line is not mistaken for a sitemap', !robots.some((r) => r.includes('admin')));
+
+  // robots.txt Sitemap: entries are held to the same same-site rule as sitemapindex children and
+  // caller-named sitemaps. IP-literal hosts keep safeFetch off DNS; fetch is stubbed, so no network.
+  {
+    const site = 'http://203.0.113.10';
+    const offSite = 'http://198.51.100.7/sitemap.xml';
+    const served: Record<string, string> = {
+      [`${site}/robots.txt`]: `User-agent: *\nSitemap: ${offSite}\nSitemap: ${site}/custom-sitemap.xml\n`,
+      [`${site}/custom-sitemap.xml`]:
+        `<urlset><url><loc>${site}/contact</loc></url><url><loc>${site}/pricing</loc></url></urlset>`,
+    };
+    const fetched: string[] = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      fetched.push(url);
+      const body = served[url];
+      return body === undefined ? new Response('', { status: 404 }) : new Response(body, { status: 200 });
+    }) as typeof fetch;
+    try {
+      const found = await discoverSitePages(`${site}/`);
+      check('robots: an off-site Sitemap entry is never fetched', !fetched.includes(offSite), fetched.join(', '));
+      check('robots: an on-site Sitemap entry is still read', fetched.includes(`${site}/custom-sitemap.xml`));
+      check(
+        'robots: pages from the on-site sitemap are listed',
+        found.pages.some((p) => p.url === `${site}/contact`) && found.pages.some((p) => p.url === `${site}/pricing`),
+      );
+      const skipped = found.sitemapsRead.find((r) => r.url === offSite);
+      check(
+        'robots: the skipped off-site sitemap is recorded with its reason',
+        skipped?.ok === false && /same site/.test(skipped?.error ?? ''),
+        JSON.stringify(skipped),
+      );
+      check('robots: skipping an off-site sitemap does not mark the site unreachable', found.sitemapStatus === 'found');
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  }
 
   const links = extractLinks(
     '<a href="/contact">c</a><a href="https://example.com/pricing">p</a><a href="https://other.test/x">o</a><a href="/logo.png">i</a>',

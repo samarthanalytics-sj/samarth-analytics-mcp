@@ -77,7 +77,10 @@ export interface DiscoverResult {
   /** How many pages were found before the MAX_DISCOVERED cap. */
   total: number;
   sitemapStatus: SitemapStatus;
-  /** Every sitemap file attempted, in order. The audit trail for "why so few pages". */
+  /**
+   * Every sitemap file attempted, in order, plus any robots.txt named on another site and skipped.
+   * The audit trail for "why so few pages".
+   */
   sitemapsRead: SitemapRead[];
   /** True when the list came from the link-crawl fallback rather than a sitemap. */
   viaCrawl: boolean;
@@ -263,7 +266,17 @@ async function sitemapCandidates(start: string, st: CollectState): Promise<strin
     if (robots.status < 400 && robots.body) {
       for (const raw of sitemapsInRobots(robots.body)) {
         const u = validSitemapUrl(raw, start);
-        if (u) candidates.add(u);
+        if (!u) continue;
+        // Same rule as a sitemapindex child and a caller-named sitemap: robots.txt does not get to
+        // point our fetch at another host. Recorded rather than dropped, so a site whose sitemap
+        // lives on another domain can see why it was not read.
+        if (!sameSite(u, start)) {
+          if (!st.reads.some((r) => r.url === u)) {
+            st.reads.push({ url: u, ok: false, urls: 0, error: 'skipped: not on the same site as the URL being scanned' });
+          }
+          continue;
+        }
+        candidates.add(u);
       }
     }
   } catch {
