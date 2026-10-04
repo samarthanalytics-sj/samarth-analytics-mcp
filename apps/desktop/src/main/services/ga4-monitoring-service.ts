@@ -7,6 +7,7 @@
 // one-entry targets list on load.
 
 import { readJsonFile, writeJsonFileAtomic } from '../storage/json-file';
+import { MAX_INTERVAL_MINUTES, assertTimerMs } from './timer-limits';
 import { monitorGa4, monitorHealthScore, firstMetric, noSourceSharePct, ga4DataLagDays, type Ga4MonitorInput } from '../google/ga4-monitor';
 import { buildSlackPayload, buildSlackDigestPayload, buildSlackAuditPayload, buildSlackMonthlyPayload, buildSlackTestPayload, sendSlackWebhook, isValidSlackWebhook, type FetchLike } from './slack-notify';
 import { withQuotaRetry } from '../google/quota-retry';
@@ -290,7 +291,8 @@ export class Ga4MonitoringService {
   private normalize(c: Partial<Ga4MonitorConfig> | null, owner: string | null): Ga4MonitorConfig {
     return {
       enabled: Boolean(c?.enabled),
-      intervalMinutes: Math.max(MIN_INTERVAL_MINUTES, Math.floor(Number(c?.intervalMinutes) || DEFAULT_CONFIG.intervalMinutes)),
+      // Ceiling too: an interval past setInterval's limit (or Infinity) would fire every 1 ms.
+      intervalMinutes: Math.min(MAX_INTERVAL_MINUTES, Math.max(MIN_INTERVAL_MINUTES, Math.floor(Number(c?.intervalMinutes) || DEFAULT_CONFIG.intervalMinutes))),
       targets: this.normalizeTargets(c, owner),
       days: Math.min(365, Math.max(1, Math.floor(Number(c?.days) || DEFAULT_CONFIG.days))),
       slackEnabled: c?.slackEnabled === undefined ? true : Boolean(c.slackEnabled),
@@ -477,7 +479,7 @@ export class Ga4MonitoringService {
 
   start(runNow = false): void {
     if (this.timer) return;
-    const ms = this.config.intervalMinutes * 60_000;
+    const ms = assertTimerMs(this.config.intervalMinutes * 60_000);
     this.timer = setInterval(() => void this.runOnce(), ms);
     if (typeof this.timer.unref === 'function') this.timer.unref();
     if (runNow) void this.runOnce();

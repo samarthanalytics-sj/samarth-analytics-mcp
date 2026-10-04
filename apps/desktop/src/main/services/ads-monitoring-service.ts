@@ -8,6 +8,7 @@
 // consent probe). Read-only against Google Ads; the only outbound write is the Slack webhook POST.
 
 import { readJsonFile, writeJsonFileAtomic } from '../storage/json-file';
+import { MAX_INTERVAL_MINUTES, assertTimerMs } from './timer-limits';
 import { assembleConversionHealth } from '../google/ads-map';
 import { captureAdsSnapshot, diffAdsSnapshots, detectVolumeAnomalies, type AdsSnapshot } from '../google/ads-snapshot';
 import { buildAdsMonitorResult, buildAdsSlackPayload, buildAdsSlackTestPayload } from '../google/ads-monitor';
@@ -134,7 +135,8 @@ export class AdsMonitoringService {
   private normalize(c: Partial<AdsMonitorConfig> | null, owner: string | null): AdsMonitorConfig {
     return {
       enabled: Boolean(c?.enabled),
-      intervalMinutes: Math.max(MIN_INTERVAL_MINUTES, Math.floor(Number(c?.intervalMinutes) || DEFAULT_CONFIG.intervalMinutes)),
+      // Ceiling too: an interval past setInterval's limit (or Infinity) would fire every 1 ms.
+      intervalMinutes: Math.min(MAX_INTERVAL_MINUTES, Math.max(MIN_INTERVAL_MINUTES, Math.floor(Number(c?.intervalMinutes) || DEFAULT_CONFIG.intervalMinutes))),
       targets: this.normalizeTargets(c, owner),
       days: [7, 14, 30].includes(Number(c?.days)) ? Number(c?.days) : DEFAULT_CONFIG.days,
     };
@@ -247,7 +249,7 @@ export class AdsMonitoringService {
 
   start(runNow = false): void {
     if (this.timer) return;
-    const ms = this.config.intervalMinutes * 60_000;
+    const ms = assertTimerMs(this.config.intervalMinutes * 60_000);
     this.timer = setInterval(() => void this.runOnce(), ms);
     if (typeof this.timer.unref === 'function') this.timer.unref();
     if (runNow) void this.runOnce();
