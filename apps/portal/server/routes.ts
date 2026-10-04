@@ -35,7 +35,12 @@ import {
   type RuntimePage,
 } from "../shared/consent-audit";
 // Tolerant of malformed percent-encoding (one bad cookie must not 500 every route).
-import { parseCookies } from "./gtm/vercel-helpers";
+import {
+  clearOAuthStateCookie,
+  OAUTH_STATE_COOKIE,
+  parseCookies,
+  setOAuthStateCookie,
+} from "./gtm/vercel-helpers";
 
 const SESSION_COOKIE = "samarth_portal_sid";
 
@@ -53,7 +58,8 @@ function setSessionCookie(res: Response, sid: string) {
     "Max-Age=2592000",
   ];
   if (process.env.NODE_ENV === "production") parts.push("Secure");
-  res.setHeader("Set-Cookie", parts.join("; "));
+  // append, not set: the OAuth callback also clears the state cookie.
+  res.append("Set-Cookie", parts.join("; "));
 }
 
 function clearSessionCookie(res: Response) {
@@ -121,6 +127,9 @@ export async function registerRoutes(
       );
     }
     const state = newOAuthState();
+    // Bind this sign-in to the browser that started it (login-CSRF defence):
+    // the callback only accepts a state that matches this HttpOnly cookie.
+    setOAuthStateCookie(res, state);
     res.redirect(buildAuthUrl(client, state));
   });
 
@@ -136,9 +145,12 @@ export async function registerRoutes(
     if (error) {
       return res.status(400).send(renderConfigError(`Google returned an error: ${error}`));
     }
-    if (!code || !state || !consumeOAuthState(state)) {
+    const stateCookie = parseCookies(req.headers.cookie)[OAUTH_STATE_COOKIE];
+    if (!code || !state || !consumeOAuthState(state, stateCookie)) {
+      clearOAuthStateCookie(res);
       return res.status(400).send(renderConfigError("Invalid or expired OAuth state."));
     }
+    clearOAuthStateCookie(res);
     try {
       const tokens = await exchangeCodeForTokens(client, code);
       const sid = newSessionId();
