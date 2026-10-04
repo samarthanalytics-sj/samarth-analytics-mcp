@@ -110,6 +110,14 @@
     "@semantic-release/release-notes-generator": "^14.0.1",
     "conventional-changelog-conventionalcommits": "^8.0.0"
   },
+  "overrides": {
+    "gaxios": {
+      "uuid": "^11.1.1"
+    },
+    "googleapis-common": {
+      "uuid": "^11.1.1"
+    }
+  },
   "engines": {
     "node": ">=18.0.0"
   },
