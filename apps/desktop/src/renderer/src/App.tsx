@@ -1554,7 +1554,9 @@ function ChatView({
       const parts = [`Reverted ${res.reverted.length} item(s)`];
       if (res.failed.length) parts.push(`${res.failed.length} failed: ${res.failed.map((f) => f.label).join(', ')}`);
       setMessages((m) => [...m, { role: 'assistant', text: `↩︎ ${parts.join(' · ')}.`, tools: [], ts: Date.now() }]);
-      setRevertable(null);
+      // Items that failed to revert stay in the journal: re-read it so Revert offers a retry of them.
+      const left = await window.desktop.data.peekLastChange().catch(() => null);
+      setRevertable(left && left.count > 0 ? left : null);
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {

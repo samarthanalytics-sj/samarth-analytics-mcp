@@ -1342,33 +1342,27 @@ export class GoogleDataService {
 
   /** Revert the GTM entities the last chat query wrote to, using GTM's native per-entity
    *  revert (restores each to its last published version). Continues past per-entity
-   *  failures and returns a summary. The revert itself is NOT journaled (no undo-of-undo). */
+   *  failures and returns a summary. A ref that fails stays in the journal, so pressing Revert
+   *  again retries it. Each revert authenticates as the desktop account that MADE the change, not
+   *  the currently active one. The revert itself is NOT journaled (no undo-of-undo). */
   async revertLastChanges(): Promise<{ reverted: string[]; failed: Array<{ label: string; error: string }> }> {
-    const refs = changeJournal.takeLast();
-    if (!refs || !refs.length) return { reverted: [], failed: [] };
-    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
-    const gtm = tagmanager({ version: 'v2', auth });
+    const pending = changeJournal.peekLast();
+    if (!pending || !pending.length) return { reverted: [], failed: [] };
     const ws = (r: { accountId: string; containerId: string; workspaceId: string }): string =>
       `accounts/${r.accountId}/containers/${r.containerId}/workspaces/${r.workspaceId}`;
-    const reverted: string[] = [];
-    const failed: Array<{ label: string; error: string }> = [];
-    log.info(`[gtm] revertLastChanges: ${refs.length} entity(ies): ${refs.map((r) => r.label).join(' | ')}`);
-    for (const r of refs) {
-      try {
-        const path = `${ws(r)}/${r.kind}s/${r.id}`;
-        if (r.kind === 'tag') await gtm.accounts.containers.workspaces.tags.revert({ path });
-        else if (r.kind === 'trigger') await gtm.accounts.containers.workspaces.triggers.revert({ path });
-        else await gtm.accounts.containers.workspaces.variables.revert({ path });
-        reverted.push(r.label);
-        log.success(`[gtm] reverted ${r.kind} ${r.id}`);
-      } catch (e) {
-        const error = e instanceof Error ? e.message : String(e);
-        failed.push({ label: r.label, error });
-        log.error(`[gtm] revert ${r.kind} ${r.id}: ${error}`);
-      }
-    }
-    log.info(`[gtm] revertLastChanges DONE: ${reverted.length} reverted, ${failed.length} failed`);
-    return { reverted, failed };
+    log.info(`[gtm] revertLastChanges: ${pending.length} entity(ies): ${pending.map((r) => r.label).join(' | ')}`);
+    const { reverted, failed } = await changeJournal.revertLast(async (r) => {
+      const auth = this.clients.getClient(r.desktopAccountId) as unknown as Parameters<typeof tagmanager>[0]['auth'];
+      const gtm = tagmanager({ version: 'v2', auth });
+      const path = `${ws(r)}/${r.kind}s/${r.id}`;
+      if (r.kind === 'tag') await gtm.accounts.containers.workspaces.tags.revert({ path });
+      else if (r.kind === 'trigger') await gtm.accounts.containers.workspaces.triggers.revert({ path });
+      else await gtm.accounts.containers.workspaces.variables.revert({ path });
+      log.success(`[gtm] reverted ${r.kind} ${r.id}`);
+    });
+    for (const f of failed) log.error(`[gtm] revert ${f.ref.kind} ${f.ref.id}: ${f.error}`);
+    log.info(`[gtm] revertLastChanges DONE: ${reverted.length} reverted, ${failed.length} failed${failed.length ? ' (kept in the journal, so Revert can retry them)' : ''}`);
+    return { reverted: reverted.map((r) => r.label), failed: failed.map((f) => ({ label: f.ref.label, error: f.error })) };
   }
 
   /** Record a touched entity into the current chat turn's change journal (for Revert). */

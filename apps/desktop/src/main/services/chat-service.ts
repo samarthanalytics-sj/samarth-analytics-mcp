@@ -838,7 +838,7 @@ export class ChatService {
     // while the old turn keeps running), so a second turn used to capture the first turn's later
     // writes into its own revert set, reset its quota count and take over its quota hook.
     const inGtmTurn = <T>(fn: () => Promise<T>): Promise<T> =>
-      covers('gtm') ? changeJournal.runTurn(() => this.data.withQuotaScope(quota, fn)) : fn();
+      covers('gtm') ? changeJournal.runTurn(turnAccountId, () => this.data.withQuotaScope(quota, fn)) : fn();
     const model = active.llm.model; // read before the closure below, where the null-check narrowing is lost
 
     let result;
