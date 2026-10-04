@@ -135,8 +135,16 @@ export function AdsMonitoringPanel({ active, onError }: { active: AccountView | 
 
   async function testWebhook(customerId: string): Promise<void> {
     setTestResult('Sending...');
-    const r = await window.desktop.adsmonitoring.sendTest(customerId);
-    setTestResult(r.ok ? 'Test message sent - check the channel.' : r.error ?? 'Send failed.');
+    try {
+      const r = await window.desktop.adsmonitoring.sendTest(customerId);
+      setTestResult(r.ok ? 'Test message sent - check the channel.' : r.error ?? 'Send failed.');
+    } catch (e) {
+      // A rejected IPC (secret store, registry, network) must replace "Sending..." rather than leave it
+      // on screen forever, and must not escape as an unhandled rejection.
+      const msg = e instanceof Error ? e.message : String(e);
+      setTestResult(`Send failed: ${msg}`);
+      onError(msg);
+    }
   }
 
   if (!signedIn) {
