@@ -4140,6 +4140,37 @@ test('server audit P0: an ungated vendor CAPI tag is critical, a consent-gated o
   } as never);
   assert.equal(consentOf(many).length, 1, 'aggregated');
   assert.match(consentOf(many)[0].message, /3 third-party/);
+
+  // The Stape template's OWN gate (adStorageConsent='required', what requireConsent:true writes) is a
+  // gate even with no tag-level Consent Settings. 'optional' is not.
+  const withTplConsent = (tagId: string, name: string, value: string) => {
+    const t = capi(tagId, name, null);
+    return { ...t, parameter: [...t.parameter, { type: 'template', key: 'adStorageConsent', value }] };
+  };
+  const tplGated = auditServerContainer({ ...base, tags: [withTplConsent('t1', 'Meta CAPI', 'required')], triggers: [] } as never);
+  assert.equal(consentOf(tplGated).length, 0, 'adStorageConsent=required is the template\'s ad_storage gate');
+  const tplOptional = auditServerContainer({ ...base, tags: [withTplConsent('t1', 'Meta CAPI', 'optional')], triggers: [] } as never);
+  assert.equal(consentOf(tplOptional).length, 1, 'adStorageConsent=optional gates nothing');
+  assert.equal(consentOf(tplOptional)[0].severity, 'critical');
+  // Tags produced by the app's own builders with requireConsent:true are not reported; the same
+  // builders with requireConsent:false still are (so they are recognised as vendor CAPI tags).
+  const builtWith = (requireConsent: boolean) => auditServerContainer({
+    ...base,
+    tags: [
+      { ...buildLinkedInCapiServerTag('cvt_LI01', 'LI built', 'T', 'R', { requireConsent, firingTriggerId: ['1'] }), tagId: 't1', paused: false, blockingTriggerId: [], consentSettings: null },
+      { ...buildTikTokCapiServerTag('cvt_TT01', 'TikTok built', 'PIX', 'TOK', 'CompletePayment', { requireConsent, firingTriggerId: ['1'] }), tagId: 't2', paused: false, blockingTriggerId: [], consentSettings: null },
+    ],
+    triggers: [],
+  } as never);
+  assert.equal(consentOf(builtWith(true)).length, 0, 'builder-written template gate is honoured');
+  assert.equal(consentOf(builtWith(false)).length, 1);
+  assert.match(consentOf(builtWith(false))[0].message, /2 third-party/);
+
+  // A paused or trigger-less CAPI tag never fires, so it sends nothing for anyone.
+  const paused = auditServerContainer({ ...base, tags: [{ ...capi('t1', 'Meta CAPI paused', null), paused: true }], triggers: [] } as never);
+  assert.equal(consentOf(paused).length, 0, 'paused tags are not counted');
+  const noTrigger = auditServerContainer({ ...base, tags: [capi('t1', 'Meta CAPI no trigger', null, [])], triggers: [] } as never);
+  assert.equal(consentOf(noTrigger).length, 0, 'trigger-less tags are not counted');
 });
 
 test('server audit P0: the GA4 client that cannot claim, and the malformed tagging URL', () => {

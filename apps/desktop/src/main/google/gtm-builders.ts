@@ -2786,7 +2786,14 @@ export function auditServerContainer(s: ServerContainerSnapshot): AuditReport {
     return false;
   };
   const ungatedVendorTags = s.tags.filter((t) => {
+    // Paused or trigger-less tags never fire, so they send nothing for anyone (same rule as the dedup check).
+    if (t.paused || !(t.firingTriggerId ?? []).length) return false;
     if (!isAnyCapiServerTag(t)) return false;
+    // Stape-family CAPI templates carry their own ad_storage gate: adStorageConsent='required' makes the
+    // tag read the consent state and send nothing when ad_storage is denied. It is what the
+    // create_*_server_tag builders write for requireConsent:true. Only the literal 'required' counts:
+    // 'optional', a missing value or a {{variable}} cannot be shown to gate anything.
+    if (serverTagParam(t, 'adStorageConsent').trim().toLowerCase() === 'required') return false;
     const gate = evaluateConsentGate(t.consentSettings, ['ad_storage']);
     // 'ungated' = no additional consent check at all; 'declared_no_consent' = explicitly declared
     // as needing none. Both mean the tag fires regardless of the visitor's choice.
@@ -2801,7 +2808,7 @@ export function auditServerContainer(s: ServerContainerSnapshot): AuditReport {
       confidence: 'likely',
       category: 'consent',
       message: `${ungatedVendorTags.length} third-party conversion-API server tag(s) carry no consent gate: ${shown}${more}. Unlike Google's server tags these do not honour Consent Mode on their own, so they send data for visitors who refused.`,
-      recommendation: 'Set Consent Settings on each tag to "Require additional consent" with the vendor\'s consent types (ad_storage for advertising vendors, plus ad_user_data / ad_personalization where the vendor requires them), or gate the firing trigger on a consent variable. Decide the correct types deliberately: this is never auto-fixed because the safe default is to send nothing.',
+      recommendation: 'Set Consent Settings on each tag to "Require additional consent" with the vendor\'s consent types (ad_storage for advertising vendors, plus ad_user_data / ad_personalization where the vendor requires them), set the template\'s own consent option to require ad_storage (adStorageConsent = "required", which create_*_server_tag sets with requireConsent:true), or gate the firing trigger on a consent variable. Decide the correct types deliberately: this is never auto-fixed because the safe default is to send nothing.',
       autoFixable: false,
     });
   }
