@@ -1374,6 +1374,19 @@ check('embed: HubSpot embed surfaces beside an unrelated search form', buildSugg
   );
   check('rect: a page-specific form custom_event still rings its single form', JSON.stringify(formEvent[0].rect) === JSON.stringify(rect));
 
+  // A popup form revealed by an interactive click has no rect on the picture (it was taken before the
+  // click). It still counts: the one measured form must not be ringed for a suggestion that could be either.
+  const revealed = attachRects(
+    [sug({ trigger: { name: 'Demo', kind: 'form_submit' } })],
+    [page({ forms: [{ purpose: 'contact', action: '/x', formId: 'contact', rect }, { purpose: 'demo', action: '', formId: '', hidden: true }] as never })],
+  );
+  check('rect: an unmeasured revealed form keeps the match ambiguous (no ring on the other form)', revealed[0].rect === undefined);
+  const byId = attachRects(
+    [sug({ trigger: { name: 'Contact', kind: 'form_submit', formIdValue: 'contact' } })],
+    [page({ forms: [{ purpose: 'contact', action: '/x', formId: 'contact', rect }, { purpose: 'demo', action: '', formId: '', hidden: true }] as never })],
+  );
+  check('rect: a form named by id is still ringed next to a revealed one', JSON.stringify(byId[0].rect) === JSON.stringify(rect));
+
   // An element the collector could not measure (the layout-less path) is not invented.
   const noRect = attachRects(
     [sug({ trigger: { name: 'Email', kind: 'link_click', clickUrlValue: 'mailto:' } })],

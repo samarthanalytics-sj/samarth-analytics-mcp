@@ -2,7 +2,7 @@
  * Phase 3 orchestrator — pure report-building tests (no browser).
  * Run: tsx apps/web-audit-mcp/src/agent/tag-suggest/__tests__/scan.node.test.ts
  */
-import { pagePath, toPageScan, assembleTagReport, accountNotScanned, entryNavUrl, type AssembleArgs } from '../scan.js';
+import { pagePath, toPageScan, assembleTagReport, accountNotScanned, entryNavUrl, scanSiteForTagSuggestions, type AssembleArgs } from '../scan.js';
 import type { PageScan, PageScanRaw, RawElement } from '../collect.js';
 import type { PageSignals } from '../types.js';
 
@@ -151,6 +151,17 @@ check('entryNavUrl: entry page keeps the start #fragment', entryNavUrl(START, ST
 check('entryNavUrl: a non-entry page is navigated unchanged (no fragment leak)', entryNavUrl('https://ex.example/about/', START, '#start') === 'https://ex.example/about/');
 check('entryNavUrl: no start fragment → entry unchanged', entryNavUrl(START, START, '') === START);
 check('entryNavUrl: null normalised start → unchanged', entryNavUrl(START, null, '#start') === START);
+
+// ── the worker takes the proof screenshot BEFORE any interactive click ──────────────────────────────
+// The worker needs a browser, so pin the order in its source: a screenshot taken after the clicks shows
+// accordions left open and modals Escape did not close, and every pre-click rect points at the wrong place.
+{
+  const src = scanSiteForTagSuggestions.toString();
+  const shot = src.indexOf('page.screenshot(');
+  const clicks = src.indexOf('discoverInteractiveForms(');
+  check('worker: the page screenshot is taken before interactive form discovery clicks anything',
+    shot > 0 && clicks > 0 && shot < clicks, `screenshot@${shot} discover@${clicks}`);
+}
 
 console.log(`\nTag-scan: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }

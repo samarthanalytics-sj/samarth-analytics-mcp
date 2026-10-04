@@ -198,8 +198,9 @@ function rectIn(scan: PageScan, t: Record<string, unknown>, onePage: boolean): R
     // rather than ringing whichever form happens to be alone on the first page that has one.
     if (t.kind === 'form_submit' || (t.kind === 'custom_event' && onePage && scan.forms.length > 0)) {
       const id = String(t.formIdValue ?? '').trim();
-      const withRect = scan.forms.filter((f) => f.rect);
-      const matched = id ? withRect.filter((f) => f.formId === id) : withRect;
+      // Every form counts toward ambiguity, measured or not: a form revealed by an interactive click has
+      // no rect on the picture, and must not leave the one measured form looking like the only match.
+      const matched = id ? scan.forms.filter((f) => f.formId === id) : scan.forms;
       rect = only(matched)?.rect;
     }
 
@@ -607,15 +608,11 @@ export async function scanSiteForTagSuggestions(
             await page.waitForTimeout(settleMs);
             const raw = await collectPageRaw(page);
             const forms = await scanForms(page, page.url());
-            // Opt-in: reveal popup/modal forms that only exist after clicking an "open-a-form" CTA. Runs
-            // AFTER the read-only element/form collection so it can't disturb them; best-effort + bounded.
-            if (discoverInteractive) {
-              const revealed = await discoverInteractiveForms(page, page.url(), forms).catch(() => null);
-              if (revealed && revealed.forms.length) forms.push(...revealed.forms);
-            }
             if (options.captureImages && totalImageBytes < MAX_TOTAL_IMAGE_BYTES) {
               // After the collect, never before: the screenshot must show the page the suggestions
-              // were read from, including anything the settle time brought in.
+              // were read from, including anything the settle time brought in. And before any
+              // interactive click, never after: an accordion or tab a click opened, or a modal that
+              // Escape did not close, would shift or cover what the element and form rects measured.
               //
               // A capture failure is swallowed on purpose. A screenshot is supporting evidence, and
               // losing the scan of a page because its picture did not take would be the wrong trade.
@@ -632,6 +629,15 @@ export async function scanSiteForTagSuggestions(
               } catch {
                 /* no proof for this page; the suggestions from it still stand */
               }
+            }
+            // Opt-in: reveal popup/modal forms that only exist after clicking an "open-a-form" CTA. Runs
+            // AFTER the read-only element/form collection and the screenshot so it can't disturb them;
+            // best-effort + bounded.
+            if (discoverInteractive) {
+              const revealed = await discoverInteractiveForms(page, page.url(), forms).catch(() => null);
+              // A revealed form was measured inside its open modal, which the screenshot never shows, so it
+              // has no position on that picture to be ringed at.
+              if (revealed && revealed.forms.length) forms.push(...revealed.forms.map((f) => ({ ...f, rect: undefined })));
             }
             pageScans.push(
               toPageScan(target.url, raw, forms.map((f) => ({ purpose: f.purpose, action: f.action, method: f.method, formId: f.formId, providerFormId: f.providerFormId, formClasses: f.formClasses, title: f.title, fields: f.fields.map((x) => ({ type: x.type, name: x.name, required: x.required })), hidden: f.hidden, rect: f.rect })), siteHost),
