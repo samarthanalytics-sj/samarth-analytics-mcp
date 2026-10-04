@@ -168,7 +168,7 @@ export function attachRects(suggestions: SuggestedTag[], pageScans: PageScan[]):
     if (candidates.length === 0) return s;
 
     for (const scan of candidates) {
-      const found = rectIn(scan, t);
+      const found = rectIn(scan, t, s.page !== 'site-wide');
       if (found) {
         return {
           ...s,
@@ -182,13 +182,18 @@ export function attachRects(suggestions: SuggestedTag[], pageScans: PageScan[]):
 }
 
 /** The one element or form on this page that a trigger points at, or nothing when it is not one. */
-function rectIn(scan: PageScan, t: Record<string, unknown>): Rect | undefined {
+function rectIn(scan: PageScan, t: Record<string, unknown>, onePage: boolean): Rect | undefined {
   {
     const only = <T>(list: T[]): T | undefined => (list.length === 1 ? list[0] : undefined);
 
     let rect: Rect | undefined;
 
-    if (t.kind === 'form_submit' || (t.kind === 'custom_event' && scan.forms.length > 0)) {
+    // A custom_event is about a form only when a form produced it. Every page-specific one did (a
+    // provider/dataLayer form listener, an AJAX search box), but a site-wide one need not: the
+    // ecommerce funnel events fire on a dataLayer push unrelated to any form, and the trigger has no
+    // {{Form ID}} left to tell the two apart. So a site-wide custom_event never takes the form branch,
+    // rather than ringing whichever form happens to be alone on the first page that has one.
+    if (t.kind === 'form_submit' || (t.kind === 'custom_event' && onePage && scan.forms.length > 0)) {
       const id = String(t.formIdValue ?? '').trim();
       const withRect = scan.forms.filter((f) => f.rect);
       const matched = id ? withRect.filter((f) => f.formId === id) : withRect;

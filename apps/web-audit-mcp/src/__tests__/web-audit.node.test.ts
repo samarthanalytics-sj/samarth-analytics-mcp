@@ -1356,6 +1356,21 @@ check('embed: HubSpot embed surfaces beside an unrelated search form', buildSugg
   );
   check('rect: two forms with nothing to tell them apart stay unringed', forms2[0].rect === undefined);
 
+  // A site-wide custom_event (an ecommerce funnel tag fires on a dataLayer push, not on any form) is
+  // not ringed around the one form that happens to be alone on a page (was: ringed + proofPage set).
+  const ecommerce = attachRects(
+    [sug({ page: 'site-wide', trigger: { name: 'Add To Cart (dataLayer) Trigger', kind: 'custom_event', eventName: 'add_to_cart' } })],
+    [page({ page: '/contact', forms: [{ purpose: 'contact', action: '/x', rect }] as never })],
+  );
+  check('rect: a site-wide custom_event is not ringed around an unrelated single form', ecommerce[0].rect === undefined && ecommerce[0].proofPage === undefined);
+
+  // A page-specific custom_event is a form's provider/dataLayer listener: its single form is still ringed.
+  const formEvent = attachRects(
+    [sug({ trigger: { name: 'Contact Form Trigger', kind: 'custom_event', eventName: 'hubspot-form-success' } })],
+    [page({ forms: [{ purpose: 'contact', action: '/x', rect }] as never })],
+  );
+  check('rect: a page-specific form custom_event still rings its single form', JSON.stringify(formEvent[0].rect) === JSON.stringify(rect));
+
   // An element the collector could not measure (the layout-less path) is not invented.
   const noRect = attachRects(
     [sug({ trigger: { name: 'Email', kind: 'link_click', clickUrlValue: 'mailto:' } })],
