@@ -23,6 +23,7 @@ import {
 } from '../../agent/browser.js';
 import { extractConsentEvents, extractEventNames } from '../../agent/capture.js';
 import { urlAllowed } from '../../utils/urlGuard.js';
+import { createRequestGuard } from '../../utils/safeFetch.js';
 import { parseCollectRequest, isGa4CollectRequest } from '../ga4-hits.js';
 import { toTrackerObservation, isTrackerRequest, hasGlParam } from '../trackers.js';
 import type { CaptureResult, VerifySpec, Ga4Hit, TrackerObservation, ActionResult, ConsentActionFacts } from '../types.js';
@@ -73,6 +74,8 @@ export interface VerifyCaptureOptions {
   fixtures?: FixtureProvider | null;
   /** Injectable clock for the settle window (defaults to the real clock). */
   clock?: SettleClock;
+  /** Injectable SSRF request guard (defaults to a DNS-resolving guard per capture). */
+  requestGuard?: (rawUrl: string) => Promise<boolean>;
 }
 
 interface CaptureState {
@@ -130,6 +133,7 @@ export async function runCapture(
   opts: VerifyCaptureOptions,
 ): Promise<CaptureResult> {
   const clock = opts.clock ?? realClock();
+  const requestGuard = opts.requestGuard ?? createRequestGuard();
   const notes: string[] = [];
   const linkerDomains = collectLinkerDomains(spec);
   const context = await browser.newContext({ viewport: { width: 1366, height: 900 } });
@@ -166,7 +170,12 @@ export async function runCapture(
       if (req.resourceType() === 'document' && linkerDomains.size > 0 && hostMatches(url, linkerDomains)) {
         return route.abort();
       }
-      return route.continue();
+      // Named hosts are DNS-resolved: the string check above passes a name that resolves inside
+      // (metadata.google.internal, 127.0.0.1.nip.io, a docker service name).
+      return requestGuard(url).then(
+        (ok) => (ok ? route.continue() : route.abort()),
+        () => route.abort(),
+      );
     });
 
     const page = await context.newPage();

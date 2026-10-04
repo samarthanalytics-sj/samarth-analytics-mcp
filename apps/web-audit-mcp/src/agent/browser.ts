@@ -6,7 +6,7 @@
  * reconcile with the portal's consent engine.
  */
 
-import { urlAllowed } from '../utils/urlGuard.js';
+import { createRequestGuard } from '../utils/safeFetch.js';
 
 // ── Minimal structural typings for the Playwright surface we use ───────────
 // (Avoids a hard dependency on playwright's types when it is not installed.)
@@ -223,15 +223,25 @@ export const DATALAYER_HOOK = `(() => {
  * Open a new instrumented page: SSRF route guard on every request (private
  * ranges always blocked, even via redirects), tracker classification with
  * nav-relative timing, console/page error capture, dataLayer hook.
+ *
+ * `requestGuard` defaults to a DNS-resolving guard scoped to this call; tests
+ * inject one built on a fake resolver.
  */
-export async function openInstrumentedPage(context: PwContext): Promise<PageInstruments> {
+export async function openInstrumentedPage(
+  context: PwContext,
+  requestGuard: (rawUrl: string) => Promise<boolean> = createRequestGuard(),
+): Promise<PageInstruments> {
   // Defence in depth: subresources and redirects may go anywhere public, but
   // never to private/loopback/metadata hosts (allowlist applies only to
-  // top-level navigation, at the tool boundary).
-  await context.route('**/*', (route) => {
-    const verdict = urlAllowed(route.request().url(), []);
-    return verdict.ok ? route.continue() : route.abort();
-  });
+  // top-level navigation, at the tool boundary). Named hosts are DNS-resolved,
+  // because a hostname-string check passes a name that resolves inside
+  // (metadata.google.internal, 127.0.0.1.nip.io, a docker service name).
+  await context.route('**/*', (route) =>
+    requestGuard(route.request().url()).then(
+      (ok) => (ok ? route.continue() : route.abort()),
+      () => route.abort(),
+    ),
+  );
 
   const page = await context.newPage();
   await page.addInitScript({ content: DATALAYER_HOOK });

@@ -9,7 +9,18 @@
  */
 
 import { urlAllowed } from '../utils/urlGuard.js';
-import { classifyUrl, parseQuery, MEASUREMENT_GROUPS } from '../agent/browser.js';
+import { createRequestGuard } from '../utils/safeFetch.js';
+import {
+  classifyUrl,
+  parseQuery,
+  MEASUREMENT_GROUPS,
+  openInstrumentedPage,
+  type PwBrowser,
+  type PwContext,
+  type PwPage,
+  type PwRoute,
+} from '../agent/browser.js';
+import { runCapture } from '../verify/capture/capture.js';
 import { CMP_VENDORS, ACCEPT_TEXT_RE, REJECT_TEXT_RE } from '../agent/cmp.js';
 import { analyzeForms, classifyFieldPii, type RawForm, type RawFormField } from '../agent/forms.js';
 import { buildFillPlan, classifyFieldRole, selectorFor, localeById, US_LOCALE } from '../agent/form-fill.js';
@@ -104,6 +115,206 @@ check('guard: ip6-localhost. blocked', !urlAllowed('http://ip6-localhost./').ok)
 check('guard: LOCALHOST.. (repeated dots) blocked', !urlAllowed('http://LOCALHOST../').ok);
 check('guard: allowlist matches the FQDN spelling', urlAllowed('https://client.com./', ['client.com']).ok);
 check('guard: FQDN spelling is no suffix-confusion', !urlAllowed('https://evilclient.com./', ['client.com']).ok);
+
+// ── in-browser request guard (DNS-resolving) ─────────────────────────────────
+// The Playwright route guards used to run only the string check above, which passes a
+// public-looking NAME that resolves inside. These drive the real guard on a fake resolver.
+
+function fakeLookup(table: Record<string, string[]>) {
+  const calls: string[] = [];
+  const lookup = async (hostname: string) => {
+    calls.push(hostname);
+    const addrs = table[hostname];
+    if (!addrs) throw new Error(`ENOTFOUND ${hostname}`);
+    return addrs.map((address) => ({ address, family: address.includes(':') ? 6 : 4 }));
+  };
+  return { lookup, calls };
+}
+
+const PUBLIC_IP = '93.184.216.34';
+const dnsTable: Record<string, string[]> = {
+  'metadata.google.internal': ['169.254.169.254'],
+  '127.0.0.1.nip.io': ['127.0.0.1'],
+  db: ['172.18.0.3'],
+  'v6-loop.example.com': ['::1'],
+  'mixed.example.com': [PUBLIC_IP, '10.0.0.7'],
+  'example.com': [PUBLIC_IP],
+  'shop.example.com': [PUBLIC_IP],
+  'cdn.example.com': [PUBLIC_IP],
+  'evil.test': [PUBLIC_IP],
+};
+
+{
+  const { lookup, calls } = fakeLookup(dnsTable);
+  const allowed = createRequestGuard(lookup);
+  for (const u of [
+    'http://metadata.google.internal/computeMetadata/v1/',
+    'http://127.0.0.1.nip.io/',
+    'http://db:5432/',
+    'http://v6-loop.example.com/',
+    'http://mixed.example.com/',
+  ]) {
+    check(`request guard: string check alone passes ${u}`, urlAllowed(u, []).ok);
+    check(`request guard: blocks ${u} (resolves private)`, (await allowed(u)) === false);
+  }
+  check('request guard: public name allowed', (await allowed('https://example.com/')) === true);
+  check('request guard: unresolvable name fails closed', (await allowed('https://nope.example/')) === false);
+  const before = calls.length;
+  check('request guard: public IP literal allowed', (await allowed(`http://${PUBLIC_IP}/`)) === true);
+  check('request guard: private IP literal blocked', (await allowed('http://10.0.0.1/')) === false);
+  check('request guard: IP literals and string-check failures never hit DNS', calls.length === before);
+  const many = await Promise.all(Array.from({ length: 20 }, (_, i) => allowed(`https://cdn.example.com/a${i}.js`)));
+  check('request guard: one lookup per host', many.every(Boolean) && calls.filter((h) => h === 'cdn.example.com').length === 1);
+}
+
+/** Drive a captured Playwright route handler with a fake route; returns what it decided. */
+type FakeReq = { url: string; nav?: boolean; iframe?: boolean; popup?: boolean };
+async function decide(
+  handler: ((route: never) => unknown) | undefined,
+  r: FakeReq,
+): Promise<'continue' | 'abort' | 'fulfill' | 'none'> {
+  let outcome: 'continue' | 'abort' | 'fulfill' | 'none' = 'none';
+  const route = {
+    request: () => ({
+      url: () => r.url,
+      method: () => 'GET',
+      resourceType: () => (r.nav ? 'document' : 'script'),
+      postData: () => null,
+      isNavigationRequest: () => Boolean(r.nav),
+      frame: () => {
+        if (r.popup) throw new Error('Frame for this navigation request is not available');
+        return { parentFrame: () => (r.iframe ? {} : null) };
+      },
+    }),
+    continue: async () => {
+      outcome = 'continue';
+    },
+    abort: async () => {
+      outcome = 'abort';
+    },
+    fulfill: async () => {
+      outcome = 'fulfill';
+    },
+  };
+  await handler?.(route as never);
+  return outcome;
+}
+
+/** A fake browser for runCapture: records goto() calls and routes them through the handler. */
+function fakeVerifyBrowser() {
+  const box: { handler?: (route: never) => unknown } = {};
+  const gotos: string[] = [];
+  let current = 'about:blank';
+  const page = {
+    goto: async (url: string) => {
+      gotos.push(url);
+      if ((await decide(box.handler, { url, nav: true })) === 'abort') throw new Error(`net::ERR_FAILED at ${url}`);
+      current = url;
+      return { status: () => 200, headers: () => ({}) };
+    },
+    evaluate: async () => [],
+    addInitScript: async () => {},
+    on: () => {},
+    frames: () => [],
+    $: async () => null,
+    title: async () => '',
+    url: () => current,
+    waitForTimeout: async () => {},
+    screenshot: async () => Buffer.alloc(0),
+    close: async () => {},
+  };
+  const context = {
+    route: async (_pattern: string, handler: (route: never) => unknown) => {
+      box.handler = handler;
+    },
+    newPage: async () => page,
+    cookies: async () => [],
+    close: async () => {},
+  };
+  const browser = { newContext: async () => context, close: async () => {} } as unknown as PwBrowser;
+  return { browser, box, gotos, decide: (r: FakeReq) => decide(box.handler, r) };
+}
+
+function fakeClock() {
+  let t = 0;
+  return {
+    now: () => t,
+    sleep: async (ms: number) => {
+      t += ms;
+    },
+  };
+}
+
+const verifyOpts = (extra: Record<string, unknown> = {}) => ({
+  headless: true,
+  navTimeoutMs: 1000,
+  settle: { quietMs: 10, maxMs: 20 },
+  allowlist: [] as string[],
+  clock: fakeClock(),
+  ...extra,
+});
+
+// openInstrumentedPage (audit agent, crawler, tag-suggest scan).
+{
+  const box: { handler?: (route: never) => unknown } = {};
+  const ctx = {
+    route: async (_p: string, h: (route: PwRoute) => unknown) => {
+      box.handler = h as (route: never) => unknown;
+    },
+    newPage: async () => ({ addInitScript: async () => {}, on: () => {} }) as unknown as PwPage,
+    cookies: async () => [],
+    close: async () => {},
+  } as PwContext;
+  await openInstrumentedPage(ctx, createRequestGuard(fakeLookup(dnsTable).lookup));
+  check(
+    'audit route guard: aborts a name that resolves to metadata',
+    (await decide(box.handler, { url: 'http://metadata.google.internal/computeMetadata/v1/' })) === 'abort',
+  );
+  check(
+    'audit route guard: aborts a nip.io loopback name',
+    (await decide(box.handler, { url: 'http://127.0.0.1.nip.io/', nav: true })) === 'abort',
+  );
+  check(
+    'audit route guard: a public subresource continues',
+    (await decide(box.handler, { url: 'https://cdn.example.com/gtm.js' })) === 'continue',
+  );
+}
+
+// verify capture (TagDrishti) — the third copy of the route guard.
+{
+  const fb = fakeVerifyBrowser();
+  const cap = await runCapture(
+    fb.browser,
+    { url: 'https://shop.example.com/', checks: [] },
+    verifyOpts({ requestGuard: createRequestGuard(fakeLookup(dnsTable).lookup) }),
+  );
+  check('verify route guard: the start page on a public name loads', cap.loaded === true, cap.notes.join('; '));
+  check(
+    'verify route guard: aborts a name that resolves to metadata',
+    (await fb.decide({ url: 'http://metadata.google.internal/computeMetadata/v1/' })) === 'abort',
+  );
+  check(
+    'verify route guard: a public subresource continues',
+    (await fb.decide({ url: 'https://cdn.example.com/gtm.js' })) === 'continue',
+  );
+
+  // Fixture mode is offline: it never consults the (DNS) guard.
+  const fx = fakeVerifyBrowser();
+  let guardCalls = 0;
+  await runCapture(
+    fx.browser,
+    { url: 'https://fixtures.example/', checks: [] },
+    verifyOpts({
+      fixtures: { resolve: () => ({ body: '<html></html>' }) },
+      requestGuard: async () => {
+        guardCalls += 1;
+        return true;
+      },
+    }),
+  );
+  check('verify route guard: fixture mode serves from memory', (await fx.decide({ url: 'https://x.example/' })) === 'fulfill');
+  check('verify route guard: fixture mode never consults the DNS guard', guardCalls === 0);
+}
 
 // ── tracker classification ─────────────────────────────────────────────────
 
