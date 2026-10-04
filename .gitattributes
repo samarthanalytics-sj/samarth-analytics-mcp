@@ -1,0 +1,2 @@
+# Vendored template fixtures are hashed byte-for-byte; never convert their line endings.
+src/__tests__/fixtures/*.tpl -text

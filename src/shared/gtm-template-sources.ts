@@ -127,12 +127,19 @@ export const TEMPLATE_SOURCES: Readonly<Record<string, TemplateSource>> = {
   // raised by code scanning on PR #989), plus the SHA-256 of that file's raw bytes. Before the pin
   // the installer took whatever was on main/master at install time, so upstream could change the
   // code it wrote into a container at any moment. Reviewed permissions at these commits:
-  //   data-client    (64364 bytes): return_response, access_response, run_container, read_request,
-  //                  get/set_cookies limited to stape, _dcid, FPIDP, FPID. Expected for a data client.
-  //   rtb-house-tag  (97341 bytes): send_http only to https://{ams,us,asia}.creativecdn.com/partner/omni/postbacks*,
-  //                  cookies __rtbh.*.
-  //   tapfiliate-tag (121851 bytes): send_http only to https://api.tapfiliate.com/1.6/{clicks,conversions,customers}/,
-  //                  cookies tapfiliate_cid, tap_vid.
+  // (the COMPLETE ___SERVER_PERMISSIONS___ list of each file, so a bump can be diffed against it)
+  //   data-client    (64364 bytes): return_response; access_response (write any response, specific
+  //                  headers); run_container; read_request (any request, headers and query);
+  //                  get_cookies stape, _dcid, FPIDP, FPID; set_cookies stape, _dcid, FPIDP.
+  //                  Expected for a data client.
+  //   rtb-house-tag  (97341 bytes): logging (all environments); read_request (headers trace-id and
+  //                  referer, any query parameter); read_event_data (any); send_http ONLY to
+  //                  https://{ams,us,asia}.creativecdn.com/partner/omni/postbacks*; get_cookies
+  //                  __rtbh.aid, __rtbh.uid, __rtbh.sid; set_cookies __rtbh.aid.
+  //   tapfiliate-tag (121851 bytes): logging (all environments); read_request (headers trace-id and
+  //                  referer, any query parameter); read_event_data (any); send_http ONLY to
+  //                  https://api.tapfiliate.com/1.6/{clicks,conversions,customers}/; get_cookies
+  //                  tapfiliate_cid, tap_vid; set_cookies tapfiliate_cid.
   // BUMPING A PIN means reviewing the new commit's template.tpl (above all its ___SERVER_PERMISSIONS___
   // block: the hosts it may call, the cookies it may read or set) and updating sourceSha AND sha256
   // together, in the same change, with the review recorded here. Never point an entry at a branch.

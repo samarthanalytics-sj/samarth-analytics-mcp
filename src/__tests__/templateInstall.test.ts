@@ -17,6 +17,7 @@
 
 import assert from 'assert';
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import {
   fetchVerifiedTemplateSource,
   installTemplateFromSource,
@@ -44,14 +45,15 @@ const bytesOf = (s: string): ArrayBuffer => new TextEncoder().encode(s).buffer a
 const nodeSha256 = (s: string | Uint8Array): string => createHash('sha256').update(s).digest('hex');
 
 /** Records every URL asked for, and answers from a map. Serves RAW BYTES, as the installer reads them. */
-function stubFetch(responses: Record<string, { status?: number; body?: string }>): FetchLike & { calls: string[] } {
+function stubFetch(responses: Record<string, { status?: number; body?: string; bytes?: Uint8Array }>): FetchLike & { calls: string[] } {
   const calls: string[] = [];
   const f = (async (url: string) => {
     calls.push(url);
     const hit = responses[url];
     if (!hit) return { ok: false, status: 404, arrayBuffer: async () => new ArrayBuffer(0) };
     const status = hit.status ?? 200;
-    return { ok: status >= 200 && status < 300, status, arrayBuffer: async () => bytesOf(hit.body ?? '') };
+    const raw = hit.bytes ? (new Uint8Array(hit.bytes).buffer as ArrayBuffer) : bytesOf(hit.body ?? '');
+    return { ok: status >= 200 && status < 300, status, arrayBuffer: async () => raw };
   }) as FetchLike & { calls: string[] };
   f.calls = calls;
   return f;
@@ -92,7 +94,7 @@ async function main(): Promise<void> {
 
   // ── verifyTemplateBytes: hash first, then identity ──
 
-  await test('a body whose SHA-256 matches the expected hash passes and is decoded verbatim', async () => {
+  await test('a body whose SHA-256 matches the expected hash passes and is decoded as UTF-8', async () => {
     const v = await verifyTemplateBytes(bytesOf(DATA_CLIENT), nodeSha256(DATA_CLIENT), 'stape-io', 'data-client');
     assert.ok(v.ok, v.ok ? '' : v.reason);
     if (v.ok) {
@@ -226,6 +228,33 @@ async function main(): Promise<void> {
     );
     assert.equal(created, 0, 'the hash check runs BEFORE anything is written');
     assert.deepEqual(f.calls, [PINNED]);
+  });
+
+  await test('the reviewed data-client template.tpl matches its pin and is uploaded once, as the template', async () => {
+    // The vendored fixture is the exact file the registry pins (see fixtures/README.md), so this
+    // proves offline that the pin is right AND that a correct download installs.
+    const raw = readFileSync(new URL('./fixtures/stape-data-client.template.tpl', import.meta.url));
+    assert.equal(nodeSha256(raw), PIN_HASH, 'the fixture is the reviewed file the registry pins');
+    const f = stubFetch({ [PINNED]: { bytes: raw } });
+    const calls: Array<{ parent: string; requestBody: Record<string, unknown> }> = [];
+    const api = {
+      create: async (p: { parent: string; requestBody: Record<string, unknown> }) => {
+        calls.push(p);
+        return { data: { templateId: '7', name: 'Data Client' } };
+      },
+    };
+    const out = await installTemplateFromSource(api, 'accounts/1/containers/2/workspaces/3', 'stape-io', 'data-client', f);
+    assert.deepEqual(f.calls, [PINNED], 'only the pinned commit URL is fetched');
+    assert.equal(calls.length, 1, 'exactly one create call');
+    assert.equal(calls[0].parent, 'accounts/1/containers/2/workspaces/3');
+    assert.equal(calls[0].requestBody.name, 'Data Client');
+    // Uploaded as decoded UTF-8; TextDecoder drops the file's leading BOM, as res.text() used to.
+    assert.equal(calls[0].requestBody.templateData, new TextDecoder('utf-8').decode(raw));
+    assert.equal(calls[0].requestBody.galleryReference, undefined, 'a source install never claims a gallery origin');
+    assert.equal(out.url, PINNED);
+    assert.equal(out.sourceSha, PIN_SHA);
+    assert.equal(out.sha256, PIN_HASH);
+    assert.deepEqual(out.template, { templateId: '7', name: 'Data Client' });
   });
 
   await test('nothing is created when the pinned URL cannot be fetched', async () => {

@@ -67,23 +67,35 @@ function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
 }
 
 /**
- * Lowercase hex SHA-256 of raw bytes, via Web Crypto (`globalThis.crypto.subtle`, present in
- * Node 19+, Electron and browsers). Throws when the runtime has none: a download that cannot be
- * verified is never installed.
+ * Lowercase hex SHA-256 of raw bytes, via Web Crypto (`globalThis.crypto.subtle` in Node 19+,
+ * Electron and browsers; node:crypto's webcrypto on Node 18). Throws when the runtime has neither:
+ * a download that cannot be verified is never installed.
  */
 export async function sha256Hex(bytes: ArrayBuffer | Uint8Array): Promise<string> {
-  const subtle = globalThis.crypto?.subtle;
+  // Node 18 (still allowed by package.json engines) has no global Web Crypto without a flag; reach
+  // node:crypto's webcrypto lazily there, so the import never runs where globalThis.crypto exists.
+  const subtle = globalThis.crypto?.subtle ?? (await nodeWebCryptoSubtle());
   if (!subtle) {
     throw new Error(
-      'Web Crypto (globalThis.crypto.subtle) is not available in this runtime, so the template download ' +
-        'cannot be checked against its pinned SHA-256 and will not be installed. Use Node 19 or later ' +
-        '(on Node 18, start it with --experimental-global-webcrypto).',
+      'Web Crypto is not available in this runtime, so the template download cannot be checked ' +
+        'against its pinned SHA-256 and will not be installed. Use Node 18 or later.',
     );
   }
   // Copy a view into its own ArrayBuffer so exactly its bytes are hashed, not the whole backing buffer.
   const data: ArrayBuffer = bytes instanceof Uint8Array ? new Uint8Array(bytes).buffer : bytes;
   const digest = await subtle.digest('SHA-256', data);
   return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+type Subtle = NonNullable<typeof globalThis.crypto>['subtle'];
+
+async function nodeWebCryptoSubtle(): Promise<Subtle | undefined> {
+  try {
+    const nodeCrypto = await import('node:crypto');
+    return nodeCrypto.webcrypto?.subtle as unknown as Subtle | undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export type TemplateBytesVerdict =
