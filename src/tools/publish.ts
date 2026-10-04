@@ -79,6 +79,13 @@ export function registerPublishTools(server: McpServer, getClient: () => GtmClie
         const res = await client.accounts.containers.versions.publish({
           path: `accounts/${accountId}/containers/${containerId}/versions/${containerVersionId}`,
         });
+        // GTM answers a publish that fails to compile with HTTP 200 and compilerError: true; the
+        // version is NOT live. Reporting success there would tell the caller production changed.
+        if (res.data.compilerError === true) {
+          return errorText(
+            `Version ${containerVersionId} has compiler errors. NOT published. Fix that before publishing.\n${JSON.stringify(res.data, null, 2)}`
+          );
+        }
         return jsonResult({
           success: true,
           compilerError: res.data.compilerError ?? false,
@@ -154,6 +161,13 @@ export function registerPublishTools(server: McpServer, getClient: () => GtmClie
         const publishRes = await client.accounts.containers.versions.publish({
           path: `accounts/${accountId}/containers/${containerId}/versions/${versionId}`,
         });
+
+        // Same as versions_publish: compilerError on the PUBLISH response means it did not go live.
+        if (publishRes.data.compilerError === true) {
+          return errorText(
+            `Version created (${versionId}) but publishing it hit compiler errors. NOT published. Fix that before publishing.\n${JSON.stringify(publishRes.data, null, 2)}`
+          );
+        }
 
         return jsonResult({
           success: true,
