@@ -125,10 +125,10 @@ async function main(): Promise<void> {
     const api = {
       create: async (params: { parent: string; requestBody: Record<string, unknown> }) => {
         seen.push(params);
-        return { data: { templateId: '25', containerId: '233785128', name: 'Data Client' } };
+        return { data: { templateId: '25', containerId: '1234567', name: 'Data Client' } };
       },
     };
-    const parent = 'accounts/6/containers/233785128/workspaces/3';
+    const parent = 'accounts/6/containers/1234567/workspaces/3';
     const out = await installTemplateFromSource(api, parent, 'stape-io', 'data-client', f);
     assert.equal(seen.length, 1);
     assert.equal(seen[0].parent, parent);
@@ -136,8 +136,8 @@ async function main(): Promise<void> {
     assert.equal(seen[0].requestBody.templateData, DATA_CLIENT, 'the vendor source is uploaded verbatim');
     assert.equal(seen[0].requestBody.galleryReference, undefined, 'a source install has no gallery reference');
     assert.equal(out.url, MAIN);
-    // The created template is container-scoped, which is exactly the shape real Data Clients have.
-    assert.deepEqual(out.template, { templateId: '25', containerId: '233785128', name: 'Data Client' });
+    // The created template is container-scoped (no galleryReference), matching how hand-installed Data Clients look.
+    assert.deepEqual(out.template, { templateId: '25', containerId: '1234567', name: 'Data Client' });
   });
 
   await test('nothing is created when the download is refused', async () => {
