@@ -1314,6 +1314,15 @@ function nameValueTable(key: string, rows: Array<{ name: string; value: string }
 /** StackAdapt server pixel type (endpoint + id semantics). Verified against StackAdapt/
  *  stackadapt-gtm-server-side-pixel template.tpl (pixelType SELECT). */
 export const STACKADAPT_PIXEL_TYPES: string[] = ['rt', 'lal', 'conv', 'universal'];
+/** The words people use for each pixel type (StackAdapt's UI says "audience" / "conversion"). */
+const STACKADAPT_PIXEL_ALIASES: Record<string, string> = {
+  rt: 'rt', retargeting: 'rt', audience: 'rt', lal: 'lal', lookalike: 'lal', conv: 'conv', conversion: 'conv', universal: 'universal',
+};
+/** A free-text pixel type (any case, or an alias such as "audience") → the template value, or null when
+ *  unrecognised. PURE. */
+export function stackAdaptPixelType(v: string): string | null {
+  return STACKADAPT_PIXEL_ALIASES[(v ?? '').trim().toLowerCase()] ?? null;
+}
 /** commonProperties name-column SELECT set (verified). Off-list names are silently ignored by StackAdapt. */
 export const STACKADAPT_COMMON_KEYS: string[] = [
   'email', 'first_name', 'last_name', 'phone', 'order_id', 'revenue',
@@ -1341,7 +1350,7 @@ export function buildStackAdaptServerTag(
     firingTriggerId?: string[];
   }
 ): GtmTagResource {
-  const pt = STACKADAPT_PIXEL_TYPES.includes(pixelType) ? pixelType : 'conv';
+  const pt = stackAdaptPixelType(pixelType) ?? 'conv';
   const parameter: Param[] = [tpl('pixelID', pixelID), tpl('pixelType', pt)];
   const common = [...(opts?.commonProperties ?? [])];
   const action = opts?.action?.trim();
@@ -1682,7 +1691,7 @@ export function buildAmazonCapiServerTag(
     firingTriggerId?: string[];
   }
 ): GtmTagResource {
-  const region = tagRegion === 'EU' ? 'EU' : 'NA';
+  const region = (tagRegion ?? '').trim().toUpperCase() === 'EU' ? 'EU' : 'NA';
   const parameter: Param[] = [];
   // Event name: eventType RADIO (standard | inherit | custom) + eventNameStandard / eventNameCustom.
   const event = opts?.event?.trim();

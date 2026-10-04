@@ -19,7 +19,7 @@ import {
   buildSnapchatCapiServerTag, buildMicrosoftCapiServerTag, buildAmazonCapiServerTag,
   buildXCapiServerTag, buildQuoraCapiServerTag, buildAdRollCapiServerTag,
   buildNextdoorCapiServerTag, buildYelpCapiServerTag, buildSpotifyCapiServerTag,
-  buildLineYahooCapiServerTag, buildRtbHouseServerTag,
+  buildLineYahooCapiServerTag, buildRtbHouseServerTag, stackAdaptPixelType,
 } from './server-migration.js';
 import type { GtmTagResource } from './gtm-builders.js';
 
@@ -39,6 +39,9 @@ export interface CapiCredentialField {
   secret?: boolean;
   /** Optional fields do not block the apply when blank. */
   optional?: boolean;
+  /** For a field with a fixed set of values: false = unrecognised, reported like a missing value so the
+   *  item is skipped rather than silently built with a default. */
+  accepts?: (value: string) => boolean;
 }
 
 export interface CapiPlatformSpec {
@@ -122,13 +125,16 @@ export const CAPI_PLATFORMS: readonly CapiPlatformSpec[] = [
     platform: 'amazon', label: 'Amazon Ads CAPI', gallery: ['stape-io', 'amazon-tag'],
     nameRe: /amazon[\s_-]?(ads?|pixel|tag)/i, bodyRe: /amzn\(|amazon-adsystem/i,
     // Amazon takes a REGION, not a secret: the token lives in the template's own connection.
-    fields: [{ key: 'tagId', label: 'Amazon Ads Tag ID' }, { key: 'region', label: 'Region (NA or EU)' }],
+    fields: [{ key: 'tagId', label: 'Amazon Ads Tag ID' }, { key: 'region', label: 'Region (NA or EU)', accepts: (v) => /^(na|eu)$/i.test(v.trim()) }],
     build: (t, n, c, x) => buildAmazonCapiServerTag(t, n, [c.tagId], c.region, { event: x.event, firingTriggerId: x.firingTriggerId }),
   },
   {
     platform: 'stackadapt', label: 'StackAdapt', gallery: ['StackAdapt', 'stackadapt-gtm-server-side-pixel'],
     nameRe: /stackadapt/i, bodyRe: /saq\(|srv\.stackadapt/i,
-    fields: [{ key: 'pixelId', label: 'StackAdapt pixel ID' }, { key: 'pixelType', label: 'Pixel type (audience / conversion / universal)' }],
+    fields: [
+      { key: 'pixelId', label: 'StackAdapt pixel ID' },
+      { key: 'pixelType', label: 'Pixel type (rt = audience / lal / conv / universal)', accepts: (v) => stackAdaptPixelType(v) !== null },
+    ],
     build: (t, n, c, x) => buildStackAdaptServerTag(t, n, c.pixelId, c.pixelType, { action: x.event, firingTriggerId: x.firingTriggerId }),
   },
   {
@@ -239,6 +245,7 @@ export function capiCredentials(
     const v = (values?.[`${spec.platform}.${f.key}`] ?? '').trim();
     creds[f.key] = v;
     if (!v && !f.optional) missing.push(f.label);
+    else if (v && f.accepts && !f.accepts(v)) missing.push(f.secret ? `${f.label} (unrecognised value)` : `${f.label} (unrecognised "${v}")`);
   }
   return { creds, missing };
 }

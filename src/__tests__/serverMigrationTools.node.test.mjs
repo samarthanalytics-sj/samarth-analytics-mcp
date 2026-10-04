@@ -192,6 +192,19 @@ await test('each CAPI tool refuses without its OWN credentials, and creates noth
   assert.equal(client.calls.length, 0, 'no import and no create on a refusal');
 });
 
+await test('enumerated inputs: case and aliases normalise; unrecognised values are refused, not defaulted', async () => {
+  const client = stubClient({ templates: [INSTALLED('stape-io', 'amazon-tag', 'AM1'), INSTALLED('StackAdapt', 'stackadapt-gtm-server-side-pixel', 'SA1')] });
+  const s = serverWith(client);
+  await callValidated(s, 'create_amazon_capi_server_tag', { ...WS, tagIds: ['T1'], tagRegion: 'eu', confirm: true });
+  assert.equal(paramVal(client.calls.find((c) => c.kind === 'tag').body, 'tagRegion'), 'EU', 'lower-case eu is the EU endpoint');
+  await callValidated(s, 'create_stackadapt_server_tag', { ...WS, pixelID: 'P', pixelType: 'audience', confirm: true });
+  assert.equal(paramVal(client.calls.filter((c) => c.kind === 'tag')[1].body, 'pixelType'), 'rt', 'audience is a retargeting pixel');
+  const before = client.calls.length;
+  assert.ok(/tagRegion "APAC" is not recognised/.test(text(await callValidated(s, 'create_amazon_capi_server_tag', { ...WS, tagIds: ['T1'], tagRegion: 'APAC', confirm: true }))));
+  assert.ok(/pixelType "banana" is not recognised/.test(text(await callValidated(s, 'create_stackadapt_server_tag', { ...WS, pixelID: 'P', pixelType: 'banana', confirm: true }))));
+  assert.equal(client.calls.length, before, 'nothing created on a refusal');
+});
+
 await test('create_server_tag: GA4 relay + Ads conversion shapes; per-platform validation', async () => {
   const client = stubClient();
   const s = serverWith(client);

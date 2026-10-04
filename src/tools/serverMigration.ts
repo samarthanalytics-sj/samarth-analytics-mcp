@@ -51,6 +51,7 @@ import {
   buildSpotifyCapiServerTag,
   buildLineYahooCapiServerTag,
   buildRtbHouseServerTag,
+  stackAdaptPixelType,
 } from '../shared/server-migration.js';
 
 const wsBase = z.object({
@@ -159,8 +160,8 @@ const CAPI_TOOLS: CapiSpec[] = [
   {
     name: 'create_stackadapt_server_tag', defaultTagName: 'StackAdapt Server Tag', gallery: ['StackAdapt', 'stackadapt-gtm-server-side-pixel'],
     description: 'Create a StackAdapt SERVER pixel tag from the official template (StackAdapt/stackadapt-gtm-server-side-pixel), imported automatically. Not a CAPI: an id-only pixel (pixelID + pixelType rt/lal/conv/universal, default conv) with optional commonProperties (email/order_id/revenue/action…) and customProperties. No token, no event_id dedup.',
-    fields: { pixelID: z.string(), pixelType: z.string().optional().describe('rt | lal | conv (default) | universal'), action: z.string().optional(), commonProperties: rowsSchema, customProperties: rowsSchema },
-    validate: (a) => need(a, 'pixelID', 'the StackAdapt pixel id'),
+    fields: { pixelID: z.string(), pixelType: z.string().optional().describe('rt (audience) | lal (lookalike) | conv (default) | universal'), action: z.string().optional(), commonProperties: rowsSchema, customProperties: rowsSchema },
+    validate: (a) => need(a, 'pixelID', 'the StackAdapt pixel id') ?? (s(a.pixelType).trim() && !stackAdaptPixelType(s(a.pixelType)) ? `pixelType "${s(a.pixelType).trim()}" is not recognised (rt / lal / conv / universal).` : null),
     build: (type, name, a, firingTriggerId) => buildStackAdaptServerTag(type, name, s(a.pixelID), s(a.pixelType).trim() || 'conv', { action: opt(a.action), commonProperties: rows(a.commonProperties), customProperties: rows(a.customProperties), firingTriggerId }),
   },
   {
@@ -188,7 +189,8 @@ const CAPI_TOOLS: CapiSpec[] = [
     name: 'create_amazon_capi_server_tag', defaultTagName: 'Amazon Ads CAPI Tag', gallery: ['stape-io', 'amazon-tag'],
     description: 'Create an Amazon Ads Conversions API SERVER tag from the Stape template (stape-io/amazon-tag), imported automatically. No token: the only credential is tagIds (the Amazon Ads Tag UUIDs) plus tagRegion (NA | EU). Omit `event` to inherit; pass an Amazon standard event (Off-AmazonPurchases, Lead, …) or a GA4 name. eventId is the clientDedupeId dedup row.',
     fields: { tagIds: z.array(z.string()).describe('Amazon Ads Tag ID(s), UUIDs.'), tagRegion: z.string().optional().describe('NA (default) | EU'), event: z.string().optional(), eventId: z.string().optional(), enableAdvancedMatching: z.boolean().optional(), userData: rowsSchema, customAttributes: rowsSchema },
-    validate: (a) => (Array.isArray(a.tagIds) && (a.tagIds as unknown[]).some((t) => s(t).trim()) ? null : 'tagIds is required (at least one Amazon Ads Tag ID).'),
+    validate: (a) => (Array.isArray(a.tagIds) && (a.tagIds as unknown[]).some((t) => s(t).trim()) ? null : 'tagIds is required (at least one Amazon Ads Tag ID).')
+      ?? (s(a.tagRegion).trim() && !/^(na|eu)$/i.test(s(a.tagRegion).trim()) ? `tagRegion "${s(a.tagRegion).trim()}" is not recognised (NA or EU).` : null),
     build: (type, name, a, firingTriggerId) => buildAmazonCapiServerTag(type, name, (a.tagIds as unknown[]).map(String).filter((t) => t.trim()), s(a.tagRegion).trim() || 'NA', { event: opt(a.event), eventId: opt(a.eventId), enableAdvancedMatching: b(a.enableAdvancedMatching), userData: rows(a.userData), customAttributes: rows(a.customAttributes), firingTriggerId }),
   },
   {

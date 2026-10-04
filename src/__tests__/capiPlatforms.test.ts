@@ -71,8 +71,8 @@ test('credentials are read per platform, and blanks are reported by their own la
 
 test('every platform builds a real tag from its declared fields', () => {
   for (const p of CAPI_PLATFORMS) {
-    // Enumerated fields must get a value from their own set: the builders deliberately normalise
-    // anything else to a safe default, so a synthetic string would never appear in the tag.
+    // Enumerated fields must get a value from their own set: capiCredentials reports anything else as
+    // unrecognised (and the builders normalise it to a default), so a synthetic string never reaches the tag.
     const ENUMERATED: Record<string, string> = { 'amazon.region': 'EU', 'stackadapt.pixelType': 'conv' };
     const creds = Object.fromEntries(
       p.fields.map((f) => [f.key, ENUMERATED[`${p.platform}.${f.key}`] ?? `v_${f.key}`]),
@@ -107,6 +107,25 @@ test('every {{ed - }} / {{rh - }} variable a built tag references is provisioned
     for (const r of refs) assert.ok(provided[p.emqVariables!].has(r), `${p.platform}: {{${r}}} is not created by the ${p.emqVariables} variable set`);
   }
   assert.equal(capiPlatform('snapchat')?.emqVariables, 'meta');
+});
+
+test('free-text enumerated credentials: the words the label suggests and any case map correctly; unknowns are skipped, not guessed', () => {
+  const param = (tag: unknown, key: string) =>
+    ((tag as { parameter?: Array<{ key?: string; value?: string }> }).parameter ?? []).find((p) => p.key === key)?.value;
+  const sa = capiPlatform('stackadapt')!;
+  const amazon = capiPlatform('amazon')!;
+  const ctx = { event: 'purchase', firingTriggerId: ['7'] };
+  assert.equal(param(sa.build('cvt_1', 'n', { pixelId: 'P', pixelType: 'audience' }, ctx), 'pixelType'), 'rt', 'audience is a retargeting (rt) pixel');
+  assert.equal(param(sa.build('cvt_1', 'n', { pixelId: 'P', pixelType: 'Universal' }, ctx), 'pixelType'), 'universal');
+  assert.equal(param(sa.build('cvt_1', 'n', { pixelId: 'P', pixelType: 'conversion' }, ctx), 'pixelType'), 'conv');
+  assert.equal(param(amazon.build('cvt_1', 'n', { tagId: 'T', region: 'eu' }, ctx), 'tagRegion'), 'EU', 'lower-case eu is EU');
+  assert.equal(param(amazon.build('cvt_1', 'n', { tagId: 'T', region: ' Eu ' }, ctx), 'tagRegion'), 'EU');
+  assert.ok(/rt = audience/.test(sa.fields.find((f) => f.key === 'pixelType')!.label), 'the label names the accepted values');
+  // A value outside the set is reported (so the apply skips the item) instead of defaulting silently.
+  assert.deepEqual(capiCredentials(sa, { 'stackadapt.pixelId': 'P', 'stackadapt.pixelType': 'Audience' }).missing, []);
+  assert.equal(capiCredentials(sa, { 'stackadapt.pixelId': 'P', 'stackadapt.pixelType': 'banana' }).missing.length, 1);
+  assert.deepEqual(capiCredentials(amazon, { 'amazon.tagId': 'T', 'amazon.region': 'eu' }).missing, []);
+  assert.match(capiCredentials(amazon, { 'amazon.tagId': 'T', 'amazon.region': 'APAC' }).missing[0], /Region.*unrecognised "APAC"/);
 });
 
 test('web pixels resolve to their platform, and GA4 tags never do', () => {
