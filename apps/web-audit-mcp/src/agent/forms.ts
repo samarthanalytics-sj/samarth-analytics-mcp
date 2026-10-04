@@ -523,7 +523,12 @@ export function classifyFieldPii(field: RawFormField): PiiCategory | null {
 }
 
 function guessPurpose(form: RawForm, pii: PiiField[]): FormPurpose {
-  const textInputs = form.fields.filter((f) => !['checkbox', 'radio', 'select'].includes(f.type));
+  // A <select> carries its DOM type ('select-one' / 'select-multiple'), never a bare 'select', so it is
+  // matched by tag or type prefix (as form-fill's isSelect does). Otherwise every dropdown would count as
+  // a text input and tip the one-/two-input search, magic-link and newsletter rules below.
+  const textInputs = form.fields.filter(
+    (f) => !['checkbox', 'radio'].includes(f.type) && f.tag !== 'select' && !/^select/.test(f.type),
+  );
   // A lone EMAIL input is a signup/newsletter capture, never a search box (which is type text/search) —
   // so don't let a name like "s"/"q" misroute it to 'search' before the email checks below run.
   if (textInputs.length === 1 && textInputs[0].type !== 'email' && (SEARCH_RE.test(textInputs[0].name) || /search/i.test(form.action))) return 'search';

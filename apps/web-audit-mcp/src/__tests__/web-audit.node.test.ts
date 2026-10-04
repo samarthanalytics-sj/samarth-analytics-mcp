@@ -688,6 +688,14 @@ check('forms: email+name "Join our newsletter" → newsletter (subscription join
 // A passwordless / magic-link login (lone email, "log in" copy, no password) → login, NOT newsletter.
 const magicLink = form({ index: 18, fields: [field({ type: 'email', name: 'email' })], fieldCount: 1, text: 'log in — email me a login link' });
 check('forms: lone email magic-link login ("log in") → login, not newsletter', analyzeForms([magicLink], 'https://example.com')[0].purpose === 'login');
+// A <select> is extracted with its DOM type ('select-one' / 'select-multiple'), never a bare 'select'.
+// It is not a text input, so a dropdown must not tip the one-/two-input purpose rules (was: counted).
+const searchWithCategory = form({ index: 19, fields: [field({ type: 'text', name: 's' }), field({ tag: 'select', type: 'select-one', name: 'category' })], action: 'https://example.com/?s=', text: '' });
+check('forms: a search box with a category dropdown → still search', analyzeForms([searchWithCategory], 'https://example.com')[0].purpose === 'search');
+const emailWithCountry = form({ index: 20, fields: [field({ type: 'email', name: 'email' }), field({ tag: 'select', type: 'select-one', name: 'country' })], text: '' });
+check('forms: a lone email plus a country dropdown → newsletter, not contact', analyzeForms([emailWithCountry], 'https://example.com')[0].purpose === 'newsletter');
+const magicLinkWithSelects = form({ index: 21, fields: [field({ type: 'email', name: 'email' }), field({ tag: 'select', type: 'select-one', name: 'region' }), field({ tag: 'select', type: 'select-multiple', name: 'workspace' })], text: 'log in with a magic link' });
+check('forms: a magic-link login with two dropdowns → still login', analyzeForms([magicLinkWithSelects], 'https://example.com')[0].purpose === 'login');
 
 const noticedForm = form({ index: 1, fields: contactForm.fields, hasPrivacyLink: true });
 check(
