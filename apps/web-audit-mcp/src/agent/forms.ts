@@ -257,14 +257,22 @@ export function extractFormsInPage(): RawForm[] {
   // category toggles) but collect NO lead data, so they must never surface as a trackable form. Match the
   // major CMPs by container id/class plus a generic cookie/consent id/class. `closest` (self-or-ancestor)
   // so a <form id="fast-cmp-form"> or a cluster inside #onetrust-banner-sdk is skipped.
-  const CMP_SEL =
+  const CMP_VENDOR_SEL =
     '#onetrust-banner-sdk, #onetrust-consent-sdk, #CybotCookiebotDialog, #usercentrics-root, #didomi-host, ' +
     '#qc-cmp2-container, #truste-consent-track, .cmplz-cookiebanner, .cky-consent-container, #iubenda-cs-banner, ' +
-    '.osano-cm-window, #cmpbox, #BorlabsCookieBox, #fast-cmp-form, ' +
-    '[class*="cookie" i], [id*="cookie" i], [class*="consent" i], [id*="consent" i]';
+    '.osano-cm-window, #cmpbox, #BorlabsCookieBox, #fast-cmp-form';
+  const CMP_GENERIC_SEL = '[class*="cookie" i], [id*="cookie" i], [class*="consent" i], [id*="consent" i]';
   const inCmp = (el: Element): boolean => {
     try {
-      return !!el.closest(CMP_SEL);
+      if (el.closest(CMP_VENDOR_SEL)) return true;
+      // The generic substring arms must not match the document ROOT: consent tooling routinely flags
+      // <body>/<html> itself (WordPress Cookie Notice's body.cookies-not-set, cookieconsent's
+      // html.show--consent, Modernizr's html.cookies), and closest() climbs that far, which dropped
+      // every form on the page. closest() returns the NEAREST match, so when that is body/html,
+      // nothing between the element and the root is a banner.
+      const g = el.closest(CMP_GENERIC_SEL);
+      const d = el.ownerDocument;
+      return !!g && g !== d.body && g !== d.documentElement;
     } catch {
       return false;
     }
@@ -523,7 +531,12 @@ export function classifyFieldPii(field: RawFormField): PiiCategory | null {
 }
 
 function guessPurpose(form: RawForm, pii: PiiField[]): FormPurpose {
-  const textInputs = form.fields.filter((f) => !['checkbox', 'radio', 'select'].includes(f.type));
+  // A <select> carries its DOM type ('select-one' / 'select-multiple'), never a bare 'select', so it is
+  // matched by tag or type prefix (as form-fill's isSelect does). Otherwise every dropdown would count as
+  // a text input and tip the one-/two-input search, magic-link and newsletter rules below.
+  const textInputs = form.fields.filter(
+    (f) => !['checkbox', 'radio'].includes(f.type) && f.tag !== 'select' && !/^select/.test(f.type),
+  );
   // A lone EMAIL input is a signup/newsletter capture, never a search box (which is type text/search) —
   // so don't let a name like "s"/"q" misroute it to 'search' before the email checks below run.
   if (textInputs.length === 1 && textInputs[0].type !== 'email' && (SEARCH_RE.test(textInputs[0].name) || /search/i.test(form.action))) return 'search';

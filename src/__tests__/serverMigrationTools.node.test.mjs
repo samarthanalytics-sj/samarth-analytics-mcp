@@ -35,7 +35,8 @@ function stubClient({ tags = [], triggers = [], variables = [], templates = [] }
     accounts: { containers: { workspaces: {
       tags: { ...lister('tag', tags), create: async (a) => { calls.push({ kind: 'tag', body: a.requestBody }); return { data: { tagId: 'TAG-new', name: a.requestBody?.name, type: a.requestBody?.type } }; } },
       triggers: lister('trigger', triggers),
-      variables: lister('variable', variables),
+      // Stateful: a created variable is listed afterwards, so idempotency can be observed.
+      variables: { ...lister('variable', variables), create: async (a) => { calls.push({ kind: 'variable', body: a.requestBody }); variables.push(a.requestBody); return { data: a.requestBody }; } },
       templates: lister('template', templates),
     } } },
   };
@@ -94,6 +95,63 @@ await test('plan_server_migration_from_web: reads the web container and plans ea
   assert.ok(/triggers_create/.test(res.note));
 });
 
+await test('plan_server_migration_from_web: a {{Constant}} GA4 Measurement ID resolves; a non-Constant one is reported, not dropped', async () => {
+  const constant = { variableId: 'v1', name: 'GA4 Measurement ID', type: 'c', parameter: [P('value', 'G-ABC123')] };
+  const client = stubClient({
+    variables: [constant],
+    tags: [
+      { tagId: '1', name: 'Google Tag', type: 'googtag', parameter: [P('tagId', '{{GA4 Measurement ID}}')] },
+      { tagId: '2', name: 'GA4 Purchase', type: 'gaawe', parameter: [P('measurementIdOverride', '{{GA4 Measurement ID}}')] },
+      // A variable override must not hide a literal measurementId behind it.
+      { tagId: '3', name: 'GA4 Lead', type: 'gaawe', parameter: [P('measurementIdOverride', '{{Lookup - GA4}}'), P('measurementId', 'g-def456')] },
+    ],
+  });
+  const res = json(await callValidated(serverWith(client), 'plan_server_migration_from_web', WS));
+  assert.deepEqual(res.ga4, { present: true, measurementIds: ['G-ABC123', 'G-DEF456'] });
+  assert.equal(res.summary.auto, 1);
+  assert.equal(res.items.length, 0, 'the Google tag is GA4, never a vendor item');
+
+  const unresolved = stubClient({
+    variables: [{ variableId: 'v2', name: 'Lookup - GA4', type: 'smm', parameter: [] }],
+    tags: [{ tagId: '1', name: 'Google Tag', type: 'googtag', parameter: [P('tagId', '{{Lookup - GA4}}')] }],
+  });
+  const r2 = json(await callValidated(serverWith(unresolved), 'plan_server_migration_from_web', WS));
+  assert.deepEqual(r2.ga4, { present: true, measurementIds: [], unresolvedRefs: ['{{Lookup - GA4}}'] });
+  assert.equal(r2.summary.auto, 1);
+  assert.equal(r2.items.length, 0);
+});
+
+await test('plan_server_migration_from_web: a {{variable}} id is never carried into derived; missing ids are required; keys match the tool fields', async () => {
+  const client = stubClient({
+    variables: [{ variableId: 'v1', name: 'TikTok ID', type: 'c', parameter: [P('value', 'C7TK')] }],
+    tags: [
+      // A web variable the server container does not have: never copied, required instead.
+      { tagId: '1', name: 'Meta Pixel', type: 'html', parameter: [P('html', "<script>fbq('init','{{Meta Pixel ID}}')</script>")] },
+      { tagId: '2', name: 'Ads - Purchase', type: 'awct', parameter: [P('conversionId', '{{Google Ads ID}}'), P('conversionLabel', 'LBL')] },
+      // A Constant resolves to its literal value.
+      { tagId: '3', name: 'TikTok Pixel', type: 'cvt_TT01', parameter: [P('pixel_code', '{{TikTok ID}}')] },
+      // No id on the web tag at all: the typed tool still needs it.
+      { tagId: '4', name: 'Snap Pixel', type: 'html', parameter: [P('html', '<script>snaptr("track","PAGE_VIEW")</script>')] },
+      { tagId: '5', name: 'Reddit Pixel', type: 'html', parameter: [P('html', "<script>rdt('init','t2_abc')</script>")] },
+      { tagId: '6', name: 'Amazon Ads pixel', type: 'html', parameter: [P('html', "<script>amzn('addTag','tag-987')</script>")] },
+    ],
+  });
+  const res = json(await callValidated(serverWith(client), 'plan_server_migration_from_web', WS));
+  const by = (d) => res.items.find((i) => i.destination === d);
+  assert.deepEqual(by('Meta').derived, {});
+  assert.deepEqual(by('Meta').requires, ['pixelId', 'accessToken']);
+  assert.ok(by('Meta').note.includes('{{Meta Pixel ID}}'), 'the note names the web variable');
+  assert.deepEqual(by('Google Ads conversion').derived, { conversionLabel: 'LBL' });
+  assert.deepEqual(by('Google Ads conversion').requires, ['conversionId']);
+  assert.deepEqual(by('TikTok').derived, { pixelId: 'C7TK' });
+  assert.deepEqual(by('TikTok').requires, ['accessToken']);
+  assert.deepEqual(by('Snapchat').derived, {});
+  assert.deepEqual(by('Snapchat').requires, ['pixelId', 'apiAccessToken']);
+  assert.deepEqual(by('Reddit').derived, { pixelId: 't2_abc' }, 'create_reddit_capi_server_tag takes pixelId, not the GTM accountId');
+  assert.deepEqual(by('Amazon Ads').derived, { tagIds: ['tag-987'] }, 'create_amazon_capi_server_tag takes a tagIds array');
+  assert.ok(!JSON.stringify(res.items.map((i) => i.derived)).includes('{{'), 'no web-container variable reference is ever carried');
+});
+
 await test('a CAPI tool with the template already installed: no import, tag created with the cvt type, credentials and trigger', async () => {
   const client = stubClient({ templates: [INSTALLED('stape-io', 'reddit-tag', 'RD01')] });
   const res = json(await callValidated(serverWith(client), 'create_reddit_capi_server_tag', { ...WS, pixelId: '{{Reddit Pixel}}', accessToken: '{{Reddit Token}}', event: 'purchase', eventId: '{{Event ID}}', firingTriggerId: ['5'], confirm: true }));
@@ -132,7 +190,81 @@ await test('each CAPI tool refuses without its OWN credentials, and creates noth
   assert.ok(/accessToken is required/.test(text(await callValidated(s, 'create_yelp_capi_server_tag', { ...WS, accessToken: ' ', confirm: true }))));
   assert.ok(/event is required/.test(text(await callValidated(s, 'create_rtb_house_server_tag', { ...WS, taggingHash: 'h', partnerKey: 'k', event: '', confirm: true }))));
   assert.ok(/tagIds is required/.test(text(await callValidated(s, 'create_amazon_capi_server_tag', { ...WS, tagIds: [], confirm: true }))));
+  // LINE Yahoo: a forced non-page_view event needs its own Event Snippet ID; page_view and inherit do not.
+  assert.ok(/eventSnippetId is required for the "purchase" event/.test(text(await callValidated(s, 'create_line_yahoo_capi_server_tag', { ...WS, tagId: 'T', accessToken: 'A', channelId: 'C', event: 'purchase', confirm: true }))));
   assert.equal(client.calls.length, 0, 'no import and no create on a refusal');
+});
+
+await test('create_line_yahoo_capi_server_tag: page_view and inherit need no snippet; a conversion carries its own', async () => {
+  const client = stubClient({ templates: [INSTALLED('stape-io', 'line-yahoo-tag', 'LY1')] });
+  const s = serverWith(client);
+  const base = { ...WS, tagId: 'T', accessToken: 'A', channelId: 'C', confirm: true };
+  await callValidated(s, 'create_line_yahoo_capi_server_tag', { ...base, event: 'page_view' });
+  await callValidated(s, 'create_line_yahoo_capi_server_tag', { ...base });
+  await callValidated(s, 'create_line_yahoo_capi_server_tag', { ...base, event: 'purchase', eventSnippetId: 'SNIP1' });
+  const tags = client.calls.filter((c) => c.kind === 'tag').map((c) => c.body);
+  assert.equal(tags.length, 3);
+  assert.equal(paramVal(tags[2], 'eventSnippetId'), 'SNIP1');
+});
+
+await test('enumerated inputs: case and aliases normalise; unrecognised values are refused, not defaulted', async () => {
+  const client = stubClient({ templates: [INSTALLED('stape-io', 'amazon-tag', 'AM1'), INSTALLED('StackAdapt', 'stackadapt-gtm-server-side-pixel', 'SA1')] });
+  const s = serverWith(client);
+  await callValidated(s, 'create_amazon_capi_server_tag', { ...WS, tagIds: ['T1'], tagRegion: 'eu', confirm: true });
+  assert.equal(paramVal(client.calls.find((c) => c.kind === 'tag').body, 'tagRegion'), 'EU', 'lower-case eu is the EU endpoint');
+  await callValidated(s, 'create_stackadapt_server_tag', { ...WS, pixelID: 'P', pixelType: 'audience', confirm: true });
+  assert.equal(paramVal(client.calls.filter((c) => c.kind === 'tag')[1].body, 'pixelType'), 'rt', 'audience is a retargeting pixel');
+  const before = client.calls.length;
+  assert.ok(/tagRegion "APAC" is not recognised/.test(text(await callValidated(s, 'create_amazon_capi_server_tag', { ...WS, tagIds: ['T1'], tagRegion: 'APAC', confirm: true }))));
+  assert.ok(/pixelType "banana" is not recognised/.test(text(await callValidated(s, 'create_stackadapt_server_tag', { ...WS, pixelID: 'P', pixelType: 'banana', confirm: true }))));
+  assert.equal(client.calls.length, before, 'nothing created on a refusal');
+});
+
+await test('Meta / TikTok / Snapchat CAPI tools create the ed - variables their tag reads (idempotently) before the tag', async () => {
+  const tools = [
+    ['create_meta_capi_server_tag', INSTALLED('stape-io', 'facebook-tag', 'FB1'), { pixelId: '1', accessToken: '{{T}}', event: 'Purchase' }],
+    ['create_tiktok_capi_server_tag', INSTALLED('stape-io', 'tiktok-tag', 'TT1'), { pixelId: 'C1', accessToken: '{{T}}', event: 'purchase' }],
+    ['create_snapchat_capi_server_tag', INSTALLED('Snapchat', 'capi-google-tag-manager-serverside-tag', 'SC1'), { pixelId: 'S1', apiAccessToken: '{{T}}', event: 'purchase' }],
+  ];
+  for (const [tool, installed, args] of tools) {
+    const client = stubClient({ templates: [installed], variables: [{ variableId: '9', name: 'ed - event_id', type: 'ed', parameter: [] }] });
+    const s = serverWith(client);
+    const res = json(await callValidated(s, tool, { ...WS, ...args, firingTriggerId: ['5'], confirm: true }));
+    const kinds = client.calls.map((c) => c.kind);
+    assert.ok(kinds.includes('variable') && kinds.lastIndexOf('variable') < kinds.indexOf('tag'), `${tool}: variables go in before the tag`);
+    assert.ok(res.variables.skipped.includes('ed - event_id'), `${tool}: an existing variable is reused, not duplicated`);
+    const have = new Set(['ed - event_id', ...res.variables.created]);
+    const tag = client.calls.find((c) => c.kind === 'tag').body;
+    const refs = [...JSON.stringify(tag.parameter).matchAll(/\{\{((?:ed|rh) - [^}]+)\}\}/g)].map((m) => m[1]);
+    assert.ok(refs.length > 0, `${tool} maps Event Data`);
+    for (const r of refs) assert.ok(have.has(r), `${tool}: {{${r}}} would dangle`);
+    // A second tag in the same container creates no variable again.
+    const before = client.calls.filter((c) => c.kind === 'variable').length;
+    const res2 = json(await callValidated(s, tool, { ...WS, ...args, name: 'Second', firingTriggerId: ['6'], confirm: true }));
+    assert.deepEqual(res2.variables.created, [], `${tool}: idempotent`);
+    assert.equal(client.calls.filter((c) => c.kind === 'variable').length, before);
+  }
+  // Dry run names the variables it would ensure, and writes nothing.
+  const dryClient = stubClient();
+  const prevDry = process.env.DRY_RUN;
+  process.env.DRY_RUN = 'true';
+  try {
+    const dry = json(await callValidated(serverWith(dryClient), 'create_meta_capi_server_tag', { ...WS, pixelId: '1', accessToken: 'T', event: 'Purchase', confirm: true }));
+    assert.equal(dry.dryRun, true);
+    assert.ok(dry.wouldEnsureVariables.includes('ed - email_address'));
+    assert.equal(dryClient.calls.length, 0);
+  } finally {
+    if (prevDry === undefined) delete process.env.DRY_RUN; else process.env.DRY_RUN = prevDry;
+  }
+});
+
+await test('a CAPI tag create that fails after the template import says the template is already in the workspace', async () => {
+  const client = stubClient();
+  client.accounts.containers.workspaces.tags.create = async () => { throw new Error('Unknown variable reference'); };
+  const res = await callValidated(serverWith(client), 'create_tiktok_capi_server_tag', { ...WS, pixelId: 'C1', accessToken: 'T', event: 'purchase', confirm: true });
+  assert.equal(res.isError, true);
+  assert.ok(/Unknown variable reference/.test(text(res)), text(res));
+  assert.ok(/stape-io\/tiktok-tag is already imported into the workspace as cvt_IMP9/.test(text(res)), text(res));
 });
 
 await test('create_server_tag: GA4 relay + Ads conversion shapes; per-platform validation', async () => {

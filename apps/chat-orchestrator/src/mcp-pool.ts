@@ -22,6 +22,11 @@ interface PoolEntry {
 
 export class McpPool {
   private readonly entries = new Map<string, PoolEntry>();
+  /**
+   * Children replaced (token changed, identity refreshed) while a turn was still using them. Out of
+   * `entries`, so no new turn is handed one, and closed when the last turn using it releases it.
+   */
+  private readonly retired = new Map<McpConnection, { userId: string; entry: PoolEntry }>();
   private readonly starting = new Map<string, Promise<PoolEntry>>();
   private sweeper: NodeJS.Timeout | null = null;
 
@@ -49,16 +54,34 @@ export class McpPool {
     return entry.connection;
   }
 
-  release(userId: string): void {
+  /**
+   * Hands back one use of `connection`: the exact one acquire or refreshIdentity returned.
+   *
+   * Keyed by the connection, not just the user. By the time a long turn ends, the user's current
+   * child may be a replacement another request minted; decrementing that one instead would let it
+   * be swept or evicted for capacity while it is still serving.
+   */
+  release(userId: string, connection: McpConnection): void {
     const entry = this.entries.get(userId);
-    if (!entry) return;
-    entry.inUse = Math.max(0, entry.inUse - 1);
-    entry.lastUsedAt = Date.now();
+    if (entry?.connection === connection) {
+      entry.inUse = Math.max(0, entry.inUse - 1);
+      entry.lastUsedAt = Date.now();
+      return;
+    }
+    const retired = this.retired.get(connection);
+    if (!retired) return;
+    retired.entry.inUse = Math.max(0, retired.entry.inUse - 1);
+    if (retired.entry.inUse === 0) {
+      this.retired.delete(connection);
+      void this.close(retired.entry, retired.userId, 'replaced, last turn finished');
+    }
   }
 
   /**
    * Replaces a user's child with one holding a freshly minted token. Called after Google rejects
    * the current one mid-turn.
+   *
+   * The returned connection is a use of its own, released separately from the one being replaced.
    */
   async refreshIdentity(userId: string, userJwt: string): Promise<McpConnection> {
     if (!this.tokens) {
@@ -143,6 +166,19 @@ export class McpPool {
     const entry = this.entries.get(userId);
     if (!entry) return;
     this.entries.delete(userId);
+    if (entry.inUse > 0) {
+      // Closing it now would fail every later tool call of the turn still running on it with "MCP
+      // client is not connected", which is not an auth failure, so nothing would retry it.
+      this.retired.set(entry.connection, { userId, entry });
+      console.log(
+        `[pool] retired MCP session for user ${redactId(userId)} (${reason}); closing after ${entry.inUse} turn(s) finish`,
+      );
+      return;
+    }
+    await this.close(entry, userId, reason);
+  }
+
+  private async close(entry: PoolEntry, userId: string, reason: string): Promise<void> {
     try {
       await entry.connection.close();
     } catch {
@@ -152,14 +188,19 @@ export class McpPool {
   }
 
   stats(): { sessions: number; busy: number } {
-    let busy = 0;
+    // A retired child is still a live process, and in use by definition.
+    let busy = this.retired.size;
     for (const e of this.entries.values()) if (e.inUse > 0) busy++;
-    return { sessions: this.entries.size, busy };
+    return { sessions: this.entries.size + this.retired.size, busy };
   }
 
   async shutdown(): Promise<void> {
     if (this.sweeper) clearInterval(this.sweeper);
-    await Promise.all([...this.entries.keys()].map((id) => this.evict(id, 'shutdown')));
+    const live = [...this.entries.entries()].map(([userId, entry]) => ({ userId, entry }));
+    const all = [...live, ...this.retired.values()];
+    this.entries.clear();
+    this.retired.clear();
+    await Promise.all(all.map(({ userId, entry }) => this.close(entry, userId, 'shutdown')));
   }
 }
 

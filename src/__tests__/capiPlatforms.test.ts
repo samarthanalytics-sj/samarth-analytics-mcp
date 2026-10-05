@@ -11,6 +11,7 @@ import assert from 'assert';
 import {
   CAPI_PLATFORMS, capiPlatform, capiValueKeys, capiCredentials, webPixelPlatform,
 } from '../shared/capi-platforms';
+import { buildMetaEmqVariables, buildTikTokEmqVariables } from '../shared/server-migration';
 
 let passed = 0, failed = 0;
 function test(name: string, fn: () => void): void {
@@ -44,9 +45,9 @@ test('every entry declares complete, well-formed credentials', () => {
 test('value keys are namespaced, so two vendors can both want an "accessToken"', () => {
   const meta = capiPlatform('meta')!;
   const reddit = capiPlatform('reddit')!;
-  assert.deepEqual(capiValueKeys(meta), ['meta.pixelId', 'meta.accessToken']);
-  assert.deepEqual(capiValueKeys(reddit), ['reddit.accountId', 'reddit.accessToken']);
-  const all = CAPI_PLATFORMS.flatMap(capiValueKeys);
+  assert.deepEqual(capiValueKeys(meta, 'purchase'), ['meta.pixelId', 'meta.accessToken']);
+  assert.deepEqual(capiValueKeys(reddit, 'purchase'), ['reddit.accountId', 'reddit.accessToken']);
+  const all = CAPI_PLATFORMS.flatMap((p) => capiValueKeys(p, 'purchase'));
   assert.equal(new Set(all).size, all.length, 'no key collides across platforms');
 });
 
@@ -55,23 +56,23 @@ test('credentials are read per platform, and blanks are reported by their own la
   const full = capiCredentials(nextdoor, {
     'nextdoor.pixelId': 'ND1', 'nextdoor.clientId': 'C1', 'nextdoor.accessToken': 'T1',
     'meta.accessToken': 'SHOULD NOT LEAK',
-  });
+  }, 'purchase');
   assert.deepEqual(full.missing, []);
   assert.deepEqual(full.creds, { pixelId: 'ND1', clientId: 'C1', accessToken: 'T1' }, 'only its own fields');
 
-  const partial = capiCredentials(nextdoor, { 'nextdoor.pixelId': ' ND1 ' });
+  const partial = capiCredentials(nextdoor, { 'nextdoor.pixelId': ' ND1 ' }, 'purchase');
   assert.equal(partial.creds.pixelId, 'ND1', 'trimmed');
   assert.equal(partial.missing.length, 2);
   assert.ok(partial.missing.every((m) => /Nextdoor|Channel|client/i.test(m)), partial.missing.join(', '));
 
   // Yelp is the shape a two-credential model could not express.
-  assert.deepEqual(capiCredentials(capiPlatform('yelp')!, { 'yelp.accessToken': 'T' }).missing, []);
+  assert.deepEqual(capiCredentials(capiPlatform('yelp')!, { 'yelp.accessToken': 'T' }, 'purchase').missing, []);
 });
 
 test('every platform builds a real tag from its declared fields', () => {
   for (const p of CAPI_PLATFORMS) {
-    // Enumerated fields must get a value from their own set: the builders deliberately normalise
-    // anything else to a safe default, so a synthetic string would never appear in the tag.
+    // Enumerated fields must get a value from their own set: capiCredentials reports anything else as
+    // unrecognised (and the builders normalise it to a default), so a synthetic string never reaches the tag.
     const ENUMERATED: Record<string, string> = { 'amazon.region': 'EU', 'stackadapt.pixelType': 'conv' };
     const creds = Object.fromEntries(
       p.fields.map((f) => [f.key, ENUMERATED[`${p.platform}.${f.key}`] ?? `v_${f.key}`]),
@@ -88,6 +89,77 @@ test('every platform builds a real tag from its declared fields', () => {
       assert.ok(blob.includes(expected), `${p.platform}: ${f.key} never reaches the built tag`);
     }
   }
+});
+
+test('every {{ed - }} / {{rh - }} variable a built tag references is provisioned by its own spec', () => {
+  // A tag referencing a variable the container lacks hard-fails on create, so a spec whose builder emits
+  // such references must provision them (emqVariables) - Snapchat reuses the Meta set.
+  const provided: Record<string, Set<string>> = {
+    meta: new Set(buildMetaEmqVariables().map((v) => v.name)),
+    tiktok: new Set(buildTikTokEmqVariables().map((v) => v.name)),
+  };
+  for (const p of CAPI_PLATFORMS) {
+    const creds = Object.fromEntries(p.fields.map((f) => [f.key, `v_${f.key}`]));
+    const blob = JSON.stringify(p.build('cvt_1', 'n', creds, { event: 'purchase', firingTriggerId: ['7'] }));
+    const refs = [...blob.matchAll(/\{\{((?:ed|rh) - [^}]+)\}\}/g)].map((m) => m[1]);
+    if (!refs.length) continue;
+    assert.ok(p.emqVariables, `${p.platform} references ${refs[0]} but provisions no variables`);
+    for (const r of refs) assert.ok(provided[p.emqVariables!].has(r), `${p.platform}: {{${r}}} is not created by the ${p.emqVariables} variable set`);
+  }
+  assert.equal(capiPlatform('snapchat')?.emqVariables, 'meta');
+});
+
+test('per-conversion ids are keyed per event: two X / LinkedIn / LINE Yahoo events never share one conversion', () => {
+  const x = capiPlatform('x')!;
+  const shared = { 'x.pixelId': 'PX', 'x.pixelAccessToken': 'TOK' };
+  const vals = { ...shared, 'x.eventId@purchase': 'tw-a', 'x.eventId@generate_lead': 'tw-b' };
+  assert.deepEqual(capiValueKeys(x, 'purchase'), ['x.pixelId', 'x.eventId@purchase', 'x.pixelAccessToken']);
+  const p = capiCredentials(x, vals, 'purchase');
+  const l = capiCredentials(x, vals, 'generate_lead');
+  assert.equal(p.creds.eventId, 'tw-a');
+  assert.equal(l.creds.eventId, 'tw-b');
+  const eventIdOf = (c: Record<string, string>, ev: string) =>
+    ((x.build('cvt_1', ev, c, { event: ev, firingTriggerId: ['7'] }) as unknown as { parameter: Array<{ key?: string; value?: string }> })
+      .parameter.find((q) => q.key === 'eventId')?.value);
+  assert.notEqual(eventIdOf(p.creds, 'purchase'), eventIdOf(l.creds, 'generate_lead'), 'each event tag reports its own X conversion');
+  // A platform-wide value is never reused for an event: that event is reported missing, not guessed.
+  const flat = capiCredentials(x, { ...shared, 'x.eventId': 'tw-a', 'x.eventId@purchase': 'tw-a' }, 'sign_up');
+  assert.deepEqual(flat.missing, ['X Event ID (tw-...) for sign_up']);
+
+  const li = capiPlatform('linkedin')!;
+  assert.deepEqual(capiValueKeys(li, 'sign_up'), ['linkedin.conversionRuleUrn@sign_up', 'linkedin.accessToken']);
+  assert.equal(capiCredentials(li, { 'linkedin.accessToken': 'T', 'linkedin.conversionRuleUrn': 'urn:x' }, 'sign_up').missing.length, 1);
+
+  // LINE Yahoo: every event but page_view needs its own Event Snippet ID, and it reaches the tag.
+  const ly = capiPlatform('lineyahoo')!;
+  const base = { 'lineyahoo.tagId': 'T', 'lineyahoo.accessToken': 'A', 'lineyahoo.channelId': 'C' };
+  assert.deepEqual(capiValueKeys(ly, 'purchase'), ['lineyahoo.tagId', 'lineyahoo.accessToken', 'lineyahoo.channelId', 'lineyahoo.eventSnippetId@purchase']);
+  assert.deepEqual(capiValueKeys(ly, 'page_view'), ['lineyahoo.tagId', 'lineyahoo.accessToken', 'lineyahoo.channelId'], 'page_view needs no snippet');
+  assert.deepEqual(capiCredentials(ly, base, 'purchase').missing, ['Yahoo Event Snippet ID for purchase']);
+  assert.deepEqual(capiCredentials(ly, base, 'page_view').missing, []);
+  const c = capiCredentials(ly, { ...base, 'lineyahoo.eventSnippetId@purchase': 'SNIP1' }, 'purchase');
+  assert.deepEqual(c.missing, []);
+  const tag = ly.build('cvt_1', 'n', c.creds, { event: 'purchase', firingTriggerId: ['7'] }) as unknown as { parameter: Array<{ key?: string; value?: string }> };
+  assert.equal(tag.parameter.find((q) => q.key === 'eventSnippetId')?.value, 'SNIP1');
+});
+
+test('free-text enumerated credentials: the words the label suggests and any case map correctly; unknowns are skipped, not guessed', () => {
+  const param = (tag: unknown, key: string) =>
+    ((tag as { parameter?: Array<{ key?: string; value?: string }> }).parameter ?? []).find((p) => p.key === key)?.value;
+  const sa = capiPlatform('stackadapt')!;
+  const amazon = capiPlatform('amazon')!;
+  const ctx = { event: 'purchase', firingTriggerId: ['7'] };
+  assert.equal(param(sa.build('cvt_1', 'n', { pixelId: 'P', pixelType: 'audience' }, ctx), 'pixelType'), 'rt', 'audience is a retargeting (rt) pixel');
+  assert.equal(param(sa.build('cvt_1', 'n', { pixelId: 'P', pixelType: 'Universal' }, ctx), 'pixelType'), 'universal');
+  assert.equal(param(sa.build('cvt_1', 'n', { pixelId: 'P', pixelType: 'conversion' }, ctx), 'pixelType'), 'conv');
+  assert.equal(param(amazon.build('cvt_1', 'n', { tagId: 'T', region: 'eu' }, ctx), 'tagRegion'), 'EU', 'lower-case eu is EU');
+  assert.equal(param(amazon.build('cvt_1', 'n', { tagId: 'T', region: ' Eu ' }, ctx), 'tagRegion'), 'EU');
+  assert.ok(/rt = audience/.test(sa.fields.find((f) => f.key === 'pixelType')!.label), 'the label names the accepted values');
+  // A value outside the set is reported (so the apply skips the item) instead of defaulting silently.
+  assert.deepEqual(capiCredentials(sa, { 'stackadapt.pixelId': 'P', 'stackadapt.pixelType': 'Audience' }, 'purchase').missing, []);
+  assert.equal(capiCredentials(sa, { 'stackadapt.pixelId': 'P', 'stackadapt.pixelType': 'banana' }, 'purchase').missing.length, 1);
+  assert.deepEqual(capiCredentials(amazon, { 'amazon.tagId': 'T', 'amazon.region': 'eu' }, 'purchase').missing, []);
+  assert.match(capiCredentials(amazon, { 'amazon.tagId': 'T', 'amazon.region': 'APAC' }, 'purchase').missing[0], /Region.*unrecognised "APAC"/);
 });
 
 test('web pixels resolve to their platform, and GA4 tags never do', () => {

@@ -40,6 +40,14 @@ function check(name: string, ok: boolean, detail?: string): void {
   check('E.164 stays E.164 and is confident', (() => { const n = normalizePhone('+15551234567'); return n.e164 === '+15551234567' && n.confident; })());
   check('formatting is stripped', normalizePhone('+1 (555) 123-4567').e164 === '+15551234567');
   check('00 international prefix is treated as +', (() => { const n = normalizePhone('0044 20 7946 0958'); return n.e164 === '+442079460958' && n.confident; })());
+  // Leading punctuation used to hide the prefix, so these came out as "no country code".
+  check('a bracketed + prefix is still international', (() => { const n = normalizePhone('(+44) 20 7946 0958'); return n.e164 === '+442079460958' && n.confident; })(), JSON.stringify(normalizePhone('(+44) 20 7946 0958')));
+  check('a bracketed 00 prefix is still international', (() => { const n = normalizePhone('(0044) 20 7946 0958'); return n.e164 === '+442079460958' && n.confident; })(), JSON.stringify(normalizePhone('(0044) 20 7946 0958')));
+  check('a bracketed tel: href keeps its country code through the merge',
+    mergePhoneSightings([{ raw: 'tel:(+44)2079460958', source: 'tel_link', page: '/a' }])[0]?.e164 === '+442079460958');
+  // "00" is stripped ONLY when it is the detected international prefix, never silently otherwise.
+  check('leading zeros that are not an international prefix are kept in the digits',
+    (() => { const n = normalizePhone('(00) 7946 0958'); return n.digits === '0079460958' && n.e164 === null && !n.confident; })(), JSON.stringify(normalizePhone('(00) 7946 0958')));
   check('a bare 10-digit number is NOT assumed to be +1', (() => { const n = normalizePhone('(555) 123-4567'); return n.e164 === null && !n.confident && /No country code/.test(n.reason ?? ''); })());
   check('but IS completed when the caller supplies a NANP default', (() => { const n = normalizePhone('(555) 123-4567', 'US'); return n.e164 === '+15551234567' && !n.confident; })());
   check('11 digits starting with 1 completes under a NANP default', normalizePhone('1-555-123-4567', 'US').e164 === '+15551234567');

@@ -40,7 +40,7 @@ const SECRET_KEYS = /token|secret|password|credential/i;
 
 /** Human destination for a server tag - the id the tag forwards TO, never a credential. */
 export function tagDestination(t: AuditTag): string {
-  if (t.type === 'sgtmgaaw') return serverTagParam(t, 'measurementId').trim() || '(no Measurement ID)';
+  if (t.type === 'sgtmgaaw') return serverTagParam(t, 'measurementId').trim() || '(inherits from the event)';
   const pixel = serverTagParam(t, 'pixelId').trim();
   if (pixel) return `pixel ${pixel}`;
   const conv = serverTagParam(t, 'conversionId').trim();

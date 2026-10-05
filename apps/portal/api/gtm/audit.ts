@@ -11,13 +11,10 @@ import type {
   RuntimeInput as ConsentRuntimeInput,
   RuntimePage as ConsentRuntimePage,
 } from "../../shared/consent-audit";
-// Pure, dependency-free accuracy invariants. Safe to import at the top level on
-// Vercel (no node:*, no engine, no googleapis) — same contract as
-// shared/cache-keys.ts. Centralizes the evidence-scoped rules so they can't drift.
-import {
-  normalizeFindingAccuracy,
-  type EvidenceItem as AccuracyEvidenceItem,
-} from "../../shared/audit-accuracy";
+// Accuracy invariants (shared/audit-accuracy.ts) centralize the evidence-scoped
+// rules so they can't drift. Types only here: the module itself is loaded lazily
+// by runAudit() after session validation (see `accuracyModule` below).
+import type { EvidenceItem as AccuracyEvidenceItem } from "../../shared/audit-accuracy";
 
 /**
  * /api/gtm/audit
@@ -1521,12 +1518,13 @@ function ruleCrossMeasurementIds(ctx: Ctx, out: AuditFinding[]) {
 function ruleCrossCustomDimensions(ctx: Ctx, out: AuditFinding[]) {
   const ga4 = ctx.ga4;
   if (!ga4) return;
-  // Only run when we successfully read custom dimensions/metrics. An empty list
-  // after a successful read is meaningful (none registered); a failed read is
-  // already surfaced as a tool failure, so skip in that case.
+  // Only run when we successfully read custom dimensions AND metrics. An empty
+  // list after a successful read is meaningful (none registered); a failed read
+  // is already surfaced as a tool failure, so skip in that case — with either
+  // list missing, params registered there would be misreported as unregistered.
   const cdFailed = ga4.failures.some((f) => f.resource === "ga4_custom_dimensions");
   const cmFailed = ga4.failures.some((f) => f.resource === "ga4_custom_metrics");
-  if (cdFailed && cmFailed) return;
+  if (cdFailed || cmFailed) return;
 
   const registered = new Set<string>();
   for (const d of ga4.customDimensions) {
@@ -2062,6 +2060,18 @@ function severityForResource(resource: string): AuditSeverity {
 
 // ── Findings helpers ─────────────────────────────────────────────────────
 
+// shared/audit-accuracy, loaded lazily by runAudit() (after the handler has
+// validated the session) and held here for the synchronous rule helpers.
+type AccuracyModule = typeof import("../../shared/audit-accuracy");
+let accuracyModule: AccuracyModule | null = null;
+
+function accuracy(): AccuracyModule {
+  if (!accuracyModule) {
+    throw new Error("audit-accuracy module not loaded (runAudit loads it)");
+  }
+  return accuracyModule;
+}
+
 function pushFinding(
   out: AuditFinding[],
   f: {
@@ -2089,7 +2099,7 @@ function pushFinding(
   // ever tightens severity/confidence, never the reverse. It also fills the
   // evidence floor and records any downgrade as accuracyNotes / confidenceDowngraded.
   // See shared/audit-accuracy.ts and docs/AUDIT_ACCURACY.md.
-  const acc = normalizeFindingAccuracy({
+  const acc = accuracy().normalizeFindingAccuracy({
     finding: f.finding,
     severity: f.severity,
     sources: f.sources ?? ["CONFIG"],
@@ -2219,28 +2229,29 @@ function toConsentRuntimeInput(rt: RuntimeState | null): ConsentRuntimeInput | n
   return { capturedAt: rt.capturedAt, pages, states: rt.states, ok: true };
 }
 
-function consentFindingToAudit(f: ConsentFinding): AuditFinding {
-  return {
+// Routed through pushFinding (→ normalizeFindingAccuracy) like every other rule,
+// with the same structured evidence /api/gtm/consent-audit builds, so the full
+// audit and the consent-only route agree on severity/confidence/evidence. The
+// engine's snippets live in evidence[] — not appended to suggestedFix.
+function consentFindingToAudit(f: ConsentFinding, out: AuditFinding[]): void {
+  const sources: AuditSourceFlag[] = f.sources.length > 0 ? f.sources : ["CONFIG"];
+  pushFinding(out, {
     id: fid(`consent:${f.id}`),
     category: "consent",
-    title: f.finding,
-    description: f.whyItMatters,
     severity: f.severity,
     finding: f.finding,
     affected: f.affected,
     whyItMatters: f.whyItMatters,
-    suggestedFix:
-      f.evidence && f.evidence.length
-        ? `${f.suggestedFix} Evidence: ${f.evidence.join(" | ")}`
-        : f.suggestedFix,
+    suggestedFix: f.suggestedFix,
     needsManualReview: f.needsManualReview,
-    sources: f.sources,
+    sources,
     confidence: f.confidence,
     entity: f.entity,
     parameter: f.parameter,
     businessImpact: f.businessImpact,
     effort: f.effort,
-  };
+    evidence: accuracy().buildConsentEvidenceItems(f, sources) as EvidenceItem[],
+  });
 }
 
 function buildSummary(findings: AuditFinding[], itemsChecked: number): string {
@@ -2272,6 +2283,11 @@ async function runAudit(
     dataApi?: DataApiState | null;
   },
 ): Promise<AuditSummary> {
+  // Lazy, post-auth load of the accuracy normalizer every rule's pushFinding()
+  // uses. An import failure throws into the handler's catch → JSON error.
+  if (!accuracyModule) {
+    accuracyModule = await import("../../shared/audit-accuracy");
+  }
   const runtime = opts.runtime ?? null;
   const sgtm = opts.sgtm ?? null;
   const dataApi = opts.dataApi ?? null;
@@ -2302,7 +2318,7 @@ async function runAudit(
       toConsentConfigInput(ctx),
       toConsentRuntimeInput(runtime),
     );
-    for (const cf of consentResult.findings) findings.push(consentFindingToAudit(cf));
+    for (const cf of consentResult.findings) consentFindingToAudit(cf, findings);
   } catch (e) {
     findings.push({
       id: "consent-engine-unavailable",

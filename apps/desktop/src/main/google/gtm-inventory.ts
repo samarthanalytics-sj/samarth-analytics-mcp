@@ -4,7 +4,7 @@
 // Pure — snapshot in, tables out. Attached to the audit_gtm_container result; the reporting methodology
 // (jit-reference AUDIT_REPORTING_METHODOLOGY) tells the model to render these first.
 
-import { isBuiltinTriggerId, type ContainerSnapshot, type AuditTag, type AuditTrigger, type AuditVariable } from './gtm-builders';
+import { isBuiltinTriggerId, collectUsedTriggerIds, type ContainerSnapshot, type AuditTag, type AuditTrigger, type AuditVariable } from './gtm-builders';
 
 export interface InventoryTagRow {
   name: string;
@@ -156,27 +156,6 @@ function variableValue(v: AuditVariable): string {
   }
 }
 
-/** Collect every triggerReference value anywhere in a value tree (Trigger Group members). */
-function collectTriggerRefs(value: unknown, into: Set<string>): void {
-  if (Array.isArray(value)) { for (const v of value) collectTriggerRefs(v, into); return; }
-  if (value && typeof value === 'object') {
-    const o = value as Record<string, unknown>;
-    if (o.type === 'triggerReference' && o.value != null) into.add(String(o.value));
-    for (const v of Object.values(o)) collectTriggerRefs(v, into);
-  }
-}
-
-/** Trigger ids referenced by any tag (firing OR blocking) or any Trigger Group — anything NOT here is Unused. */
-function referencedTriggerIds(snapshot: ContainerSnapshot): Set<string> {
-  const used = new Set<string>();
-  for (const t of snapshot.tags) {
-    for (const id of t.firingTriggerId ?? []) used.add(id);
-    for (const id of t.blockingTriggerId ?? []) used.add(id);
-  }
-  for (const tr of snapshot.triggers) collectTriggerRefs(tr.parameter, used);
-  return used;
-}
-
 /** Resolve a tag's firingTriggerId list to human trigger names (built-in ids → "All Pages (Initialization)"). */
 function firingTriggerNames(tag: AuditTag, byId: Map<string, AuditTrigger>): string {
   const names = (tag.firingTriggerId ?? []).map((id) => {
@@ -189,7 +168,11 @@ function firingTriggerNames(tag: AuditTag, byId: Map<string, AuditTrigger>): str
 /** Build the three inventory tables from a container snapshot. PURE. */
 export function buildContainerInventory(snapshot: ContainerSnapshot): ContainerInventory {
   const byId = new Map(snapshot.triggers.map((t) => [t.triggerId, t]));
-  const used = referencedTriggerIds(snapshot);
+  // The SAME usage rule as the unused-trigger audit (collectUsedTriggerIds): a tag's firing/blocking
+  // trigger is used, and a Trigger Group's members only when the group itself is reached. Marking
+  // every group member Used regardless had this table call a dead group's member Used while the
+  // audit, in the same report, listed it as an orphan.
+  const used = collectUsedTriggerIds(snapshot);
 
   const tags: InventoryTagRow[] = snapshot.tags.map((t) => ({
     name: t.name,

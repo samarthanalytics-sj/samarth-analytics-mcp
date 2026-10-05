@@ -17,6 +17,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { verifyPage, formatHuman, SpecValidationError, type VerifyOptions } from './index.js';
 import { PlaywrightMissingError } from '../agent/browser.js';
+import { urlAllowed } from '../utils/urlGuard.js';
 
 interface Args {
   url?: string;
@@ -41,7 +42,7 @@ function parseArgs(argv: string[]): Args {
       case '--out': args.out = next(); break;
       case '--settle-quiet': args.settleQuiet = Number(next()); break;
       case '--settle-max': args.settleMax = Number(next()); break;
-      case '--allowlist': args.allowlist = next().split(',').map((s) => s.trim()).filter(Boolean); break;
+      case '--allowlist': args.allowlist = next().split(',').map((s) => s.trim().toLowerCase()).filter(Boolean); break;
       case '-h':
       case '--help': args.help = true; break;
       default:
@@ -64,7 +65,11 @@ Options:
   --out           Write the JSON report to this path (default: stdout).
   --settle-quiet  Stop capturing after this many ms with no new GA4 collect (default 2000).
   --settle-max    Hard cap on capture time in ms (default 10000).
-  --allowlist     Comma-separated host suffixes the browser may load.
+  --allowlist     Comma-separated host suffixes the page may navigate to (start URL,
+                  navigate steps, link/form navigations). A server redirect off the list
+                  cannot be blocked, but no click, submit, navigate or consent step is
+                  performed on the page it lands on. Subresources and iframes are not
+                  restricted.
 `;
 
 async function main(): Promise<number> {
@@ -83,6 +88,17 @@ async function main(): Promise<number> {
   }
   if (args.url && raw && typeof raw === 'object') {
     (raw as Record<string, unknown>).url = args.url;
+  }
+
+  // Admission: the start URL must pass the SSRF guard and --allowlist before anything loads, the
+  // same check the MCP tool makes. (A missing or malformed url is left to spec validation.)
+  const startUrl = raw && typeof raw === 'object' ? (raw as Record<string, unknown>).url : undefined;
+  if (typeof startUrl === 'string') {
+    const verdict = urlAllowed(startUrl, args.allowlist ?? []);
+    if (!verdict.ok) {
+      process.stderr.write(`URL rejected: ${startUrl}: ${verdict.reason}\n`);
+      return 2;
+    }
   }
 
   const opts: VerifyOptions = { headless: !args.headed };

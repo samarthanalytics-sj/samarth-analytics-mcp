@@ -51,7 +51,7 @@ const MUTATIONS = new Set([
   'createGtmFolder', 'moveEntitiesToFolder', 'renameGtmFolder', 'deleteGtmFolder',
   'createGtmEnvironment', 'updateGtmEnvironment',
   'createServerContainer', 'createGtmClient', 'updateGtmClient', 'deleteGtmClient', 'createGtmTransformation', 'updateGtmTransformation', 'bootstrapServerSideTagging',
-  'setWebServerContainerUrl', 'setServerContainerTaggingUrl', 'createMetaEmqVariables', 'copyWorkspaceResources', 'importGalleryTemplate',
+  'setWebServerContainerUrl', 'setServerContainerTaggingUrl', 'runServerRuntimeProbe', 'createMetaEmqVariables', 'copyWorkspaceResources', 'importGalleryTemplate',
   'setupEcommerceFunnel', 'setupServerEcommerceFunnel', 'createServerContainerFromWeb',
   'ga4AdminCreate', 'ga4AdminPatch', 'ga4AdminDelete', 'ga4AdminArchive',
   'ga4CreateProperty', 'ga4UpdateProperty', 'ga4DeleteProperty', 'ga4UpdateDataRetention', 'ga4UpdateAccount', 'ga4DeleteAccount',
@@ -115,6 +115,7 @@ function makeFakeData(): { data: GoogleDataService; calls: string[]; mutations: 
     createStapeDataPipeline: () => r('createStapeDataPipeline', { dataTag: { name: 'Data Tag - All Pages', tagId: 'T1', reused: false }, dataClient: { name: 'Data Client', clientId: 'C1', reused: false }, requestPath: '/data', note: 'x', nextSteps: [] }),
     setWebServerContainerUrl: () => r('setWebServerContainerUrl', { tagId: '1', name: 'Google Tag', serverContainerUrl: 'https://sgtm.example.com' }),
     setServerContainerTaggingUrl: () => r('setServerContainerTaggingUrl', { containerId: 'SC1', name: 'Server', taggingServerUrls: ['https://sgtm.example.com'] }),
+    runServerRuntimeProbe: () => r('runServerRuntimeProbe', { status: 'pass', measurementId: 'G-1', property: 'properties/1', propertyDisplayName: 'P', taggingHost: 'sgtm.example.com', eventName: 'samarth_probe_deadbeef', sendStatus: 204, sentAt: 0, seenAt: 12000, latencyMs: 12000, polls: 2, boundary: 'x', note: 'x' }),
     createMetaEmqVariables: () => r('createMetaEmqVariables', { created: ['ed - fbp', 'ed - fbc'], skipped: [] }),
     setupEcommerceFunnel: () => r('setupEcommerceFunnel', { created: { variables: [], triggers: ['CE - purchase'], tags: ['GA4 - Event - Purchase Tag'] }, skipped: [] }),
     setupServerEcommerceFunnel: () => r('setupServerEcommerceFunnel', { created: { triggers: ['ga4 - purchase'], tags: ['GA4 - Purchase Tag (Server)'] }, skipped: [] }),
@@ -368,13 +369,15 @@ async function main(): Promise<void> {
     //   - create_google_ads_conversion_action (a live Ads conversion action);
     //   - the GA4 ACCESS-BINDING create/update tools, which change WHO can access a property/account
     //     (a permission write, flagged `sensitive` in ga4-write-tools → approval:true). The delete
-    //     access-binding tool is caught by isDestructive above, so only create_/update_ land here.
+    //     access-binding tool is caught by isDestructive above, so only create_/update_ land here;
+    //   - probe_server_runtime, which delivers a live synthetic hit into a production GA4 property.
     // registry.list() intentionally projects only {name, description, inputSchema} (the LLM tool
     // shape), so this classification cannot read the approval flag off the listed tools and must name
     // the gated set. Keep it in step with the registry: any new Tool.approval write belongs here.
     const isApprovalGated = (n: string) =>
       n === 'create_google_ads_conversion_action' ||
       n === 'create_google_ads_conversion_actions_for_tags' ||
+      n === 'probe_server_runtime' ||
       ((n.startsWith('create_') || n.startsWith('update_')) && n.endsWith('_access_binding'));
     const destructiveNames = writeNames.filter(isDestructive);
     const gatedNames = writeNames.filter((n) => !isDestructive(n) && isApprovalGated(n));

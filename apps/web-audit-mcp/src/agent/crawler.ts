@@ -5,10 +5,10 @@
  * prioritised so small page budgets still find the interesting surfaces.
  */
 
-import type { PwBrowser } from './browser.js';
+import type { PwBrowser, PwResponse } from './browser.js';
 import { openInstrumentedPage } from './browser.js';
 import { urlAllowed } from '../utils/urlGuard.js';
-import { botBlockReason } from './bot-block.js';
+import { botBlockReason, isBlockStatus } from './bot-block.js';
 
 export interface CrawlOptions {
   maxPages: number;
@@ -83,6 +83,39 @@ export function normalizeUrl(raw: string, baseUrl: string): string | null {
 /** Higher score = crawled earlier within the same depth. */
 export function urlPriority(url: string): number {
   return FORMY_RE.test(url) ? 1 : 0;
+}
+
+/**
+ * The bot-block note for a main-document response, or undefined for an ordinary one.
+ *
+ * Playwright's headers() leaves out security-related headers, Set-Cookie among them, so the
+ * cookie-only vendor markers (PerimeterX _px, Imperva visid_incap, DataDome, Akamai _abck) could never
+ * match on it. allHeaders() carries them, but it waits on a separate CDP event, so it is read only for
+ * a status that can be a block, and bounded so a navigation never hangs on it.
+ */
+export async function blockNoteOf(
+  resp: Pick<PwResponse, 'headers' | 'allHeaders'>,
+  status: number,
+  timeoutMs = 2_000,
+): Promise<string | undefined> {
+  let headers: Record<string, string> = resp.headers();
+  if (isBlockStatus(status)) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const provisional = headers;
+      headers = await Promise.race([
+        resp.allHeaders(),
+        new Promise<Record<string, string>>((resolve) => {
+          timer = setTimeout(() => resolve(provisional), timeoutMs);
+        }),
+      ]);
+    } catch {
+      // keep the provisional headers
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  return botBlockReason(status, headers) ?? undefined;
 }
 
 interface PageScan {
@@ -167,7 +200,7 @@ export async function crawlSite(
         const resp = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: opts.navTimeoutMs });
         status = resp ? resp.status() : null;
         // A bot-protection challenge (Cloudflare etc.) is an HTTP error with a NAME; carry it as the note.
-        if (resp && status !== null) note = botBlockReason(status, resp.headers()) ?? undefined;
+        if (resp && status !== null) note = await blockNoteOf(resp, status);
         await page.waitForTimeout(500);
         scan = await page.evaluate<PageScan>(scanPageInBrowser);
       } catch (err) {

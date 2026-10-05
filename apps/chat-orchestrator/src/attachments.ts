@@ -224,10 +224,27 @@ export async function extractAttachment(input: AttachmentInput): Promise<Extract
 }
 
 /**
+ * True for an entry the extractor can work with. The request body is untrusted JSON, so this is
+ * checked at the boundary, before a session is acquired: see the chat handler in index.ts.
+ */
+export function isAttachmentInput(value: unknown): value is AttachmentInput {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as AttachmentInput).name === 'string' &&
+    typeof (value as AttachmentInput).dataBase64 === 'string'
+  );
+}
+
+/**
  * Extracts a whole batch, keeping the good ones and reporting the rest.
  *
  * One unreadable file must not cost the user the other four, and it must not vanish silently
  * either - a dropped attachment looks identical to one the model chose to ignore.
+ *
+ * Never throws, even for a malformed entry. A `null` in the list used to throw in extractAttachment
+ * and then again in the catch below, escaping as a TypeError from an Express handler, which exits
+ * the process; it is now reported like any other unreadable file.
  */
 export async function extractAll(
   inputs: AttachmentInput[],
@@ -237,11 +254,15 @@ export async function extractAll(
 
   const capped = inputs.slice(0, MAX_ATTACHMENTS);
   for (const extra of inputs.slice(MAX_ATTACHMENTS)) {
-    rejected.push({ name: extra.name, reason: `Only ${MAX_ATTACHMENTS} attachments per message.` });
+    rejected.push({ name: extra?.name ?? 'attachment', reason: `Only ${MAX_ATTACHMENTS} attachments per message.` });
   }
 
   let total = 0;
   for (const input of capped) {
+    if (!isAttachmentInput(input)) {
+      rejected.push({ name: 'attachment', reason: 'Not a valid attachment: it needs a name and base64 data.' });
+      continue;
+    }
     try {
       const out = await extractAttachment(input);
       total += out.bytes;

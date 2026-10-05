@@ -31,7 +31,8 @@ export interface WebAuditConfig {
   /**
    * Interactive form discovery: click "open-a-form" CTAs to reveal popup/modal forms whose markup is only
    * injected on click. OFF by default — unlike the read-only scan it clicks controls on the live page
-   * (navigation is neutralised first, nothing is submitted). WEB_AUDIT_ENABLE_INTERACTIVE_FORMS=true.
+   * (navigation, form submits, network writes and measurement hits are blocked while it clicks; see
+   * tag-suggest/interactive-forms.ts). WEB_AUDIT_ENABLE_INTERACTIVE_FORMS=true.
    */
   interactiveFormsEnabled: boolean;
   /** verify: stop capturing after this many ms with no new GA4 collect. */

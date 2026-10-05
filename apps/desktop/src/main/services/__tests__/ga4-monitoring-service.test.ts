@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { Ga4MonitoringService } from '../ga4-monitoring-service';
+import { MAX_INTERVAL_MINUTES } from '../timer-limits';
 import type { GoogleDataService } from '../../google/data-service';
 import type { AccountView, Ga4MonitorRun } from '../../../shared/ipc';
 
@@ -41,6 +42,16 @@ const makeSecrets = () => {
 };
 
 console.log('\nGA4 monitoring service:');
+
+// Regression: the interval was only floor-clamped. Past setInterval's 2^31-1 ms limit (35791 min) Node
+// fires every 1 ms, which would sweep GA4 (~7 calls per property) and post to Slack nonstop.
+test('interval: floored at 15 min AND capped at the setInterval ceiling (Infinity too)', async () => {
+  const svc = new Ga4MonitoringService({ registry: { getActiveView: () => account }, data: fakeData(), secrets: makeSecrets(), emit: () => {}, now: () => 1 });
+  assert.equal(svc.configure({ intervalMinutes: 1, enabled: false }).intervalMinutes, 15, 'floor');
+  assert.equal(svc.configure({ intervalMinutes: 60 * 24 * 30 }).intervalMinutes, MAX_INTERVAL_MINUTES, '30 days is past the timer limit → clamped');
+  assert.equal(svc.configure({ intervalMinutes: Infinity }).intervalMinutes, MAX_INTERVAL_MINUTES, 'Infinity → clamped');
+  assert.equal(svc.configure({ intervalMinutes: 90 }).intervalMinutes, 90, 'a normal interval is untouched');
+});
 
 test('per-account scoping: a property added under one mail is invisible (and never swept) under another', async () => {
   const accountB: AccountView = { id: 'acct2', email: 'b@c.com', createdAt: 0, isActive: true, hasGoogleToken: true };

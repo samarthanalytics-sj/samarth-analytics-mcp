@@ -20,12 +20,12 @@ import { runTurn } from './loop.js';
 import { AuditRecorder } from './audit.js';
 import { UsageMeter, quotaMessage } from './usage.js';
 import { planFix, FIXABLE_CATEGORIES, type AuditFinding } from './audit-fix.js';
-import { SseStream } from './sse.js';
+import { onClientGone, SseStream } from './sse.js';
 import { deadline, DeadlineError } from './deadline.js';
 import { installTimestampedLogging } from './log-time.js';
 import { scopeTools } from './tools.js';
 import { checkAllowlistAgainstServer } from './integrations.js';
-import { extractAll, type ExtractedAttachment } from './attachments.js';
+import { extractAll, isAttachmentInput, type ExtractedAttachment } from './attachments.js';
 import { MemoryStore } from './memory.js';
 import { isSuperAdmin, tailLog, MAX_LINES } from './logs.js';
 import {
@@ -1101,7 +1101,7 @@ async function main(): Promise<void> {
     } catch (err) {
       if (err instanceof DeadlineError) {
         void acquiring.then(
-          () => pool.release(user.id),
+          (late) => pool.release(user.id, late),
           // The acquire failing after the deadline is already answered; the catch is only here so
           // its rejection is attached and cannot become an unhandled rejection.
           () => undefined,
@@ -1152,7 +1152,7 @@ async function main(): Promise<void> {
         message: err instanceof Error ? err.message : 'Could not complete that request.',
       });
     } finally {
-      pool.release(user.id);
+      pool.release(user.id, mcp);
     }
   }
 
@@ -1876,6 +1876,14 @@ async function main(): Promise<void> {
         message: 'Every message needs a string content.',
       });
     }
+    // The same for attachments, for the same reason: a null entry threw out of extractAll below,
+    // outside the turn's try, after a session had been acquired and with nothing to release it.
+    if (Array.isArray(body.attachments) && !body.attachments.every(isAttachmentInput)) {
+      return res.status(400).json({
+        code: 'bad_request',
+        message: 'Every attachment needs a string name and dataBase64.',
+      });
+    }
     const product: Product = body.context?.product === 'ga4' ? 'ga4' : 'gtm';
 
     const userJwt = extractBearer(req.headers.authorization);
@@ -1936,7 +1944,7 @@ async function main(): Promise<void> {
         // early return never reaches. Without this, one unreadable attachment pinned that user's
         // child as in use for the life of the process: never idle-evicted, still counted busy by
         // the capacity check, and one pool slot gone for good.
-        pool.release(user.id);
+        pool.release(user.id, userMcp);
         return res.status(400).json({
           error: 'attachments_unreadable',
           message: rejected.map((r) => r.reason).join(' '),
@@ -1961,11 +1969,12 @@ async function main(): Promise<void> {
 
     const stream = new SseStream(res);
     const controller = new AbortController();
-    req.on('close', () => {
+    // Not req.on('close'): that had already fired by here, so a client that left kept its turn
+    // running and spending tokens. And not per user: finishing one turn must not withdraw the cards
+    // of the same user's other conversation. Aborting this turn's signal stops its model call and
+    // declines only the approval it parked (the signal is passed to the broker in loop.ts).
+    onClientGone(res, () => {
       controller.abort();
-      // A parked write whose user has navigated away must not sit waiting for a decision that can
-      // no longer arrive.
-      approvals?.abortFor(user.id);
       stream.close();
     });
 
@@ -2007,6 +2016,10 @@ async function main(): Promise<void> {
       trigger: 'User request',
     });
 
+    // Every connection this turn holds a use of: the one acquired above, plus any replacement an
+    // auth refresh mints mid-turn. Each is released exactly once, in the finally below.
+    const held: McpConnection[] = [userMcp];
+
     try {
       await runTurn({
         cfg,
@@ -2023,7 +2036,11 @@ async function main(): Promise<void> {
         // token. Without one, the retry replaces the MCP's own actionable message ("run
         // npm run auth:google") with a confusing one about refresh being unavailable.
         onAuthFailure: tokenProvider
-          ? () => pool.refreshIdentity(user.id, userJwt)
+          ? async () => {
+              const fresh = await pool.refreshIdentity(user.id, userJwt);
+              held.push(fresh);
+              return fresh;
+            }
           : undefined,
         approvals: approvals ?? undefined,
         memory,
@@ -2080,7 +2097,7 @@ async function main(): Promise<void> {
       });
       stream.send({ type: 'done', reason: 'aborted' });
     } finally {
-      pool.release(user.id);
+      for (const connection of held) pool.release(user.id, connection);
       stream.close();
     }
   });

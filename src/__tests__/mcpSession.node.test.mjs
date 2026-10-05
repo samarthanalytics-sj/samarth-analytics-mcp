@@ -24,9 +24,16 @@ if (!existsSync(distPath)) {
   console.error(`\n✗ mcpSession test: ${distPath} not found. Run "npm run build" first.`);
   process.exit(1);
 }
-const { decidePostRoute, isInitializeRequest, UNKNOWN_SESSION_MESSAGE } = await import(
-  pathToFileURL(distPath).href
-);
+const {
+  decidePostRoute,
+  decideSessionAccess,
+  sessionErrorResponse,
+  sessionOwnedBy,
+  redactSessionId,
+  isInitializeRequest,
+  UNKNOWN_SESSION_MESSAGE,
+  MISSING_SESSION_MESSAGE,
+} = await import(pathToFileURL(distPath).href);
 
 let passed = 0;
 let failed = 0;
@@ -112,6 +119,80 @@ test('the unknown-session message tells the client how to recover', () => {
   assert.match(UNKNOWN_SESSION_MESSAGE, /initialize/);
 });
 
+console.log('\nmcpSession: decideSessionAccess (GET / DELETE)');
+
+test('a known session id is served', () => {
+  assert.deepStrictEqual(decideSessionAccess('sess-1', true), { kind: 'ok', sessionId: 'sess-1' });
+});
+
+test('REGRESSION: an unknown session id is a 404 + -32001 (GET used to answer 400)', () => {
+  const access = decideSessionAccess('sess-from-before-the-restart', false);
+  assert.strictEqual(access.kind, 'unknown-session');
+  const { status, body } = sessionErrorResponse(access.kind);
+  assert.strictEqual(status, 404);
+  assert.deepStrictEqual(body, {
+    jsonrpc: '2.0',
+    error: { code: -32001, message: UNKNOWN_SESSION_MESSAGE },
+    id: null,
+  });
+});
+
+test('REGRESSION: a missing header is a 400 (DELETE used to answer 404), never a 404', () => {
+  for (const sid of [undefined, '']) {
+    const access = decideSessionAccess(sid, false);
+    assert.strictEqual(access.kind, 'missing-header', JSON.stringify(sid));
+    const { status, body } = sessionErrorResponse(access.kind);
+    assert.strictEqual(status, 400);
+    assert.strictEqual(body.jsonrpc, '2.0');
+    assert.strictEqual(body.error.message, MISSING_SESSION_MESSAGE);
+    assert.notStrictEqual(body.error.code, -32001);
+  }
+});
+
+
+console.log('\nmcpSession: sessions are bound to the principal that opened them');
+
+// Sessions were keyed by mcp-session-id alone, so in multi-user mode another authenticated member who
+// learned an id could resume the session, take its event stream, or DELETE it.
+const ALICE = 'stytch:org-1:member-alice';
+const BOB = 'stytch:org-1:member-bob';
+
+test('the owner is recognised; anyone else, or no stored session, is not', () => {
+  assert.strictEqual(sessionOwnedBy(ALICE, ALICE), true);
+  assert.strictEqual(sessionOwnedBy(ALICE, BOB), false);
+  assert.strictEqual(sessionOwnedBy(undefined, ALICE), false);
+});
+
+test("REGRESSION: another principal's session id on a tools/call is refused like an unknown id", () => {
+  const route = decidePostRoute('alice-sess', sessionOwnedBy(ALICE, BOB), CALL);
+  assert.strictEqual(route.kind, 'unknown-session');
+});
+
+test("REGRESSION: another principal's session id on an initialize mints a NEW session, never resumes", () => {
+  assert.strictEqual(decidePostRoute('alice-sess', sessionOwnedBy(ALICE, BOB), INIT).kind, 'create');
+});
+
+test("REGRESSION: GET/DELETE with another principal's session id is the same 404 as an unknown id", () => {
+  const foreign = decideSessionAccess('alice-sess', sessionOwnedBy(ALICE, BOB));
+  const unknown = decideSessionAccess('no-such-sess', sessionOwnedBy(undefined, BOB));
+  assert.strictEqual(foreign.kind, 'unknown-session');
+  assert.deepStrictEqual(sessionErrorResponse(foreign.kind), sessionErrorResponse(unknown.kind));
+});
+
+test('the owner still resumes and reaches its own session', () => {
+  assert.strictEqual(decidePostRoute('alice-sess', sessionOwnedBy(ALICE, ALICE), CALL).kind, 'resume');
+  assert.strictEqual(decideSessionAccess('alice-sess', sessionOwnedBy(ALICE, ALICE)).kind, 'ok');
+});
+
+test('REGRESSION: session ids are redacted for logs, never printed whole', () => {
+  const sid = 'f849818d-d6cb-4931-b69a-fe6e0ede948f';
+  const shown = redactSessionId(sid);
+  assert.ok(!shown.includes(sid), shown);
+  assert.ok(shown.startsWith('f849818d'), 'a short prefix stays for correlation');
+  assert.ok(shown.length < 16, shown);
+  assert.ok(!redactSessionId('short-id').includes('short-id'), 'a short id is not printed either');
+});
+
 console.log('\nindex.ts: HTTP transport session lifetime and body limit');
 
 // These two live in src/index.ts, which cannot be imported: it calls main() at module load, so
@@ -145,6 +226,46 @@ test('a body-parser failure is answered as JSON-RPC, not as Express HTML', () =>
   const at = indexCode.indexOf('Malformed request body');
   assert.ok(at >= 0, 'no body-parser error handler');
   assert.match(indexCode.slice(at, at + 400), /jsonrpc: '2\.0'/);
+});
+
+test('REGRESSION: GET and DELETE /mcp answer session errors through decideSessionAccess', () => {
+  // POST's unknown-session 404 shares the same envelope, so all three methods answer alike.
+  const post = indexCode.indexOf("app.post('/mcp'");
+  assert.ok(post >= 0, 'POST /mcp not found');
+  assert.match(
+    indexCode.slice(post, indexCode.indexOf('});', post)),
+    /sessionErrorResponse\('unknown-session'\)/,
+    'POST must answer an unknown session with sessionErrorResponse'
+  );
+  for (const route of ["app.get('/mcp'", "app.delete('/mcp'"]) {
+    const at = indexCode.indexOf(route);
+    assert.ok(at >= 0, `${route} not found`);
+    const handler = indexCode.slice(at, indexCode.indexOf('});', at));
+    assert.match(handler, /decideSessionAccess\(/, `${route} must use decideSessionAccess`);
+    assert.match(handler, /sessionErrorResponse\(/, `${route} must answer with sessionErrorResponse`);
+  }
+  assert.ok(!indexCode.includes('Missing or invalid mcp-session-id header.'), 'the GET 400-for-unknown body is back');
+  assert.ok(!indexCode.includes("'Session not found.'"), 'the non-JSON-RPC DELETE 404 body is back');
+});
+
+test('REGRESSION: index.ts binds each session to its principal and checks it on POST, GET and DELETE', () => {
+  assert.match(indexCode, /sessions\.set\([^)]*principal/, 'the stored session must record its principal');
+  for (const route of ["app.post('/mcp'", "app.get('/mcp'", "app.delete('/mcp'"]) {
+    const at = indexCode.indexOf(route);
+    const handler = indexCode.slice(at, indexCode.indexOf('});', at));
+    assert.match(handler, /ownsSession\(sessionId, principal\)/, `${route} must check the session owner`);
+    assert.ok(!/sessions\.has\(sessionId\)/.test(handler), `${route} still routes on bare existence`);
+  }
+  assert.match(indexCode, /sessionOwnedBy\(sessions\.get\(sessionId\)\?\.principal, principal\)/);
+});
+
+test('REGRESSION: index.ts never logs a full session id', () => {
+  const logs = indexCode.match(/console\.error\([^;]*HTTP session[^;]*;/g) ?? [];
+  assert.ok(logs.length >= 3, `expected the new / closed / idle session logs, found ${logs.length}`);
+  for (const line of logs) {
+    assert.ok(!/\$\{sid\}/.test(line), `raw session id logged: ${line}`);
+    assert.match(line, /redactSessionId\(sid\)/, line);
+  }
 });
 
 test('REGRESSION: every stored session records lastActivity', () => {

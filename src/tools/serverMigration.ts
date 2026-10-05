@@ -22,11 +22,12 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { GtmClient } from '../utils/gtmClient.js';
-import { checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
+import { checkGuardrails, getGuardrailConfig, formatGoogleError } from '../utils/guardrails.js';
 import { paginate } from '../utils/pagination.js';
-import { jsonResult, textResult, errorResult } from '../utils/toolResponse.js';
+import { jsonResult, textResult, errorResult, errorText } from '../utils/toolResponse.js';
+import { isDuplicateNameError } from '../utils/writeDiagnostics.js';
 import { ensureGalleryTemplate } from './serverSide.js';
-import type { GtmTagResource } from '../shared/gtm-builders.js';
+import type { GtmTagResource, GtmVariableResource } from '../shared/gtm-builders.js';
 import {
   planWebToServerMigration,
   type ContainerSnapshot,
@@ -51,6 +52,10 @@ import {
   buildSpotifyCapiServerTag,
   buildLineYahooCapiServerTag,
   buildRtbHouseServerTag,
+  stackAdaptPixelType,
+  lineYahooServerEvent,
+  buildMetaEmqVariables,
+  buildTikTokEmqVariables,
 } from '../shared/server-migration.js';
 
 const wsBase = z.object({
@@ -111,6 +116,29 @@ async function createTag(client: GtmClient, parent: string, tag: GtmTagResource)
   return res.data;
 }
 
+/** Idempotently create the Event Data (`ed - …`) / request-header (`rh - …`) variables a CAPI tag
+ *  reads: a tag referencing a variable the container lacks fails to create (or leaves the workspace
+ *  unable to compile). Names that already exist, or that a concurrent writer creates first, are skipped. */
+async function ensureVariables(client: GtmClient, parent: string, wanted: GtmVariableResource[]): Promise<{ created: string[]; skipped: string[] }> {
+  const ws = client.accounts.containers.workspaces;
+  const existing = await paginate((t) => ws.variables.list({ parent, pageToken: t }).then((r) => r.data), (d) => d.variable);
+  const names = new Set((existing.items as Array<{ name?: string | null }>).map((v) => String(v.name ?? '').trim().toLowerCase()));
+  const created: string[] = [];
+  const skipped: string[] = [];
+  for (const v of wanted) {
+    if (names.has(v.name.trim().toLowerCase())) { skipped.push(v.name); continue; }
+    try {
+      await ws.variables.create({ parent, requestBody: v as unknown as Record<string, unknown> });
+      created.push(v.name);
+    } catch (err) {
+      if (!isDuplicateNameError(err)) throw err;
+      skipped.push(v.name);
+    }
+    names.add(v.name.trim().toLowerCase());
+  }
+  return { created, skipped };
+}
+
 /** One typed CAPI tool = its gallery template + the fields its builder needs + how to call the builder. */
 interface CapiSpec {
   name: string;
@@ -121,6 +149,8 @@ interface CapiSpec {
   /** Returns a refusal message when a required credential is missing, else null. */
   validate: (a: Args) => string | null;
   build: (type: string, name: string, a: Args, firingTriggerId?: string[]) => GtmTagResource;
+  /** The `ed - …` variables the built tag references, created first when missing. */
+  variables?: () => GtmVariableResource[];
 }
 
 const tokenDoc = (what: string): string => `${what}, usually a {{variable}} so it is not stored in plain text on the tag.`;
@@ -130,17 +160,19 @@ const firstMissing = (...checks: Array<string | null>): string | null => checks.
 const CAPI_TOOLS: CapiSpec[] = [
   {
     name: 'create_meta_capi_server_tag', defaultTagName: 'Meta CAPI Tag', gallery: ['stape-io', 'facebook-tag'],
-    description: 'Create a Meta Conversions API SERVER tag from the Stape template (stape-io/facebook-tag), imported automatically: the server counterpart of the Meta Pixel. pixelId is the Pixel ID (public, on the web pixel), accessToken the CAPI system-user token. `event` is the Meta event the tag sends (Purchase, Lead, a GA4 name is mapped, or a custom name). The template auto-maps user data (em/ph/external_id) and the event_id dedup key from the incoming event.',
+    description: 'Create a Meta Conversions API SERVER tag from the Stape template (stape-io/facebook-tag), imported automatically: the server counterpart of the Meta Pixel. pixelId is the Pixel ID (public, on the web pixel), accessToken the CAPI system-user token. `event` is the Meta event the tag sends (Purchase, Lead, a GA4 name is mapped, or a custom name). User data (em/ph/external_id/IP/user agent), ecommerce custom data and the event_id dedup key are mapped from `ed - …` Event Data variables, which this tool creates in the workspace when they are missing.',
     fields: { pixelId: z.string(), accessToken: z.string().describe(tokenDoc('Meta CAPI access token')), event: z.string().describe('Meta event, e.g. "Purchase" / "Lead", or a GA4 name.') },
     validate: (a) => firstMissing(need(a, 'pixelId', 'the Meta Pixel ID'), need(a, 'accessToken', 'the CAPI access token'), need(a, 'event', 'the event to send')),
     build: (type, name, a, firingTriggerId) => buildMetaCapiServerTag(type, name, s(a.pixelId), s(a.accessToken), s(a.event), { firingTriggerId }),
+    variables: buildMetaEmqVariables,
   },
   {
     name: 'create_tiktok_capi_server_tag', defaultTagName: 'TikTok CAPI Tag', gallery: ['stape-io', 'tiktok-tag'],
-    description: 'Create a TikTok Events API SERVER tag from the Stape template (stape-io/tiktok-tag), imported automatically. pixelId is the TikTok Pixel Code (public), accessToken the Events API token. `event` is the TikTok event (CompletePayment, SubmitForm, a GA4 name is mapped). User data, event properties and the event_id dedup key are auto-mapped from the incoming event.',
+    description: 'Create a TikTok Events API SERVER tag from the Stape template (stape-io/tiktok-tag), imported automatically. pixelId is the TikTok Pixel Code (public), accessToken the Events API token. `event` is the TikTok event (CompletePayment, SubmitForm, a GA4 name is mapped). User data, event properties and the event_id dedup key are mapped from `ed - …` Event Data variables, which this tool creates in the workspace when they are missing.',
     fields: { pixelId: z.string().describe('TikTok Pixel Code.'), accessToken: z.string().describe(tokenDoc('TikTok Events API access token')), event: z.string() },
     validate: (a) => firstMissing(need(a, 'pixelId', 'the TikTok Pixel Code'), need(a, 'accessToken', 'the Events API token'), need(a, 'event', 'the event to send')),
     build: (type, name, a, firingTriggerId) => buildTikTokCapiServerTag(type, name, s(a.pixelId), s(a.accessToken), s(a.event), { firingTriggerId }),
+    variables: buildTikTokEmqVariables,
   },
   {
     name: 'create_linkedin_capi_server_tag', defaultTagName: 'LinkedIn CAPI Tag', gallery: ['stape-io', 'linkedin-tag'],
@@ -159,8 +191,8 @@ const CAPI_TOOLS: CapiSpec[] = [
   {
     name: 'create_stackadapt_server_tag', defaultTagName: 'StackAdapt Server Tag', gallery: ['StackAdapt', 'stackadapt-gtm-server-side-pixel'],
     description: 'Create a StackAdapt SERVER pixel tag from the official template (StackAdapt/stackadapt-gtm-server-side-pixel), imported automatically. Not a CAPI: an id-only pixel (pixelID + pixelType rt/lal/conv/universal, default conv) with optional commonProperties (email/order_id/revenue/action…) and customProperties. No token, no event_id dedup.',
-    fields: { pixelID: z.string(), pixelType: z.string().optional().describe('rt | lal | conv (default) | universal'), action: z.string().optional(), commonProperties: rowsSchema, customProperties: rowsSchema },
-    validate: (a) => need(a, 'pixelID', 'the StackAdapt pixel id'),
+    fields: { pixelID: z.string(), pixelType: z.string().optional().describe('rt (audience) | lal (lookalike) | conv (default) | universal'), action: z.string().optional(), commonProperties: rowsSchema, customProperties: rowsSchema },
+    validate: (a) => need(a, 'pixelID', 'the StackAdapt pixel id') ?? (s(a.pixelType).trim() && !stackAdaptPixelType(s(a.pixelType)) ? `pixelType "${s(a.pixelType).trim()}" is not recognised (rt / lal / conv / universal).` : null),
     build: (type, name, a, firingTriggerId) => buildStackAdaptServerTag(type, name, s(a.pixelID), s(a.pixelType).trim() || 'conv', { action: opt(a.action), commonProperties: rows(a.commonProperties), customProperties: rows(a.customProperties), firingTriggerId }),
   },
   {
@@ -172,10 +204,12 @@ const CAPI_TOOLS: CapiSpec[] = [
   },
   {
     name: 'create_snapchat_capi_server_tag', defaultTagName: 'Snapchat CAPI Tag', gallery: ['Snapchat', 'capi-google-tag-manager-serverside-tag'],
-    description: 'Create a Snapchat Conversions API SERVER tag from the official template (Snapchat/capi-google-tag-manager-serverside-tag), imported automatically. pixelId is the Snap Pixel ID (public), apiAccessToken the CAPI token. `event` is the Snap event (PURCHASE, SIGN_UP, a GA4 name is mapped). eventId dedups against the Snap Pixel.',
+    description: 'Create a Snapchat Conversions API SERVER tag from the official template (Snapchat/capi-google-tag-manager-serverside-tag), imported automatically. pixelId is the Snap Pixel ID (public), apiAccessToken the CAPI token. `event` is the Snap event (PURCHASE, SIGN_UP, a GA4 name is mapped). eventId dedups against the Snap Pixel. User data and the default event_id are mapped from the Meta-style `ed - …` Event Data variables, which this tool creates in the workspace when they are missing.',
     fields: { pixelId: z.string(), apiAccessToken: z.string().describe(tokenDoc('Snapchat CAPI access token')), event: z.string(), eventId: z.string().optional(), actionSource: z.string().optional(), testId: z.string().optional(), userData: rowsSchema, customData: rowsSchema, serverData: rowsSchema },
     validate: (a) => firstMissing(need(a, 'pixelId', 'the Snap Pixel ID'), need(a, 'apiAccessToken', 'the CAPI access token'), need(a, 'event', 'the event to send')),
     build: (type, name, a, firingTriggerId) => buildSnapchatCapiServerTag(type, name, s(a.pixelId), s(a.apiAccessToken), s(a.event), { eventId: opt(a.eventId), actionSource: opt(a.actionSource), testId: opt(a.testId), userData: rows(a.userData), customData: rows(a.customData), serverData: rows(a.serverData), firingTriggerId }),
+    // SNAP_USER_DATA_MAP reuses the Meta EMQ keys, all of which buildMetaEmqVariables creates.
+    variables: buildMetaEmqVariables,
   },
   {
     name: 'create_microsoft_capi_server_tag', defaultTagName: 'Microsoft Ads CAPI Tag', gallery: ['stape-io', 'microsoft-capi-tag'],
@@ -188,7 +222,8 @@ const CAPI_TOOLS: CapiSpec[] = [
     name: 'create_amazon_capi_server_tag', defaultTagName: 'Amazon Ads CAPI Tag', gallery: ['stape-io', 'amazon-tag'],
     description: 'Create an Amazon Ads Conversions API SERVER tag from the Stape template (stape-io/amazon-tag), imported automatically. No token: the only credential is tagIds (the Amazon Ads Tag UUIDs) plus tagRegion (NA | EU). Omit `event` to inherit; pass an Amazon standard event (Off-AmazonPurchases, Lead, …) or a GA4 name. eventId is the clientDedupeId dedup row.',
     fields: { tagIds: z.array(z.string()).describe('Amazon Ads Tag ID(s), UUIDs.'), tagRegion: z.string().optional().describe('NA (default) | EU'), event: z.string().optional(), eventId: z.string().optional(), enableAdvancedMatching: z.boolean().optional(), userData: rowsSchema, customAttributes: rowsSchema },
-    validate: (a) => (Array.isArray(a.tagIds) && (a.tagIds as unknown[]).some((t) => s(t).trim()) ? null : 'tagIds is required (at least one Amazon Ads Tag ID).'),
+    validate: (a) => (Array.isArray(a.tagIds) && (a.tagIds as unknown[]).some((t) => s(t).trim()) ? null : 'tagIds is required (at least one Amazon Ads Tag ID).')
+      ?? (s(a.tagRegion).trim() && !/^(na|eu)$/i.test(s(a.tagRegion).trim()) ? `tagRegion "${s(a.tagRegion).trim()}" is not recognised (NA or EU).` : null),
     build: (type, name, a, firingTriggerId) => buildAmazonCapiServerTag(type, name, (a.tagIds as unknown[]).map(String).filter((t) => t.trim()), s(a.tagRegion).trim() || 'NA', { event: opt(a.event), eventId: opt(a.eventId), enableAdvancedMatching: b(a.enableAdvancedMatching), userData: rows(a.userData), customAttributes: rows(a.customAttributes), firingTriggerId }),
   },
   {
@@ -242,7 +277,15 @@ const CAPI_TOOLS: CapiSpec[] = [
     name: 'create_line_yahoo_capi_server_tag', defaultTagName: 'LINE Yahoo CAPI Tag', gallery: ['stape-io', 'line-yahoo-tag'],
     description: 'Create a LINE Yahoo (Yahoo! JAPAN Ads) Conversion API SERVER tag from the Stape template (stape-io/line-yahoo-tag), imported automatically. Needs the Yahoo tagId (public), accessToken and channelId. Omit `event` to inherit; Yahoo has NO custom events (unknown names inherit). Every event other than page_view needs its own eventSnippetId from Yahoo Ads. transactionId is the dedup row.',
     fields: { tagId: z.string(), accessToken: z.string().describe(tokenDoc('Yahoo Ads tag access token')), channelId: z.string(), event: z.string().optional(), eventSnippetId: z.string().optional(), transactionId: z.string().optional(), testMode: z.boolean().optional(), serverEventData: rowsSchema, userIdentifiers: rowsSchema, webParameters: rowsSchema, eventParameters: rowsSchema, autoMap: z.boolean().optional(), optimistic: z.boolean().optional(), requireConsent: z.boolean().optional() },
-    validate: (a) => firstMissing(need(a, 'tagId', 'the Yahoo Tag ID'), need(a, 'accessToken', 'the Yahoo Ads access token'), need(a, 'channelId', 'the Yahoo Ads Channel ID')),
+    validate: (a) => {
+      const base = firstMissing(need(a, 'tagId', 'the Yahoo Tag ID'), need(a, 'accessToken', 'the Yahoo Ads access token'), need(a, 'channelId', 'the Yahoo Ads Channel ID'));
+      if (base) return base;
+      // A forced standard event other than page_view cannot be attributed without its own snippet id.
+      const std = s(a.event).trim() ? lineYahooServerEvent(s(a.event)) : null;
+      return std && std !== 'page_view' && !s(a.eventSnippetId).trim()
+        ? `eventSnippetId is required for the "${std}" event (Yahoo needs its own Event Snippet ID for every event other than page_view).`
+        : null;
+    },
     build: (type, name, a, firingTriggerId) => buildLineYahooCapiServerTag(type, name, s(a.tagId), s(a.accessToken), s(a.channelId), { event: opt(a.event), eventSnippetId: opt(a.eventSnippetId), transactionId: opt(a.transactionId), testMode: b(a.testMode), serverEventData: rows(a.serverEventData), userIdentifiers: rows(a.userIdentifiers), webParameters: rows(a.webParameters), eventParameters: rows(a.eventParameters), autoMap: b(a.autoMap), optimistic: b(a.optimistic), requireConsent: b(a.requireConsent), firingTriggerId }),
   },
   {
@@ -265,7 +308,8 @@ export function registerServerMigrationTools(server: McpServer, getClient: () =>
         'web tag (`derived` - Pixel IDs from template params or the fbq/ttq/pintrk/rdt/snaptr/uet/twq init calls, so the server ' +
         'tag is created pre-filled), and the secrets you must still ask the user for (`requires` - CAPI access tokens are never in ' +
         'a web container). Creates NOTHING. GA4 is reported once in `ga4` (port it with create_server_tag platform "ga4" as the ' +
-        'relay, or the setup_server_side_container prompt); Google Ads conversion (awct) / remarketing (sp) -> create_server_tag; ' +
+        'relay, or the setup_server_side_container prompt; a {{Constant}} Measurement ID is resolved to its value, any other ' +
+        '{{variable}} id is listed in ga4.unresolvedRefs - ask the user for the G- id); Google Ads conversion (awct) / remarketing (sp) -> create_server_tag; ' +
         'Meta/TikTok/LinkedIn/Pinterest/Reddit/Snapchat/Microsoft/Amazon/StackAdapt/X/Quora/AdRoll/Nextdoor/Yelp/Spotify/' +
         'LINE Yahoo/RTB House pixels -> their typed tool (native Microsoft UET `baut` and LinkedIn Insight `bzi` tags are ' +
         'recognised by type); analytics (Mixpanel, Matomo, Piwik PRO, Piano, Plausible, Umami, Pirsch, Snowplow, Klaviyo) and ' +
@@ -370,18 +414,30 @@ export function registerServerMigrationTools(server: McpServer, getClient: () =>
           if (refusal) return textResult(`Not creating "${name}": ${refusal}`);
           const [owner, repository] = spec.gallery;
           if (dryRun) {
-            return jsonResult({ dryRun: true, wouldImportTemplate: `${owner}/${repository}`, wouldCreate: spec.build('cvt_<template>', name, a, triggers(a.firingTriggerId)) });
+            return jsonResult({
+              dryRun: true, wouldImportTemplate: `${owner}/${repository}`,
+              ...(spec.variables ? { wouldEnsureVariables: spec.variables().map((v) => v.name) } : {}),
+              wouldCreate: spec.build('cvt_<template>', name, a, triggers(a.firingTriggerId)),
+            });
           }
           const client = getClient();
           const parent = parentOf(a);
           const { tagType, imported } = await ensureGalleryTemplate(client, parent, s(a.containerId), owner, repository);
-          const tag = spec.build(tagType, name, a, triggers(a.firingTriggerId));
-          const created = await createTag(client, parent, tag);
-          return jsonResult({
-            created,
-            template: { gallery: `${owner}/${repository}`, tagType, imported },
-            note: 'Created in the DRAFT workspace; not published. Verify with the server container\'s Preview.',
-          });
+          try {
+            // The tag's `ed - …` rows must resolve, so the variables they reference go in first.
+            const variables = spec.variables ? await ensureVariables(client, parent, spec.variables()) : undefined;
+            const tag = spec.build(tagType, name, a, triggers(a.firingTriggerId));
+            const created = await createTag(client, parent, tag);
+            return jsonResult({
+              created,
+              template: { gallery: `${owner}/${repository}`, tagType, imported },
+              ...(variables ? { variables } : {}),
+              note: 'Created in the DRAFT workspace; not published. Verify with the server container\'s Preview.',
+            });
+          } catch (err) {
+            // The template is already in the workspace by now: say so, so a retry is understood.
+            return errorText(`${spec.name} failed: ${formatGoogleError(err)} (The template ${owner}/${repository} is already ${imported ? 'imported into' : 'installed in'} the workspace as ${tagType}; re-running reuses it.)`);
+          }
         } catch (err) {
           return errorResult(spec.name, err);
         }

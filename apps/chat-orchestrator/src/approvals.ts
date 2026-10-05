@@ -48,6 +48,10 @@ export class ApprovalBroker {
    *
    * Resolves rather than rejects on decline, because a declined write is a normal outcome the model
    * should be told about and reason around, not an exception that aborts the turn.
+   *
+   * `signal` is the turn's own. When that turn ends early (its client went away), this approval is
+   * declined as aborted and nothing else is: the same user may have another conversation open with
+   * its own card waiting, and that one is still answerable.
    */
   request(
     userId: string,
@@ -55,12 +59,29 @@ export class ApprovalBroker {
     args: Record<string, unknown>,
     onCreated: (id: string) => void,
     confirmWord?: string,
+    signal?: AbortSignal,
   ): Promise<ApprovalOutcome> {
     const id = randomUUID();
     return new Promise<ApprovalOutcome>((resolve) => {
+      if (signal?.aborted) {
+        resolve({ approved: false, reason: 'aborted' });
+        return;
+      }
+      const onAbort = (): void => {
+        const entry = this.pending.get(id);
+        if (!entry) return;
+        this.pending.delete(id);
+        clearTimeout(entry.timer);
+        resolve({ approved: false, reason: 'aborted' });
+      };
+      const settle = (outcome: ApprovalOutcome): void => {
+        signal?.removeEventListener('abort', onAbort);
+        resolve(outcome);
+      };
+
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        resolve({ approved: false, reason: 'timeout' });
+        settle({ approved: false, reason: 'timeout' });
       }, this.ttlMs);
       // Never hold the process open for an approval nobody is going to give.
       timer.unref?.();
@@ -72,9 +93,10 @@ export class ApprovalBroker {
         args,
         confirmWord,
         createdAt: Date.now(),
-        resolve,
+        resolve: settle,
         timer,
       });
+      signal?.addEventListener('abort', onAbort, { once: true });
       onCreated(id);
     });
   }
@@ -119,16 +141,6 @@ export class ApprovalBroker {
         ? { approved: true, args: args ?? entry.args }
         : { approved: false, reason: 'declined' },
     );
-  }
-
-  /** Declines everything a user has outstanding. Used when their turn is aborted. */
-  abortFor(userId: string): void {
-    for (const [id, entry] of this.pending) {
-      if (entry.userId !== userId) continue;
-      this.pending.delete(id);
-      clearTimeout(entry.timer);
-      entry.resolve({ approved: false, reason: 'aborted' });
-    }
   }
 
   stats(): { pending: number } {

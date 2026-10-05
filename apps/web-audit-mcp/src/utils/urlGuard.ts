@@ -93,7 +93,10 @@ export function urlAllowed(rawUrl: string, allowlist: string[] = []): UrlVerdict
   }
 
   const host = parsed.hostname.toLowerCase();
-  const bareHost = host.replace(/^\[/, "").replace(/\]$/, "");
+  // Trailing dots name the same host in absolute (FQDN) form — "localhost." and
+  // "foo.localhost.." resolve to loopback — so strip them before the name and
+  // allowlist checks below.
+  const bareHost = host.replace(/^\[/, "").replace(/\]$/, "").replace(/\.+$/, "");
 
   if (
     bareHost === "localhost" ||

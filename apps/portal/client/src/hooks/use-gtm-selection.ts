@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { portalApi } from "@/lib/portal-api";
+import { pickAutoSelected, type AuditDeepLink } from "@shared/audit-deep-link";
 import type {
   GtmAccountSummary,
   GtmContainerSummary,
@@ -42,13 +43,20 @@ export interface GtmSelection {
  * `preferContainer` lets a page bias the auto-selected container (server-side
  * prefers a server container). It only affects which option is auto-picked when
  * none is selected — explicit user choices always win.
+ *
+ * `initial` names an account/container to preselect (the Containers page's
+ * `/audit?a=<accountId>&c=<publicId>` link). It is read once, on the first
+ * render, takes precedence over `preferContainer`, and likewise only decides
+ * the auto-pick; an id missing from the loaded list is ignored.
  */
 export function useGtmSelection(options?: {
   enabled?: boolean;
   preferContainer?: (containers: GtmContainerSummary[]) => GtmContainerSummary | undefined;
+  initial?: AuditDeepLink;
 }): GtmSelection {
   const enabled = options?.enabled ?? false;
   const preferContainer = options?.preferContainer;
+  const [initial] = useState(() => options?.initial);
 
   const [accountId, setAccountId] = useState<string>("");
   const [containerId, setContainerId] = useState<string>("");
@@ -77,8 +85,14 @@ export function useGtmSelection(options?: {
 
   useEffect(() => {
     const list = accountsQuery.data ?? [];
-    if (!accountId && list.length > 0) setAccountId(list[0].accountId);
-  }, [accountsQuery.data, accountId]);
+    if (!accountId && list.length > 0) {
+      const linked = initial?.accountId;
+      setAccountId(
+        pickAutoSelected(list, linked ? (a) => a.accountId === linked : undefined)
+          .accountId,
+      );
+    }
+  }, [accountsQuery.data, accountId, initial]);
 
   useEffect(() => {
     const list = containersQuery.data ?? [];
@@ -86,8 +100,15 @@ export function useGtmSelection(options?: {
       setContainerId("");
     }
     if (!containerId && list.length > 0) {
+      const linked = initial?.publicId;
       const preferred = preferContainer?.(list);
-      setContainerId((preferred ?? list[0]).containerId);
+      setContainerId(
+        pickAutoSelected(
+          list,
+          linked ? (c) => c.publicId === linked : undefined,
+          preferred,
+        ).containerId,
+      );
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [containersQuery.data, containerId]);

@@ -23,11 +23,12 @@ import {
 } from '../../agent/browser.js';
 import { extractConsentEvents, extractEventNames } from '../../agent/capture.js';
 import { urlAllowed } from '../../utils/urlGuard.js';
+import { createRequestGuard } from '../../utils/safeFetch.js';
 import { parseCollectRequest, isGa4CollectRequest } from '../ga4-hits.js';
 import { toTrackerObservation, isTrackerRequest, hasGlParam } from '../trackers.js';
 import type { CaptureResult, VerifySpec, Ga4Hit, TrackerObservation, ActionResult, ConsentActionFacts } from '../types.js';
 import { waitForSettle, realClock, type SettleOptions, type SettleClock } from './settle.js';
-import { clickConsent, clickSelector, submitForm, navigateTo } from './journey.js';
+import { clickConsent, clickSelector, submitForm, navigateTo, type ConsentClickOutcome } from './journey.js';
 
 const MAX_HITS = 1000;
 const MAX_ERRORS = 100;
@@ -39,6 +40,8 @@ interface PwRequestEx {
   method(): string;
   resourceType(): string;
   postData(): string | null;
+  isNavigationRequest(): boolean;
+  frame(): { parentFrame(): unknown | null };
 }
 interface PwRouteEx {
   request(): PwRequestEx;
@@ -68,11 +71,20 @@ export interface VerifyCaptureOptions {
   headless: boolean;
   navTimeoutMs: number;
   settle: SettleOptions;
+  /**
+   * Host suffixes the PAGE may navigate to: the start URL, navigate steps, and link or form-submit
+   * navigations are aborted at the route when off the list. Playwright never routes redirect hops,
+   * so a redirect CAN still land the page off the list; the page URL is therefore re-checked before
+   * every interaction (consent click, journey step, linker probe), which is refused there.
+   * Subresources and iframes are not bound by it. Empty means any public host.
+   */
   allowlist: string[];
   /** Test-only offline fixtures — serves every request in-memory, no network. */
   fixtures?: FixtureProvider | null;
   /** Injectable clock for the settle window (defaults to the real clock). */
   clock?: SettleClock;
+  /** Injectable SSRF request guard (defaults to a DNS-resolving guard per capture). */
+  requestGuard?: (rawUrl: string) => Promise<boolean>;
 }
 
 interface CaptureState {
@@ -99,6 +111,45 @@ function hostMatches(url: string, domains: Set<string>): boolean {
     if (host === d || host.endsWith(`.${d}`)) return true;
   }
   return false;
+}
+
+/**
+ * A navigation of a top-level page (not an iframe). Playwright throws from frame() when a
+ * navigation is issued before its frame exists, which for a navigation means a new top-level page
+ * (a popup / target=_blank), so that case counts as top-level.
+ */
+function isTopLevelNavigation(req: PwRequestEx): boolean {
+  try {
+    if (!req.isNavigationRequest()) return false;
+  } catch {
+    return false;
+  }
+  try {
+    return req.frame().parentFrame() === null;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Where the page actually is, held to the operator allowlist. The route guard cannot stop a server
+ * redirect (Playwright does not route redirect hops), so before every interaction the live page URL
+ * must itself be allowlisted. Returns the refusal note, or null when the page may be driven (always
+ * null for an empty allowlist).
+ */
+function allowlistRefusal(page: PwPage, allowlist: string[]): string | null {
+  if (allowlist.length === 0) return null;
+  let url = '';
+  try {
+    url = page.url();
+  } catch {
+    url = '';
+  }
+  if (urlAllowed(url, allowlist).ok) return null;
+  const host = /^https?:/i.test(url) ? hostOf(url) : '';
+  return host
+    ? `refused: page is on ${host}, outside the allowlist (reached by redirect)`
+    : `refused: page is on ${url.slice(0, 100) || 'an unknown URL'}, not an allowlisted host`;
 }
 
 function collectLinkerDomains(spec: VerifySpec): Set<string> {
@@ -130,6 +181,7 @@ export async function runCapture(
   opts: VerifyCaptureOptions,
 ): Promise<CaptureResult> {
   const clock = opts.clock ?? realClock();
+  const requestGuard = opts.requestGuard ?? createRequestGuard();
   const notes: string[] = [];
   const linkerDomains = collectLinkerDomains(spec);
   const context = await browser.newContext({ viewport: { width: 1366, height: 900 } });
@@ -166,7 +218,20 @@ export async function runCapture(
       if (req.resourceType() === 'document' && linkerDomains.size > 0 && hostMatches(url, linkerDomains)) {
         return route.abort();
       }
-      return route.continue();
+      // The operator allowlist bounds where the page itself may go: a link, a navigate step or a
+      // REAL form submit to an off-allowlist host is aborted here. Playwright does NOT call this
+      // handler for redirect hops, so a redirect can still land the page off the list; that is
+      // why every interaction re-checks page.url() first (allowlistRefusal). Only top-level
+      // navigations: CMP banners, payment and video embeds live in third-party iframes.
+      if (opts.allowlist.length > 0 && isTopLevelNavigation(req) && !urlAllowed(url, opts.allowlist).ok) {
+        return route.abort();
+      }
+      // Named hosts are DNS-resolved: the string check above passes a name that resolves inside
+      // (metadata.google.internal, 127.0.0.1.nip.io, a docker service name).
+      return requestGuard(url).then(
+        (ok) => (ok ? route.continue() : route.abort()),
+        () => route.abort(),
+      );
     });
 
     const page = await context.newPage();
@@ -216,6 +281,10 @@ export async function runCapture(
     } catch (err) {
       notes.push(`navigation failed: ${err instanceof Error ? err.message : String(err)}`.slice(0, 300));
     }
+    const offList = loaded ? allowlistRefusal(page, opts.allowlist) : null;
+    if (offList) {
+      notes.push(`start URL ended outside the allowlist, so every interaction is refused: ${offList.replace(/^refused: /, '')}`);
+    }
 
     await waitForSettle(() => state.ga4Hits.length, opts.settle, clock);
 
@@ -227,7 +296,10 @@ export async function runCapture(
     let consentAction: ConsentActionFacts | null = null;
     if (loaded && spec.consent) {
       const plannedTMs = Date.now() - state.navStart;
-      const outcome = await clickConsent(page, spec.consent);
+      const refused = allowlistRefusal(page, opts.allowlist);
+      const outcome: ConsentClickOutcome = refused
+        ? { action: spec.consent.mode ?? 'accept', found: false, performed: false, note: refused }
+        : await clickConsent(page, spec.consent);
       consentAction = {
         action: outcome.action,
         clicked: outcome.performed,
@@ -248,7 +320,7 @@ export async function runCapture(
     for (const check of spec.checks) {
       if (check.type === 'event_on_interaction' && check.action) {
         const atTMs = Date.now() - state.navStart;
-        const { kind, outcome } = await runInteraction(page, check.action, opts.navTimeoutMs);
+        const { kind, outcome } = await runInteraction(page, check.action, opts.navTimeoutMs, opts.allowlist);
         actions.push({
           checkId: check.id,
           kind,
@@ -267,7 +339,10 @@ export async function runCapture(
       } else if (check.type === 'cross_domain_linker') {
         for (const domain of check.expectedDomains ?? []) {
           const atTMs = Date.now() - state.navStart;
-          const probe = await linkerProbe(page, domain, state, clock);
+          const refused = allowlistRefusal(page, opts.allowlist);
+          const probe: LinkerProbeResult = refused
+            ? { found: false, clicked: false, glPresent: false, note: refused }
+            : await linkerProbe(page, domain, state, clock);
           actions.push({
             checkId: check.id,
             kind: 'linker',
@@ -334,10 +409,24 @@ async function runInteraction(
   page: PwPage,
   action: { click?: string; submit?: string; navigate?: string },
   navTimeoutMs: number,
+  allowlist: string[],
 ): Promise<{ kind: ActionResult['kind']; outcome: { found: boolean; performed: boolean; note?: string } }> {
+  // Never act on a page a redirect carried off the allowlist (the route guard cannot see redirects).
+  const refused = allowlistRefusal(page, allowlist);
+  if (refused) {
+    const kind: ActionResult['kind'] = action.click ? 'click' : action.submit ? 'submit' : action.navigate ? 'navigate' : 'click';
+    return { kind, outcome: { found: false, performed: false, note: refused } };
+  }
   if (action.click) return { kind: 'click', outcome: await clickSelector(page, action.click) };
   if (action.submit) return { kind: 'submit', outcome: await submitForm(page, action.submit) };
-  if (action.navigate) return { kind: 'navigate', outcome: await navigateTo(page, action.navigate, navTimeoutMs) };
+  if (action.navigate) {
+    // Admission-check the spec's target the way the tool boundary checks the start URL.
+    const verdict = urlAllowed(action.navigate, allowlist);
+    if (!verdict.ok) {
+      return { kind: 'navigate', outcome: { found: false, performed: false, note: `navigate refused: ${verdict.reason}` } };
+    }
+    return { kind: 'navigate', outcome: await navigateTo(page, action.navigate, navTimeoutMs) };
+  }
   return { kind: 'click', outcome: { found: false, performed: false, note: 'interaction had no click/submit/navigate' } };
 }
 

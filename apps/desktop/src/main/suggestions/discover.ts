@@ -89,8 +89,9 @@ async function collectSitemap(sitemapUrl: string, base: string, out: Set<string>
     for (const loc of locs) {
       if (out.size >= MAX_URLS || sitemapsLeft.n <= 0) break;
       // Only follow SAME-SITE sub-sitemaps — never let a sitemapindex point our
-      // fetch at an arbitrary host.
-      if (sameSite(loc, base)) await collectSitemap(loc, base, out, sitemapsLeft, depth + 1);
+      // fetch at an arbitrary host. The fail tracker rides along: a child sitemap that 429s/5xxs is
+      // as much a hole in the count as a top-level one, so it must turn 'found' into 'partial'.
+      if (sameSite(loc, base)) await collectSitemap(loc, base, out, sitemapsLeft, depth + 1, fail);
     }
   } else {
     for (const loc of locs) {

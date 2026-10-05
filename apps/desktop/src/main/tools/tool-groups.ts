@@ -187,6 +187,7 @@ const GROUP_MEMBERS: Record<ToolGroup, readonly string[]> = {
     'create_server_tag',
     'setup_server_ecommerce_funnel',
     'set_server_container_tagging_url',
+    'probe_server_runtime',
     'set_web_server_container_url',
     'add_ga4_server_parameters',
     'create_meta_capi_server_tag',

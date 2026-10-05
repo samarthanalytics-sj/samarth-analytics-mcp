@@ -1,6 +1,6 @@
 {
   "name": "samarth-gtm-mcp",
-  "version": "1.495.0",
+  "version": "1.497.2",
   "description": "Production-ready MCP server for Google Tag Manager API v2 — Samarth Analytics",
   "type": "module",
   "bin": {
@@ -109,6 +109,14 @@
     "@semantic-release/npm": "^13.1.5",
     "@semantic-release/release-notes-generator": "^14.0.1",
     "conventional-changelog-conventionalcommits": "^8.0.0"
+  },
+  "overrides": {
+    "gaxios": {
+      "uuid": "^11.1.1"
+    },
+    "googleapis-common": {
+      "uuid": "^11.1.1"
+    }
   },
   "engines": {
     "node": ">=18.0.0"

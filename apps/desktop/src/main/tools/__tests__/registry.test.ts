@@ -161,6 +161,10 @@ function fakeData(
       calls.push(`verifyEndpoint:${url}`);
       return { url: `${url}/healthy`, ok: true, status: 200, body: 'ok' };
     },
+    runServerRuntimeProbe: async (a: string, c: string, w: string, o?: { measurementId?: string }) => {
+      calls.push(`runServerRuntimeProbe:${a}:${c}:${w}:${o?.measurementId ?? ''}`);
+      return { status: 'pass', measurementId: o?.measurementId ?? 'G-1' };
+    },
     listGa4DataStreams: async (p: string) => {
       calls.push(`ga4Streams:${p}`);
       return [];
@@ -747,8 +751,9 @@ async function main(): Promise<void> {
     // plus the two CAPI server tags create_snapchat_capi_server_tag / create_microsoft_capi_server_tag = 123,
     // plus the read-only plan_server_migration_from_web = 124,
     // plus the GTM write create_stape_data_pipeline = 125,
-    // plus the eight Tier-1 CAPI server tags (X / Quora / AdRoll / Nextdoor / Yelp / Spotify / LINE Yahoo / RTB House) = 133.
-    assert.equal(withWrites.list().length, 133 + 64, 'read + write registry has 133 GTM/GA4-read/context/write + 64 GA4-write tools');
+    // plus the eight Tier-1 CAPI server tags (X / Quora / AdRoll / Nextdoor / Yelp / Spotify / LINE Yahoo / RTB House) = 133,
+    // plus probe_server_runtime (the one live GA4 hit verification may deliver; Tool.approval card) = 134.
+    assert.equal(withWrites.list().length, 134 + 64, 'read + write registry has 134 GTM/GA4-read/context/write + 64 GA4-write tools');
     for (const n of ['create_x_capi_server_tag', 'create_quora_capi_server_tag', 'create_adroll_capi_server_tag', 'create_nextdoor_capi_server_tag', 'create_yelp_capi_server_tag', 'create_spotify_capi_server_tag', 'create_line_yahoo_capi_server_tag', 'create_rtb_house_server_tag']) {
       assert.equal(withWrites.list().some((t) => t.name === n), true, `${n} present`);
       assert.equal(withWrites.isWrite?.(n), true, `${n} is a write`);
@@ -882,6 +887,29 @@ async function main(): Promise<void> {
     const cfg = seqConfirm(true);
     await buildToolRegistry(fakeData().data, cfg.fn, 'ga4').execute('create_ga4_key_event', { property: '1', eventName: 'x' });
     assert.equal(cfg.calls.length, 0, 'an ordinary GA4 create still shows no card');
+  });
+
+  await test('probe_server_runtime shows a one-click LIVE-GA4 approval card before any hit is sent', async () => {
+    // The probe delivers a real synthetic event into a production GA4 property that this app cannot
+    // remove. It used to ride the draft-workspace auto-apply path (write:true only), so the model could
+    // fire it with no card at all. It must show ONE plain card, labelled as a live GA4 write (not the
+    // "draft workspace" GTM wording productOf would give it), and declining must send nothing.
+    const declineCard = seqConfirm(false);
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data, declineCard.fn, 'gtm');
+    const out = await reg.execute('probe_server_runtime', { accountId: '1', containerId: '2', workspaceId: '3' });
+    assert.equal(declineCard.calls.length, 1, 'the probe showed ONE approval card');
+    assert.equal(declineCard.calls[0].destructive ?? false, false, 'not the destructive delete card');
+    assert.equal((declineCard.calls[0] as { requireTextConfirm?: string }).requireTextConfirm, undefined, 'no typed word');
+    assert.equal(declineCard.calls[0].platform, 'ga4', 'the card says this is a live GA4 write, not a GTM draft');
+    assert.equal(JSON.parse(out).declined, true, 'declining cancels the probe');
+    assert.ok(!fd.calls.some((c) => c.startsWith('runServerRuntimeProbe')), 'no hit was sent when declined');
+    // Approving the single card sends exactly one probe.
+    const approve = seqConfirm(true);
+    const fd2 = fakeData();
+    await buildToolRegistry(fd2.data, approve.fn, 'gtm').execute('probe_server_runtime', { accountId: '1', containerId: '2', workspaceId: '3', measurementId: 'G-ABC123' });
+    assert.equal(approve.calls.length, 1, 'one approval, then it runs');
+    assert.deepEqual(fd2.calls.filter((c) => c.startsWith('runServerRuntimeProbe')), ['runServerRuntimeProbe:1:2:3:G-ABC123'], 'exactly one probe after approval');
   });
 
   await test('the approval card is told which live surface a write lands on (platform)', async () => {
@@ -3058,7 +3086,7 @@ async function main(): Promise<void> {
     // The matrix leak: GTM-NAMED tools that READ the GA4 API (productOf files them as gtm) must NOT
     // reach an Ads chat either, or "an Ads chat never sees the property" is false. These have no "ga4"
     // in the name, so only the explicit GTM_NAMED_TOOLS_READING_GA4 exclusion keeps them out.
-    for (const leaky of ['check_gtm_measurement_ids', 'analytics_scorecard', 'generate_analytics_report']) {
+    for (const leaky of ['check_gtm_measurement_ids', 'analytics_scorecard', 'generate_analytics_report', 'probe_server_runtime']) {
       assert.equal(adsGtm.includes(leaky), false, `${leaky} reads GA4, so it must be withheld from an Ads chat`);
     }
     // ...but the GTM chat (which is allowed to read GA4) still gets them.

@@ -708,9 +708,10 @@ function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null
 
   const formNameValue = '{{Form Name}}';
 
-  // Field signature (type/name only — never values) for the evidence line.
+  // Field signature (type/name only — never values) for the evidence line. A <select>'s type is
+  // 'select-one' / 'select-multiple', so it is dropped by prefix.
   const sig = (f.fields ?? [])
-    .filter((x) => !['checkbox', 'radio', 'select', 'hidden'].includes(x.type))
+    .filter((x) => !['checkbox', 'radio', 'hidden'].includes(x.type) && !/^select/.test(x.type))
     .map((x) => x.name || x.type)
     .filter(Boolean)
     .slice(0, 8);

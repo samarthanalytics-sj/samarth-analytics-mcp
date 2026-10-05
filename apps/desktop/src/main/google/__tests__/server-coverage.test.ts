@@ -138,6 +138,39 @@ test('web wiring: not_wired when the Google tag has no server_container_url; wir
   assert.equal(buildServerCoverage(wired, server({ taggingServerUrls: ['https://other.example.org'] }), AUDIT_OK).webWiring.status, 'url_mismatch');
 });
 
+test('web wiring: a server URL in a Constant or a gtcs Configuration Settings variable is resolved; an unresolvable variable is unknown', () => {
+  const cfgTable = (url: string) => ({ type: 'list', key: 'configSettingsTable', list: [{ type: 'map', map: [{ type: 'template', key: 'parameter', value: 'server_container_url' }, { type: 'template', key: 'parameterValue', value: url }] }] });
+  const urlConst = { variableId: 'v1', name: 'sGTM URL', type: 'c', parameter: [{ key: 'value', value: 'https://sgtm.example.com' }] };
+  const xc = (r: ReturnType<typeof buildServerCoverage>, id: string) => r.crossContainer.filter((f) => f.checkId === id);
+
+  const viaConst = buildServerCoverage(web({
+    tags: [tag({ tagId: 'w1', name: 'GA4 - Config', type: 'googtag', parameter: [{ type: 'template', key: 'tagId', value: 'G-ABC1234' }, cfgTable('{{sGTM URL}}')] as never })],
+    triggers: [], variables: [urlConst] as never,
+  }), server(), AUDIT_OK);
+  assert.equal(viaConst.webWiring.status, 'wired');
+  assert.equal(viaConst.webWiring.webUrl, 'https://sgtm.example.com');
+  assert.equal(xc(viaConst, 'web_server_ga4_parallel').length, 0);
+
+  // Wired through a Google Tag: Configuration Settings variable; a second config for the same id
+  // wired the plain way is redundant, not a server bypass.
+  const viaGtcs = buildServerCoverage(web({
+    tags: [
+      tag({ tagId: 'w1', name: 'GA4 - Config', type: 'googtag', parameter: [{ type: 'template', key: 'tagId', value: 'G-ABC1234' }, { type: 'template', key: 'configSettingsVariable', value: '{{GT Settings}}' }] }),
+      tag({ tagId: 'w9', name: 'GA4 - Config 2', type: 'googtag', parameter: [{ type: 'template', key: 'tagId', value: 'G-ABC1234' }, cfgTable('https://sgtm.example.com')] as never }),
+    ],
+    triggers: [], variables: [{ variableId: 'v2', name: 'GT Settings', type: 'gtcs', parameter: [cfgTable('{{sGTM URL}}')] }, urlConst] as never,
+  }), server(), AUDIT_OK);
+  assert.equal(viaGtcs.webWiring.status, 'wired');
+  assert.equal(xc(viaGtcs, 'duplicate_web_ga4_config').length, 0, 'both copies carry a server URL');
+
+  const viaLookup = buildServerCoverage(web({
+    tags: [tag({ tagId: 'w1', name: 'GA4 - Config', type: 'googtag', parameter: [{ type: 'template', key: 'tagId', value: 'G-ABC1234' }, cfgTable('{{Lookup - sGTM URL}}')] as never })],
+    triggers: [],
+  }), server(), AUDIT_OK);
+  assert.equal(viaLookup.webWiring.status, 'unknown', 'cannot be compared from config');
+  assert.equal(xc(viaLookup, 'web_server_ga4_parallel').length, 0, 'no double-count claim on an unknown URL');
+});
+
 test('measurement-id mismatch is reported, and the health score reflects audit findings', () => {
   const srv = server({
     tags: [tag({ tagId: 's1', name: 'GA4 Relay', type: 'sgtmgaaw', firingTriggerId: ['90'], parameter: [{ type: 'template', key: 'measurementId', value: 'G-OTHER999' }] })],
@@ -349,6 +382,51 @@ test('cross-container: a second Google tag config without the transport URL bypa
   // A single config is never a duplicate, wired or not.
   assert.equal(xc(buildServerCoverage(web({ tags: [cfg('w1', 'A')] }), server(), AUDIT_OK)).length, 0);
 });
+
+test('GA4: a relay with a BLANK Measurement ID inherits it from the event and still covers GA4', () => {
+  // This is the recommended setup and what every real server container in the corpus does. It used
+  // to make the coverage scorer call GA4 uncovered and the plan offer to create a second relay.
+  const srv = server({ tags: [tag({ tagId: 's1', name: 'GA4 Relay', type: 'sgtmgaaw', firingTriggerId: ['90'], parameter: [] })], triggers: [clientTrigger('90')] });
+  const r = buildServerCoverage(web(), srv, AUDIT_OK);
+  assert.equal(r.ga4.relay, true, 'a blank id is still a relay');
+  assert.deepEqual(r.ga4.serverMeasurementIds, ['G-ABC1234'], 'an inheriting relay forwards whatever the web sends');
+  assert.equal(r.ga4.idsMatch, true);
+  const ga4Row = r.rows.find((x) => x.platform === 'ga4');
+  assert.equal(ga4Row?.status, 'covered');
+  // An inheriting relay forwards only what reaches this server. The web tag is not wired, so its
+  // hits never arrive and nothing is doubled: that is an idle relay, not double counting.
+  assert.equal(r.crossContainer.filter((f) => f.checkId === 'web_server_ga4_parallel').length, 0, 'inheriting relay + unwired web is not counted twice');
+});
+
+test('cross-container: double counting is judged per Measurement ID, not from the first Google tag', () => {
+  const cfg = (tagId: string, name: string, id: string, url?: string) => tag({
+    tagId, name, type: 'googtag',
+    parameter: [
+      { type: 'template', key: 'tagId', value: id },
+      ...(url ? [{ type: 'list', key: 'configSettingsTable', list: [{ type: 'map', map: [
+        { type: 'template', key: 'parameter', value: 'server_container_url' }, { type: 'template', key: 'parameterValue', value: url },
+      ] }] }] : []),
+    ],
+  } as never);
+  const relay = (mid: string) => tag({ tagId: 's1', name: 'GA4 Relay', type: 'sgtmgaaw', firingTriggerId: ['90'], parameter: mid ? [{ type: 'template', key: 'measurementId', value: mid }] : [] });
+  const xc = (r: ReturnType<typeof buildServerCoverage>) => r.crossContainer.filter((f) => f.checkId === 'web_server_ga4_parallel');
+  // US is deliberately direct and listed FIRST; AU is wired to this server and relayed explicitly.
+  const regions = web({ tags: [cfg('w1', 'US GA4', 'G-USUSUS1'), cfg('w2', 'AUS GA4', 'G-AUAUAU1', 'https://sgtm.example.com')], triggers: [] });
+  const explicit = buildServerCoverage(regions, server({ tags: [relay('G-AUAUAU1')], triggers: [clientTrigger('90')] }), AUDIT_OK);
+  assert.equal(xc(explicit).length, 0, 'G-AUAUAU1 flows through the server; G-USUSUS1 is not relayed');
+  assert.equal(explicit.webWiring.status, 'wired', 'a wired regional tag makes the container wired');
+  assert.equal(explicit.webWiring.webUrl, 'https://sgtm.example.com');
+  const inheriting = buildServerCoverage(regions, server({ tags: [relay('')], triggers: [clientTrigger('90')] }), AUDIT_OK);
+  assert.equal(xc(inheriting).length, 0, 'an inheriting relay never doubles the direct US tag');
+
+  // The id that really is relayed explicitly AND sent direct is still caught, and only it is named.
+  const doubled = buildServerCoverage(regions, server({ tags: [relay('G-USUSUS1')], triggers: [clientTrigger('90')] }), AUDIT_OK);
+  assert.equal(xc(doubled).length, 1);
+  assert.match(xc(doubled)[0].message, /G-USUSUS1/);
+  assert.doesNotMatch(xc(doubled)[0].message, /G-AUAUAU1/);
+  assert.match(xc(doubled)[0].message, /no server container URL/);
+});
+
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

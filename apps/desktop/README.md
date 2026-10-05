@@ -37,8 +37,8 @@ The MCP server is **already multi-identity capable** (`src/auth/identityContext.
 
 ```bash
 cd apps/desktop
-npm install           # downloads the Electron binary (~100 MB first time)
-npm run dev           # electron-vite dev — boots the window with HMR
+npm install           # Node.js 22.12+ (Electron 42 requirement)
+npm run dev           # first run downloads the Electron binary (~100 MB), then electron-vite dev with HMR
 npm run typecheck     # node (main+preload) + web (renderer)
 npm run build         # production bundle into ./out
 ```

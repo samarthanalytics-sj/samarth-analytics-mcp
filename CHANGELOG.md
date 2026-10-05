@@ -1,3 +1,110 @@
+## [1.497.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.497.1...v1.497.2) (2026-10-04)
+
+### Bug Fixes
+
+* **deps-chat-orchestrator:** patch transitive xmldom, brace-expansion, hono, qs, ip-address, fast-uri and uuid advisories ([ab6556a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/ab6556a6c2b7e46f3bc27204b742e70fb50e7051))
+* **deps-desktop:** upgrade Electron to 42 and patch transitive advisories ([6e66ad1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/6e66ad151773170d53d793839ea24ae93bb5bba2))
+* **deps-mcp-authorize:** override uuid to 11.1.1 under @stytch/core ([87eac04](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/87eac04d4ac9d9d333ce4cc53585eb9783bf6522))
+* **deps-portal:** patch qs, browserslist, baseline-browser-mapping, postcss-selector-parser and esbuild ([881967c](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/881967cc20ea38b8bc1d1a422672a94190235ab2))
+* **deps-web-audit:** patch hono, qs, fast-uri and ip-address advisories ([d1fe777](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d1fe777d1f0bcc9601757cfda022ebce4dce373a))
+* **deps:** patch root lockfile advisories (qs, hono, fast-uri, ip-address, undici, uuid, ...) ([2ef7388](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/2ef7388ad1971fa8a603eaa2dd4b83292dcc7b84))
+
+## [1.497.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.497.0...v1.497.1) (2026-10-04)
+
+### Bug Fixes
+
+* **audit:** count a CMP tag on the built-in Consent Initialization trigger as Consent Mode in use ([9dbfc94](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/9dbfc94976a6ce2bb1b4d6dcb7e5dba3f70d68ad))
+* **audit:** honour the CAPI template consent gate and skip non-firing tags in the server consent check ([72e1966](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/72e1966ca4d27d9f9a74c380725173054a5a7029))
+* **audit:** judge the web+server GA4 double-count per Measurement ID and only for explicit relays ([6659038](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/665903848af7f63a2f4c464f70a6dd6c250388e6))
+* **auth:** always pin Stytch issuer/audience and accept only Connected App tokens ([d18aa9d](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d18aa9dd520e71745a3de6430e7f1486b6e16177))
+* **capi:** collect per-conversion ids per event in the one-click server plan ([c074829](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c0748290633653a17f37d9333963253940200297))
+* **capi:** provision the Meta ed variables before a one-click Snapchat CAPI tag ([edc122e](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/edc122ecce0a00fd5752a6c30632c8ec0db7d548))
+* **capi:** stop silently mis-normalising StackAdapt pixel types and Amazon regions ([a999602](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a999602bc52b1c3b523dd138249b4e1c5dbf5ad9))
+* **consent:** anchor the tracking-cookie pattern so first-party cookies are not flagged ([e9d01b7](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/e9d01b780bb8c359fc6761b287f2fc10042b037f))
+* **desktop:** anchor Ads conversion category keywords at a word start ([c3cfde5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c3cfde5c13e9986058a367def7cb351a04f3b356))
+* **desktop:** cap monitor intervals below the setInterval overflow ([be26d71](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/be26d7163b15884cd63fd5b39d81b962fd482809))
+* **desktop:** carry pair findings forward when the pair read fails ([f5818a0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/f5818a05c473ced4033bca1adbb47b00e3425033))
+* **desktop:** clear "Sending..." when the Ads monitoring webhook test fails ([db517e6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/db517e624e4330dbce76f0a321e56accce16d066))
+* **desktop:** detect bracketed international phone prefixes, strip 00 only when it is one ([d9f4dd8](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d9f4dd81372bb221dd2bf2dd91982a6569608a2a))
+* **desktop:** gate probe_server_runtime behind a live-GA4 approval card ([64517cf](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/64517cf724ee379d7f9db21ecb46dd72fb89b714))
+* **desktop:** keep each chat turn's change journal and quota state its own ([1f7ad30](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/1f7ad302638ca68b1952d613c63db4a85e64df04))
+* **desktop:** keep failed reverts retryable and revert as the writing account ([db671b9](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/db671b94390643a6ecbce81b92732c96d7b61273))
+* **desktop:** mark trigger-group members Used only when the group is reached ([d0ef2a2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d0ef2a2d1ae03eb90f997e4ae969b0b1dde60893))
+* **desktop:** only launch browser executables that detection found ([3339be8](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/3339be80200d032146d71574cd6353ddbd5681a5))
+* **desktop:** probe same-origin sGTM at its path and filter the realtime read-back ([04c39d6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/04c39d6bca13feedd311ac3421eca7f989ee856d))
+* **desktop:** refuse a runtime probe the server would mis-deliver, before sending ([120d1c3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/120d1c38bb57e7705b5a4810d5bd671b9192b46e))
+* **desktop:** report a failed child sitemap as a partial discovery ([e0a8db4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/e0a8db446a39a68048ec1921746e97e391d403a3))
+* **desktop:** reuse existing server CAPI triggers on re-apply and pick a free name ([597d206](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/597d2067dfc0d00b258400afd451c75c7d68d64c))
+* **desktop:** stop GTM audit batch fixes from overwriting or duplicating row fixes ([ad7261b](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/ad7261b1dce52fe1579408aa936e805b29fca0ee))
+* **jobs:** fail expired leases once maxAttempts is used up ([5ea969a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/5ea969ae19390137a8f91ce5fdea3f8133c2164b))
+* **monitor:** do not call hits "certainly dropped" when a server relay's Measurement ID is a variable ([6846949](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/6846949ea6312a81ebb7d549cdea939103a8b2c0))
+* **monitor:** resolve a web Google tag's server URL through Constants and Configuration Settings variables ([90ea8d2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/90ea8d261f366c5faae04bcfa2699d1d324b017d))
+* **orchestrator:** abort a turn when its client leaves, scoped to that turn ([2df5e5e](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/2df5e5e767255a50613a2747a2c8babd95193ddd))
+* **orchestrator:** classify [DELETE]-tier tools as deletes by their label ([b6cc06b](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/b6cc06bab5f157427226dbb077ddeee0ff033a92))
+* **orchestrator:** enforce the turn and request budgets while waiting ([dda6d59](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/dda6d59b2481817ab218b64dfa55e5a5e7d1785a))
+* **orchestrator:** never close a pooled MCP child under a running turn ([38c1361](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/38c1361e39b9318ed8431ff7a55e4041989a898d))
+* **orchestrator:** refuse tool arguments that parse to a non-object ([5e0ea98](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/5e0ea98c0431d3f42eee1b5108612f2381ae8cb1))
+* **orchestrator:** refuse tool calls outside the conversation's scoped set ([7183224](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/71832244661296838377b7af7275b0a9142d8b66))
+* **orchestrator:** reject malformed attachments before acquiring a session ([3fc3e4c](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/3fc3e4c0cd5d51223fe5b1653440eb1563785053))
+* **portal-api:** lazy-load shared/audit-accuracy in the audit routes ([eef6212](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/eef6212cc45aad287647e0325cd3d93f7fa8e00e))
+* **portal-api:** normalize consent findings in the full audit like the consent route ([cdbe9e7](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/cdbe9e7acabb060b84a10f296a4033d151ca04c9))
+* **portal-api:** skip the unregistered-params check when either GA4 list read fails ([e3ad6e9](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/e3ad6e96bf36ffb1bbb19316a6087b769b5c8f56))
+* **portal:** bind the Express OAuth state to the browser that started sign-in ([0f4ff47](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/0f4ff47d00d9c92df75781ee3128f723bdce9594))
+* **portal:** minify CSS with esbuild so the portal build succeeds ([8e50c3e](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/8e50c3eae7efc23b9ce952d83b958643caa56c48))
+* **portal:** open the audit on the container the Containers page linked ([8b4dc85](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/8b4dc85bf86d7fcf4eed3b9f3f65a31e31e2d784))
+* **portal:** stop one malformed cookie from failing every Express route ([19b346b](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/19b346bba3f99ff909d47a19fe7cd06adc14b945))
+* **publish:** report compilerError on versions.publish as an error, not success ([0281715](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/02817155c0ed3c37e411e0fc75be2fcdc62a13d1))
+* **server-migration:** create the ed - variables MCP Meta/TikTok/Snapchat CAPI tags read ([c427f8c](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c427f8cb50228c000005bae7a826d8766ff130ef))
+* **server-migration:** never carry web {{variable}} ids into the migration plan ([a165867](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a165867c7b3e7552c04eac6d76d65f1ae903dc4b))
+* **server-migration:** resolve {{Constant}} GA4 Measurement IDs in the migration planner ([f88b778](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/f88b77888380a6ad2d3da321aa4d3b45417ca848))
+* **server:** answer unknown MCP sessions with 404 -32001 on GET and DELETE too ([a2064bc](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a2064bc083eb11faaef93f579acc8346938f3f4d))
+* **server:** bind HTTP MCP sessions to the principal that opened them ([5c68290](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/5c68290c947821deb52c49ffda20dfdf3526f8f6))
+* **server:** guard the unauthenticated loopback HTTP server against DNS rebinding ([2de3a81](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/2de3a81004499b14109977f5cb1ac08a1162319a))
+* **server:** treat a blank HTTP port as unset and refuse an invalid one clearly ([1e08be1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/1e08be169f9f274a1b9ae4f05b37b2526188e11b))
+* **setup:** fail oauth:setup when no refresh token was saved, and stop pointing at unprinted tokens ([457318b](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/457318b16bfe84dd1bfc8471a17697872cdf9647))
+* **templates:** pin non-gallery template sources to reviewed commits and verify their SHA-256 ([61e6c12](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/61e6c1299ec0a6f40bcccd2f8a2273b0cabe895f)), closes [#989](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/989)
+* **webaudit:** answer oversized or malformed /mcp bodies with JSON-RPC errors ([49b1d30](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/49b1d30f2a22d7441c2bbcdaf0d47caa7b8b2984))
+* **webaudit:** block navigation, submits and network writes while discovery clicks ([66bffc8](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/66bffc82b06c01212d092e0fa7aaf0c23d229d1c)), closes [#hash](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/hash) [#hash](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/hash)
+* **webaudit:** classify bot blocks on Playwright's full header list ([80232e0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/80232e0aad752577aeaac4ff2628bb686860f9cd))
+* **webaudit:** DNS-resolve named hosts in the in-browser SSRF route guards ([5a3e255](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/5a3e255cd12bcd3947dea5d6c18c4b73bd3740ff))
+* **webaudit:** enforce the verify allowlist on top-level navigations, navigate steps and the CLI start URL ([76407b6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/76407b6daa11bc4164270e74c1bda64a8cee9683))
+* **webaudit:** hold robots.txt Sitemap entries to the same-site rule in page discovery ([8cfd647](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/8cfd647cfd0b4071025f9f9941fcb28679334867))
+* **webaudit:** keep forms when a cookie/consent class sits on <body> or <html> ([8f416a9](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/8f416a99043a4f811d4a053811d52b59ae628930)), closes [#onetrust-banner-sdk](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/onetrust-banner-sdk)
+* **webaudit:** name bot-blocked and error pages in tag-scan workers ([453b07b](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/453b07b14b756537c2f1315d4c6059deec25231d)), closes [#969](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/969) [#969](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/969)
+* **webaudit:** never click form-submit, cart or nav controls in interactive form discovery ([69342aa](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/69342aaef312580b97d179a173b6b6927b42c66b))
+* **webaudit:** one McpServer per HTTP session so a second client cannot crash the process ([770740f](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/770740f8225555f2eabdfacca160cd5c8e6a8cb9))
+* **webaudit:** refuse to start the HTTP transport without an auth token ([31378f9](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/31378f91fcf696fa2bb91b268112f918f7596edb))
+* **webaudit:** refuse verify interactions on a page a redirect carried off the allowlist ([6f18e31](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/6f18e316fc6c0d13186b107b5afd4859d6c2bd4e))
+* **webaudit:** stop calling a CDN-fronted 503 a bot block without a challenge marker ([80c3ff8](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/80c3ff8e97dc516f7cce3f74ecd788ea8f917cc1))
+* **webaudit:** stop counting dropdowns as text inputs in form purpose rules ([d96c03b](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d96c03bdb99c9730297f0518526633500c9a3ff4))
+* **webaudit:** stop ringing a lone form for site-wide custom_event tags ([9e77611](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/9e77611e8cfd290ab71abd84c77cf74e20805f26))
+* **webaudit:** strip trailing dots before the SSRF guard's loopback and allowlist checks ([7c6bec7](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/7c6bec7ac68052c7fb7525a91131001321d69ed3))
+* **webaudit:** take the tag-scan proof screenshot before interactive clicks ([8d6f015](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/8d6f015df52a0a94d6466d528bf6823bd345bd73)), closes [#964](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/964)
+
+## [1.497.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.496.0...v1.497.0) (2026-09-22)
+
+### Features
+
+* **server:** the runtime leg, proven by one labelled synthetic event read back from GA4 ([#986](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/986)) ([14a7d9a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/14a7d9a1523af988feb4ac893b5fca79a27a5419))
+
+## [1.496.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.495.2...v1.496.0) (2026-09-22)
+
+### Features
+
+* **monitor:** drift monitoring for server containers, including the web + server pair ([#985](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/985)) ([a1ac474](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a1ac474e53cae41a19322f429acdd8a3d4420f37)), closes [#984](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/984)
+
+## [1.495.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.495.1...v1.495.2) (2026-09-22)
+
+### Bug Fixes
+
+* **audit:** pick the engine by container type, whatever surface asked ([#984](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/984)) ([61e297f](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/61e297fe6fe528dd53872f5a357bce5d7a008a5c))
+
+## [1.495.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.495.0...v1.495.1) (2026-09-22)
+
+### Bug Fixes
+
+* **audit:** remove three false positives that were half of every finding ([#983](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/983)) ([0b936ea](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/0b936ea1ecf68345066aa0ef3163718b87af121e))
+
 ## [1.495.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.494.0...v1.495.0) (2026-09-21)
 
 ### Features

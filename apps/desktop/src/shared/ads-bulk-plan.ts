@@ -58,13 +58,17 @@ const isPlaceholder = (v: string | undefined): boolean => {
  * operator sees the category in the confirmation before anything is created.
  */
 export function categoryForRow(row: Pick<AdsPlanRow, 'tagName' | 'eventName'>): string {
-  const hay = `${row.eventName ?? ''} ${row.tagName ?? ''}`.toLowerCase();
-  if (/\bphone|call|tel\b/.test(hay)) return 'PHONE_CALL_LEAD';
-  if (/\bbook|appointment|demo|consultation|schedule\b/.test(hay)) return 'BOOK_APPOINTMENT';
-  if (/\bquote|estimate|pricing\b/.test(hay)) return 'REQUEST_QUOTE';
-  if (/\bsign.?up|register|subscribe|newsletter\b/.test(hay)) return 'SIGNUP';
-  if (/\bpurchase|order.?complete|checkout.?complete\b/.test(hay)) return 'PURCHASE';
-  if (/\bemail|contact|chat|whatsapp\b/.test(hay)) return 'CONTACT';
+  // '_' and '-' become spaces so snake_case event names ("phone_click") have word boundaries. Every
+  // alternation is grouped behind ONE leading \b, so a keyword must START a word: "hotel" is not
+  // "tel", "recall" is not "call". Prefixes still count ("booking", "subscribed"), except the two
+  // short stems that would swallow unrelated words: "tel" (tell, telegram) and "demo" (demolition).
+  const hay = `${row.eventName ?? ''} ${row.tagName ?? ''}`.toLowerCase().replace(/[_-]+/g, ' ');
+  if (/\b(?:phone|call|tel\b)/.test(hay)) return 'PHONE_CALL_LEAD';
+  if (/\b(?:book|appointment|demos?\b|consultation|schedule)/.test(hay)) return 'BOOK_APPOINTMENT';
+  if (/\b(?:quote|estimate|pricing)/.test(hay)) return 'REQUEST_QUOTE';
+  if (/\b(?:sign.?up|register|subscribe|newsletter)/.test(hay)) return 'SIGNUP';
+  if (/\b(?:purchase|order.?complete|checkout.?complete)/.test(hay)) return 'PURCHASE';
+  if (/\b(?:email|contact|chat|whatsapp)/.test(hay)) return 'CONTACT';
   return 'SUBMIT_LEAD_FORM';
 }
 

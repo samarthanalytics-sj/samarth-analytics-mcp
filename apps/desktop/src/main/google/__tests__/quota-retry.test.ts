@@ -187,6 +187,34 @@ async function main(): Promise<void> {
     assert.equal(calls, 1, 'no retry for a non-transient error');
   });
 
+  // Regression: the quota-backoff counter and UI hook were fields on the shared GoogleDataService. A
+  // second chat turn (an account switch remounts the chat view; nothing serializes turns) reset the
+  // first turn's count and replaced its hook, so turn A's 429 wait was reported on turn B's banner.
+  // Drives the real create path (qCreate), so this waits out one real 2s quota backoff.
+  await test('GTM quota backoffs are counted and surfaced PER TURN, never on another turn', async () => {
+    const { GoogleDataService } = await import('../data-service');
+    type Ctor = ConstructorParameters<typeof GoogleDataService>;
+    const svc = new GoogleDataService({} as Ctor[0], {} as Ctor[1]);
+    const qCreate = (svc as unknown as { qCreate: <T>(fn: () => Promise<T>) => Promise<T> }).qCreate.bind(svc);
+    const seenA: number[] = [];
+    const seenB: number[] = [];
+    const a = { backoffs: 0, onBackoff: (i: { attempt: number }) => { seenA.push(i.attempt); } };
+    const b = { backoffs: 0, onBackoff: (i: { attempt: number }) => { seenB.push(i.attempt); } };
+    let aCalls = 0;
+    let outCalls = 0;
+    // Turn A hits the quota once (then succeeds); turn B starts while A is waiting and never does. A
+    // create outside any turn (e.g. a UI action) also waits once, and must not be filed under either.
+    const turnA = svc.withQuotaScope(a, () => qCreate(async () => { aCalls += 1; if (aCalls === 1) throw quotaErr(); return 'a'; }));
+    const outside = qCreate(async () => { outCalls += 1; if (outCalls === 1) throw quotaErr(); return 'out'; });
+    await new Promise((r) => setImmediate(r));
+    const turnB = svc.withQuotaScope(b, () => qCreate(async () => 'b'));
+    assert.deepEqual(await Promise.all([turnA, turnB, outside]), ['a', 'b', 'out']);
+    assert.equal(a.backoffs, 1, 'turn A counts its own quota wait (and not the out-of-turn one)');
+    assert.deepEqual(seenA, [1], 'turn A\'s banner shows its wait');
+    assert.equal(b.backoffs, 0, 'turn B starting did not inherit (or reset) A\'s count');
+    assert.deepEqual(seenB, [], 'A\'s wait never reached B\'s banner');
+  });
+
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed > 0) process.exit(1);
 }

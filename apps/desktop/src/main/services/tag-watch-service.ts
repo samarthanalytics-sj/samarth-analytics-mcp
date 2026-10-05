@@ -5,6 +5,7 @@
 // data is public - a competitor's measurement id has no owner.
 
 import { readJsonFile, writeJsonFileAtomic } from '../storage/json-file';
+import { MAX_INTERVAL_HOURS, assertTimerMs } from './timer-limits';
 import { parseGtagSnapshot } from '../google/gtag-spy';
 import { applyScan, shouldAlert, type TagWatchTarget, type TagWatchEvent, type ScanOutcome } from '../google/tag-watch-core';
 import { sendSlackWebhook, isValidSlackWebhook, type SlackPayload } from './slack-notify';
@@ -72,7 +73,8 @@ export class TagWatchService {
     // Dedupe by measurement id (keep the first).
     const seen = new Set<string>();
     const deduped = targets.filter((t) => (seen.has(t.measurementId) ? false : (seen.add(t.measurementId), true)));
-    return { enabled: Boolean(c?.enabled), intervalHours: Math.max(MIN_INTERVAL_HOURS, Number(c?.intervalHours) || 24), slackWebhook: c?.slackWebhook, targets: deduped };
+    // Ceiling too: an interval past setInterval's limit (or Infinity) would fire every 1 ms.
+    return { enabled: Boolean(c?.enabled), intervalHours: Math.min(MAX_INTERVAL_HOURS, Math.max(MIN_INTERVAL_HOURS, Number(c?.intervalHours) || 24)), slackWebhook: c?.slackWebhook, targets: deduped };
   }
 
   private persist(): void {
@@ -82,7 +84,7 @@ export class TagWatchService {
 
   private start(): void {
     this.stop();
-    this.timer = setInterval(() => void this.runOnce(), Math.max(MIN_INTERVAL_HOURS, this.config.intervalHours) * 3600_000);
+    this.timer = setInterval(() => void this.runOnce(), assertTimerMs(Math.max(MIN_INTERVAL_HOURS, this.config.intervalHours) * 3600_000));
     if (this.timer.unref) this.timer.unref();
   }
   stop(): void {
@@ -124,7 +126,7 @@ export class TagWatchService {
 
   setInterval(intervalHours: number): TagWatchConfig {
     const n = Math.round(intervalHours);
-    this.config.intervalHours = Number.isFinite(n) ? Math.max(MIN_INTERVAL_HOURS, n) : 24;
+    this.config.intervalHours = Number.isFinite(n) ? Math.min(MAX_INTERVAL_HOURS, Math.max(MIN_INTERVAL_HOURS, n)) : 24;
     if (this.timer) this.start(); // restart with the new cadence
     this.persist();
     return this.getConfig();

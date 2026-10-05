@@ -1061,6 +1061,10 @@ export interface AuditFinding {
   /** True when `fix` is a ready-to-run tool call the model can apply on approval. */
   autoFixable: boolean;
   fix?: AuditFix;
+  /** Set to 'pair' on findings from the web + server PAIR read (server-pair.ts), which can fail
+   *  independently of the container audit. Lets the monitor carry them forward when that read fails
+   *  instead of recording them as resolved. Not part of findingKey, so history keys are unchanged. */
+  origin?: 'pair';
 }
 
 /** Container-only boundary statement — what a config audit proves and what it cannot. */
@@ -1530,20 +1534,37 @@ export function auditContainer(s: ContainerSnapshot, opts?: { clientRegion?: str
   // if it matches, "Google tag found in this container"; if not, "Cannot detect the Google
   // tag". (e.g. an event tag on {{GA4 Variable}} is NOT covered by a config tag that uses
   // {{GA4 Measurement ID}} — different tokens, so GTM warns.)
+  // Constant variables resolve to their literal value here, so a Google tag holding "G-XXXX" and
+  // an event tag holding {{GA4 ID}} (a Constant of the same value) are recognised as the SAME id.
+  // Comparing the raw strings flagged a quarter of real containers as "Cannot detect the Google
+  // tag" for a setup that works.
+  const constantValues = new Map<string, string>();
+  for (const v of s.variables ?? []) {
+    if ((v.type ?? '').toLowerCase() !== 'c') continue;
+    const val = String((v.parameter ?? []).find((p) => (p as { key?: string }).key === 'value')?.value ?? '').trim();
+    if (val) constantValues.set(v.name.trim().toLowerCase(), val);
+  }
+  const resolveConstant = (raw: string): string => {
+    const m = raw.match(/^\{\{([^}]+)\}\}$/);
+    return m ? (constantValues.get(m[1].trim().toLowerCase()) ?? raw) : raw;
+  };
   const googleTagIds = new Set<string>();
   for (const t of s.tags) {
-    if (t.type === 'googtag') {
-      const v = t.parameter.find((p) => (p.key === 'tagId' || p.key === 'tag_id') && p.value)?.value;
-      if (v) googleTagIds.add(String(v));
-    } else if (t.type === 'gaawc') {
-      const v = t.parameter.find((p) => p.key === 'measurementId' && p.value)?.value;
-      if (v) googleTagIds.add(String(v));
+    let v: unknown;
+    if (t.type === 'googtag') v = t.parameter.find((p) => (p.key === 'tagId' || p.key === 'tag_id') && p.value)?.value;
+    else if (t.type === 'gaawc') v = t.parameter.find((p) => p.key === 'measurementId' && p.value)?.value;
+    if (v) {
+      const raw = String(v).trim();
+      googleTagIds.add(raw);
+      googleTagIds.add(resolveConstant(raw));
     }
   }
 
   // Tag Sequencing is matched by tag NAME in the GTM API, so resolve setup/teardown
   // references (and their paused state) against the tags actually present.
   const tagByName = new Map(s.tags.map((t) => [t.name, t]));
+  // Data-sending tags with no consent settings; how they are reported is decided after the loop.
+  const unconfiguredConsentTags: AuditTag[] = [];
 
   for (const t of s.tags) {
     const resource = { kind: 'tag' as const, id: t.tagId, name: t.name };
@@ -1643,7 +1664,7 @@ export function auditContainer(s: ContainerSnapshot, opts?: { clientRegion?: str
         });
       } else if (mid.startsWith('G-')) {
         measurementIds.add(mid);
-      } else if (mid.includes('{{') && !googleTagIds.has(mid)) {
+      } else if (mid.includes('{{') && !googleTagIds.has(mid) && !googleTagIds.has(resolveConstant(mid))) {
         // A8 / "Cannot detect the Google tag": the event tag's variable Measurement ID is
         // declared by NO Google/Configuration tag in this container, so GTM cannot match
         // it. A variable id is best practice, not a defect — but this specific id isn't
@@ -1829,21 +1850,57 @@ export function auditContainer(s: ContainerSnapshot, opts?: { clientRegion?: str
     // 'notNeeded' are both valid, configured choices and must NOT be flagged.
     if (CONSENT_RELEVANT_TYPES.has(t.type)) {
       const status = normConsent(t.consentSettings?.consentStatus);
-      if (!status || status === 'notset') {
-        findings.push({
-          severity: 'high',
-          category: 'consent',
-          resource,
-          message: `Tag "${t.name}" has no Consent Mode v2 settings (consent status is not set).`,
-          recommendation: 'In the tag\'s "Consent Settings", declare the consent types it requires (e.g. ad_storage, analytics_storage), or "No additional consent required" if it genuinely needs none. "Apply fix" requires the consent types for this tag type.',
-          autoFixable: true,
-          fix: {
-            tool: 'set_gtm_tag_consent',
-            args: { tagId: t.tagId, consentStatus: 'needed', consentTypes: consentTypesFor(t.type), name: t.name },
-          },
-        });
-      }
+      if (!status || status === 'notset') unconfiguredConsentTags.push(t);
     }
+  }
+
+  // Consent Mode findings are shaped by whether the container uses Consent Mode AT ALL.
+  //
+  // When it does (a consent-initialisation trigger, a tag firing on the built-in Consent
+  // Initialization trigger, a default/update call, or tags that already declare consent), a
+  // data-sending tag with no consent settings is a real gap in a working setup and is reported per
+  // tag, with its fix.
+  //
+  // When it does not, the same per-tag finding is noise: it fired once per tag on 91% of real
+  // containers and was 86% of every high-severity finding the audit produced. The actual problem
+  // is a single fact, "this container has no Consent Mode", which the consent engine already
+  // reports once at medium. It is reported once here too, so a 60-tag container gets one finding,
+  // not sixty, and the count is carried in the message.
+  const consentModeInUse =
+    s.triggers.some((tr) => /^consentinit/.test((tr.type ?? '').toLowerCase().replace(/[^a-z]/g, '')) || /consent[\s_-]?init/i.test(tr.name)) ||
+    s.tags.some((t) => { const st = normConsent(t.consentSettings?.consentStatus); return st === 'needed' || st === 'notneeded'; }) ||
+    s.tags.some((t) => t.type === 'html' && /gtag\(\s*['"]consent['"]|consent[_\s-]?(default|update)|ad_user_data|ad_personalization/i.test(String(t.parameter.find((p) => p.key === 'html')?.value ?? ''))) ||
+    // A CMP template (cvt_*, calls setDefaultConsentState) or consent-default tag on the BUILT-IN
+    // Consent Initialization trigger: triggers.list never returns built-ins, so look at the tag side.
+    // A data-sending tag (GA4, Ads, ...) placed there is not a consent setup, so it does not count.
+    s.tags.some((t) => !t.paused && !CONSENT_RELEVANT_TYPES.has(t.type) && (t.firingTriggerId ?? []).map(String).includes(CONSENT_INIT_TRIGGER_ID));
+  if (unconfiguredConsentTags.length > 0 && consentModeInUse) {
+    for (const t of unconfiguredConsentTags) {
+      findings.push({
+        severity: 'high',
+        category: 'consent',
+        resource: { kind: 'tag' as const, id: t.tagId, name: t.name },
+        message: `Tag "${t.name}" has no Consent Mode v2 settings while the rest of this container uses Consent Mode, so it fires regardless of the visitor's choice.`,
+        recommendation: 'In the tag\'s "Consent Settings", declare the consent types it requires (e.g. ad_storage, analytics_storage), or "No additional consent required" if it genuinely needs none. "Apply fix" requires the consent types for this tag type.',
+        autoFixable: true,
+        fix: {
+          tool: 'set_gtm_tag_consent',
+          args: { tagId: t.tagId, consentStatus: 'needed', consentTypes: consentTypesFor(t.type), name: t.name },
+        },
+      });
+    }
+  } else if (unconfiguredConsentTags.length > 0) {
+    const shown = unconfiguredConsentTags.slice(0, 4).map((t) => `"${t.name}"`).join(', ');
+    const more = unconfiguredConsentTags.length > 4 ? ` and ${unconfiguredConsentTags.length - 4} more` : '';
+    findings.push({
+      severity: 'medium',
+      confidence: 'certain',
+      category: 'consent',
+      checkId: 'consent-mode-not-configured',
+      message: `Consent Mode v2 is not configured in this container: ${unconfiguredConsentTags.length} data-sending tag(s) carry no consent settings (${shown}${more}), and there is no consent initialisation, default or update.`,
+      recommendation: 'Decide whether this site needs Consent Mode (it does if it has EU/UK/CH visitors or uses a consent banner). If so, add a Consent Mode default on the Consent Initialization trigger and declare consent types on the data-sending tags; the consent audit lists the exact steps.',
+      autoFixable: false,
+    });
   }
 
   if (measurementIds.size > 1) {
@@ -2355,9 +2412,11 @@ export function auditServerContainer(s: ServerContainerSnapshot): AuditReport {
     if (t.paused) {
       push({ severity: 'high', category: 'paused', resource, message: `Server tag "${t.name}" is PAUSED — it sends nothing while paused.`, recommendation: 'Unpause it if it should be live.', autoFixable: true, fix: { tool: 'set_gtm_tag_paused', args: { tagId: t.tagId, paused: false, name: t.name } } });
     }
-    if (t.type === 'sgtmgaaw' && !has('measurementId')) {
-      push({ severity: 'high', category: 'ga4', resource, message: `GA4 server tag "${t.name}" has no Measurement ID — it forwards nothing to GA4.`, recommendation: 'Set its Measurement ID (G-XXXXXXX or a {{variable}}).', autoFixable: false });
-    }
+    // A GA4 server tag with NO Measurement ID is not broken: it inherits the id from each incoming
+    // event, which is the documented and recommended setup (one relay serves every property the
+    // web side sends). This used to be flagged high/certain, and fired on every real production
+    // server container in the corpus. Only an id that is set but unresolvable is a defect, and the
+    // dangling-reference check below already reports that.
     if (t.type === 'sgtmadsct' && (!has('conversionId') || !has('conversionLabel'))) {
       push({ severity: 'high', category: 'ga4', resource, message: `Google Ads conversion server tag "${t.name}" is missing its Conversion ID and/or Label — it records no conversion.`, recommendation: 'Set conversionId (AW-…) and conversionLabel.', autoFixable: false });
     }
@@ -2736,7 +2795,14 @@ export function auditServerContainer(s: ServerContainerSnapshot): AuditReport {
     return false;
   };
   const ungatedVendorTags = s.tags.filter((t) => {
+    // Paused or trigger-less tags never fire, so they send nothing for anyone (same rule as the dedup check).
+    if (t.paused || !(t.firingTriggerId ?? []).length) return false;
     if (!isAnyCapiServerTag(t)) return false;
+    // Stape-family CAPI templates carry their own ad_storage gate: adStorageConsent='required' makes the
+    // tag read the consent state and send nothing when ad_storage is denied. It is what the
+    // create_*_server_tag builders write for requireConsent:true. Only the literal 'required' counts:
+    // 'optional', a missing value or a {{variable}} cannot be shown to gate anything.
+    if (serverTagParam(t, 'adStorageConsent').trim().toLowerCase() === 'required') return false;
     const gate = evaluateConsentGate(t.consentSettings, ['ad_storage']);
     // 'ungated' = no additional consent check at all; 'declared_no_consent' = explicitly declared
     // as needing none. Both mean the tag fires regardless of the visitor's choice.
@@ -2751,7 +2817,7 @@ export function auditServerContainer(s: ServerContainerSnapshot): AuditReport {
       confidence: 'likely',
       category: 'consent',
       message: `${ungatedVendorTags.length} third-party conversion-API server tag(s) carry no consent gate: ${shown}${more}. Unlike Google's server tags these do not honour Consent Mode on their own, so they send data for visitors who refused.`,
-      recommendation: 'Set Consent Settings on each tag to "Require additional consent" with the vendor\'s consent types (ad_storage for advertising vendors, plus ad_user_data / ad_personalization where the vendor requires them), or gate the firing trigger on a consent variable. Decide the correct types deliberately: this is never auto-fixed because the safe default is to send nothing.',
+      recommendation: 'Set Consent Settings on each tag to "Require additional consent" with the vendor\'s consent types (ad_storage for advertising vendors, plus ad_user_data / ad_personalization where the vendor requires them), set the template\'s own consent option to require ad_storage (adStorageConsent = "required", which create_*_server_tag sets with requireConsent:true), or gate the firing trigger on a consent variable. Decide the correct types deliberately: this is never auto-fixed because the safe default is to send nothing.',
       autoFixable: false,
     });
   }

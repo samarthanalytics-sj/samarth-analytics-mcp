@@ -389,7 +389,8 @@ function registerGalleryImport(server: McpServer, getClient: () => GtmClient): v
         'Idempotent: one already present is returned unchanged rather than duplicated, including a copy installed by hand. ' +
         'Handles the two cases a plain gallery import cannot: a repo that is only a FORK is imported from the publisher instead, ' +
         'and a template the gallery never listed (e.g. stape-io/data-client, rtb-house-tag, tapfiliate-tag) is installed by uploading ' +
-        'the vendor source, which is what Templates > Import does by hand. ' +
+        'the vendor source, which is what Templates > Import does by hand. That source is fetched only at the commit pinned as reviewed ' +
+        'and refused unless its SHA-256 matches the pin. ' +
         'Returns the installed template. To build a tag on it you need its tag TYPE (a cvt_... string): READ ' +
         'that from the container rather than constructing it from the templateId, because the format is not ' +
         'what it appears to be. Pass the exact string as `type` to tags_create ' +
@@ -451,7 +452,8 @@ function registerGalleryImport(server: McpServer, getClient: () => GtmClient): v
 
         // A template the gallery never listed cannot be imported from it. Install it the way the
         // GTM UI's Templates > Import does instead: upload the vendor's own source. Allowlisted to
-        // the registry in gtm-template-sources, and verified before anything is written.
+        // the registry in gtm-template-sources, fetched only at its reviewed commit, and checked
+        // against the pinned SHA-256 (then by identity) before anything is written.
         const coords = galleryCoordinatesFor(owner, repository);
         if (!coords) {
           let installed;
@@ -463,9 +465,12 @@ function registerGalleryImport(server: McpServer, getClient: () => GtmClient): v
           return jsonResult({
             imported: true,
             installedFrom: installed.url,
+            sourceSha: installed.sourceSha,
+            sha256: installed.sha256,
             reason:
               `${owner}/${repository} is not in the Community Template Gallery, so it was installed by uploading its ` +
-              'source from the vendor repository, the same thing Templates > Import does by hand.',
+              'source from the vendor repository at the reviewed commit (the same thing Templates > Import does by hand), ' +
+              'after checking its SHA-256 against the pin.',
             template: installed.template,
             tagType: customTemplateType(installed.template, containerId),
             tagTypeNote: TAG_TYPE_GUIDANCE,
@@ -585,7 +590,8 @@ export async function ensureGalleryTemplate(
     template = existing;
   } else {
     // Not installed yet. A template that IS in the gallery is imported from it; one that is not
-    // listed is installed by uploading its source, which is what Templates > Import does by hand.
+    // listed is installed by uploading its source, which is what Templates > Import does by hand,
+    // fetched at its reviewed commit and checked against the pinned SHA-256 first.
     const coords = galleryCoordinatesFor(owner, repository);
     try {
       template = coords

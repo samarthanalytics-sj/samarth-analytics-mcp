@@ -1000,20 +1000,30 @@ test('audit: structured findings carry resource + recommendation + machine fix',
 });
 
 test('audit: Consent Mode v2 + missing event name flagged on bare GA4/Ads tags', () => {
+  const tags = [
+    { tagId: '1', name: 'Bare GA4', type: 'gaawe', firingTriggerId: ['T1'], paused: false, parameter: [{ key: 'measurementIdOverride', value: 'G-9' }] },
+    { tagId: '2', name: 'Ads', type: 'awct', firingTriggerId: ['T1'], paused: false, parameter: [] },
+  ];
+  // A container that does not use Consent Mode AT ALL: one container-level finding, not one per
+  // tag. Per-tag alarms here were 86% of every high finding across 558 real containers.
+  const bare = auditContainer({ tags, triggers: [{ triggerId: 'T1', name: 'All Pages', type: 'pageview' }], variables: [] });
+  assert.ok(bare.findings.some((f) => f.message.includes('has no event name')), 'GA4 missing event name flagged');
+  const bareConsent = bare.findings.filter((f) => f.category === 'consent');
+  assert.equal(bareConsent.length, 1, 'ONE finding for a container with no Consent Mode');
+  assert.equal(bareConsent[0].checkId, 'consent-mode-not-configured');
+  assert.equal(bareConsent[0].severity, 'medium', 'matches the consent engine, which reports the same fact at medium');
+  assert.match(bareConsent[0].message, /2 data-sending tag/);
+  assert.match(bareConsent[0].message, /"Bare GA4"/);
+  assert.equal(bareConsent[0].autoFixable, false, 'whether to adopt Consent Mode is a decision, not a fix');
+
+  // The SAME tags in a container that DOES use Consent Mode (a Consent Initialization trigger
+  // exists): now each unconfigured tag is a real gap in a working setup, reported per tag with its fix.
   const r = auditContainer({
-    tags: [
-      { tagId: '1', name: 'Bare GA4', type: 'gaawe', firingTriggerId: ['T1'], paused: false, parameter: [{ key: 'measurementIdOverride', value: 'G-9' }] },
-      { tagId: '2', name: 'Ads', type: 'awct', firingTriggerId: ['T1'], paused: false, parameter: [] },
-    ],
-    triggers: [{ triggerId: 'T1', name: 'All Pages', type: 'pageview' }],
+    tags,
+    triggers: [{ triggerId: 'T1', name: 'All Pages', type: 'pageview' }, { triggerId: 'T0', name: 'Consent Initialization - All Pages', type: 'consentInit' }],
     variables: [],
   });
-  const cats = r.findings.map((f) => f.category);
-  assert.ok(cats.includes('consent'), 'consent finding for tags without consentSettings');
-  assert.ok(r.findings.some((f) => f.message.includes('has no event name')), 'GA4 missing event name flagged');
-  // Both consent-relevant tags should be flagged for consent.
-  assert.equal(r.findings.filter((f) => f.category === 'consent').length, 2);
-  // Brain: consent is High (not Medium), confidence 'likely', and now AUTO-FIXABLE.
+  assert.equal(r.findings.filter((f) => f.category === 'consent').length, 2, 'per tag when Consent Mode is in use');
   const ga4Consent = r.findings.find((f) => f.category === 'consent' && f.resource?.id === '1');
   assert.equal(ga4Consent?.severity, 'high', 'consent finding is High');
   assert.equal(ga4Consent?.confidence, 'likely', 'consent finding is [Likely]');
@@ -1022,6 +1032,63 @@ test('audit: Consent Mode v2 + missing event name flagged on bare GA4/Ads tags',
   assert.deepEqual(ga4Consent?.fix?.args.consentTypes, ['analytics_storage'], 'GA4 → analytics_storage');
   const adsConsent = r.findings.find((f) => f.category === 'consent' && f.resource?.id === '2');
   assert.deepEqual(adsConsent?.fix?.args.consentTypes, ['ad_storage', 'ad_user_data', 'ad_personalization'], 'Ads → ad signals');
+});
+
+test('audit: a CMP template on the BUILT-IN Consent Initialization trigger means Consent Mode is in use', () => {
+  // triggers.list never returns GTM's built-in triggers, so the CMP tag's firingTriggerId
+  // (2147479572) is the only sign of the consent initialisation.
+  const cmp = { tagId: '9', name: 'Cookiebot CMP', type: 'cvt_123_45', firingTriggerId: ['2147479572'], paused: false, parameter: [], consentSettings: { consentStatus: 'notSet' } };
+  const senders = [
+    { tagId: '1', name: 'Bing UET', type: 'baut', firingTriggerId: ['2147479553'], paused: false, parameter: [], consentSettings: { consentStatus: 'notSet' } },
+    { tagId: '2', name: 'LinkedIn Insight', type: 'bzi', firingTriggerId: ['2147479553'], paused: false, parameter: [], consentSettings: { consentStatus: 'notSet' } },
+  ];
+  const r = auditContainer({ tags: [cmp, ...senders], triggers: [], variables: [] });
+  const consent = r.findings.filter((f) => f.category === 'consent');
+  assert.equal(consent.some((f) => f.checkId === 'consent-mode-not-configured'), false, 'a consent initialisation exists');
+  assert.equal(consent.length, 2, 'per-tag gaps when Consent Mode is in use');
+  for (const f of consent) {
+    assert.equal(f.severity, 'high');
+    assert.equal(f.autoFixable, true);
+    assert.equal(f.fix?.tool, 'set_gtm_tag_consent');
+  }
+
+  // The same container with the CMP tag PAUSED has no live consent initialisation: one medium finding.
+  const paused = auditContainer({ tags: [{ ...cmp, paused: true }, ...senders], triggers: [], variables: [] });
+  const pausedConsent = paused.findings.filter((f) => f.category === 'consent');
+  assert.deepEqual(pausedConsent.map((f) => f.checkId), ['consent-mode-not-configured']);
+
+  // A data-sending tag placed on Consent Initialization is not a consent setup.
+  const misplaced = auditContainer({ tags: [{ ...senders[0], firingTriggerId: ['2147479572'] }, senders[1]], triggers: [], variables: [] });
+  assert.deepEqual(misplaced.findings.filter((f) => f.category === 'consent').map((f) => f.checkId), ['consent-mode-not-configured']);
+});
+
+test('audit: an event tag whose {{Constant}} Measurement ID matches the Google tag literal is NOT "Cannot detect the Google tag"', () => {
+  const base = {
+    triggers: [{ triggerId: 'T1', name: 'All Pages', type: 'pageview' }, { triggerId: 'T0', name: 'Consent Initialization', type: 'consentInit' }],
+    variables: [{ variableId: 'v1', name: 'GA4 ID', type: 'c', parameter: [{ key: 'value', value: 'G-ABC123' }] }],
+  };
+  const cannotDetect = (r: ReturnType<typeof auditContainer>) => r.findings.filter((f) => /NO Google\/Configuration tag/.test(f.message));
+
+  // Google tag holds the literal, the event tag holds a Constant with the same value: one id, no finding.
+  const ok = auditContainer({ ...base, tags: [
+    { tagId: '1', name: 'Google tag', type: 'googtag', firingTriggerId: ['T1'], paused: false, parameter: [{ key: 'tagId', value: 'G-ABC123' }], consentSettings: { consentStatus: 'NEEDED', consentType: { list: [{ value: 'analytics_storage' }] } } },
+    { tagId: '2', name: 'GA4 - view_item', type: 'gaawe', firingTriggerId: ['T1'], paused: false, parameter: [{ key: 'measurementIdOverride', value: '{{GA4 ID}}' }, { key: 'eventName', value: 'view_item' }], consentSettings: { consentStatus: 'NEEDED', consentType: { list: [{ value: 'analytics_storage' }] } } },
+  ] });
+  assert.equal(cannotDetect(ok).length, 0, 'the Constant resolves to the declared literal; this flagged 24% of real containers');
+
+  // The other way round too: Google tag holds the Constant, the event tag holds the literal.
+  const ok2 = auditContainer({ ...base, tags: [
+    { tagId: '1', name: 'Google tag', type: 'googtag', firingTriggerId: ['T1'], paused: false, parameter: [{ key: 'tagId', value: '{{GA4 ID}}' }] },
+    { tagId: '2', name: 'GA4 - view_item', type: 'gaawe', firingTriggerId: ['T1'], paused: false, parameter: [{ key: 'measurementIdOverride', value: 'G-ABC123' }, { key: 'eventName', value: 'view_item' }] },
+  ] });
+  assert.equal(cannotDetect(ok2).length, 0);
+
+  // A reference that resolves to NOTHING the Google tag declares is still a real finding.
+  const bad = auditContainer({ ...base, tags: [
+    { tagId: '1', name: 'Google tag', type: 'googtag', firingTriggerId: ['T1'], paused: false, parameter: [{ key: 'tagId', value: 'G-OTHER99' }] },
+    { tagId: '2', name: 'GA4 - view_item', type: 'gaawe', firingTriggerId: ['T1'], paused: false, parameter: [{ key: 'measurementIdOverride', value: '{{GA4 ID}}' }, { key: 'eventName', value: 'view_item' }] },
+  ] });
+  assert.equal(cannotDetect(bad).length, 1, 'a genuinely undeclared id is still reported');
 });
 
 test('consentTypesFor maps destination type → required consent signals', () => {
@@ -1263,6 +1330,9 @@ test('audit: Universal Analytics tags are flagged as deprecated; Microsoft Ads (
     tags: [
       { tagId: '1', name: 'Old UA', type: 'ua', firingTriggerId: ['T1'], paused: false, parameter: [] },
       { tagId: '2', name: 'Bing UET', type: 'baut', firingTriggerId: ['T1'], paused: false, parameter: [], consentSettings: { consentStatus: 'NOT_SET' } },
+      // A tag that already declares consent proves this container uses Consent Mode, so the
+      // unconfigured baut tag is reported per tag rather than folded into a container-level note.
+      { tagId: '3', name: 'GA4 (gated)', type: 'gaawe', firingTriggerId: ['T1'], paused: false, parameter: [{ key: 'measurementIdOverride', value: 'G-1' }, { key: 'eventName', value: 'page_view' }], consentSettings: { consentStatus: 'NEEDED', consentType: { list: [{ value: 'analytics_storage' }] } } },
     ],
     triggers: [{ triggerId: 'T1', name: 'All Pages', type: 'pageview' }],
     variables: [],
@@ -1852,7 +1922,7 @@ test('auditServerContainer flags missing client, blank ids, no trigger, paused, 
   assert.ok(rep.summary.critical >= 1, 'no client → a critical');
   assert.ok(/no client/i.test(msgs), 'names the missing-client problem');
   assert.ok(/no tagging server URL/i.test(msgs), 'flags missing tagging URL');
-  assert.ok(/no Measurement ID/i.test(msgs), 'flags GA4 tag with blank measurement id');
+  assert.ok(!/no Measurement ID/i.test(msgs), 'a blank measurement id INHERITS from the event and is not a defect');
   assert.ok(/never fires/i.test(msgs), 'flags the tag with no firing trigger');
   assert.ok(/Conversion ID and\/or Label/i.test(msgs), 'flags incomplete Ads conversion');
   assert.ok(/PAUSED/i.test(msgs), 'flags the paused server tag');
@@ -3812,7 +3882,7 @@ test('planWebToServerMigration: classifies GA4/Ads/Floodlight/Linker natives + M
 
   // Builders that existed but were never planned, and the X generic path.
   assert.equal(by('Amazon Ads')?.serverTool, 'create_amazon_capi_server_tag');
-  assert.deepEqual(by('Amazon Ads')?.derived, { tagId: 'tag-987' });
+  assert.deepEqual(by('Amazon Ads')?.derived, { tagIds: ['tag-987'] }, 'keyed + shaped as the typed tool takes it');
   assert.deepEqual(by('Amazon Ads')?.requires, []);
   assert.equal(by('StackAdapt')?.serverTool, 'create_stackadapt_server_tag');
   assert.deepEqual(by('StackAdapt')?.derived, { pixelID: 'SA-55' });
@@ -4034,7 +4104,7 @@ test('planWebToServerMigration: the Tier-1 pixels are planned to their typed too
   assert.equal(by('X (Twitter)')?.status, 'typed-tool', 'X has a typed builder now');
   assert.deepEqual(by('X (Twitter)')?.derived, { pixelId: 'o1abc' });
   assert.deepEqual(by('X (Twitter)')?.requires, ['eventId', 'pixelAccessToken']);
-  assert.deepEqual(by('Quora')?.derived, { accountId: 'QP123' });
+  assert.deepEqual(by('Quora')?.derived, { pixelId: 'QP123' }, 'the typed tool field, not the GTM accountId arg');
   assert.deepEqual(by('AdRoll')?.derived, { advertisableId: 'ADV9', pixelId: 'PIX9' }, 'both AdRoll ids come off the snippet');
   assert.deepEqual(by('Nextdoor')?.derived, { pixelId: 'NDP77' });
   assert.deepEqual(by('Nextdoor')?.requires, ['clientId', 'accessToken']);
@@ -4098,6 +4168,37 @@ test('server audit P0: an ungated vendor CAPI tag is critical, a consent-gated o
   } as never);
   assert.equal(consentOf(many).length, 1, 'aggregated');
   assert.match(consentOf(many)[0].message, /3 third-party/);
+
+  // The Stape template's OWN gate (adStorageConsent='required', what requireConsent:true writes) is a
+  // gate even with no tag-level Consent Settings. 'optional' is not.
+  const withTplConsent = (tagId: string, name: string, value: string) => {
+    const t = capi(tagId, name, null);
+    return { ...t, parameter: [...t.parameter, { type: 'template', key: 'adStorageConsent', value }] };
+  };
+  const tplGated = auditServerContainer({ ...base, tags: [withTplConsent('t1', 'Meta CAPI', 'required')], triggers: [] } as never);
+  assert.equal(consentOf(tplGated).length, 0, 'adStorageConsent=required is the template\'s ad_storage gate');
+  const tplOptional = auditServerContainer({ ...base, tags: [withTplConsent('t1', 'Meta CAPI', 'optional')], triggers: [] } as never);
+  assert.equal(consentOf(tplOptional).length, 1, 'adStorageConsent=optional gates nothing');
+  assert.equal(consentOf(tplOptional)[0].severity, 'critical');
+  // Tags produced by the app's own builders with requireConsent:true are not reported; the same
+  // builders with requireConsent:false still are (so they are recognised as vendor CAPI tags).
+  const builtWith = (requireConsent: boolean) => auditServerContainer({
+    ...base,
+    tags: [
+      { ...buildLinkedInCapiServerTag('cvt_LI01', 'LI built', 'T', 'R', { requireConsent, firingTriggerId: ['1'] }), tagId: 't1', paused: false, blockingTriggerId: [], consentSettings: null },
+      { ...buildTikTokCapiServerTag('cvt_TT01', 'TikTok built', 'PIX', 'TOK', 'CompletePayment', { requireConsent, firingTriggerId: ['1'] }), tagId: 't2', paused: false, blockingTriggerId: [], consentSettings: null },
+    ],
+    triggers: [],
+  } as never);
+  assert.equal(consentOf(builtWith(true)).length, 0, 'builder-written template gate is honoured');
+  assert.equal(consentOf(builtWith(false)).length, 1);
+  assert.match(consentOf(builtWith(false))[0].message, /2 third-party/);
+
+  // A paused or trigger-less CAPI tag never fires, so it sends nothing for anyone.
+  const paused = auditServerContainer({ ...base, tags: [{ ...capi('t1', 'Meta CAPI paused', null), paused: true }], triggers: [] } as never);
+  assert.equal(consentOf(paused).length, 0, 'paused tags are not counted');
+  const noTrigger = auditServerContainer({ ...base, tags: [capi('t1', 'Meta CAPI no trigger', null, [])], triggers: [] } as never);
+  assert.equal(consentOf(noTrigger).length, 0, 'trigger-less tags are not counted');
 });
 
 test('server audit P0: the GA4 client that cannot claim, and the malformed tagging URL', () => {

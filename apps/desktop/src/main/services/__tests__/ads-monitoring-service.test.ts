@@ -3,6 +3,7 @@
 
 import assert from 'node:assert/strict';
 import { AdsMonitoringService } from '../ads-monitoring-service';
+import { MAX_INTERVAL_MINUTES } from '../timer-limits';
 import type { GoogleAdsService } from '../../google/ads-service';
 import type { AccountView, AdsMonitorRun } from '../../../shared/ipc';
 
@@ -177,6 +178,9 @@ test('normalize: interval floor 60, per-account cap 5, junk ids dropped, days sn
     enabled: false,
   });
   assert.equal(st.intervalMinutes, 60, 'floor is one hour (Ads API quota)');
+  // Ceiling: past setInterval's 2^31-1 ms limit Node fires every 1 ms, hammering the Ads API + Slack.
+  assert.equal(svc.configure({ intervalMinutes: 1e9 }).intervalMinutes, MAX_INTERVAL_MINUTES, 'clamped to the timer ceiling');
+  assert.equal(svc.configure({ intervalMinutes: Infinity }).intervalMinutes, MAX_INTERVAL_MINUTES, 'Infinity clamped too');
   assert.equal(st.days, 30, 'invalid window falls back to the default');
   assert.equal(st.targets.length, 5, 'capped at 5 per account');
   assert.ok(!st.targets.some((t) => t.customerId === 'not-an-id'), 'junk id dropped');
