@@ -691,9 +691,10 @@ Releases are fully automated via [semantic-release](https://semantic-release.git
 3. Determines the next semantic version (`MAJOR.MINOR.PATCH`).
 4. Updates `CHANGELOG.md` and bumps the `version` in `package.json` / `package-lock.json`.
 5. Commits those files back to `main` with `chore(release): x.y.z [skip ci]` (the `[skip ci]` marker prevents an infinite release loop).
-6. Creates a Git tag (`vX.Y.Z`) and a GitHub Release with auto-generated notes.
+6. Publishes the package to npm as [`samarth-gtm-mcp`](https://www.npmjs.com/package/samarth-gtm-mcp) with a provenance attestation.
+7. Creates a Git tag (`vX.Y.Z`) and a GitHub Release with auto-generated notes.
 
-The workflow uses the built-in `GITHUB_TOKEN` and requires no additional secrets. `npm publish` is disabled — this package is distributed as a binary via the GitHub repo and releases, not via the npm registry.
+npm publishing uses [Trusted Publishing](https://docs.npmjs.com/trusted-publishers): the job's GitHub OIDC token is exchanged for a short-lived npm token, so there is no npm token secret to rotate. The trusted publisher is configured on npmjs.com (GitHub Actions, this repository, workflow `release.yml`, no environment). Because `main` is protected, the release commit is pushed with a `RELEASE_TOKEN` secret (a fine-grained token of a repo admin with Contents, Issues and Pull requests read/write).
 
 ### Conventional Commit Examples
 
