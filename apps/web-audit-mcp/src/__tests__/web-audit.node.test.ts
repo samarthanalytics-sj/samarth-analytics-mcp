@@ -71,6 +71,8 @@ import {
   resolveHttpBinding,
   bindingBanner,
   startHttpServer,
+  resolveSessionTtlMs,
+  DEFAULT_SESSION_TTL_MS,
 } from '../http.js';
 import { createWebAuditMcpServer } from '../server.js';
 import { loadConfig } from '../utils/config.js';
@@ -1244,7 +1246,13 @@ check('http: index registers an unhandledRejection net', webAuditIndexSrc.includ
 check('http: index registers an uncaughtException net', webAuditIndexSrc.includes("process.on('uncaughtException'"));
 
 // Live: a real listener on an ephemeral port, driven over loopback. No browser is launched.
-const HTTP_ENV_KEYS = ['WEB_AUDIT_HTTP_AUTH_TOKEN', 'WEB_AUDIT_HTTP_ALLOW_UNAUTHENTICATED', 'WEB_AUDIT_HTTP_PORT', 'PORT'];
+const HTTP_ENV_KEYS = [
+  'WEB_AUDIT_HTTP_AUTH_TOKEN',
+  'WEB_AUDIT_HTTP_ALLOW_UNAUTHENTICATED',
+  'WEB_AUDIT_HTTP_PORT',
+  'PORT',
+  'WEB_AUDIT_HTTP_SESSION_TTL_MS',
+];
 const httpLogs: string[] = [];
 async function withHttpEnv(env: Record<string, string>, fn: () => Promise<void>): Promise<void> {
   const saved = HTTP_ENV_KEYS.map((k) => [k, process.env[k]] as const);
@@ -1421,6 +1429,103 @@ await withHttpEnv({ WEB_AUDIT_HTTP_AUTH_TOKEN: TEST_HTTP_TOKEN, WEB_AUDIT_HTTP_P
     await h.close();
   }
 });
+
+// ── HTTP transport: idle-session sweep ──────────────────────────────────────
+// REGRESSION: each HTTP session owns its own McpServer, but nothing reclaimed a session whose
+// client exited, crashed or lost the network without sending DELETE /mcp. Its transport + server
+// stayed in the session map for the life of the process and every reconnect's initialize added
+// another, so activeSessions and memory only grew on a long-running host. The root server has
+// always had an idle sweep (GTM_MCP_HTTP_SESSION_TTL_MS); this mirrors it.
+
+check('http ttl: unset → 30 min default', resolveSessionTtlMs({}) === DEFAULT_SESSION_TTL_MS && DEFAULT_SESSION_TTL_MS === 30 * 60_000);
+check('http ttl: explicit value honoured', resolveSessionTtlMs({ WEB_AUDIT_HTTP_SESSION_TTL_MS: '200' }) === 200);
+check('http ttl: 0 disables the sweep', resolveSessionTtlMs({ WEB_AUDIT_HTTP_SESSION_TTL_MS: '0' }) === 0);
+check(
+  'http ttl: negative or non-numeric → default, never a disabled sweep',
+  resolveSessionTtlMs({ WEB_AUDIT_HTTP_SESSION_TTL_MS: '-5' }) === DEFAULT_SESSION_TTL_MS &&
+    resolveSessionTtlMs({ WEB_AUDIT_HTTP_SESSION_TTL_MS: 'abc' }) === DEFAULT_SESSION_TTL_MS &&
+    resolveSessionTtlMs({ WEB_AUDIT_HTTP_SESSION_TTL_MS: '' }) === DEFAULT_SESSION_TTL_MS,
+);
+const webAuditHttpSrc = readFileSync(new URL('../http.ts', import.meta.url), 'utf8');
+check(
+  'http ttl: the sweep timer is unref()d and cleared on close, so it never holds the process open',
+  /setInterval\(/.test(webAuditHttpSrc) && /sweep\?\.unref\(\)/.test(webAuditHttpSrc) && /clearInterval\(sweep\)/.test(webAuditHttpSrc),
+);
+
+/** Poll until `cond` holds or `timeoutMs` passes; returns whether it held. */
+async function waitUntil(cond: () => Promise<boolean>, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (await cond()) return true;
+    if (Date.now() >= deadline) return false;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+}
+
+const SWEEP_TTL_MS = 200;
+await withHttpEnv(
+  { WEB_AUDIT_HTTP_AUTH_TOKEN: TEST_HTTP_TOKEN, WEB_AUDIT_HTTP_PORT: '0', WEB_AUDIT_HTTP_SESSION_TTL_MS: String(SWEEP_TTL_MS) },
+  async () => {
+    const h = await startHttpServer(createWebAuditMcpServer);
+    const base = `http://127.0.0.1:${h.port}`;
+    const post = (body: string, extra: Record<string, string> = {}): Promise<Response> =>
+      fetch(`${base}/mcp`, { method: 'POST', headers: { ...MCP_HEADERS, ...extra }, body });
+    const activeSessions = async (): Promise<number> =>
+      ((await (await fetch(`${base}/health`)).json()) as { activeSessions: number }).activeSessions;
+    const sessionHeaders = (sid: string) => ({ 'mcp-session-id': sid, 'mcp-protocol-version': '2025-06-18' });
+    try {
+      // A client that initializes and then vanishes without DELETE.
+      const a = await post(initBody(1));
+      await a.text();
+      const sidA = a.headers.get('mcp-session-id') ?? '';
+      check('http sweep: abandoned session opened', a.status === 200 && sidA !== '' && (await activeSessions()) === 1);
+      const swept = await waitUntil(async () => (await activeSessions()) === 0, 3000);
+      check('http sweep: an abandoned session is reclaimed after the idle TTL (was: kept forever)', swept);
+      const resumed = await post(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' }), sessionHeaders(sidA));
+      const resumedBody = await readRpcError(resumed);
+      check('http sweep: a swept session id → 404 JSON-RPC -32001', resumed.status === 404 && resumedBody.error?.code === -32001, String(resumed.status));
+      check('http sweep: the sweep logs the closed session to stderr', httpLogs.some((l) => l.includes(`closing idle HTTP session: ${sidA}`)));
+
+      // A session with a request in flight (a held-open GET event stream) is never swept, however
+      // long it outlives the TTL; once the stream closes it becomes idle and is reclaimed.
+      const b = await post(initBody(1));
+      await b.text();
+      const sidB = b.headers.get('mcp-session-id') ?? '';
+      const abort = new AbortController();
+      const stream = await fetch(`${base}/mcp`, {
+        method: 'GET',
+        headers: { accept: 'text/event-stream', authorization: MCP_HEADERS.authorization, ...sessionHeaders(sidB) },
+        signal: abort.signal,
+      });
+      check('http sweep: event stream opened', stream.status === 200, String(stream.status));
+      await new Promise((r) => setTimeout(r, SWEEP_TTL_MS * 4));
+      check('http sweep: a session with an open request is NOT swept past the TTL', (await activeSessions()) === 1);
+      abort.abort();
+      await stream.body?.cancel().catch(() => undefined);
+      const sweptAfterStream = await waitUntil(async () => (await activeSessions()) === 0, 3000);
+      check('http sweep: once its stream closes, the idle session is reclaimed', sweptAfterStream);
+    } finally {
+      await h.close();
+    }
+  },
+);
+
+await withHttpEnv(
+  { WEB_AUDIT_HTTP_AUTH_TOKEN: TEST_HTTP_TOKEN, WEB_AUDIT_HTTP_PORT: '0', WEB_AUDIT_HTTP_SESSION_TTL_MS: '0' },
+  async () => {
+    const h = await startHttpServer(createWebAuditMcpServer);
+    const base = `http://127.0.0.1:${h.port}`;
+    try {
+      const a = await fetch(`${base}/mcp`, { method: 'POST', headers: MCP_HEADERS, body: initBody(1) });
+      await a.text();
+      await new Promise((r) => setTimeout(r, 300));
+      const active = ((await (await fetch(`${base}/health`)).json()) as { activeSessions: number }).activeSessions;
+      check('http sweep: WEB_AUDIT_HTTP_SESSION_TTL_MS=0 turns the sweep off', a.status === 200 && active === 1, String(active));
+    } finally {
+      await h.close();
+    }
+  },
+);
 
 // ── tag-presence reconciliation (configured vs fired) ───────────────────────
 

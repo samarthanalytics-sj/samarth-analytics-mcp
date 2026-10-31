@@ -169,6 +169,7 @@ outside a container).
 | `WEB_AUDIT_HTTP_PORT` / `PORT` | `8080` | HTTP listen port (`WEB_AUDIT_HTTP_PORT` wins). |
 | `WEB_AUDIT_HTTP_AUTH_TOKEN` | *(required for HTTP)* | Bearer token required on `/mcp`. Unset = the HTTP server refuses to start. |
 | `WEB_AUDIT_HTTP_ALLOW_UNAUTHENTICATED` | `false` | `true` lets the HTTP server start without a token, for local development only; it then binds `127.0.0.1`. |
+| `WEB_AUDIT_HTTP_SESSION_TTL_MS` | `1800000` (30 min) | Closes an HTTP session idle this long with no request in flight (a client that exits without `DELETE /mcp` otherwise leaks it). `0` disables the sweep. |
 
 ## Development
 
