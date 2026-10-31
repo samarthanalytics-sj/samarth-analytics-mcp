@@ -12,6 +12,16 @@ export function gtmScopeKey(s?: { accountId?: string; containerId?: string; work
 }
 
 /**
+ * Which stored chat thread to switch the view to, or null to stay on the shown one. A streaming reply
+ * appends to the shown thread's last assistant message, so while a turn is running the view stays
+ * pinned to the thread that asked; a product / container change made mid-turn is applied once the
+ * turn has ended (and the finished thread has been saved under its own key).
+ */
+export function chatThreadToShow(shownKey: string, wantedKey: string, streaming: boolean): string | null {
+  return !streaming && shownKey !== wantedKey ? wantedKey : null;
+}
+
+/**
  * Whether the container audit may (re-)run. A run replaces the report and resets the per-row fix map,
  * and a batch or single-row write still in flight records its result by the OLD report's row index,
  * so a re-run must wait for those to finish.

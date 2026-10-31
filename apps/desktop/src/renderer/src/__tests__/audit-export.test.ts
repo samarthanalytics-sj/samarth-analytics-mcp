@@ -3,7 +3,7 @@
  *  Run: tsx src/renderer/src/__tests__/audit-export.test.ts */
 import assert from 'node:assert/strict';
 import { auditToCsv, auditToMarkdown, sortFindings } from '../audit-export';
-import { gtmScopeKey, canRunAudit } from '../state-guards';
+import { gtmScopeKey, chatThreadToShow, canRunAudit } from '../state-guards';
 import type { AuditReportView, AuditFindingView, GtmContext } from '../../../shared/ipc';
 
 let passed = 0, failed = 0;
@@ -83,6 +83,36 @@ test('gtmScopeKey: a container or workspace switch is a new scope; a rename is n
   assert.notEqual(key(a), key({ ...a, workspaceId: '5' }), 'other workspace of the same container');
   assert.equal(key(a), key({ ...a, containerName: 'A (renamed)', workspaceName: 'Renamed' }), 'names are labels, not scope');
   assert.equal(gtmScopeKey(undefined), gtmScopeKey({}), 'no context is one stable scope');
+});
+
+test('chatThreadToShow: the view stays pinned to the asking thread while a reply streams', () => {
+  assert.equal(chatThreadToShow('acct|gtm|A', 'acct|ga4|P', true), null, 'mid-turn switch waits');
+  assert.equal(chatThreadToShow('acct|gtm|A', 'acct|ga4|P', false), 'acct|ga4|P', 'applied once the turn ends');
+  assert.equal(chatThreadToShow('acct|gtm|A', 'acct|gtm|A', false), null, 'same thread: never reload (would drop unsaved tokens)');
+  assert.equal(chatThreadToShow('acct|gtm|A', 'acct|gtm|A', true), null);
+});
+
+test('chatThreadToShow: a key flip mid-stream keeps the answer in, and saved under, the thread that asked', () => {
+  // Mirrors ChatView: `shown`/`msgs` are the on-screen thread, the stream appends to msgs' last
+  // assistant message, and the thread effect runs on every key / busy change.
+  const store: Record<string, string[]> = { A: ['old q', 'old a'], B: ['b q', 'b a'] };
+  let shown = 'A';
+  let msgs = [...store.A];
+  const effect = (wanted: string, streaming: boolean): void => {
+    const next = chatThreadToShow(shown, wanted, streaming);
+    if (next === null) return;
+    store[shown] = msgs; // flush the shown thread under its own key
+    shown = next;
+    msgs = [...(store[next] ?? [])];
+  };
+  msgs = [...msgs, 'list tags in X', '']; // send() on thread A
+  effect('A', true);
+  effect('B', true); // set_gtm_container / a product toggle flips threadKey mid-stream
+  msgs[msgs.length - 1] += 'X has 12 tags'; // the rest of the reply streams into the SHOWN thread
+  effect('B', false); // turn ends
+  assert.deepEqual(store.A, ['old q', 'old a', 'list tags in X', 'X has 12 tags'], 'answer kept in the asking thread');
+  assert.deepEqual(store.B, ['b q', 'b a'], "the other thread's last reply is untouched");
+  assert.equal(shown, 'B', 'the queued switch is applied after the turn');
 });
 
 test('canRunAudit: Re-run waits for a batch or row write still in flight', () => {

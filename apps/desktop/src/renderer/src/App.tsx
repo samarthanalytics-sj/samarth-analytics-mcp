@@ -91,7 +91,7 @@ import { AdsMonitoringPanel } from './AdsMonitoringPanel';
 import { TagTypeIcon } from './TagTypeIcon';
 import { gtmTypeLabel } from '../../shared/tag-brand';
 import { auditToCsv, auditToMarkdown } from './audit-export';
-import { gtmScopeKey, canRunAudit } from './state-guards';
+import { gtmScopeKey, chatThreadToShow, canRunAudit } from './state-guards';
 
 const DEFAULT_MODEL: Record<LlmProvider, string> = {
   anthropic: 'claude-opus-4-8',
@@ -1312,16 +1312,24 @@ function ChatView({
       : active?.adsContext?.customerId,
   );
   const [messages, setMessages] = useState<ChatMessage[]>(() => loadChatThread(threadKey));
+  // The key of the thread ON SCREEN (`messages`). It follows threadKey, except while a reply streams:
+  // the stream appends to the shown thread's last assistant message, so a product / container switch
+  // made mid-turn (a toggle, the context bar, or the model's own set_gtm_container) waits for the turn
+  // to end - otherwise the rest of the answer lands in, and is saved under, the other thread.
   const threadKeyRef = useRef(threadKey);
-  // Load the right thread whenever the account / product / container changes.
   useEffect(() => {
-    threadKeyRef.current = threadKey;
-    setMessages(loadChatThread(threadKey));
+    const next = chatThreadToShow(threadKeyRef.current, threadKey, busy);
+    if (next === null) return;
+    saveChatThread(threadKeyRef.current, messages); // flush: the swap below cancels the pending debounced save
+    threadKeyRef.current = next;
+    setMessages(loadChatThread(next));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [threadKey]);
-  // Persist (debounced so streaming tokens don't thrash localStorage).
+  }, [threadKey, busy]);
+  // Persist (debounced so streaming tokens don't thrash localStorage). The key is captured now, so a
+  // thread swap before the timer fires can never save these messages under the new thread's key.
   useEffect(() => {
-    const id = setTimeout(() => saveChatThread(threadKeyRef.current, messages), 400);
+    const key = threadKeyRef.current;
+    const id = setTimeout(() => saveChatThread(key, messages), 400);
     return () => clearTimeout(id);
   }, [messages]);
   const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null);
@@ -1576,23 +1584,28 @@ function ChatView({
           </div>
         </div>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-          <div style={styles.toggle}>
+          {/* Locked while a reply streams: the reply belongs to the thread that asked, so switching
+              product mid-turn would only queue the switch until the turn ends. */}
+          <div style={styles.toggle} title={busy ? 'Wait for the reply to finish before switching' : undefined}>
             <button
-              style={product === 'gtm' ? styles.toggleActive : styles.toggleBtn}
+              style={product === 'gtm' ? styles.toggleActive : { ...styles.toggleBtn, ...(busy ? styles.toggleLocked : {}) }}
               onClick={() => setProduct('gtm')}
+              disabled={busy}
             >
               GTM
             </button>
             <button
-              style={product === 'ga4' ? styles.toggleActive : styles.toggleBtn}
+              style={product === 'ga4' ? styles.toggleActive : { ...styles.toggleBtn, ...(busy ? styles.toggleLocked : {}) }}
               onClick={() => setProduct('ga4')}
+              disabled={busy}
             >
               GA4
             </button>
             <button
-              style={product === 'ads' ? styles.toggleActive : styles.toggleBtn}
+              style={product === 'ads' ? styles.toggleActive : { ...styles.toggleBtn, ...(busy ? styles.toggleLocked : {}) }}
               onClick={() => setProduct('ads')}
-              title="Google Ads: accounts, campaigns and conversion actions"
+              disabled={busy}
+              title={busy ? undefined : 'Google Ads: accounts, campaigns and conversion actions'}
             >
               Ads
             </button>
@@ -13447,6 +13460,7 @@ const styles: Record<string, React.CSSProperties> = {
   toggle: { display: 'inline-flex', background: 'var(--surface-2)', border: '1px solid var(--border-2)', borderRadius: 9, overflow: 'hidden', padding: 2, gap: 2 },
   toggleBtn: { background: 'transparent', color: 'var(--text-dim)', border: 'none', padding: '6px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer', borderRadius: 7 },
   toggleActive: { background: 'var(--primary)', color: 'var(--on-primary)', border: 'none', padding: '6px 16px', fontSize: 13, fontWeight: 700, cursor: 'pointer', borderRadius: 7, boxShadow: '0 1px 3px var(--ring)' },
+  toggleLocked: { opacity: 0.5, cursor: 'not-allowed' },
   chatTitle: { fontWeight: 600, fontSize: 19, color: 'var(--text)', letterSpacing: -0.3 },
   chatSub: { fontSize: 12.5, color: 'var(--text-muted)', marginTop: 3, lineHeight: 1.5 },
   // Cross-platform integration chips: a quiet opt-in strip above the context bars. Deliberately
