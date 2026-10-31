@@ -12,6 +12,18 @@ import { McpConnection } from './mcp-client.js';
 import type { OrchestratorConfig } from './config.js';
 import { GoogleIdentityError, type GoogleTokenProvider } from './google-identity.js';
 
+/**
+ * Every slot holds a child serving a turn, so no new one can start. A capacity refusal, not an
+ * authorization failure: a refresh that hits it has already minted a good token and simply has no
+ * room to start a child with it, and saying "authorization failed" sent users to reconnect Google.
+ */
+export class McpPoolCapacityError extends Error {
+  constructor(readonly maxSessions: number) {
+    super(`All ${maxSessions} MCP sessions are busy. Raise MCP_POOL_MAX_SESSIONS or add capacity.`);
+    this.name = 'McpPoolCapacityError';
+  }
+}
+
 interface PoolEntry {
   connection: McpConnection;
   accessToken: string;
@@ -160,11 +172,7 @@ export class McpPool {
         .filter(([, e]) => e.inUse === 0)
         .sort((a, b) => a[1].lastUsedAt - b[1].lastUsedAt);
 
-      if (idle.length === 0) {
-        throw new Error(
-          `All ${max} MCP sessions are busy. Raise MCP_POOL_MAX_SESSIONS or add capacity.`,
-        );
-      }
+      if (idle.length === 0) throw new McpPoolCapacityError(max);
       await this.evict(idle[0][0], 'pool at capacity');
     }
   }

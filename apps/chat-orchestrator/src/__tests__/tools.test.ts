@@ -9,6 +9,8 @@ import { ApprovalBroker } from '../approvals.js';
 import { approvalGate } from '../writeTiers.js';
 import type { OrchestratorConfig } from '../config.js';
 import { McpConnection } from '../mcp-client.js';
+import { McpPool } from '../mcp-pool.js';
+import type { GoogleTokenProvider } from '../google-identity.js';
 import { OpenAiError, type OpenAiClient } from '../openai.js';
 import type { UsageMeter } from '../usage.js';
 import type { AuditRecorder } from '../audit.js';
@@ -663,6 +665,78 @@ await testAsync('a model error after a tool round is billed and recorded, then r
   assert.equal(turns.length, 1, 'the assistant row must be written, once');
   assert.equal(turns[0].stopReason, 'error');
   assert.equal(turns[0].promptTokens, 1_000);
+});
+
+console.log('an auth retry the pool has no room for');
+
+await testAsync('a refresh refused at a full, busy pool reaches the model as capacity, not authorization', async () => {
+  // The real pool, with children that are never spawned. Both slots are serving turns, so the
+  // refresh mints a token and then has nowhere to start a child with it. That used to reach the
+  // model as "Google authorization failed: All 2 MCP sessions are busy", and the user was told to
+  // reconnect a Google account that was fine.
+  const proto = McpConnection.prototype as unknown as { connect(): Promise<void>; close(): Promise<void> };
+  const { connect, close } = proto;
+  proto.connect = async () => {};
+  proto.close = async () => {};
+  try {
+    let token = 'ya29.first';
+    const tokens: GoogleTokenProvider = {
+      getIdentity: async () => ({ accessToken: token }),
+      refresh: async () => ({ accessToken: (token = 'ya29.second') }),
+    };
+    const poolCfg = { pool: { maxSessions: 2, idleTtlMs: 60_000 }, mcp: { env: {} } } as unknown as OrchestratorConfig;
+    const pool = new McpPool(poolCfg, tokens);
+    const mine = await pool.acquire('user-1', 'jwt');
+    const theirs = await pool.acquire('user-2', 'jwt');
+
+    const mcp = {
+      listTools: () => CATALOG,
+      getInstructions: () => '',
+      callTool: async () => ({ ok: false, text: 'Request had invalid authentication credentials.' }),
+    } as unknown as McpConnection;
+    let seen: { role: string; content?: unknown }[] = [];
+    let round = 0;
+    const llm = {
+      async streamChat(messages: { role: string; content?: unknown }[]) {
+        round++;
+        if (round > 1) {
+          seen = messages;
+          return { content: 'done', toolCalls: [], finishReason: 'stop' };
+        }
+        return {
+          content: '',
+          finishReason: 'tool_calls',
+          toolCalls: [{ id: 'call_0', type: 'function' as const, function: { name: 'tags_list', arguments: '{}' } }],
+        };
+      },
+    } as unknown as OpenAiClient;
+    const events: StreamEvent[] = [];
+
+    await runTurn({
+      cfg: TURN_CFG,
+      mcp,
+      llm,
+      history: [{ role: 'user', content: 'zzz' }],
+      context: { product: 'gtm' },
+      user: { id: 'user-1' },
+      emit: (e) => events.push(e),
+      signal: new AbortController().signal,
+      onAuthFailure: () => pool.refreshIdentity('user-1', 'jwt'),
+    });
+
+    const relayed = String(seen.find((m) => m.role === 'tool')?.content ?? '');
+    assert.doesNotMatch(relayed, /authorization failed/i, 'a capacity refusal was reported as an auth failure');
+    assert.match(relayed, /all 2 tool sessions are in use/);
+    assert.match(relayed, /not a Google authorization problem/);
+    assert.equal(results(events)[0]?.ok, false);
+
+    pool.release('user-1', mine);
+    pool.release('user-2', theirs);
+    await pool.shutdown();
+  } finally {
+    proto.connect = connect;
+    proto.close = close;
+  }
 });
 
 console.log(`\n${passed} assertions passed`);

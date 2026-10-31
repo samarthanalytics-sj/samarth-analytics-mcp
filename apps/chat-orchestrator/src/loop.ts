@@ -10,6 +10,7 @@ import type { OpenAiClient } from './openai.js';
 import { capToolResult, compactToolHistory, scopeTools, toOpenAiTools } from './tools.js';
 import { buildSituationalContext, buildStaticSystem } from './prompts.js';
 import { GoogleIdentityError, isGoogleAuthFailure } from './google-identity.js';
+import { McpPoolCapacityError } from './mcp-pool.js';
 import { forLog, userRef } from './redact.js';
 import { summarizeWrite, type ApprovalBroker } from './approvals.js';
 import { approvalGate } from './writeTiers.js';
@@ -813,9 +814,15 @@ async function runTurnWithin(
           ({ ok, text } = await mcp.callTool(call.function.name, parsedArgs, toolTimeout()));
         } catch (err) {
           text =
-            err instanceof GoogleIdentityError
-              ? `Google authorization failed: ${err.message}`
-              : `Google authorization failed: ${err instanceof Error ? err.message : String(err)}`;
+            err instanceof McpPoolCapacityError
+              ? // The token was refreshed; there was no free slot to start a child with it. Reported
+                // as what it is, so nobody is sent to reconnect a Google account that works.
+                `The server is busy: all ${err.maxSessions} tool sessions are in use, so this call could not be ` +
+                `retried with a refreshed Google token. This is a temporary capacity limit, not a Google ` +
+                `authorization problem; try again in a moment.`
+              : err instanceof GoogleIdentityError
+                ? `Google authorization failed: ${err.message}`
+                : `Google authorization failed: ${err instanceof Error ? err.message : String(err)}`;
           ok = false;
         }
       }

@@ -7,7 +7,7 @@
  */
 import assert from 'node:assert/strict';
 import { McpConnection } from '../mcp-client.js';
-import { McpPool } from '../mcp-pool.js';
+import { McpPool, McpPoolCapacityError } from '../mcp-pool.js';
 import { deadlineHolding, DeadlineError } from '../deadline.js';
 import {
   GoogleIdentityError,
@@ -532,7 +532,11 @@ await testAsync('a refresh at a full, busy pool is refused rather than going pas
     const a = await pool.acquire('a', 'jwt');
     const b = await pool.acquire('b', 'jwt');
     // A's old child is retired, still alive under its turn, so a replacement would be a third.
-    await assert.rejects(() => pool.refreshIdentity('a', 'jwt'), /All 2 MCP sessions are busy/);
+    // Its own error type, so the turn reports a capacity limit rather than an authorization failure.
+    await assert.rejects(
+      () => pool.refreshIdentity('a', 'jwt'),
+      (err: unknown) => err instanceof McpPoolCapacityError && /All 2 MCP sessions are busy/.test(err.message),
+    );
     assert.ok(pool.stats().sessions <= 2, `${pool.stats().sessions} live children against a cap of 2`);
     pool.release('a', a);
     pool.release('b', b);
