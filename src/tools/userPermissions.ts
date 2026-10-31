@@ -152,7 +152,17 @@ export function registerUserPermissionTools(server: McpServer, getClient: () => 
           acctPerm === 'noAccess' || (containerAccess ?? []).some((c) => c.permission === 'noAccess');
         if (explicitlyRevokes) checkGuardrails('delete', confirm, config);
         if (dryRun) {
-          return textResult(`[DRY RUN] Would update permission ${userPermissionId} on account ${accountId}`);
+          // A dry run sends nothing, not even the GET below that shows which containers this list
+          // leaves out, so the dropped-container check cannot run here. Say what the real call
+          // would need instead of implying the write flag alone is enough.
+          const dropNote = !containerAccess
+            ? ''
+            : ' containerAccess is the COMPLETE list, and the user\'s current containers were not read in dry run: ' +
+              'leaving out a container the user can reach now revokes their access to it' +
+              (config.deletesEnabled
+                ? '.'
+                : ', which also requires GTM_MCP_ENABLE_DELETES=true (currently off); the real update would be refused in that case.');
+          return textResult(`[DRY RUN] Would update permission ${userPermissionId} on account ${accountId}.${dropNote}`);
         }
         const client = getClient();
         const path = `accounts/${accountId}/user_permissions/${userPermissionId}`;

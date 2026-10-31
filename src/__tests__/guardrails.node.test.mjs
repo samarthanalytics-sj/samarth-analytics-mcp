@@ -185,7 +185,7 @@ const withFlags = async (flags, fn) => {
   const saved = { w: process.env.GTM_MCP_ENABLE_WRITES, d: process.env.GTM_MCP_ENABLE_DELETES, dry: process.env.DRY_RUN };
   process.env.GTM_MCP_ENABLE_WRITES = flags.writes ? 'true' : 'false';
   process.env.GTM_MCP_ENABLE_DELETES = flags.deletes ? 'true' : 'false';
-  process.env.DRY_RUN = 'false';
+  process.env.DRY_RUN = flags.dryRun ? 'true' : 'false';
   try { await fn(); } finally {
     for (const [k, v] of [['GTM_MCP_ENABLE_WRITES', saved.w], ['GTM_MCP_ENABLE_DELETES', saved.d], ['DRY_RUN', saved.dry]]) {
       if (v === undefined) delete process.env[k]; else process.env[k] = v;
@@ -230,6 +230,28 @@ await testAsync('a plain user -> admin change still goes through, keeping the co
     assert.deepStrictEqual(update.params.requestBody.accountAccess, { permission: 'admin' });
     // Full-replace API: an omitted containerAccess used to go out absent, stripping both grants.
     assert.deepStrictEqual(update.params.requestBody.containerAccess, EXISTING_PERMISSION.containerAccess);
+  }));
+
+// A dry run sends nothing, not even the GET that shows which containers a list leaves out, so the
+// dropped-container check above cannot run. The preview used to read "[DRY RUN] Would update ..." as
+// if the write flag were enough; the real call would then be refused for GTM_MCP_ENABLE_DELETES.
+await testAsync('REGRESSION: DRY_RUN with a containerAccess list says leaving a container out needs GTM_MCP_ENABLE_DELETES', () =>
+  withFlags({ writes: true, deletes: false, dryRun: true }, async () => {
+    const { run, calls } = userPermServer();
+    const r = await run({ containerAccess: [{ containerId: '10', permission: 'publish' }] });
+    assert.ok(!r.isError, resText(r));
+    assert.match(resText(r), /^\[DRY RUN\]/);
+    assert.match(resText(r), /GTM_MCP_ENABLE_DELETES=true/, `the preview must name the deletes flag: ${resText(r)}`);
+    assert.deepStrictEqual(calls, [], 'a dry run sends nothing, not even the GET');
+  }));
+
+await testAsync('DRY_RUN without containerAccess does not mention the deletes flag', () =>
+  withFlags({ writes: true, deletes: false, dryRun: true }, async () => {
+    const { run, calls } = userPermServer();
+    const r = await run({ accountPermission: 'admin' });
+    assert.ok(!r.isError, resText(r));
+    assert.doesNotMatch(resText(r), /GTM_MCP_ENABLE_DELETES/);
+    assert.deepStrictEqual(calls, []);
   }));
 
 await testAsync('with deletes enabled, an explicit revocation is allowed', () =>
