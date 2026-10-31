@@ -5,7 +5,11 @@
  * Mirrors the runtime behaviour of apps/portal/shared/jobs.ts without importing
  * TS (kept dependency-free like the other .node.test.mjs files). If the .ts
  * logic changes, update this mirror. Focus: lifecycle transition legality,
- * lease/complete/fail/retry, lease expiry reclaim, cancel, and org-scoped reads.
+ * lease/complete/fail/retry, lease expiry reclaim, lease fencing of worker
+ * reports, cancel, and org-scoped reads. The lease-fencing checks also run
+ * against the real ../jobs.ts when this Node can load TypeScript directly
+ * (type stripping, Node >= 22.18), and against the runtime worker's
+ * queue-consumer, which shares the same complete/fail contract.
  *
  * Time is injected (`now`) so the suite is deterministic and never sleeps.
  */
@@ -95,15 +99,15 @@ class InMemoryJobQueue {
     next.leaseExpiresAt = t + leaseSeconds * 1000;
     return { ...next };
   }
-  async complete(id, result) {
-    const job = this._req(id);
+  async complete(id, workerId, result) {
+    const job = this._reqLease(id, workerId);
     this._tx(job, "succeeded");
     job.result = result;
     job.leasedBy = null;
     job.leaseExpiresAt = null;
   }
-  async fail(id, error) {
-    const job = this._req(id);
+  async fail(id, workerId, error) {
+    const job = this._reqLease(id, workerId);
     job.lastError = error;
     if (job.attempts < job.maxAttempts) {
       this._tx(job, "queued");
@@ -130,6 +134,18 @@ class InMemoryJobQueue {
   _req(id) {
     const job = this.jobs.get(id);
     if (!job) throw new Error(`unknown job: ${id}`);
+    return job;
+  }
+  _reqLease(id, workerId) {
+    const job = this._req(id);
+    if (
+      job.status !== "leased" ||
+      job.leasedBy !== workerId ||
+      job.leaseExpiresAt === null ||
+      job.leaseExpiresAt <= this.now()
+    ) {
+      throw new Error(`stale lease: job ${id} is not leased to ${workerId}`);
+    }
     return job;
   }
   _tx(job, to) {
@@ -226,7 +242,7 @@ await check("complete stores result and is terminal", async () => {
   const q = new InMemoryJobQueue({ now });
   const j = await q.enqueue({ orgId: "org1", kind: "runtime_capture", payload: PAYLOAD });
   await q.lease("w1", 30);
-  await q.complete(j.id, { ok: true, captureId: "cap1", artifactUri: null, schema: "v2" });
+  await q.complete(j.id, "w1", { ok: true, captureId: "cap1", artifactUri: null, schema: "v2" });
   const got = await q.get("org1", j.id);
   assert.strictEqual(got.status, "succeeded");
   assert.deepStrictEqual(got.result, { ok: true, captureId: "cap1", artifactUri: null, schema: "v2" });
@@ -243,12 +259,12 @@ await check("fail with attempts remaining requeues for retry", async () => {
   const q = new InMemoryJobQueue({ now });
   const j = await q.enqueue({ orgId: "org1", kind: "runtime_capture", payload: PAYLOAD, maxAttempts: 2 });
   await q.lease("w1", 30); // attempts = 1
-  await q.fail(j.id, "boom");
+  await q.fail(j.id, "w1", "boom");
   let got = await q.get("org1", j.id);
   assert.strictEqual(got.status, "queued", "should requeue on first failure");
   assert.strictEqual(got.lastError, "boom");
   await q.lease("w2", 30); // attempts = 2 (== maxAttempts)
-  await q.fail(j.id, "boom2");
+  await q.fail(j.id, "w2", "boom2");
   got = await q.get("org1", j.id);
   assert.strictEqual(got.status, "failed", "should land terminal after max attempts");
 });
@@ -322,6 +338,160 @@ await check("NoopJobQueue enqueues but never leases", async () => {
   assert.strictEqual(await q.lease("w", 30), null);
   assert.strictEqual(await q.get("o", j.id), null);
 });
+
+// ── lease fencing of worker reports ─────────────────────────────────────────
+// Regression: complete()/fail() took only the job id, so a worker whose lease
+// expired (and was reclaimed by another worker) could requeue, fail or complete
+// a job someone else was running, and a second complete() overwrote the result.
+
+const RESULT = (captureId) => ({ ok: true, captureId, artifactUri: null, schema: "v2" });
+
+async function leaseFencingChecks(label, Queue) {
+  await check(`[${label}] stale fail() after a re-lease is rejected; job stays with w2`, async () => {
+    clock = 0;
+    const q = new Queue({ now });
+    const j = await q.enqueue({ orgId: "org1", kind: "runtime_capture", payload: PAYLOAD });
+    await q.lease("w1", 30); // w1 until 30_000
+    clock = 31_000;
+    await q.lease("w2", 30); // reclaimed: w2 until 61_000, attempts = 2
+    clock = 35_000; // w1 wakes up and reports
+    await assert.rejects(() => q.fail(j.id, "w1", "late"), /stale lease/);
+    const got = await q.get("org1", j.id);
+    assert.strictEqual(got.status, "leased", "w1 must not requeue w2's job");
+    assert.strictEqual(got.leasedBy, "w2");
+    assert.strictEqual(got.lastError, "lease expired", "stale error must not be recorded");
+    assert.strictEqual(await q.lease("w3", 30), null, "no third worker may get the job");
+  });
+
+  await check(`[${label}] stale complete() after a re-lease is rejected; w2's result wins`, async () => {
+    clock = 0;
+    const q = new Queue({ now });
+    const j = await q.enqueue({ orgId: "org1", kind: "runtime_capture", payload: PAYLOAD });
+    await q.lease("w1", 30);
+    clock = 31_000;
+    await q.lease("w2", 30);
+    clock = 35_000;
+    await assert.rejects(() => q.complete(j.id, "w1", RESULT("from_w1")), /stale lease/);
+    await q.complete(j.id, "w2", RESULT("from_w2"));
+    const got = await q.get("org1", j.id);
+    assert.strictEqual(got.status, "succeeded");
+    assert.strictEqual(got.result.captureId, "from_w2");
+  });
+
+  await check(`[${label}] stale fail() cannot make a running job terminal`, async () => {
+    clock = 0;
+    const q = new Queue({ now });
+    const j = await q.enqueue({ orgId: "org1", kind: "runtime_capture", payload: PAYLOAD, maxAttempts: 2 });
+    await q.lease("w1", 30);
+    clock = 31_000;
+    await q.lease("w2", 30); // attempts = 2 == maxAttempts
+    clock = 35_000;
+    await assert.rejects(() => q.fail(j.id, "w1", "late"), /stale lease/);
+    await q.complete(j.id, "w2", RESULT("from_w2")); // must not be lost
+    assert.strictEqual((await q.get("org1", j.id)).status, "succeeded");
+  });
+
+  await check(`[${label}] a second complete() is rejected instead of overwriting the result`, async () => {
+    clock = 0;
+    const q = new Queue({ now });
+    const j = await q.enqueue({ orgId: "org1", kind: "runtime_capture", payload: PAYLOAD });
+    await q.lease("w1", 30);
+    await q.complete(j.id, "w1", RESULT("first"));
+    await assert.rejects(() => q.complete(j.id, "w1", RESULT("second")), /stale lease/);
+    assert.strictEqual((await q.get("org1", j.id)).result.captureId, "first");
+  });
+
+  await check(`[${label}] a report after the lease expired (not yet reclaimed) is rejected`, async () => {
+    clock = 0;
+    const q = new Queue({ now });
+    const j = await q.enqueue({ orgId: "org1", kind: "runtime_capture", payload: PAYLOAD });
+    await q.lease("w1", 30);
+    clock = 30_000; // lease_expires_at > now() no longer holds
+    await assert.rejects(() => q.complete(j.id, "w1", RESULT("late")), /stale lease/);
+    await assert.rejects(() => q.fail(j.id, "w1", "late"), /stale lease/);
+  });
+
+  await check(`[${label}] a worker that never leased the job cannot report it`, async () => {
+    clock = 0;
+    const q = new Queue({ now });
+    const j = await q.enqueue({ orgId: "org1", kind: "runtime_capture", payload: PAYLOAD });
+    await assert.rejects(() => q.complete(j.id, "w1", RESULT("x")), /stale lease/, "still queued");
+    await q.lease("w1", 30);
+    await assert.rejects(() => q.fail(j.id, "intruder", "x"), /stale lease/);
+    assert.strictEqual((await q.get("org1", j.id)).status, "leased");
+  });
+}
+
+await leaseFencingChecks("mirror", InMemoryJobQueue);
+
+// The real module, when this Node can strip TypeScript types natively. CI's
+// Node 20 cannot, so there the mirror above is the gate (as for the rest of
+// this file); `npm test` on Node >= 22.18 exercises ../jobs.ts itself.
+let realJobs = null;
+try {
+  realJobs = await import("../jobs.ts");
+} catch {
+  realJobs = null;
+}
+if (realJobs) {
+  await leaseFencingChecks("jobs.ts", realJobs.InMemoryJobQueue);
+} else {
+  // eslint-disable-next-line no-console
+  console.log("  skip [jobs.ts] lease fencing (this Node cannot import .ts; mirror checked instead)");
+}
+
+// The runtime worker's queue consumer shares the complete/fail contract.
+const consumer = await import("../../../runtime-worker/queue-consumer.mjs");
+
+await check("[queue-consumer] InMemoryQueueClient fences complete/fail on the lease owner", async () => {
+  const q = new consumer.InMemoryQueueClient();
+  const j = q.enqueue("org1", PAYLOAD);
+  await q.lease("w1", 30);
+  await assert.rejects(() => q.complete(j.id, "w2", RESULT("x")), /stale lease/);
+  await assert.rejects(() => q.fail(j.id, "w2", "x"), /stale lease/);
+  await q.complete(j.id, "w1", RESULT("ok"));
+  await assert.rejects(() => q.complete(j.id, "w1", RESULT("again")), /stale lease/);
+});
+
+await check("[queue-consumer] reports carry the workerId and a stale lease does not crash the loop", async () => {
+  const calls = [];
+  const controller = new AbortController();
+  let handedOut = false;
+  const queue = {
+    async lease() {
+      if (handedOut) {
+        controller.abort();
+        return null;
+      }
+      handedOut = true;
+      // A null payload makes processCaptureJob throw before any browser work.
+      return { id: "j1", orgId: "org1", payload: null };
+    },
+    async complete(...args) {
+      calls.push(["complete", ...args]);
+    },
+    async fail(...args) {
+      calls.push(["fail", ...args]);
+      throw new Error("stale lease: job j1 is not leased to w-test");
+    },
+  };
+  await runConsumerQuietly(queue, controller);
+  assert.strictEqual(calls.length, 1);
+  assert.strictEqual(calls[0][0], "fail");
+  assert.strictEqual(calls[0][1], "j1");
+  assert.strictEqual(calls[0][2], "w-test", "fail() must be fenced with this worker's id");
+});
+
+async function runConsumerQuietly(queue, controller) {
+  const logs = [];
+  await consumer.runQueueConsumer(queue, {
+    workerId: "w-test",
+    pollMs: 1,
+    signal: controller.signal,
+    log: (m) => logs.push(m),
+  });
+  return logs;
+}
 
 // eslint-disable-next-line no-console
 console.log(`\njobs: ${passed} checks passed.`);

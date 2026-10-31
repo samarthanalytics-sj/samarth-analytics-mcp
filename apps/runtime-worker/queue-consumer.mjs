@@ -56,10 +56,16 @@ import { urlAllowed } from "./url-guard.mjs";
  * matched to apps/portal/shared/jobs.ts so the durable Postgres/QStash client
  * drops in without touching the loop below.
  *
+ * `complete`/`fail` are fenced on the lease: they must reject unless the job
+ * is still leased to `workerId` and the lease has not expired (durable SQL:
+ * `... WHERE id = $1 AND status = 'leased' AND leased_by = $2 AND
+ * lease_expires_at > now()`), so a worker whose lease lapsed cannot overwrite
+ * or requeue a job another worker now holds.
+ *
  * @typedef {Object} QueueClient
  * @property {(workerId: string, leaseSeconds: number) => Promise<QueuedJob|null>} lease
- * @property {(id: string, result: object) => Promise<void>} complete
- * @property {(id: string, error: string) => Promise<void>} fail
+ * @property {(id: string, workerId: string, result: object) => Promise<void>} complete
+ * @property {(id: string, workerId: string, error: string) => Promise<void>} fail
  */
 
 const DEFAULT_LEASE_SECONDS = 120;
@@ -171,17 +177,28 @@ export async function runQueueConsumer(queue, opts = {}) {
       continue;
     }
     log(`leased ${job.id} (${job.payload?.urls?.length ?? 0} urls)`);
+    let outcome;
     try {
-      const result = await processCaptureJob(job.payload, opts.clamp);
-      await queue.complete(job.id, result);
-      log(`completed ${job.id}`);
+      outcome = { ok: true, result: await processCaptureJob(job.payload, opts.clamp) };
     } catch (e) {
       const reason =
         e instanceof PlaywrightMissingError
           ? `playwright_missing: ${e.message}`
           : String(e?.message ?? e).slice(0, 500);
-      await queue.fail(job.id, reason);
-      log(`failed ${job.id}: ${reason}`);
+      outcome = { ok: false, reason };
+    }
+    try {
+      if (outcome.ok) {
+        await queue.complete(job.id, workerId, outcome.result);
+        log(`completed ${job.id}`);
+      } else {
+        await queue.fail(job.id, workerId, outcome.reason);
+        log(`failed ${job.id}: ${outcome.reason}`);
+      }
+    } catch (e) {
+      // Usually a stale lease: ours expired and the job was reclaimed, so the
+      // report is dropped (the current lease holder owns the job). Not retried.
+      log(`could not report ${job.id}: ${String(e?.message ?? e).slice(0, 500)}`);
     }
   }
   log("stopped");
@@ -225,19 +242,24 @@ export class InMemoryQueueClient {
     job.leasedBy = workerId;
     return { id: job.id, orgId: job.orgId, payload: job.payload };
   }
-  async complete(id, result) {
-    const job = this.byId.get(id);
-    if (job) {
-      job.status = "succeeded";
-      job.result = result;
-    }
+  async complete(id, workerId, result) {
+    const job = this.#requireLease(id, workerId);
+    job.status = "succeeded";
+    job.result = result;
+    job.leasedBy = null;
   }
-  async fail(id, error) {
+  async fail(id, workerId, error) {
+    const job = this.#requireLease(id, workerId);
+    job.status = "failed";
+    job.lastError = error;
+    job.leasedBy = null;
+  }
+  #requireLease(id, workerId) {
     const job = this.byId.get(id);
-    if (job) {
-      job.status = "failed";
-      job.lastError = error;
+    if (!job || job.status !== "leased" || job.leasedBy !== workerId) {
+      throw new Error(`stale lease: job ${id} is not leased to ${workerId}`);
     }
+    return job;
   }
 }
 
