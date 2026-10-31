@@ -84,7 +84,8 @@ export class TagWatchService {
 
   private start(): void {
     this.stop();
-    this.timer = setInterval(() => void this.runOnce(), assertTimerMs(Math.max(MIN_INTERVAL_HOURS, this.config.intervalHours) * 3600_000));
+    // A failed sweep (e.g. a disk write) must not become an unhandled rejection from the timer.
+    this.timer = setInterval(() => { this.runOnce().catch(() => undefined); }, assertTimerMs(Math.max(MIN_INTERVAL_HOURS, this.config.intervalHours) * 3600_000));
     if (this.timer.unref) this.timer.unref();
   }
   stop(): void {
@@ -145,8 +146,7 @@ export class TagWatchService {
 
   /** Scan a single target now: fetch → parse → fold → persist → alert. Returns the folded event. */
   private async scanTarget(measurementId: string): Promise<TagWatchEvent | null> {
-    const idx = this.config.targets.findIndex((t) => t.measurementId === measurementId);
-    if (idx < 0) return null;
+    if (!this.config.targets.some((t) => t.measurementId === measurementId)) return null;
     let outcome: ScanOutcome;
     try {
       const js = await this.deps.fetchGtagJs(measurementId);
@@ -154,6 +154,10 @@ export class TagWatchService {
     } catch (e) {
       outcome = { snapshot: null, error: e instanceof Error ? e.message : String(e) };
     }
+    // Re-resolve by id AFTER the fetch: a remove during it shifts the indices (an index taken before the
+    // await folded this tag's snapshot into ANOTHER target, a false change alert) or empties the slot.
+    const idx = this.config.targets.findIndex((t) => t.measurementId === measurementId);
+    if (idx < 0) return null; // removed while the fetch was in flight
     const { target, event } = applyScan(this.config.targets[idx], outcome, this.now());
     this.config.targets[idx] = target;
     this.persist();

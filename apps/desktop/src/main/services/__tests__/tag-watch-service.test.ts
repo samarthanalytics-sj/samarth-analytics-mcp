@@ -141,6 +141,56 @@ test('enabling with no targets, then adding one, arms the schedule (and re-arms 
   }
 });
 
+// Regression: scanTarget took the target's array INDEX before awaiting the fetch and wrote back by it.
+// A remove during the fetch shifted the list, so one tag's snapshot was folded into ANOTHER target
+// (false change alerts to Slack + bogus timeline rows), or the slot was gone and the sweep threw.
+test('a target removed while a sweep fetches is never folded into another, and the sweep still resolves', async () => {
+  const keyEvents: Record<string, string[]> = { 'G-XXX': ['x_evt'], 'G-AAA': ['a_evt'], 'G-BBB': ['b_evt'] };
+  let gate: { id: string; reached: () => void; release: Promise<void> } | null = null;
+  const holdFetch = (id: string): { reached: Promise<void>; release: () => void } => {
+    let release!: () => void;
+    const released = new Promise<void>((r) => { release = r; });
+    const reached = new Promise<void>((r) => { gate = { id, reached: r, release: released }; });
+    return { reached, release };
+  };
+  const sent: string[] = [];
+  const svc = new TagWatchService({
+    fetchGtagJs: async (id) => {
+      const g = gate;
+      if (g && g.id === id) { gate = null; g.reached(); await g.release; }
+      return gtagJs(keyEvents[id]);
+    },
+    now: () => 1,
+    sendSlack: async (_w, p) => { sent.push(p.text); return { ok: true }; },
+  });
+  for (const id of Object.keys(keyEvents)) await svc.addTarget(id);
+  svc.setSlackWebhook('https://hooks.slack.com/services/T/B/xyz');
+  const bBefore = svc.getConfig().targets.find((t) => t.measurementId === 'G-BBB')!;
+
+  // [X, A, B]: X is removed while A's fetch is in flight, shifting A and B down one slot.
+  const a = holdFetch('G-AAA');
+  const sweep = svc.runOnce();
+  await a.reached;
+  svc.removeTarget('G-XXX');
+  a.release();
+  await sweep;
+  assert.equal(sent.length, 0, `no false change alert: ${sent.join(' | ')}`);
+  const bAfter = svc.getConfig().targets.find((t) => t.measurementId === 'G-BBB')!;
+  assert.deepEqual(bAfter.timeline, bBefore.timeline, "B's timeline is untouched");
+  assert.deepEqual(bAfter.lastSnapshot?.keyEvents, ['b_evt'], "B's baseline is still B's own");
+  assert.deepEqual(svc.getConfig().targets.find((t) => t.measurementId === 'G-AAA')!.lastSnapshot?.keyEvents, ['a_evt'], "A's scan landed on A");
+
+  // [A, B]: the LAST target is removed while its fetch is in flight - the sweep resolves cleanly.
+  const b = holdFetch('G-BBB');
+  const sweep2 = svc.runOnce();
+  await b.reached;
+  svc.removeTarget('G-BBB');
+  b.release();
+  const cfg = await sweep2;
+  assert.deepEqual(cfg.targets.map((t) => t.measurementId), ['G-AAA'], 'the removed target stays removed');
+  assert.equal(sent.length, 0, 'still no alert');
+});
+
 test('buildTagWatchSlack: change list with field arrows; unparsed is a warning', async () => {
   const target = { measurementId: 'G-SVC', label: 'Store' } as TagWatchTarget;
   const p = buildTagWatchSlack(target, { at: 1, kind: 'changed', changes: [{ field: 'key events', before: 'a', after: 'b' }], summary: '' });
