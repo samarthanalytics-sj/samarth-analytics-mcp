@@ -1334,6 +1334,125 @@ test("H08 granted page: cookie written after the granting update -> no cookie-be
   assert.ok(hasNo(f, "consent-runtime-cookie-before"));
 });
 
+// Partial states: only the denied category's cookies are "set in a denied
+// state". Regression: either category denied made the whole page a denied
+// state, so a `_ga` written after analytics was granted on
+// analytics_granted_ads_denied was flagged HIGH (and, untimed, always).
+const analyticsOnlyGrant: RuntimePage["consentEvents"] = [
+  { kind: "default", tMs: 100, fields: { analytics_storage: "denied", ad_storage: "denied" } },
+  { kind: "update", tMs: 500, fields: { analytics_storage: "granted", ad_storage: "denied" } },
+];
+const adsOnlyGrant: RuntimePage["consentEvents"] = [
+  { kind: "default", tMs: 100, fields: { analytics_storage: "denied", ad_storage: "denied" } },
+  { kind: "update", tMs: 500, fields: { analytics_storage: "denied", ad_storage: "granted" } },
+];
+
+test("H09 analytics_granted_ads_denied: _ga written after the analytics grant -> no cookie-before finding", () => {
+  const f = runConsentRuntimeRules(
+    rt([{
+      requestedUrl: "https://e/",
+      consentState: "analytics_granted_ads_denied",
+      consentEvents: analyticsOnlyGrant,
+      cookies: [{ name: "_ga", tMs: 600 }, { name: "_ga_ABC123", tMs: 610 }, { name: "_gid", tMs: 620 }],
+    }]),
+  );
+  assert.ok(hasNo(f, "consent-runtime-cookie-before"), JSON.stringify(f.map((x) => x.id)));
+});
+test("H10 analytics_granted_ads_denied: ad cookies are flagged, the granted _ga is not", () => {
+  const f = runConsentRuntimeRules(
+    rt([{
+      requestedUrl: "https://e/",
+      consentState: "analytics_granted_ads_denied",
+      consentEvents: analyticsOnlyGrant,
+      cookies: [{ name: "_ga", tMs: 600 }, { name: "_gcl_au", tMs: 650 }, { name: "_fbp", tMs: 700 }],
+    }]),
+  );
+  const m = has(f, "consent-runtime-cookie-before");
+  assert.ok(m, "ad cookies under ad_storage denied must be flagged");
+  assert.ok(m!.id.endsWith(":_fbp,_gcl_au"), m!.id);
+  assert.equal(m!.severity, "high");
+  assert.ok(/ad_storage denied/.test(m!.whyItMatters), m!.whyItMatters);
+  assert.ok(!m!.evidence?.includes("_ga"), JSON.stringify(m!.evidence));
+});
+test("H11 analytics_granted_ads_denied: _ga written BEFORE the analytics grant is still flagged by timing", () => {
+  const f = runConsentRuntimeRules(
+    rt([{
+      requestedUrl: "https://e/",
+      consentState: "analytics_granted_ads_denied",
+      consentEvents: analyticsOnlyGrant,
+      cookies: [{ name: "_ga", tMs: 300 }],
+    }]),
+  );
+  const m = has(f, "consent-runtime-cookie-before");
+  assert.ok(m, "a cookie set before its storage was granted must be flagged");
+  assert.ok(m!.id.endsWith(":_ga"), m!.id);
+  assert.ok(/500ms/.test(m!.whyItMatters), m!.whyItMatters);
+});
+test("H12 analytics_granted_ads_denied, untimed: only the ad cookie is flagged (MEDIUM)", () => {
+  const onlyGa = runConsentRuntimeRules(
+    rt([{ requestedUrl: "https://e/", consentState: "analytics_granted_ads_denied", cookies: [{ name: "_ga" }] }]),
+  );
+  assert.ok(hasNo(onlyGa, "consent-runtime-cookie-before"), "untimed _ga with analytics granted is not a violation");
+  const both = runConsentRuntimeRules(
+    rt([{ requestedUrl: "https://e/", consentState: "analytics_granted_ads_denied", cookies: [{ name: "_ga" }, { name: "_fbp" }] }]),
+  );
+  const m = has(both, "consent-runtime-cookie-before");
+  assert.ok(m);
+  assert.ok(m!.id.endsWith(":_fbp"), m!.id);
+  assert.equal(m!.confidence, "medium");
+});
+test("H13 ads_granted_analytics_denied: analytics cookies are flagged, the granted ad cookies are not", () => {
+  const f = runConsentRuntimeRules(
+    rt([{
+      requestedUrl: "https://e/",
+      consentState: "ads_granted_analytics_denied",
+      consentEvents: adsOnlyGrant,
+      cookies: [{ name: "_fbp", tMs: 600 }, { name: "_gcl_au", tMs: 610 }, { name: "_ga", tMs: 650 }, { name: "_gid", tMs: 660 }],
+    }]),
+  );
+  const m = has(f, "consent-runtime-cookie-before");
+  assert.ok(m, "analytics cookies under analytics_storage denied must be flagged");
+  assert.ok(m!.id.endsWith(":_ga,_gid"), m!.id);
+  assert.ok(/analytics_storage denied/.test(m!.whyItMatters), m!.whyItMatters);
+});
+test("H14 ads_granted_analytics_denied: ad cookies after the ads grant alone -> no cookie-before finding", () => {
+  const f = runConsentRuntimeRules(
+    rt([{
+      requestedUrl: "https://e/",
+      consentState: "ads_granted_analytics_denied",
+      consentEvents: adsOnlyGrant,
+      cookies: [{ name: "_fbp", tMs: 600 }, { name: "_gcl_au", tMs: 610 }, { name: "IDE", tMs: 620 }],
+    }]),
+  );
+  assert.ok(hasNo(f, "consent-runtime-cookie-before"), JSON.stringify(f.map((x) => x.id)));
+});
+test("H15 ads_granted_analytics_denied, untimed: only the analytics cookie is flagged", () => {
+  const onlyAds = runConsentRuntimeRules(
+    rt([{ requestedUrl: "https://e/", consentState: "ads_granted_analytics_denied", cookies: [{ name: "_gcl_au" }] }]),
+  );
+  assert.ok(hasNo(onlyAds, "consent-runtime-cookie-before"), "untimed ad cookie with ad_storage granted is not a violation");
+  const both = runConsentRuntimeRules(
+    rt([{ requestedUrl: "https://e/", consentState: "ads_granted_analytics_denied", cookies: [{ name: "_gcl_au" }, { name: "_gid" }] }]),
+  );
+  const m = has(both, "consent-runtime-cookie-before");
+  assert.ok(m);
+  assert.ok(m!.id.endsWith(":_gid"), m!.id);
+});
+test("H16 analytics_granted_ads_denied: a denied ad cookie and an early _ga are both named", () => {
+  const f = runConsentRuntimeRules(
+    rt([{
+      requestedUrl: "https://e/",
+      consentState: "analytics_granted_ads_denied",
+      consentEvents: analyticsOnlyGrant,
+      cookies: [{ name: "_ga", tMs: 300 }, { name: "_fbp", tMs: 700 }],
+    }]),
+  );
+  const m = has(f, "consent-runtime-cookie-before");
+  assert.ok(m);
+  assert.ok(m!.id.endsWith(":_fbp,_ga"), m!.id);
+  assert.ok(/ad_storage denied/.test(m!.whyItMatters) && /_ga were observed before .* at 500ms/.test(m!.whyItMatters), m!.whyItMatters);
+});
+
 // ── run summary ──────────────────────────────────────────────────────────--
 
 const total = passed + failed;

@@ -717,11 +717,15 @@ function ruleRuntimeCookiesBeforeConsent(rt: RuntimeInput, out: ConsentFinding[]
   // `_sctr`.
   const TRACKING_COOKIE =
     /^(_ga($|_)|_gat($|_)|_gid$|_gac_|_gcl_|_fbp$|_fbc$|_uetsid$|_uetvid$|_uetmsclkid$|_ttp$|_scid($|_r$)|_sctr$|_tt_|IDE$|MUID$|test_cookie$|li_gc$|li_sugr$|li_fat_id$|li_giant$|_pin_unauth$)/i;
+  // Google Analytics' own cookies are governed by analytics_storage; every
+  // other cookie on the list (Google Ads/Floodlight `_gcl_*`/`_gac_*`/IDE,
+  // Meta, Microsoft, TikTok, Snap, LinkedIn, Pinterest) by ad_storage.
+  const ANALYTICS_COOKIE = /^(_ga($|_)|_gat($|_)|_gid$)/i;
   for (const page of rt.pages) {
     const cookies = page.cookies ?? [];
     if (cookies.length === 0) continue;
     const cls = classifyState(page.consentState);
-    const deniedState = cls.analytics === "denied" || cls.ads === "denied";
+    const fullyDenied = cls.analytics === "denied" && cls.ads === "denied";
     const events = page.consentEvents ?? [];
     // Determine when consent default/update happened.
     const consentTs = events
@@ -740,24 +744,46 @@ function ruleRuntimeCookiesBeforeConsent(rt: RuntimeInput, out: ConsentFinding[]
       )
       .map((e) => e.tMs as number);
     const grantTMs = grantTs.length ? Math.min(...grantTs) : firstConsentTMs;
-    const offenders: string[] = [];
+    const deniedOffenders: string[] = [];
+    const timedOffenders: string[] = [];
     for (const c of cookies) {
       const name = c.name ?? "";
       if (!TRACKING_COOKIE.test(name)) continue;
-      // Two ways to flag: a tracking cookie present at all under a denied state
-      // (timed or not — storage stays denied for the whole capture), OR explicit
-      // timing showing it was written before consent granted storage.
-      if (deniedState) {
-        offenders.push(name);
+      // Two ways to flag: a tracking cookie present at all while ITS storage
+      // category is denied (timed or not — that storage stays denied for the
+      // whole capture), OR explicit timing showing it was written before
+      // consent granted storage. On a partial state only the denied category's
+      // cookies are in the first group: a `_ga` written after analytics was
+      // granted on analytics_granted_ads_denied is allowed.
+      const categoryState = ANALYTICS_COOKIE.test(name) ? cls.analytics : cls.ads;
+      if (categoryState === "denied") {
+        deniedOffenders.push(name);
       } else if (typeof c.tMs === "number" && typeof grantTMs === "number" && c.tMs < grantTMs) {
-        offenders.push(name);
+        timedOffenders.push(name);
       }
     }
+    const offenders = [...deniedOffenders, ...timedOffenders];
     if (offenders.length === 0) continue;
     const where = pageWhere(page);
     const grantLabel = grantTs.length
       ? "the consent update that granted storage"
       : "the consent event";
+    const deniedStorage = cls.analytics === "denied" ? "analytics_storage" : "ad_storage";
+    const why: string[] = [];
+    if (deniedOffenders.length > 0) {
+      why.push(
+        fullyDenied
+          ? `On "${page.consentState}" (a denied state), these tracking cookies were present even though storage should be denied.`
+          : `On "${page.consentState}" (${deniedStorage} denied), ${Array.from(new Set(deniedOffenders)).join(", ")} were present even though ${deniedStorage} should be denied.`,
+      );
+    }
+    if (timedOffenders.length > 0) {
+      why.push(
+        deniedOffenders.length > 0
+          ? `${Array.from(new Set(timedOffenders)).join(", ")} were observed before ${grantLabel} at ${grantTMs}ms.`
+          : `On "${page.consentState}", these tracking cookies were observed before ${grantLabel} at ${grantTMs}ms.`,
+      );
+    }
     push(out, {
       id: `consent-runtime-cookie-before:${where}:${Array.from(new Set(offenders)).sort().join(",")}`,
       domain: "consent",
@@ -767,9 +793,7 @@ function ruleRuntimeCookiesBeforeConsent(rt: RuntimeInput, out: ConsentFinding[]
       finding: `Tracking cookie(s) set before/without consent (${Array.from(new Set(offenders)).join(", ")})`,
       entity: { path: where },
       affected: [where],
-      whyItMatters: deniedState
-        ? `On "${page.consentState}" (a denied state), these tracking cookies were present even though storage should be denied.`
-        : `On "${page.consentState}", these tracking cookies were observed before ${grantLabel} at ${grantTMs}ms.`,
+      whyItMatters: why.join(" "),
       suggestedFix:
         "Ensure storage-setting tags are gated on consent and that no tracking cookies are written before the consent default applies.",
       businessImpact:
