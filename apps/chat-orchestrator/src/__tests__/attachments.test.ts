@@ -273,7 +273,7 @@ test('a PDF that exhausts the worker heap is refused like a bomb, not reported a
   );
 });
 
-test('PDF reads beyond maxConcurrent wait for a slot, and their deadline starts with the read', async () => {
+test('PDF reads beyond maxConcurrent wait for a slot', async () => {
   // Each read may hold up to maxMemoryBytes, so a burst of bombs from different users must not
   // all decode at once. With one slot, an ordinary PDF queued behind a bomb finishes after it.
   const one = { ...PDF_LIMITS, maxConcurrent: 1 };

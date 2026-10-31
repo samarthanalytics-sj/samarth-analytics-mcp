@@ -186,7 +186,8 @@ export interface PdfLimits {
   stackSizeMb: number;
   /** Heap plus ArrayBuffers the worker may hold, as watched from this thread. See workerMemory. */
   maxMemoryBytes: number;
-  /** PDFs read at once across all users. Others wait for a slot; the deadline starts with the read. */
+  /** PDFs read at once across all users (1 on a Node without per-worker memory stats). Others wait
+   *  for a slot; the deadline starts with the read. */
   maxConcurrent: number;
 }
 
@@ -232,6 +233,14 @@ const { parentPort, workerData: job } = require('node:worker_threads');
 `;
 
 const PDF_PARSE_URL = import.meta.resolve('pdf-parse');
+
+/**
+ * Whether this Node reports a worker's own memory (Node 22.16+). Without it, workerMemory falls
+ * back to the whole process's growth, which counts every concurrent read's memory against each
+ * one, so an ordinary PDF read beside a bomb would be refused. Reads then run one at a time.
+ */
+const WORKER_HEAP_STATS =
+  typeof (Worker.prototype as unknown as { getHeapStatistics?: unknown }).getHeapStatistics === 'function';
 
 /**
  * PDFs being read right now, and the reads waiting for a slot. Each read may hold up to
@@ -287,9 +296,10 @@ export async function extractPdf(
 ): Promise<{ text: string; chars: number }> {
   const tooBig = (): Error =>
     tooBigToRead(name, `expands to more than ${fmt(limits.maxMemoryBytes / 1024 / 1024)} MB when decoded`);
-  const release = await takePdfSlot(limits.maxConcurrent);
   // A copy the worker can own: transferring buf's own memory could detach a pooled Node buffer.
+  // Made before taking a slot, so a failed allocation cannot strand one.
   const data = new Uint8Array(buf).buffer;
+  const release = await takePdfSlot(WORKER_HEAP_STATS ? limits.maxConcurrent : 1);
   let baselineRss: number | null = null;
   let worker: Worker;
   try {
