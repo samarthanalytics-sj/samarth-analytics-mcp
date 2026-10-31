@@ -2249,6 +2249,12 @@ function GtmContextBar({
     setSel({ accountId, accountName: acc?.name });
     setContainers([]);
     setWorkspaces([]);
+    // A workspace list still loading for the previous account's container must not land under this
+    // account (nor clear the loading flag the container fetch sets): drop it, release its loading
+    // flag, and forget which container it was for, so picking that container again re-fetches.
+    workspacesReq.current.invalidate();
+    loadedForContainer.current = '';
+    setLoading((l) => (l === 'workspaces' ? '' : l));
     // containers load via the effect above - the single fetch path (also covers a pre-selected account)
   }
 

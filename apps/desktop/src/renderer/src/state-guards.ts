@@ -22,6 +22,11 @@ export class LatestRequest {
     const mine = ++this.seq;
     return () => mine === this.seq;
   }
+  /** Drop whatever is in flight without starting a new request: for a selection change that clears
+   *  the list itself and loads nothing to replace it (yet). */
+  invalidate(): void {
+    this.seq += 1;
+  }
 }
 
 /**

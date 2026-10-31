@@ -105,6 +105,19 @@ test('LatestRequest: a slower response for an earlier pick is dropped, the newes
   assert.equal(forZ(), true);
 });
 
+// Regression: picking another GTM account cleared the workspace list but started no new workspace
+// request, so the previous account's in-flight list still passed its latest-request check, landed
+// under the new account and cleared the loading flag of the container fetch.
+test('LatestRequest.invalidate: an account switch drops the in-flight workspace list without starting one', () => {
+  const gate = new LatestRequest();
+  const forOldContainer = gate.begin(); // account A / container X: its workspace list is loading
+  gate.invalidate(); // the user picks account B (nothing to load for workspaces yet)
+  assert.equal(forOldContainer(), false, "A/X's workspaces must not land under account B");
+  const forNewContainer = gate.begin(); // account B / container Y
+  assert.equal(forNewContainer(), true, 'the next real request lands as usual');
+  assert.equal(forOldContainer(), false);
+});
+
 test('chatThreadToShow: the view stays pinned to the asking thread while a reply streams', () => {
   assert.equal(chatThreadToShow('acct|gtm|A', 'acct|ga4|P', true), null, 'mid-turn switch waits');
   assert.equal(chatThreadToShow('acct|gtm|A', 'acct|ga4|P', false), 'acct|ga4|P', 'applied once the turn ends');
