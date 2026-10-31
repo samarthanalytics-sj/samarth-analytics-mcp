@@ -631,3 +631,46 @@ test('configure() echo of a STALE targets copy never rolls back server-owned fie
   assert.equal(t.enabled, false, 'renderer-owned field (pause) applied');
   assert.equal(t.history?.length ?? 0, before, 'server-owned history preserved despite the stale echo');
 });
+
+// Regression: a sweep read the active account ONCE, but every GA4 fetch re-resolved the ACTIVE
+// account's token per call. An account switch mid-sweep queried acct1's property with acct2's token;
+// the failures became a false high "Could not read this property" (no_access) alert, posted to acct1's
+// client channel and written to acct1's issue log + history. End to end through the REAL data service,
+// with every Google request answered by a per-account fake auth client (googleapis routes each request
+// through auth.request).
+test('account switch mid-sweep: every GA4 call stays on the sweep account, so no false no_access lands on it', async () => {
+  const { GoogleDataService } = await import('../../google/data-service');
+  type Ctor = ConstructorParameters<typeof GoogleDataService>;
+  const accountB: AccountView = { id: 'acct2', email: 'b@c.com', createdAt: 0, isActive: true, hasGoogleToken: true };
+  let current: AccountView = account;
+  const registry = { getActiveView: () => current, listViews: () => [account, accountB] };
+  const used: string[] = [];
+  const fakeAuth = (id: string): unknown => ({
+    request: async (opts: { url?: unknown }) => {
+      used.push(id);
+      current = accountB; // the user picks another account while the sweep's first call is in flight
+      if (id !== 'acct1') throw new Error('User does not have sufficient permissions for this property.');
+      return { data: {}, status: 200, headers: {}, config: opts };
+    },
+  });
+  const data = new GoogleDataService(registry as unknown as Ctor[0], { getClient: (id: string) => fakeAuth(id) } as unknown as Ctor[1]);
+  const posts: string[] = [];
+  const svc = new Ga4MonitoringService({
+    registry, data, secrets: makeSecrets(), emit: () => {},
+    now: () => Date.parse('2026-07-02T09:00:00Z'),
+    slackFetch: async (_url, init) => { posts.push(init.body); return { ok: true, status: 200, text: async () => 'ok' }; },
+  });
+  svc.configure({ targets: [{ propertyId: 'properties/1', propertyLabel: 'Acme', enabled: true }], enabled: false });
+  svc.setWebhook('https://hooks.slack.com/services/T/B/acme', 'properties/1');
+  const [run] = await svc.runOnce();
+  assert.ok(used.length > 1, 'the sweep made its GA4 calls');
+  assert.equal(current.id, 'acct2', 'the active account really did change mid-sweep');
+  assert.deepEqual([...new Set(used)], ['acct1'], 'every call authenticated as the account the sweep started on');
+  assert.ok(run, 'the sweep produced a run for acct1');
+  assert.ok(!run.alerts.some((a) => a.id === 'no_access'), `no false no_access alert: ${run.alerts.map((a) => a.id).join(', ')}`);
+  assert.ok(!posts.some((b) => b.includes('Could not read this property')), 'no false outage posted to the client channel');
+  current = account;
+  const t = svc.status().targetStatuses[0];
+  assert.ok(!(t.issueLog ?? []).some((e) => e.id === 'no_access'), 'no false no_access entry in the issue log');
+  assert.equal(t.history?.length, 1, 'one history row, from the real read');
+});

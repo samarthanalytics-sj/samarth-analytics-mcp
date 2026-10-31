@@ -13,6 +13,7 @@ import { assembleConversionHealth } from '../google/ads-map';
 import { captureAdsSnapshot, diffAdsSnapshots, detectVolumeAnomalies, type AdsSnapshot } from '../google/ads-snapshot';
 import { buildAdsMonitorResult, buildAdsSlackPayload, buildAdsSlackTestPayload } from '../google/ads-monitor';
 import { sendSlackWebhook, isValidSlackWebhook, type FetchLike } from './slack-notify';
+import { runAsAccount } from '../google/account-scope';
 import type { GoogleAdsService } from '../google/ads-service';
 import type { AccountView, AdsMonitorConfig, AdsMonitorRun, AdsMonitorStatus, AdsMonitorTarget, AdsMonitorTargetStatus } from '../../shared/ipc';
 
@@ -276,6 +277,13 @@ export class AdsMonitoringService {
   private async runOnceInner(only?: string | string[], trigger: 'manual' | 'scheduled' = 'scheduled'): Promise<AdsMonitorRun[]> {
     const active = this.deps.registry.getActiveView();
     if (!active || !active.hasGoogleToken) return [];
+    // Pin every Ads call of this sweep (readiness + each target's reads) to the account it started on:
+    // the Ads auth and developer token otherwise follow the ACTIVE account per call, so an account
+    // switch mid-sweep ran this account's remaining reads with the new account's credentials.
+    return runAsAccount(active.id, () => this.sweep(active, only, trigger));
+  }
+
+  private async sweep(active: AccountView, only: string | string[] | undefined, trigger: 'manual' | 'scheduled'): Promise<AdsMonitorRun[]> {
     const wanted = only === undefined ? null : new Set((Array.isArray(only) ? only : [only]).map((x) => x.replace(/-/g, '')));
     // A manual "Run now" on a paused target still runs it (the user asked); the timer only sweeps
     // enabled ones.

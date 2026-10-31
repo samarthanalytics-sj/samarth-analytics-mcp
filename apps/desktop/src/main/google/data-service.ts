@@ -16,6 +16,7 @@ import { buildProbeHit, probeSuffix, probeVerdict, describeProbe, probeTargets, 
 import { resolveGa4MeasurementIds } from './gtm-ga4-check';
 import { withQuotaRetry, withRetry, QUOTA_RE, TRANSIENT_5XX_RE, NOT_FOUND_OR_PERMISSION_RE } from './quota-retry';
 import { log } from '../logger';
+import { callerAccountView } from './account-scope';
 
 import type { Ga4PropertySnapshot } from './ga4-audit';
 import type { DataQualityCounts } from './ga4-data-quality';
@@ -405,7 +406,9 @@ export class GoogleDataService {
   }
 
   private activeAuth(): OAuth2Client {
-    const active = this.registry.getActiveView();
+    // The CALLER's account: a background monitor sweep pinned with runAsAccount keeps the account it
+    // started on across an account switch; everything else follows the active account.
+    const active = callerAccountView(this.registry);
     if (!active) throw new Error('No active account. Connect a Google account first.');
     if (!active.hasGoogleToken) {
       throw new Error('The active account is not signed in to Google.');
@@ -417,7 +420,8 @@ export class GoogleDataService {
    *  Assistant browser profile (so switching to a different Gmail uses that Gmail's own TA session, not
    *  a shared one) and to steer its Google sign-in to the right account. Null if none is active. */
   activeAccountIdentity(): { id: string; email: string } | null {
-    const active = this.registry.getActiveView();
+    // Same resolution as activeAuth, so a pinned call's container-cache key matches the token it used.
+    const active = callerAccountView(this.registry);
     return active ? { id: active.id, email: active.email } : null;
   }
 
