@@ -126,6 +126,54 @@ test('the prompt block frames attachments as reference, not as instructions', as
   assert.equal(attachmentPrompt([]), '', 'no attachments means no block at all');
 });
 
+console.log('zip bombs');
+
+/** A real workbook from exceljs, so only the extra entry differs from an honest upload. */
+async function workbookBytes(rows: string[][]): Promise<Buffer> {
+  const ExcelJS: any = (await import('exceljs')).default ?? (await import('exceljs'));
+  const wb = new ExcelJS.Workbook();
+  const sheet = wb.addWorksheet('Tags');
+  for (const row of rows) sheet.addRow(row);
+  return Buffer.from(await wb.xlsx.writeBuffer());
+}
+
+/** Adds `bytes` of one repeated byte as `entry`: tens of MB inflated from a few KB compressed. */
+async function withBomb(zipBytes: Buffer | null, entry: string, bytes: number): Promise<Buffer> {
+  const mod: any = await import('jszip');
+  const JSZip = mod.default ?? mod;
+  const zip = zipBytes ? await JSZip.loadAsync(zipBytes) : new JSZip();
+  zip.file(entry, Buffer.alloc(bytes, 0x41));
+  return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+}
+
+test('an ordinary xlsx is still read', async () => {
+  const buf = await workbookBytes([
+    ['Tag', 'Type'],
+    ['GA4 Purchase', 'gaawe'],
+  ]);
+  const out = await extractAttachment({ name: 'tags.xlsx', dataBase64: buf.toString('base64') });
+  assert.ok(out.text.includes('GA4 Purchase,gaawe'), out.text);
+});
+
+test('an xlsx that inflates far past its upload size is refused before exceljs loads it', async () => {
+  // Passed every byte limit on the compressed upload, then exceljs inflated every entry whole: a
+  // 15 MB upload of this shape took the shared process down with every other user's turn.
+  const bomb = await withBomb(await workbookBytes([['a', 'b']]), 'xl/media/image9.png', 40 * 1024 * 1024);
+  assert.ok(bomb.length < 1024 * 1024, `the bomb should be small on the wire, got ${bomb.length}`);
+  await assert.rejects(
+    () => extractAttachment({ name: 'bomb.xlsx', dataBase64: bomb.toString('base64') }),
+    /^Error: bomb\.xlsx expands to more than 25 MB when unzipped/,
+  );
+});
+
+test('a docx that inflates far past its upload size is refused before mammoth loads it', async () => {
+  const bomb = await withBomb(null, 'word/document.xml', 40 * 1024 * 1024);
+  await assert.rejects(
+    () => extractAttachment({ name: 'bomb.docx', dataBase64: bomb.toString('base64') }),
+    /^Error: bomb\.docx expands to more than 25 MB when unzipped/,
+  );
+});
+
 test('html tables keep their row structure instead of collapsing into prose', () => {
   const text = htmlTablesToText('<table><tr><td>Tag</td><td>Type</td></tr><tr><td>GA4</td><td>config</td></tr></table>');
   assert.ok(text.includes('Tag | Type'), 'cells stay separated');

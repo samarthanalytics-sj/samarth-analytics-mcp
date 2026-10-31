@@ -65,6 +65,17 @@ const IMAGE_MIMES: Record<string, string> = {
 
 const XLSX_ROW_CAP = 2000;
 
+/**
+ * What a .xlsx/.xlsm/.docx may expand to once unzipped, and how many entries it may hold.
+ *
+ * The byte limits above apply to the COMPRESSED upload, and both parsers inflate every entry whole
+ * in memory before any row or character cap applies. A 15 MB zip of repetitive XML inflates to
+ * gigabytes, which OOM-killed the one shared process and every other user's turn with it. Even an
+ * honest sheet costs exceljs roughly 15x its XML in heap, so this is also the honest-file ceiling.
+ */
+const MAX_INFLATED_BYTES = 25 * 1024 * 1024;
+const MAX_ZIP_ENTRIES = 1000;
+
 /** Read-as-text extensions. Anything else needs a real extractor below, or is refused - binary
  *  formats are never dumped raw into a prompt. */
 const TEXT_EXTS = new Set([
@@ -92,6 +103,63 @@ export function htmlTablesToText(html: string): string {
  *  legacy .doc or a renamed file reaching a parser that will throw something unhelpful. */
 const isZip = (buf: Buffer): boolean =>
   buf.length > 4 && buf[0] === 0x50 && buf[1] === 0x4b && (buf[2] === 0x03 || buf[2] === 0x05 || buf[2] === 0x07);
+
+/**
+ * Refuses a .xlsx/.xlsm/.docx that would expand past MAX_INFLATED_BYTES or hold more than
+ * MAX_ZIP_ENTRIES entries, BEFORE a parser inflates it whole. The refusal starts with the name, so
+ * it reaches the user as written.
+ *
+ * Measured by inflating, in a stream that is stopped the moment the budget is passed, not by trusting
+ * the sizes the zip declares: those are written by whoever made the file. Uses JSZip, the library
+ * exceljs and mammoth load the file with, over the same entries, so what is measured here is what
+ * they would have inflated. loadAsync reads only the directory; nothing is inflated until streamed.
+ */
+async function refuseOversizedZip(name: string, buf: Buffer): Promise<void> {
+  const mod: any = await import('jszip');
+  const JSZip = mod.default ?? mod;
+  const zip = await JSZip.loadAsync(buf);
+  const entries: any[] = Object.values(zip.files).filter((f: any) => !f.dir);
+  if (entries.length > MAX_ZIP_ENTRIES) {
+    throw new Error(
+      `${name} holds ${fmt(entries.length)} files inside it; the limit is ${fmt(MAX_ZIP_ENTRIES)}. Attach a smaller file.`,
+    );
+  }
+
+  let total = 0;
+  for (const entry of entries) {
+    const within = await new Promise<boolean>((resolve, reject) => {
+      let settled = false;
+      const stream = entry.internalStream('uint8array');
+      stream
+        .on('data', (chunk: Uint8Array) => {
+          if (settled) return;
+          total += chunk.length;
+          if (total > MAX_INFLATED_BYTES) {
+            settled = true;
+            stream.pause();
+            resolve(false);
+          }
+        })
+        .on('error', (err: unknown) => {
+          if (settled) return;
+          settled = true;
+          reject(err);
+        })
+        .on('end', () => {
+          if (settled) return;
+          settled = true;
+          resolve(true);
+        })
+        .resume();
+    });
+    if (!within) {
+      throw new Error(
+        `${name} expands to more than ${fmt(MAX_INFLATED_BYTES / 1024 / 1024)} MB when unzipped, which is ` +
+          `more than this chat can read. Attach a smaller file, or export just the part you need as CSV or text.`,
+      );
+    }
+  }
+}
 
 async function extractPdf(buf: Buffer): Promise<string> {
   const mod: any = await import('pdf-parse');
@@ -191,9 +259,11 @@ export async function extractAttachment(input: AttachmentInput): Promise<Extract
       }
     } else if (ext === '.xlsx' || ext === '.xlsm') {
       if (!isZip(buf)) throw new Error('not a valid xlsx container');
+      await refuseOversizedZip(name, buf);
       raw = await extractXlsx(buf);
     } else if (ext === '.docx') {
       if (!isZip(buf)) throw new Error('not a valid docx container');
+      await refuseOversizedZip(name, buf);
       raw = await extractDocx(buf);
     } else if (ext === '.doc') {
       // The legacy binary format needs a different parser than .docx, and the desktop carries one.
