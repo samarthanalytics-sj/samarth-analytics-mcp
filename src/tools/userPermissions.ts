@@ -129,7 +129,10 @@ export function registerUserPermissionTools(server: McpServer, getClient: () => 
       description:
         '[WRITE] Update a user\'s account and/or container access levels. ' +
         'Requires GTM_MCP_ENABLE_WRITES=true and confirm=true. ' +
-        'Provide the full intended access (account + container) as the API replaces the record.',
+        'Read-modify-write: an omitted accountPermission or containerAccess keeps the user\'s current value. ' +
+        'containerAccess, when given, is the COMPLETE list (the API replaces the record): a container left out loses access. ' +
+        'Removing access (noAccess at account or container level, or leaving a container out) is a revocation and ' +
+        'also requires GTM_MCP_ENABLE_DELETES=true, the same as user_permissions_delete.',
       inputSchema: accountBase.extend({
         userPermissionId: gtmId.describe('The user permission ID to update.'),
         accountPermission: accountPermission.optional(),
@@ -141,17 +144,59 @@ export function registerUserPermissionTools(server: McpServer, getClient: () => 
       try {
         const config = getGuardrailConfig();
         const { dryRun } = checkGuardrails('write', confirm, config);
+        // Revoking access is what user_permissions_delete does, and that tool is delete-tier.
+        // This one used to let 'noAccess' through on the write flag alone, so a server configured
+        // to refuse deletes could still lock a user out of the account. Tier by effect: an
+        // explicit revocation needs the deletes flag too, checked before anything is sent.
+        const explicitlyRevokes =
+          acctPerm === 'noAccess' || (containerAccess ?? []).some((c) => c.permission === 'noAccess');
+        if (explicitlyRevokes) checkGuardrails('delete', confirm, config);
         if (dryRun) {
           return textResult(`[DRY RUN] Would update permission ${userPermissionId} on account ${accountId}`);
         }
-        const body: tagmanager_v2.Schema$UserPermission = {
-          ...(acctPerm ? { accountAccess: { permission: acctPerm } } : {}),
-          ...(containerAccess ? { containerAccess } : {}),
-        };
         const client = getClient();
+        const path = `accounts/${accountId}/user_permissions/${userPermissionId}`;
+        // The update is a full replace, so a field the caller left out used to be sent as absent:
+        // {accountPermission:'user'} alone could strip every container grant. Fetch the record
+        // and carry forward what was not supplied, as environments_update / tags_update do.
+        const existing = (await client.accounts.user_permissions.get({ path })).data;
+        const before = (existing.containerAccess ?? []).filter(
+          (c) => c.containerId && c.permission && c.permission !== 'noAccess'
+        );
+        const merged: tagmanager_v2.Schema$UserPermission = {
+          ...(acctPerm
+            ? { accountAccess: { permission: acctPerm } }
+            : existing.accountAccess
+              ? { accountAccess: existing.accountAccess }
+              : {}),
+          ...(containerAccess
+            ? { containerAccess }
+            : existing.containerAccess
+              ? { containerAccess: existing.containerAccess }
+              : {}),
+        };
+        // A supplied containerAccess is the whole list: any container the user could reach before
+        // that is missing from it is revoked by this PUT, so it is delete-tier as well.
+        if (containerAccess) {
+          const kept = new Set(containerAccess.map((c) => c.containerId));
+          const dropped = before.filter((c) => !kept.has(c.containerId as string)).map((c) => c.containerId);
+          if (dropped.length > 0) {
+            try {
+              checkGuardrails('delete', confirm, config);
+            } catch (gate) {
+              return errorResult(
+                'user_permissions_update',
+                new Error(
+                  `${(gate as Error).message} This update leaves out container(s) ${dropped.join(', ')}, ` +
+                    'which revokes the user\'s access to them. List them in containerAccess to keep their access.'
+                )
+              );
+            }
+          }
+        }
         const res = await client.accounts.user_permissions.update({
-          path: `accounts/${accountId}/user_permissions/${userPermissionId}`,
-          requestBody: body,
+          path,
+          requestBody: merged,
         });
         return jsonResult(res.data);
       } catch (err) {
