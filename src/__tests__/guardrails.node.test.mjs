@@ -366,6 +366,84 @@ test('the child runs in the sandbox and the run aborts if the server still loads
   const abort = smokeSrc.indexOf('if (credentialsLoaded)');
   assert.ok(abort >= 0, 'no credential-leak abort');
   assert.ok(abort < smokeSrc.indexOf('"tools/call"'), 'the abort must run before any tool is called');
+  // The run waits for the stdio ready line, which the server logs after buildGoogleAuth; keep in sync.
+  const indexSrc = readFileSync(path.join(repoRoot, 'src/index.ts'), 'utf-8');
+  assert.ok(indexSrc.includes("'[samarth-gtm-mcp] Server ready on stdio transport'"), 'index.ts no longer logs the stdio ready line');
+  assert.ok(smokeSrc.includes('Server ready on stdio transport'), 'smoke-all-tools does not wait for the stdio ready line');
+});
+
+// stdout and stderr are separate pipes, so the "[auth] Using ..." line can be read AFTER the initialize
+// answer. The abort was checked once, right after initialize, so a late credential line was missed and
+// every tool was called. A fake server reproduces the ordering: it answers initialize at once and
+// writes its startup stderr lines 300 ms later.
+const FAKE_SERVER = `
+import fs from 'node:fs';
+const log = process.env.SMOKE_FAKE_LOG;
+const mode = process.env.SMOKE_FAKE_MODE;
+const reply = (id, result) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, result }) + '\\n');
+let buf = '';
+process.stdin.on('data', (c) => {
+  buf += c;
+  let i;
+  while ((i = buf.indexOf('\\n')) >= 0) {
+    const line = buf.slice(0, i).trim();
+    buf = buf.slice(i + 1);
+    if (!line) continue;
+    const msg = JSON.parse(line);
+    fs.appendFileSync(log, msg.method + '\\n');
+    if (msg.method === 'initialize') {
+      reply(msg.id, { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'fake', version: '0' } });
+      if (mode !== 'silent') {
+        setTimeout(() => {
+          if (mode === 'creds') process.stderr.write('[auth] Using OAuth2 user credentials (client: env, tokens: env)\\n');
+          process.stderr.write('[samarth-gtm-mcp] Server ready on stdio transport\\n');
+        }, 300);
+      }
+    } else if (msg.method === 'tools/list') {
+      reply(msg.id, { tools: [{ name: 'noop', inputSchema: { type: 'object', properties: {} } }] });
+    } else if (msg.method === 'tools/call') {
+      reply(msg.id, { content: [{ type: 'text', text: 'ok' }] });
+    }
+  }
+});
+`;
+
+function runSmokeAgainstFake(mode) {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'smoke-fake-'));
+  try {
+    const fake = path.join(dir, 'fake-server.mjs');
+    const log = path.join(dir, 'methods.log');
+    writeFileSync(fake, FAKE_SERVER);
+    writeFileSync(log, '');
+    const r = spawnSync(process.execPath, [smokePath, '--mcp', fake, '--timeout', '2000'], {
+      cwd: dir,
+      env: { ...process.env, SMOKE_FAKE_LOG: log, SMOKE_FAKE_MODE: mode },
+      encoding: 'utf-8',
+      timeout: 30_000,
+    });
+    return { status: r.status, stderr: r.stderr, methods: readFileSync(log, 'utf-8').split('\n').filter(Boolean) };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test('REGRESSION: a credential line that arrives after the initialize answer still aborts before any tool call', () => {
+  const r = runSmokeAgainstFake('creds');
+  assert.strictEqual(r.status, 1, `expected the abort, got exit ${r.status}: ${r.stderr}`);
+  assert.match(r.stderr, /ABORTED/);
+  assert.ok(!r.methods.includes('tools/call'), `no tool may be called: ${r.methods.join(', ')}`);
+});
+
+test('REGRESSION: a server that never logs its ready line gets no tool call either', () => {
+  const r = runSmokeAgainstFake('silent');
+  assert.strictEqual(r.status, 1, `expected the abort, got exit ${r.status}: ${r.stderr}`);
+  assert.ok(!r.methods.includes('tools/call'), `no tool may be called: ${r.methods.join(', ')}`);
+});
+
+test('a server that logs ready without credentials is smoke-tested as before', () => {
+  const r = runSmokeAgainstFake('clean');
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.ok(r.methods.includes('tools/call'), `the tool must be called: ${r.methods.join(', ')}`);
 });
 
 // ── Summary ────────────────────────────────────────────────────────────────

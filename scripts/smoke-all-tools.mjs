@@ -16,8 +16,9 @@
 //     ./.gtm-mcp-tokens.json) is never read; GTM_MCP_TOKEN_FILE and
 //     GOOGLE_APPLICATION_CREDENTIALS point at nonexistent files, so neither the
 //     token file nor Application Default Credentials can authenticate.
-//   - If the server still reports loading credentials, the run aborts before
-//     calling a single tool.
+//   - If the server still reports loading credentials (or never logs that it is
+//     ready, so that cannot be ruled out), the run aborts before calling a
+//     single tool.
 // Every tool therefore fails at the auth or guardrail layer BEFORE any network
 // call to Google, even though gated tools receive confirm:true.
 //
@@ -161,11 +162,37 @@ async function main() {
   // The server logs which credentials it loaded. Any of these means the
   // sandbox leaked and tool calls could reach Google, so the run must stop.
   let credentialsLoaded = null;
+  // The stdio server logs this once connected, AFTER buildGoogleAuth has logged
+  // which credentials it loaded (src/index.ts). stderr is a separate pipe from
+  // stdout, so the credential line can be read after the initialize answer; but
+  // stderr itself is ordered, so once this line is read, any credential line
+  // logged before it has been read too.
+  const READY_LINE = "[samarth-gtm-mcp] Server ready on stdio transport";
+  let serverReady = false;
+  let onReady = null;
   child.stderr.on("data", (c) => {
     stderrTail = (stderrTail + c.toString("utf8")).slice(-2000);
     const m = /\[auth\] Using (OAuth2 user credentials|service account credentials)/.exec(stderrTail);
     if (m && !credentialsLoaded) credentialsLoaded = m[1];
+    if (!serverReady && stderrTail.includes(READY_LINE)) {
+      serverReady = true;
+      onReady?.();
+    }
   });
+  function waitForReady(timeoutMs) {
+    if (serverReady) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        onReady = null;
+        resolve(false);
+      }, timeoutMs);
+      onReady = () => {
+        clearTimeout(timer);
+        onReady = null;
+        resolve(true);
+      };
+    });
+  }
 
   let crashed = null;
   child.on("exit", (code, signal) => {
@@ -231,13 +258,31 @@ async function main() {
   );
   notify("notifications/initialized");
 
-  // buildGoogleAuth runs (and logs) before the server answers initialize.
-  if (credentialsLoaded) {
+  let toolsCalled = 0;
+  function abortIfCredentialsLoaded() {
+    if (credentialsLoaded) {
+      shuttingDown = true;
+      child.kill("SIGTERM");
+      console.error(
+        `smoke-all-tools: ABORTED - the server loaded ${credentialsLoaded} despite the sanitized ` +
+          "environment, so tool calls could reach Google. " +
+          (toolsCalled === 0 ? "No tool was called." : `Stopped after ${toolsCalled} tool call(s).`),
+      );
+      process.exit(1);
+    }
+  }
+
+  // buildGoogleAuth runs (and logs) before the server answers initialize, but on
+  // stderr, which may be read after that answer. Wait for the ready line logged
+  // after it, then check; fail closed if it never comes.
+  const ready = await waitForReady(args.timeout);
+  abortIfCredentialsLoaded();
+  if (!ready) {
     shuttingDown = true;
     child.kill("SIGTERM");
     console.error(
-      `smoke-all-tools: ABORTED - the server loaded ${credentialsLoaded} despite the sanitized ` +
-        "environment, so tool calls could reach Google. No tool was called.",
+      `smoke-all-tools: ABORTED - the server never logged "${READY_LINE}" within ${args.timeout} ms, ` +
+        "so whether it loaded credentials is unknown. No tool was called.",
     );
     process.exit(1);
   }
@@ -258,6 +303,9 @@ async function main() {
 
   for (const tool of tools) {
     if (crashed) break;
+    // Re-checked before every call: a credential line read at any point stops the run.
+    abortIfCredentialsLoaded();
+    toolsCalled++;
     const callArgs = synthesizeArgs(tool.inputSchema);
     let outcome;
     let detail = "";
