@@ -11,7 +11,7 @@
 //
 // Playwright is loaded lazily; absent → a clear error.
 
-import { requestAllowed } from './ssrf';
+import { requestAllowed, watchRedirectHops } from './ssrf';
 import { classifyCollector, parseGa4CollectHit, beaconHost, beaconPlatform, type Collector } from '../../shared/runtime-capture';
 import { PlaywrightUnavailableError } from './playwright-driver';
 import { buildLoaderSrc, isPreviewLoader } from './verify-driver';
@@ -83,6 +83,8 @@ export interface FormSubmitDriverOptions {
   containerSnippet?: string;
   navTimeoutMs?: number;
   settleMs?: number;
+  /** Test seam: a Playwright-shaped module used instead of loading the installed one. */
+  playwright?: unknown;
 }
 export interface FormSubmitDriverResult {
   ok: boolean;
@@ -313,7 +315,7 @@ export async function runFormSubmitDriver(
   if (!(await requestAllowed(url))) {
     return { ...base, error: `Refusing to load ${url}: blocked by the SSRF guard (private/loopback/invalid host).` };
   }
-  const pw = await loadPlaywright();
+  const pw = (opts.playwright as Playwright | undefined) ?? (await loadPlaywright());
   if (!pw) throw new PlaywrightUnavailableError();
 
   const captured: { url: string; body: string | null; collector: Collector }[] = [];
@@ -333,16 +335,23 @@ export async function runFormSubmitDriver(
         return;
       }
       // Everything else — INCLUDING the form's own POST — is allowed (subject to SSRF), so the real
-      // submission actually happens and the site fires its form_submission event.
+      // submission actually happens and the site fires its form_submission event. Redirect hops never
+      // reach this handler; `landing` below re-checks them.
       void requestAllowed(reqUrl).then((ok) => (ok ? route.continue() : route.abort()), () => route.abort());
     });
 
     const page = await context.newPage();
+    const landing = watchRedirectHops(page);
+    let startResp: unknown = null;
     try {
-      await page.goto(url, { waitUntil: 'networkidle', timeout: navTimeoutMs });
+      startResp = await page.goto(url, { waitUntil: 'networkidle', timeout: navTimeoutMs });
     } catch (e) {
       return { ...base, error: `could not load ${url}: ${(e instanceof Error ? e.message : String(e)).slice(0, 150)}` };
     }
+    // A start URL that redirected somewhere the SSRF guard refuses (private, loopback, metadata) is
+    // never filled or submitted, and nothing is read from it.
+    const blocked = await landing.blockedLanding(startResp);
+    if (blocked) return { ...base, error: blocked };
 
     let injected = false;
     if (loaderSrc) {
@@ -370,6 +379,10 @@ export async function runFormSubmitDriver(
     // Give the AJAX round-trip + the success-state dataLayer push (form_submission) + the tag time to
     // fire, then settle. React forms push the event only after the fetch resolves, so wait generously.
     await page.waitForTimeout(Math.max(settleMs, 2500));
+    // The submit (or a script) can navigate: a response that redirected somewhere refused is not
+    // screenshotted or read. The submit itself already happened, so filled/submitted are still told.
+    const blockedAfter = await landing.blockedLanding(null);
+    if (blockedAfter) return { ...base, filled: outcome.filled, submitted: outcome.submitted, error: blockedAfter };
 
     // Visual proof of the real submit — the ringed form (+ any success message it now shows).
     let screenshot: string | undefined;

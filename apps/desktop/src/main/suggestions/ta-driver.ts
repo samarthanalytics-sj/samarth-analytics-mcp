@@ -18,7 +18,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { rm } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { requestAllowed } from './ssrf';
+import { requestAllowed, watchRedirectHops } from './ssrf';
 import { classifyCollector } from '../../shared/runtime-capture';
 import { PlaywrightUnavailableError } from './playwright-driver';
 import {
@@ -987,6 +987,11 @@ export async function runTaVerify(
       popup = ctx.pages().find((p) => p !== ta && !/tagassistant\.google\.com|accounts\.google\.com/i.test(p.url())) ?? null;
     }
     if (!popup) return { pagesOk: false, perTag, pagesDriven, error: 'Tag Assistant did not open the debug window - reconnect and retry. (The log now lists the buttons the Tag Assistant page showed - send it and I will wire the right one.)' };
+    // Each page is SSRF-checked before it is opened (requestAllowed(pageUrl) below), but a redirect hop
+    // is never checked by that, and this window routes every non-collector request through. This re-checks
+    // the hops, and where the window and its frames ended up, before anything on a page is driven or a
+    // form on it is submitted for real.
+    const popupLanding = watchRedirectHops(popup);
     console.log('[tag-assistant] debug window opened; waiting for the container to enter debug...');
     await popup.waitForLoadState('networkidle', { timeout: navTimeoutMs }).catch(() => undefined);
     await popup.waitForTimeout(Math.max(settleMs, 4000)); // debug handshake + container debug reload
@@ -1505,6 +1510,7 @@ export async function runTaVerify(
       // build under the debug session. So: skip only when NOT in preview mode and it's already the page.
       const alreadyOnPage = done === 1 && popup.url().split('?')[0].replace(/\/$/, '') === pageUrl.split('?')[0].replace(/\/$/, '');
       if (previewParams || !alreadyOnPage) {
+        popupLanding.reset(); // a new navigation: hops seen on earlier pages no longer count
         // A real form submit on the PREVIOUS page navigates the popup; on a heavy Shopify page the next
         // load can then miss `networkidle` (persistent beacons/sockets) and TIME OUT - which used to be
         // swallowed silently, skipping this page's form(s) with no trace (the contact + product forms that
@@ -1522,6 +1528,14 @@ export async function runTaVerify(
         }
         if (!loaded) continue;
         await popup.waitForTimeout(Math.max(settleMs, 2000)); // container + debug re-attach on the new page
+      }
+      // A page that landed somewhere the SSRF guard refuses (private, loopback, metadata) is not driven,
+      // and its forms are not submitted.
+      const refused = await popupLanding.blockedLanding(null);
+      if (refused) {
+        console.log(`[tag-assistant]   ${pageUrl}: ${refused} - skipping its ${groupTags.length} trigger(s) + ${pageForms.length} form(s).`);
+        for (const t of groupTags) perTag.push({ tagId: t.id, kind: 'navigate', targetFound: false, performed: false, note: refused, hits: [] });
+        continue;
       }
       console.log(`[tag-assistant]     on ${popup.url().slice(0, 120)} — driving ${groupTags.length} trigger(s), ${pageForms.length} form(s)`);
       // Re-establish the injected container on this page before driving its triggers (see above).
@@ -1619,12 +1633,19 @@ export async function runTaVerify(
         try { opts.onFormProgress?.(pageUrl, formDone, allForms.length); } catch { /* progress is a nicety */ }
         if (fi > 0) {
           // A later form on the SAME page needs a fresh load (the prior submit navigated the page away).
+          popupLanding.reset();
           try { await popup.goto(withPreview(pageUrl), { waitUntil: 'networkidle', timeout: navTimeoutMs }); }
           catch (e) { console.log(`[tag-assistant]   could not reload ${pageUrl} for form ${formDone}/${allForms.length}: ${(e instanceof Error ? e.message : String(e)).slice(0, 120)} — skipping it`); continue; }
           await popup.waitForTimeout(Math.max(settleMs, 1500));
           await ensureInjectedBooted(pageUrl);
           await popup.evaluate(grantConsentInPage).catch(() => undefined);
           await popup.evaluate(hideCookieOverlaysInPage).catch(() => undefined);
+        }
+        // Never a real submit on a page that has (re)landed somewhere the SSRF guard refuses.
+        const refusedForm = await popupLanding.blockedLanding(null);
+        if (refusedForm) {
+          console.log(`[tag-assistant]   ${pageUrl}: ${refusedForm} - skipping its remaining form submit(s).`);
+          break;
         }
         await popup.evaluate(allowFormSubmitInPage).catch(() => undefined); // lift the submit-guard for the real POST
         try {

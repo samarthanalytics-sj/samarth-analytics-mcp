@@ -10,11 +10,13 @@
 //     the report uses), we CAPTURE url + postData() and route.abort() — we NEVER route.continue()
 //     a collector. So no collector hit is ever delivered.
 //   • Otherwise we apply the shared SSRF guard (requestAllowed): continue if allowed, else abort.
+//     Redirect hops never reach a route handler, so they are re-checked separately (watchRedirectHops):
+//     a page that redirected to a refused address is never driven and nothing captured on it is kept.
 //
 // Playwright is OPTIONAL (not a desktop dependency) — loaded lazily; if it isn't installed the tool
 // reports that cleanly instead of throwing.
 
-import { requestAllowed } from './ssrf';
+import { requestAllowed, watchRedirectHops } from './ssrf';
 import { classifyCollector, syntheticDataLayerEvent, type Collector } from '../../shared/runtime-capture';
 import { GA4_ECOMMERCE_FUNNEL_EVENTS } from '../google/gtm-builders';
 import { PlaywrightUnavailableError } from './playwright-driver';
@@ -88,6 +90,8 @@ export interface SyntheticTestOptions {
   navTimeoutMs?: number;
   /** Wait after each dataLayer push so the tag fires and its (aborted) hit is captured. */
   settleMs?: number;
+  /** Test seam: a Playwright-shaped module used instead of loading the installed one. */
+  playwright?: unknown;
 }
 
 export interface SyntheticTestResult {
@@ -128,7 +132,7 @@ export async function runSyntheticTest(url: string, opts: SyntheticTestOptions =
     return { capturedHits, pagesOk: false, error: `Refusing to load ${url}: blocked by the SSRF guard (private/loopback/invalid host).` };
   }
 
-  const pw = await loadPlaywright();
+  const pw = (opts.playwright as Playwright | undefined) ?? (await loadPlaywright());
   if (!pw) throw new PlaywrightUnavailableError();
 
   let browser: PwBrowser | null = null;
@@ -174,9 +178,13 @@ export async function runSyntheticTest(url: string, opts: SyntheticTestOptions =
     });
 
     const page = await context.newPage();
+    const landing = watchRedirectHops(page);
 
     // networkidle lets the container + tags finish loading before we push events.
-    await page.goto(url, { waitUntil: 'networkidle', timeout: navTimeoutMs });
+    const resp = await page.goto(url, { waitUntil: 'networkidle', timeout: navTimeoutMs });
+    // A page that redirected somewhere the SSRF guard refuses is not driven, and what it sent is dropped.
+    const blocked = await landing.blockedLanding(resp);
+    if (blocked) return { capturedHits: [], pagesOk: false, error: blocked };
 
     // The page + container have loaded; from here every cross-site beacon is a tag firing. Arm the
     // synthetic-phase net so nothing we don't explicitly classify can escape either.
@@ -194,6 +202,10 @@ export async function runSyntheticTest(url: string, opts: SyntheticTestOptions =
       await page.waitForTimeout(settleMs);
     }
 
+    // Again at the end: an iframe, a subresource or a script-driven navigation can redirect somewhere
+    // refused while the events fire. Every hit captured on the page is then dropped.
+    const blockedLate = await landing.blockedLanding(null);
+    if (blockedLate) return { capturedHits: [], pagesOk: false, error: blockedLate };
     return { capturedHits, pagesOk: true };
   } catch (e) {
     return { capturedHits, pagesOk: false, error: (e instanceof Error ? e.message : String(e)).slice(0, 300) };
