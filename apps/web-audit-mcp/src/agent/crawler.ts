@@ -173,7 +173,7 @@ export async function crawlSite(
   queue.push({ url: start, depth: 0 });
   discovered.add(start);
 
-  const context = await browser.newContext({ viewport: { width: 1366, height: 900 } });
+  const context = await browser.newContext({ viewport: { width: 1366, height: 900 }, serviceWorkers: 'block' });
   try {
     const inst = await openInstrumentedPage(context);
     const page = inst.page;
@@ -203,6 +203,14 @@ export async function crawlSite(
         if (resp && status !== null) note = await blockNoteOf(resp, status);
         await page.waitForTimeout(500);
         scan = await page.evaluate<PageScan>(scanPageInBrowser);
+        // After the read, so a hop during the settle (a script-driven navigation, an iframe) counts:
+        // a page that redirected somewhere the SSRF guard refuses is reported with nothing from it.
+        const blocked = await inst.blockedLanding(resp);
+        if (blocked) {
+          note = blocked;
+          status = null;
+          scan = { title: '', links: [], formsCount: 0, cmpHint: false };
+        }
       } catch (err) {
         note = `navigation failed: ${err instanceof Error ? err.message : String(err)}`.slice(0, 300);
       }

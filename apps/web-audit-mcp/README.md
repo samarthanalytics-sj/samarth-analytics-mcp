@@ -88,7 +88,11 @@ The server has **two interaction surfaces** with different guarantees:
   authorised to test. The CLI (`samarth-verify`) is an explicit local invocation.
 - **SSRF guard** (same rules as the runtime worker): loopback, RFC-1918,
   CGNAT, link-local/cloud-metadata and encoded-IP forms are always blocked —
-  for the start URL, every redirect, and every subresource.
+  for the start URL and every subresource. Playwright never routes a redirect
+  hop, so every hop is re-checked after navigation: a page that redirects to
+  such an address is reported as blocked and nothing is read from it. Stopping
+  the redirected request itself needs egress control (an SSRF-filtering proxy
+  in front of the browser).
 - **Budgets**: hard caps on pages (25), depth (4), timeouts and settle times.
 
 ## Setup

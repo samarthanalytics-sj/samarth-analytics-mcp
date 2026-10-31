@@ -1,7 +1,8 @@
 // SSRF guard unit tests. Run with: node --test url-guard.test.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { urlAllowed, createRequestGuard } from "./url-guard.mjs";
+import { readFile } from "node:fs/promises";
+import { urlAllowed, createRequestGuard, watchLanding } from "./url-guard.mjs";
 
 test("allows ordinary public http(s) URLs", () => {
   assert.equal(urlAllowed("https://example.com/").ok, true);
@@ -205,4 +206,102 @@ test("request guard still remembers a private answer (the retry is for errors on
   assert.equal(await allowed("http://inside.example.com/a"), false);
   assert.equal(await allowed("http://inside.example.com/b"), false);
   assert.equal(calls.length, 1);
+});
+
+// Redirect hops. Playwright routes only the FIRST URL of a redirect chain, so the
+// capture.mjs route guard never saw a public URL 302ing to an internal address:
+// the page loaded and its final URL, status, dataLayer and cookies were recorded.
+// watchLanding re-checks every hop; these drive it with a fake Playwright page.
+function fakeReq(url, from = null) {
+  return { url: () => url, redirectedFrom: () => from };
+}
+function fakePage(frames = []) {
+  const listeners = [];
+  const page = {
+    current: "about:blank",
+    gotos: [],
+    on: (event, cb) => {
+      if (event === "request") listeners.push(cb);
+    },
+    url: () => page.current,
+    frames: () => frames.map((u) => ({ url: () => u })),
+    goto: async (url) => {
+      page.gotos.push(url);
+      page.current = url;
+    },
+    emit: (req) => listeners.forEach((cb) => cb(req)),
+  };
+  return page;
+}
+const publicGuard = () =>
+  createRequestGuard(
+    fakeLookup({
+      "shop.example.com": [{ address: "93.184.216.34", family: 4 }],
+      "cdn.example.com": [{ address: "93.184.216.34", family: 4 }],
+      "metadata.google.internal": [{ address: "169.254.169.254", family: 4 }],
+    }).lookup,
+  );
+
+test("watchLanding refuses a main-frame redirect to a private address and leaves the page", async () => {
+  const page = fakePage();
+  const landing = watchLanding(page, publicGuard());
+  const first = fakeReq("https://shop.example.com/");
+  const last = fakeReq("http://10.0.0.5:8080/admin", first);
+  page.emit(first);
+  page.emit(last);
+  page.current = "http://10.0.0.5:8080/admin";
+  const note = await landing.blockedLanding({ request: () => last });
+  assert.match(note ?? "", /^Blocked: redirected to 10\.0\.0\.5:8080/);
+  assert.deepEqual(page.gotos, ["about:blank"], "moved off the internal page once");
+  assert.equal(await landing.blockedLanding(null), note, "the refusal holds");
+  assert.deepEqual(page.gotos, ["about:blank"]);
+});
+
+test("watchLanding refuses a private hop in the response chain alone", async () => {
+  const page = fakePage();
+  page.current = "https://shop.example.com/done";
+  const landing = watchLanding(page, publicGuard());
+  const chain = fakeReq(
+    "https://shop.example.com/done",
+    fakeReq("http://metadata.google.internal/x", fakeReq("https://shop.example.com/")),
+  );
+  assert.match((await landing.blockedLanding({ request: () => chain })) ?? "", /metadata\.google\.internal/);
+});
+
+test("watchLanding refuses an iframe/subresource redirect seen only as a request event", async () => {
+  const page = fakePage(["https://shop.example.com/", "chrome-error://chromewebdata/"]);
+  page.current = "https://shop.example.com/";
+  const landing = watchLanding(page, publicGuard());
+  page.emit(fakeReq("http://169.254.169.254/latest/meta-data/", fakeReq("https://cdn.example.com/frame")));
+  assert.match((await landing.blockedLanding(null)) ?? "", /169\.254\.169\.254/);
+});
+
+test("watchLanding passes a public redirect and ignores non-http frames", async () => {
+  const page = fakePage(["https://shop.example.com/landing", "about:blank", "chrome-error://chromewebdata/"]);
+  const landing = watchLanding(page, publicGuard());
+  const first = fakeReq("https://shop.example.com/");
+  const last = fakeReq("https://shop.example.com/landing", first);
+  page.emit(first);
+  page.emit(last);
+  page.current = "https://shop.example.com/landing";
+  assert.equal(await landing.blockedLanding({ request: () => last }), null);
+  assert.deepEqual(page.gotos, []);
+});
+
+// capturePage needs a browser, so pin its wiring in the source: the watch is
+// registered before goto, the landing is checked before the final URL/status are
+// recorded, and again after the dataLayer/cookie reads.
+test("capture.mjs checks the landing before it records anything from a page", async () => {
+  const src = await readFile(new URL("./capture.mjs", import.meta.url), "utf8");
+  const body = src.slice(src.indexOf("async function capturePage("));
+  const watch = body.indexOf("watchLanding(page");
+  const goto = body.indexOf("page.goto(");
+  const first = body.indexOf("blockedLanding(");
+  const finalUrl = body.indexOf("record.finalUrl = page.url()");
+  const reads = body.indexOf("record.dataLayerAfter = await");
+  const late = body.lastIndexOf("blockedLanding(", body.indexOf("} catch (e)"));
+  assert.ok(watch > 0 && watch < goto, `watch@${watch} goto@${goto}`);
+  assert.ok(first > goto && first < finalUrl, `landing@${first} finalUrl@${finalUrl}`);
+  assert.ok(late > reads, `late landing@${late} reads@${reads}`);
+  assert.match(src, /capturePage\(context, url, \{[^}]*requestAllowed/, "the context's guard is passed in");
 });

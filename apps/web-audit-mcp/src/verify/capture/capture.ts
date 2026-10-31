@@ -16,10 +16,12 @@ import {
   loadPlaywright,
   PlaywrightMissingError,
   DATALAYER_HOOK,
+  watchLanding,
   type Playwright,
   type PwBrowser,
   type PwPage,
   type PwContext,
+  type PwResponse,
 } from '../../agent/browser.js';
 import { extractConsentEvents, extractEventNames } from '../../agent/capture.js';
 import { urlAllowed } from '../../utils/urlGuard.js';
@@ -184,7 +186,7 @@ export async function runCapture(
   const requestGuard = opts.requestGuard ?? createRequestGuard();
   const notes: string[] = [];
   const linkerDomains = collectLinkerDomains(spec);
-  const context = await browser.newContext({ viewport: { width: 1366, height: 900 } });
+  const context = await browser.newContext({ viewport: { width: 1366, height: 900 }, serviceWorkers: 'block' });
   const state: CaptureState = {
     ga4Hits: [],
     trackers: [],
@@ -236,6 +238,13 @@ export async function runCapture(
 
     const page = await context.newPage();
     await page.addInitScript({ content: DATALAYER_HOOK });
+    // The route handler above never sees a redirect hop, so a URL that redirects to a private,
+    // loopback or metadata address still loads. Once that happens the run is refused from there on
+    // (never reset): no interaction (a REAL submit included) and no page reads, allowlist or not.
+    // Fixture mode serves everything from memory and never consults the guard.
+    const landing = opts.fixtures ? null : watchLanding(page, requestGuard);
+    const ssrfRefusal = async (resp?: PwResponse | null): Promise<string | null> =>
+      landing ? landing.blockedLanding(resp) : null;
 
     const pageOn = page as unknown as PwPageOnEx;
     pageOn.on('request', (req: PwRequestEx) => {
@@ -273,13 +282,26 @@ export async function runCapture(
     // ── Navigate + phase-1 (pre-consent) settle ───────────────────────────────
     let httpStatus: number | null = null;
     let loaded = false;
+    let startResp: PwResponse | null = null;
     state.navStart = Date.now();
     try {
-      const resp = await page.goto(spec.url, { waitUntil: 'load', timeout: opts.navTimeoutMs });
-      httpStatus = resp ? resp.status() : null;
+      startResp = await page.goto(spec.url, { waitUntil: 'load', timeout: opts.navTimeoutMs });
+      httpStatus = startResp ? startResp.status() : null;
       loaded = true;
     } catch (err) {
       notes.push(`navigation failed: ${err instanceof Error ? err.message : String(err)}`.slice(0, 300));
+    }
+    const startBlocked = loaded ? await ssrfRefusal(startResp) : null;
+    if (startBlocked) {
+      // Nothing from the refused page counts: not its status, its hits, or that it "loaded".
+      loaded = false;
+      httpStatus = null;
+      state.ga4Hits.length = 0;
+      state.trackers.length = 0;
+      state.linkerRequests.length = 0;
+      state.consoleErrors.length = 0;
+      state.pageErrors.length = 0;
+      notes.push(`start URL ${startBlocked}, so every interaction is refused`);
     }
     const offList = loaded ? allowlistRefusal(page, opts.allowlist) : null;
     if (offList) {
@@ -289,14 +311,14 @@ export async function runCapture(
     await waitForSettle(() => state.ga4Hits.length, opts.settle, clock);
 
     // Cookies just before the consent action (or at settle, if no consent flow).
-    const cookiesPreConsent = (await context.cookies()).map((c) => c.name);
+    const cookiesPreConsent = (await ssrfRefusal()) ? [] : (await context.cookies()).map((c) => c.name);
 
     // ── Consent action (two-phase) ─────────────────────────────────────────────
     let consentActionTMs: number | null = null;
     let consentAction: ConsentActionFacts | null = null;
     if (loaded && spec.consent) {
       const plannedTMs = Date.now() - state.navStart;
-      const refused = allowlistRefusal(page, opts.allowlist);
+      const refused = (await ssrfRefusal()) ?? allowlistRefusal(page, opts.allowlist);
       const outcome: ConsentClickOutcome = refused
         ? { action: spec.consent.mode ?? 'accept', found: false, performed: false, note: refused }
         : await clickConsent(page, spec.consent);
@@ -320,7 +342,7 @@ export async function runCapture(
     for (const check of spec.checks) {
       if (check.type === 'event_on_interaction' && check.action) {
         const atTMs = Date.now() - state.navStart;
-        const { kind, outcome } = await runInteraction(page, check.action, opts.navTimeoutMs, opts.allowlist);
+        const { kind, outcome } = await runInteraction(page, check.action, opts.navTimeoutMs, opts.allowlist, await ssrfRefusal());
         actions.push({
           checkId: check.id,
           kind,
@@ -339,7 +361,7 @@ export async function runCapture(
       } else if (check.type === 'cross_domain_linker') {
         for (const domain of check.expectedDomains ?? []) {
           const atTMs = Date.now() - state.navStart;
-          const refused = allowlistRefusal(page, opts.allowlist);
+          const refused = (await ssrfRefusal()) ?? allowlistRefusal(page, opts.allowlist);
           const probe: LinkerProbeResult = refused
             ? { found: false, clicked: false, glPresent: false, note: refused }
             : await linkerProbe(page, domain, state, clock);
@@ -358,17 +380,22 @@ export async function runCapture(
     }
 
     // ── Final reads ────────────────────────────────────────────────────────────
-    const cookiesPostConsent = (await context.cookies()).map((c) => c.name);
-    const dlLog = await page
-      .evaluate<{ t?: number; entry?: unknown }[]>(readDlLogInPage)
-      .catch(() => [] as { t?: number; entry?: unknown }[]);
-    const gtmEvaluated = await page.evaluate<boolean>(detectGtmInPage).catch(() => false);
+    // A step can land the page somewhere refused too (a submit or navigate that redirects inside).
+    const endBlocked = await ssrfRefusal();
+    if (endBlocked && !startBlocked) notes.push(`journey ${endBlocked}`);
+    const cookiesPostConsent = endBlocked ? [] : (await context.cookies()).map((c) => c.name);
+    const dlLog = endBlocked
+      ? []
+      : await page
+          .evaluate<{ t?: number; entry?: unknown }[]>(readDlLogInPage)
+          .catch(() => [] as { t?: number; entry?: unknown }[]);
+    const gtmEvaluated = endBlocked ? false : await page.evaluate<boolean>(detectGtmInPage).catch(() => false);
 
     const ga4Hits = [...state.ga4Hits].sort((a, b) => a.tRelativeMs - b.tRelativeMs);
 
     return {
       requestedUrl: spec.url,
-      finalUrl: page.url(),
+      finalUrl: endBlocked ? null : page.url(),
       httpStatus,
       loaded,
       gtmPresent: gtmEvaluated || state.ga4Hits.length > 0,
@@ -410,9 +437,11 @@ async function runInteraction(
   action: { click?: string; submit?: string; navigate?: string },
   navTimeoutMs: number,
   allowlist: string[],
+  ssrfRefused: string | null = null,
 ): Promise<{ kind: ActionResult['kind']; outcome: { found: boolean; performed: boolean; note?: string } }> {
-  // Never act on a page a redirect carried off the allowlist (the route guard cannot see redirects).
-  const refused = allowlistRefusal(page, allowlist);
+  // Never act on a page a redirect carried somewhere the SSRF guard refuses, or off the allowlist
+  // (the route guard cannot see redirects).
+  const refused = ssrfRefused ?? allowlistRefusal(page, allowlist);
   if (refused) {
     const kind: ActionResult['kind'] = action.click ? 'click' : action.submit ? 'submit' : action.navigate ? 'navigate' : 'click';
     return { kind, outcome: { found: false, performed: false, note: refused } };

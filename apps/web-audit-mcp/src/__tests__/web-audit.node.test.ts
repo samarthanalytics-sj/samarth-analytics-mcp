@@ -22,6 +22,7 @@ import {
   parseQuery,
   MEASUREMENT_GROUPS,
   openInstrumentedPage,
+  watchLanding,
   loadPlaywright,
   type PwBrowser,
   type PwContext,
@@ -32,7 +33,7 @@ import { runCapture } from '../verify/capture/capture.js';
 import { CMP_VENDORS, ACCEPT_TEXT_RE, REJECT_TEXT_RE } from '../agent/cmp.js';
 import { analyzeForms, classifyFieldPii, extractFormsInPage, type RawForm, type RawFormField } from '../agent/forms.js';
 import { buildFillPlan, classifyFieldRole, selectorFor, localeById, US_LOCALE } from '../agent/form-fill.js';
-import { sameSite, normalizeUrl, urlPriority } from '../agent/crawler.js';
+import { sameSite, normalizeUrl, urlPriority, crawlSite } from '../agent/crawler.js';
 import { buildExclude, attachRects, resolvePageList } from '../agent/tag-suggest/scan.js';
 import {
   parseSitemapLocs,
@@ -44,7 +45,7 @@ import {
 } from '../agent/tag-suggest/discover.js';
 import { isBlogLike } from '../agent/tag-suggest/blog-paths.js';
 import type { PageScan } from '../agent/tag-suggest/collect.js';
-import { extractConsentEvents, extractEventNames, type ScenarioCapture } from '../agent/capture.js';
+import { extractConsentEvents, extractEventNames, captureScenario, type ScenarioCapture } from '../agent/capture.js';
 import {
   evaluateBannerRules,
   evaluateFormFindings,
@@ -148,6 +149,8 @@ const dnsTable: Record<string, string[]> = {
   'v6-loop.example.com': ['::1'],
   'mixed.example.com': [PUBLIC_IP, '10.0.0.7'],
   'example.com': [PUBLIC_IP],
+  // A redirect target: the landing check resolves it, as Chromium did to follow the redirect.
+  'www.example.com': [PUBLIC_IP],
   'shop.example.com': [PUBLIC_IP],
   'cdn.example.com': [PUBLIC_IP],
   'evil.test': [PUBLIC_IP],
@@ -321,6 +324,178 @@ const verifyOpts = (extra: Record<string, unknown> = {}) => ({
   check(
     'audit route guard: a public subresource continues',
     (await decide(box.handler, { url: 'https://cdn.example.com/gtm.js' })) === 'continue',
+  );
+}
+
+// ── redirect hops (F07) ──────────────────────────────────────────────────────
+// Playwright routes only the FIRST URL of a redirect chain, so the route guards above never see a
+// public URL 302ing to a private/metadata address: the browser loaded it, and the crawler, forms_scan,
+// consent capture and tag-scan read it back (title, form labels, a full-page screenshot).
+
+/** A fake Playwright request; `from` is the request that redirected to it. */
+function fakeReq(url: string, from: unknown = null) {
+  return { url: () => url, method: () => 'GET', resourceType: () => 'document', redirectedFrom: () => from };
+}
+
+/**
+ * A fake browser for the audit agent. Like real Playwright: only the first URL reaches the route
+ * handler, a server redirect (`redirects`) lands the page elsewhere and emits a 'request' event with
+ * redirectedFrom set, and about:blank is never routed. The landed page "contains" a title, a link, a
+ * form, a consent banner and a cookie, so a test can see whether any of it was read.
+ */
+function fakeAgentBrowser(redirects: Record<string, string> = {}) {
+  const box: { handler?: (route: never) => unknown } = {};
+  const listeners: Record<string, ((arg: unknown) => void)[]> = {};
+  const clicks: string[] = [];
+  let current = 'about:blank';
+  let visited = false;
+  const page = {
+    goto: async (url: string) => {
+      if (url === 'about:blank') {
+        current = url;
+        return null;
+      }
+      if ((await decide(box.handler, { url, nav: true })) === 'abort') throw new Error(`net::ERR_FAILED at ${url}`);
+      const first = fakeReq(url);
+      for (const cb of listeners.request ?? []) cb(first);
+      const landed = redirects[url];
+      const last = landed ? fakeReq(landed, first) : first;
+      if (landed) for (const cb of listeners.request ?? []) cb(last);
+      current = landed ?? url;
+      visited = true;
+      return { status: () => 200, headers: () => ({}), allHeaders: async () => ({}), request: () => last };
+    },
+    evaluate: async (fn: unknown) => {
+      const name = typeof fn === 'function' ? fn.name : '';
+      const blank = current === 'about:blank';
+      if (name === 'scanPageInBrowser') {
+        return blank
+          ? { title: '', links: [], formsCount: 0, cmpHint: false }
+          : { title: `PAGE AT ${current}`, links: ['/next'], formsCount: 1, cmpHint: true };
+      }
+      if (name === 'extractFormsInPage') {
+        return blank ? [] : [form({ title: 'Admin login', fields: [field({ type: 'password', name: 'db_password', label: 'DB password' })] })];
+      }
+      return [];
+    },
+    addInitScript: async () => {},
+    on: (event: string, cb: (arg: unknown) => void) => {
+      (listeners[event] ??= []).push(cb);
+    },
+    frames: () => [],
+    $: async (sel: string) =>
+      current === 'about:blank'
+        ? null
+        : {
+            isVisible: async () => true,
+            click: async () => {
+              clicks.push(`${current} ${sel}`);
+            },
+          },
+    title: async () => '',
+    url: () => current,
+    waitForTimeout: async () => {},
+    screenshot: async () => Buffer.alloc(0),
+    close: async () => {},
+  };
+  const context = {
+    route: async (_pattern: string, handler: (route: never) => unknown) => {
+      box.handler = handler;
+    },
+    newPage: async () => page,
+    cookies: async () => (visited ? [{ name: 'admin_session' }] : []),
+    close: async () => {},
+  };
+  const browser = { newContext: async () => context, close: async () => {} } as unknown as PwBrowser;
+  return { browser, clicks, emit: (event: string, arg: unknown) => (listeners[event] ?? []).forEach((cb) => cb(arg)) };
+}
+
+// IP literals throughout, so the real (default) DNS guard never needs the network.
+const PUBLIC_START = 'http://203.0.113.10/contact';
+const INTERNAL = 'http://10.0.0.5:8080/admin';
+
+// watchLanding itself: hops it sees through 'request' events, the response chain, and where the page is.
+{
+  const fake = fakeAgentBrowser();
+  const page = (await (await fake.browser.newContext()).newPage()) as unknown as PwPage;
+  const landing = watchLanding(page, createRequestGuard(fakeLookup(dnsTable).lookup));
+  check('landing: a page that never left a public host is not refused', (await landing.blockedLanding(null)) === null);
+  // An iframe/subresource redirect: only the 'request' event shows it (the main frame is unchanged).
+  fake.emit('request', fakeReq('http://169.254.169.254/latest/meta-data/', fakeReq('https://cdn.example.com/x')));
+  const note = await landing.blockedLanding(null);
+  check('landing: a redirect hop to metadata seen on the page is refused', /^blocked: redirected to 169\.254\.169\.254/.test(note ?? ''), note ?? 'null');
+  check('landing: a refusal holds until reset', (await landing.blockedLanding(null)) === note);
+  landing.reset();
+  check('landing: reset() starts a clean navigation', (await landing.blockedLanding(null)) === null);
+  // A public redirect hop is fine, and so is a non-http frame (an aborted iframe shows chrome-error://).
+  fake.emit('request', fakeReq('https://shop.example.com/landing', fakeReq('https://example.com/')));
+  check('landing: a public redirect hop is not refused', (await landing.blockedLanding(null)) === null);
+  // The response's own chain, without any event: a name that resolves inside is refused too.
+  const viaChain = await landing.blockedLanding({
+    status: () => 200,
+    headers: () => ({}),
+    allHeaders: async () => ({}),
+    request: () => fakeReq('https://example.com/ok', fakeReq('http://metadata.google.internal/x', fakeReq('https://example.com/'))),
+  });
+  check('landing: a private hop in the response chain is refused', /metadata\.google\.internal/.test(viaChain ?? ''), viaChain ?? 'null');
+}
+
+// openInstrumentedPage: a refused landing drops what was recorded for that navigation.
+{
+  const fake = fakeAgentBrowser({ [PUBLIC_START]: INTERNAL });
+  const inst = await openInstrumentedPage(await fake.browser.newContext() as unknown as PwContext);
+  inst.markNavigationStart();
+  const resp = await inst.page.goto(PUBLIC_START);
+  fake.emit('request', fakeReq('https://region1.google-analytics.com/g/collect?v=2&tid=G-1&dl=http%3A%2F%2F10.0.0.5%2Fadmin'));
+  check('instruments: the internal page produced a tracker hit (precondition)', inst.trackerHits.length === 1);
+  const note = await inst.blockedLanding(resp);
+  check('instruments: a redirect to a private address is refused', /^blocked: redirected to 10\.0\.0\.5:8080/.test(note ?? ''), note ?? 'null');
+  check('instruments: its tracker hits are dropped', inst.trackerHits.length === 0);
+  check('instruments: the page is moved off the internal address', inst.page.url() === 'about:blank');
+}
+
+// crawlSite: the redirected page is reported with nothing read from it.
+{
+  const fake = fakeAgentBrowser({ [PUBLIC_START]: INTERNAL });
+  const crawl = await crawlSite(fake.browser, PUBLIC_START, { maxPages: 3, maxDepth: 2, navTimeoutMs: 1000, allowlist: [] });
+  const p = crawl.pages[0];
+  check('crawl redirect: the page is noted as blocked', /^blocked: redirected to 10\.0\.0\.5:8080/.test(p?.note ?? ''), JSON.stringify(p));
+  check(
+    'crawl redirect: no title, final URL, status or links from the internal page',
+    p?.title === '' && p?.finalUrl === null && p?.httpStatus === null && p?.linksFound === 0 && p?.formsCount === 0,
+    JSON.stringify(p),
+  );
+  check('crawl redirect: its links are never followed', crawl.pages.length === 1, JSON.stringify(crawl.pages.map((x) => x.url)));
+
+  // Control: a redirect that stays public is crawled as before.
+  const ok = fakeAgentBrowser({ [PUBLIC_START]: 'http://203.0.113.10/contact-us' });
+  const okCrawl = await crawlSite(ok.browser, PUBLIC_START, { maxPages: 1, maxDepth: 0, navTimeoutMs: 1000, allowlist: [] });
+  check(
+    'crawl redirect: a public redirect is still read',
+    okCrawl.pages[0]?.title === 'PAGE AT http://203.0.113.10/contact-us' && !okCrawl.pages[0]?.note,
+    JSON.stringify(okCrawl.pages[0]),
+  );
+}
+
+// captureScenario (forms_scan, consent_banner_detect, consent_scenario_capture): no forms, cookies or
+// banner click on the internal page.
+{
+  const fake = fakeAgentBrowser({ [PUBLIC_START]: INTERNAL });
+  const cap = await captureScenario(fake.browser, PUBLIC_START, 'accept', { navTimeoutMs: 1000, settleMs: 0, scanForms: true });
+  check('capture redirect: the capture is noted as blocked', cap.notes.some((n) => /^blocked: redirected to 10\.0\.0\.5:8080/.test(n)), cap.notes.join('; '));
+  check(
+    'capture redirect: no forms, cookies, status or final URL from the internal page',
+    cap.forms === null && cap.cookiesPreInteraction.length === 0 && cap.cookiesFinal.length === 0 && cap.httpStatus === null && cap.finalUrl === null,
+    JSON.stringify({ forms: cap.forms, cookies: cap.cookiesFinal, status: cap.httpStatus, finalUrl: cap.finalUrl }),
+  );
+  check('capture redirect: nothing on the internal page is clicked', fake.clicks.length === 0 && cap.interaction === null, fake.clicks.join(', '));
+
+  const ok = fakeAgentBrowser({ [PUBLIC_START]: 'http://203.0.113.10/contact-us' });
+  const okCap = await captureScenario(ok.browser, PUBLIC_START, 'ignore', { navTimeoutMs: 1000, settleMs: 0, scanForms: true });
+  check(
+    'capture redirect: a public redirect is still read',
+    (okCap.forms?.length ?? 0) === 1 && okCap.finalUrl === 'http://203.0.113.10/contact-us' && !okCap.notes.some((n) => /blocked/.test(n)),
+    JSON.stringify({ forms: okCap.forms?.length, finalUrl: okCap.finalUrl, notes: okCap.notes }),
   );
 }
 
@@ -501,6 +676,67 @@ const verifyOpts = (extra: Record<string, unknown> = {}) => ({
     'verify redirect: an empty allowlist does not refuse interactions',
     openCap.actions.find((x) => x.checkId === 'sub')?.performed === true && open.interactions.includes('script #lead'),
     JSON.stringify(openCap.actions),
+  );
+}
+
+// verify vs a redirect to a PRIVATE address (F07). The allowlist re-check above is skipped for an
+// empty allowlist, so a start URL that 302'd to an internal host had its consent click, a REAL submit
+// and clicks driven on the internal page. The SSRF refusal applies whatever the allowlist.
+{
+  const spec = {
+    url: 'https://shop.example.com/start',
+    consent: { acceptSelector: '#accept' },
+    checks: [
+      { id: 'sub', type: 'event_on_interaction', event: 'generate_lead', action: { submit: '#lead' } },
+      { id: 'clk', type: 'event_on_interaction', event: 'cta', action: { click: '#cta' } },
+      { id: 'lnk', type: 'cross_domain_linker', expectedDomains: ['partner.example.org'] },
+    ],
+  } as never;
+  const fb = fakeVerifyBrowser({ redirects: { 'https://shop.example.com/start': 'http://10.0.0.5/admin' }, elements: true });
+  const cap = await runCapture(fb.browser, spec, verifyOpts({ requestGuard: createRequestGuard(fakeLookup(dnsTable).lookup) }));
+  check(
+    'verify ssrf redirect: the start page counts as not loaded, with no status or final URL',
+    cap.loaded === false && cap.httpStatus === null && cap.finalUrl === null,
+    JSON.stringify({ loaded: cap.loaded, status: cap.httpStatus, finalUrl: cap.finalUrl }),
+  );
+  check(
+    'verify ssrf redirect: the refusal is noted',
+    cap.notes.some((n) => /^start URL blocked: redirected to 10\.0\.0\.5/.test(n)),
+    cap.notes.join('; '),
+  );
+  check('verify ssrf redirect: the consent click does not run', cap.consentAction === null || cap.consentAction.clicked === false);
+  for (const id of ['sub', 'clk', 'lnk']) {
+    const a = cap.actions.find((x) => x.checkId === id);
+    check(
+      `verify ssrf redirect: the ${id} step is refused, empty allowlist or not`,
+      a?.performed === false && /blocked: redirected to 10\.0\.0\.5/.test(a?.note ?? ''),
+      JSON.stringify(a),
+    );
+  }
+  check('verify ssrf redirect: nothing was clicked or submitted on the internal page', fb.interactions.length === 0, fb.interactions.join(', '));
+}
+{
+  // Mid-journey: a navigate step that redirects into the metadata address refuses every later step.
+  const spec = {
+    url: 'https://shop.example.com/',
+    checks: [
+      { id: 'nav', type: 'event_on_interaction', event: 'pv', action: { navigate: 'https://shop.example.com/next' } },
+      { id: 'sub', type: 'event_on_interaction', event: 'generate_lead', action: { submit: '#lead' } },
+    ],
+  } as never;
+  const fb = fakeVerifyBrowser({ redirects: { 'https://shop.example.com/next': 'http://169.254.169.254/latest/meta-data/' }, elements: true });
+  const cap = await runCapture(fb.browser, spec, verifyOpts({ requestGuard: createRequestGuard(fakeLookup(dnsTable).lookup) }));
+  check('verify ssrf redirect: the public start page still loads', cap.loaded === true, cap.notes.join('; '));
+  const sub = cap.actions.find((x) => x.checkId === 'sub');
+  check(
+    'verify ssrf redirect: a step after a redirect into metadata is refused',
+    sub?.performed === false && /blocked: redirected to 169\.254\.169\.254/.test(sub?.note ?? '') && !fb.interactions.includes('script #lead'),
+    JSON.stringify({ sub, interactions: fb.interactions }),
+  );
+  check(
+    'verify ssrf redirect: the journey refusal is noted and the final URL withheld',
+    cap.finalUrl === null && cap.notes.some((n) => /^journey blocked: redirected to 169\.254\.169\.254/.test(n)),
+    JSON.stringify({ finalUrl: cap.finalUrl, notes: cap.notes }),
   );
 }
 

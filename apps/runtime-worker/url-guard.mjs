@@ -3,10 +3,13 @@
 // The worker loads attacker-influenced URLs in a real browser, so it is a prime
 // SSRF target: a request can be steered at cloud metadata (169.254.169.254),
 // loopback, or RFC-1918 hosts to read internal services. This module is the
-// single source of truth for "is this URL safe to load", used both at request
-// admission (server.mjs) and — critically — on every in-browser navigation so a
-// redirect from an allowlisted page to an internal host is still blocked
-// (capture.mjs route interceptor).
+// single source of truth for "is this URL safe to load", used at request
+// admission (server.mjs), on every routed in-browser request (capture.mjs route
+// interceptor), and on every redirect hop after navigation (watchLanding).
+// Playwright never routes a redirect hop, so a redirect from an allowlisted page
+// to an internal host is NOT stopped in the browser (that needs egress control:
+// an SSRF-filtering proxy or --host-resolver-rules); watchLanding makes sure
+// nothing read from such a page is kept.
 //
 // It is intentionally dependency-free (only `node:*`) so it can be `node --check`ed
 // and unit-tested without installing the browser.
@@ -220,5 +223,80 @@ export function createRequestGuard(lookup = dnsLookup) {
       });
     }
     return (await verdict) === true; // a lookup error (null) still fails closed
+  };
+}
+
+const MAX_REDIRECT_CHAIN = 25;
+
+/**
+ * Re-check the redirect hops Playwright never routes.
+ *
+ * A context.route handler sees only the FIRST URL of a redirect chain; every
+ * later hop is continued by Playwright itself, so a public URL that 302s to a
+ * private/loopback/metadata address is loaded. Register this on the page before
+ * goto, then call blockedLanding(resp) after goto and again after reading the
+ * page: it returns a refusal note when any redirect hop the page saw (main
+ * frame, iframe or subresource), the response's own redirect chain, or where the
+ * page and its frames now are fails `requestAllowed`, else null. A refusal moves
+ * the page to about:blank; the caller must discard whatever it read.
+ *
+ * Mirrors watchLanding in apps/web-audit-mcp/src/agent/browser.ts.
+ *
+ * @param {{ on(event: string, cb: (req: any) => void): void, url(): string, frames(): { url(): string }[], goto(url: string): Promise<unknown> }} page
+ * @param {(rawUrl: string) => Promise<boolean>} requestAllowed
+ * @returns {{ blockedLanding(resp?: { request?(): any } | null): Promise<string | null> }}
+ */
+export function watchLanding(page, requestAllowed) {
+  let blocked = null;
+  let left = false;
+  const pending = new Set();
+  const allowed = (url) => requestAllowed(url).catch(() => false);
+
+  page.on("request", (req) => {
+    if (!req.redirectedFrom?.()) return;
+    const url = req.url();
+    const check = allowed(url).then((ok) => {
+      if (!ok && blocked === null) blocked = url;
+    });
+    pending.add(check);
+    void check.finally(() => pending.delete(check));
+  });
+
+  return {
+    async blockedLanding(resp) {
+      if (blocked === null) {
+        const urls = new Set();
+        let req = resp?.request?.() ?? null;
+        for (let i = 0; req && i < MAX_REDIRECT_CHAIN; i++) {
+          urls.add(req.url());
+          req = req.redirectedFrom?.() ?? null;
+        }
+        try {
+          urls.add(page.url());
+          for (const frame of page.frames()) urls.add(frame.url());
+        } catch {
+          // page closed: nothing more to read from it
+        }
+        await Promise.all([...pending]);
+        for (const url of urls) {
+          if (blocked !== null) break;
+          // about:blank, data:, chrome-error:// (an aborted frame) reach no address.
+          if (!/^https?:/i.test(url)) continue;
+          if (!(await allowed(url))) blocked = url;
+        }
+      }
+      if (blocked === null) return null;
+      if (!left) {
+        left = true;
+        await page.goto("about:blank").catch(() => null);
+      }
+      let where;
+      try {
+        where = new URL(blocked).host;
+      } catch {
+        where = String(blocked).slice(0, 80);
+      }
+      return `Blocked: redirected to ${where}, which the SSRF guard refuses (private, loopback or metadata address); nothing was recorded from the page.`;
+    },
   };
 }

@@ -65,8 +65,10 @@ function tokenOk(req) {
 // SSRF admission check. Delegates to the hardened, unit-tested guard in
 // url-guard.mjs (covers loopback/RFC-1918/link-local + the cloud metadata IP,
 // IPv6 private ranges, IPv4-mapped IPv6, and decimal/octal/hex IP encodings).
-// The same guard is re-applied to every in-browser navigation in capture.mjs so
-// a redirect from an allowlisted page to an internal host is still blocked.
+// The same guard is re-applied to every routed in-browser request in capture.mjs,
+// and to every redirect hop after navigation: Playwright never routes a redirect,
+// so a redirect from an allowlisted page to an internal host still LOADS (stopping
+// that request needs egress control), but nothing from that page is recorded.
 function urlAllowed(rawUrl) {
   return guardUrlAllowed(rawUrl, ALLOWLIST);
 }

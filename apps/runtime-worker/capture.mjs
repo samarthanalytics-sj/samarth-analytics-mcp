@@ -20,7 +20,7 @@
 //
 // This module is shared by the HTTP worker (server.mjs) and the CLI wrapper.
 
-import { createRequestGuard } from "./url-guard.mjs";
+import { createRequestGuard, watchLanding } from "./url-guard.mjs";
 
 export const CAPTURE_SCHEMA = "samarth.runtime-capture/v2";
 // v3 adds multi-consent-state grouping, parsed GA4 query params, hit timing,
@@ -191,6 +191,8 @@ function extractDataLayerKeys(dataLayer) {
  */
 async function capturePage(context, url, opts) {
   const page = await context.newPage();
+  // Redirect hops never reach the route guard; this re-checks them (see url-guard.mjs).
+  const landing = opts.requestAllowed ? watchLanding(page, opts.requestAllowed) : null;
   const navStart = Date.now();
   const sinceNav = () => Date.now() - navStart;
   const record = {
@@ -284,8 +286,31 @@ async function capturePage(context, url, opts) {
     }
   });
 
+  // A page that redirected somewhere the SSRF guard refuses: drop everything
+  // observed on it (status, final URL, hits, console, dataLayer, cookies).
+  const refuse = (note) => {
+    record.finalUrl = null;
+    record.httpStatus = null;
+    record.trackerHits = [];
+    record.sgtmCandidates = [];
+    record.consoleErrors = [];
+    record.consoleWarnings = [];
+    record.pageErrors = [];
+    record.dataLayerBefore = null;
+    record.dataLayerAfter = null;
+    record.dataLayerEvents = [];
+    record.dataLayerKeys = [];
+    record.consentEvents = [];
+    record.cookies = [];
+    record.firstMeasurementTMs = undefined;
+    record.notes = [note];
+    return record;
+  };
+
   try {
     const resp = await page.goto(url, { waitUntil: "load", timeout: opts.timeout });
+    const blocked = landing ? await landing.blockedLanding(resp) : null;
+    if (blocked) return refuse(blocked);
     record.finalUrl = page.url();
     if (resp) {
       record.httpStatus = resp.status();
@@ -325,6 +350,10 @@ async function capturePage(context, url, opts) {
     if (record.dataLayerAfter == null) {
       record.notes.push("No window.dataLayer found — GTM may not be present or uses a custom name.");
     }
+    // Again after the reads: a late script-driven navigation or iframe can
+    // redirect somewhere refused during the settle.
+    const blockedLate = landing ? await landing.blockedLanding(null) : null;
+    if (blockedLate) return refuse(blockedLate);
   } catch (e) {
     record.notes.push(`Navigation/observation error: ${String(e?.message ?? e).slice(0, 300)}`);
   } finally {
@@ -508,12 +537,16 @@ function deriveStateLabel(fields) {
 
 // Capture all URLs in a fresh context under one consent state. Returns { pages, note }.
 async function captureUnderConsent(browser, urls, consentFields, stateLabel, opts) {
-  const context = await browser.newContext();
-  // SSRF defense-in-depth: block any in-browser request (including a redirect
-  // from an allowlisted page, a sub-resource, or a JS-initiated fetch) that
-  // targets loopback / RFC-1918 / link-local / cloud-metadata addresses. The
-  // initial-URL admission check in server.mjs only inspects the requested host;
-  // this catches a host that *resolves* or *redirects* to an internal target.
+  const context = await browser.newContext({ serviceWorkers: "block" });
+  // SSRF defense-in-depth: block any routed in-browser request (a navigation, a
+  // sub-resource, or a JS-initiated fetch) that targets loopback / RFC-1918 /
+  // link-local / cloud-metadata addresses. The initial-URL admission check in
+  // server.mjs only inspects the requested host; this catches a host that
+  // *resolves* to an internal target. Playwright never routes a REDIRECT hop, so
+  // a host that *redirects* to an internal target is not stopped here: capturePage
+  // re-checks every hop after navigation (watchLanding) and records nothing from
+  // such a page. Stopping the request itself needs egress control (an SSRF
+  // filtering proxy, or Chromium --host-resolver-rules).
   // We enforce only the private-IP block here (not the allowlist suffix match)
   // so legitimate third-party analytics beacons still load. Named hosts are
   // DNS-resolved (memoised per host for this context): a string check alone
@@ -551,6 +584,7 @@ async function captureUnderConsent(browser, urls, consentFields, stateLabel, opt
       const rec = await capturePage(context, url, {
         ...opts,
         consentState: stateLabel,
+        requestAllowed,
       });
       pages.push(rec);
     }

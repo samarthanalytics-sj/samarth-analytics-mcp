@@ -185,6 +185,21 @@ check('entryNavUrl: null normalised start → unchanged', entryNavUrl(START, nul
   const collect = src.indexOf('collectPageRaw(');
   check('worker: the goto response status is checked before the page is read',
     statusCheck > 0 && collect > 0 && statusCheck < collect, `status@${statusCheck} collect@${collect}`);
+
+  // Playwright never routes a redirect hop, so a target that 302s to a private/metadata address used to
+  // be read and SCREENSHOTTED. Where the page landed must be checked right after goto (before even its
+  // status is used), and again after every read, before its picture or scan is kept.
+  const goto = src.indexOf('page.goto(');
+  const landedFirst = src.indexOf('blockedLanding(');
+  const landedLast = src.lastIndexOf('blockedLanding(');
+  const imageKept = src.indexOf('pageImages.push(');
+  const scanKept = src.indexOf('pageScans.push(');
+  check('worker: the landing is checked right after goto, before the status or any read',
+    goto > 0 && landedFirst > goto && landedFirst < statusCheck && landedFirst < collect,
+    `goto@${goto} landing@${landedFirst} status@${statusCheck}`);
+  check('worker: the landing is re-checked after the reads, before the screenshot or scan is kept',
+    landedLast > landedFirst && landedLast > shot && landedLast > clicks && landedLast < imageKept && landedLast < scanKept,
+    `landing@${landedLast} shot@${shot} image@${imageKept} scan@${scanKept}`);
 }
 
 console.log(`\nTag-scan: ${passed} passed, ${failed} failed`);
