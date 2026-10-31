@@ -1868,7 +1868,11 @@ async function waitUntil(cond: () => Promise<boolean>, timeoutMs: number): Promi
   }
 }
 
-const SWEEP_TTL_MS = 200;
+// Wide enough that a slow CI host cannot let a session idle past the TTL between two back-to-back
+// steps of one check (initialize, then /health or the GET stream), which a 200 ms TTL could. The sweep
+// runs every TTL, so a session idle past it is reclaimed within two TTLs; the waits allow ten.
+const SWEEP_TTL_MS = 500;
+const SWEEP_WAIT_MS = SWEEP_TTL_MS * 10;
 await withHttpEnv(
   { WEB_AUDIT_HTTP_AUTH_TOKEN: TEST_HTTP_TOKEN, WEB_AUDIT_HTTP_PORT: '0', WEB_AUDIT_HTTP_SESSION_TTL_MS: String(SWEEP_TTL_MS) },
   async () => {
@@ -1885,7 +1889,7 @@ await withHttpEnv(
       await a.text();
       const sidA = a.headers.get('mcp-session-id') ?? '';
       check('http sweep: abandoned session opened', a.status === 200 && sidA !== '' && (await activeSessions()) === 1);
-      const swept = await waitUntil(async () => (await activeSessions()) === 0, 3000);
+      const swept = await waitUntil(async () => (await activeSessions()) === 0, SWEEP_WAIT_MS);
       check('http sweep: an abandoned session is reclaimed after the idle TTL (was: kept forever)', swept);
       const resumed = await post(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' }), sessionHeaders(sidA));
       const resumedBody = await readRpcError(resumed);
@@ -1909,7 +1913,7 @@ await withHttpEnv(
       check('http sweep: a session with an open request is NOT swept past the TTL', (await activeSessions()) === 1);
       abort.abort();
       await stream.body?.cancel().catch(() => undefined);
-      const sweptAfterStream = await waitUntil(async () => (await activeSessions()) === 0, 3000);
+      const sweptAfterStream = await waitUntil(async () => (await activeSessions()) === 0, SWEEP_WAIT_MS);
       check('http sweep: once its stream closes, the idle session is reclaimed', sweptAfterStream);
     } finally {
       await h.close();
