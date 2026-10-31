@@ -1632,13 +1632,13 @@ async function main(): Promise<void> {
     const out = JSON.parse(
       await reg.execute('create_gtm_tracking_tag', {
         accountId: '1', containerId: '2', workspaceId: '3',
-        platform: 'google_ads_call_conversion', tagName: 'Call', phoneNumber: '(877) 635-4246', conversionId: 'AW-10966070237', conversionLabel: 'L1',
+        platform: 'google_ads_call_conversion', tagName: 'Call', phoneNumber: '(555) 010-0000', conversionId: 'AW-123456789', conversionLabel: 'L1',
         trigger: { name: 'All Pages', kind: 'pageview' },
       })
     );
     assert.equal(out.tag.type, 'awcc');
-    assert.equal(trkParam(out, 'conversionId'), '10966070237');
-    assert.equal(trkParam(out, 'phoneConversionNumber'), '(877) 635-4246');
+    assert.equal(trkParam(out, 'conversionId'), '123456789');
+    assert.equal(trkParam(out, 'phoneConversionNumber'), '(555) 010-0000');
   });
 
   await test('create_tracking_tag (google_ads_remarketing) dispatches sp with customParamsFormat NONE', async () => {

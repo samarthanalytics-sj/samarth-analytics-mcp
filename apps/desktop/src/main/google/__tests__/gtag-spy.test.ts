@@ -14,7 +14,7 @@ function test(name: string, fn: () => void): void {
   }
 }
 
-// Fixture mirrors the REAL structure fetched live for G-EWV8Q3DDZ8 (2026-07 session).
+// Fixture mirrors the structure of a live gtag.js container payload.
 function gtagJs(overrides: { keyEvents?: string[]; signalsOff?: boolean; search?: string } = {}): string {
   const rules = (overrides.keyEvents ?? ['purchase', 'form_start']).map(
     (e) => ['map', 'matchingRules', JSON.stringify({ type: 5, args: [{ stringValue: e }, { contextValue: { namespaceType: 1, keyParts: ['eventName'] } }] })],

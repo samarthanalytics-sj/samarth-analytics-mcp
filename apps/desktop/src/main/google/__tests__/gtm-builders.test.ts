@@ -227,11 +227,11 @@ test('Floodlight Counter tag: flc + core params (ordinalType STANDARD default) +
 });
 
 test('Google Ads Call Conversion tag: awcc + exactly the 3 corpus params, conversionId stripped of AW-', () => {
-  const t = buildGoogleAdsCallConversionTag({ name: 'Call', phoneNumber: '(877) 635-4246', conversionId: 'AW-10966070237', conversionLabel: '8J53CLK87pEBEIqL88YD' });
+  const t = buildGoogleAdsCallConversionTag({ name: 'Call', phoneNumber: '(555) 010-0000', conversionId: 'AW-123456789', conversionLabel: 'TESTLABEL123' });
   assert.equal(t.type, 'awcc');
-  assert.equal(findParam(t.parameter, 'phoneConversionNumber')?.value, '(877) 635-4246');
-  assert.equal(findParam(t.parameter, 'conversionId')?.value, '10966070237');
-  assert.equal(findParam(t.parameter, 'conversionLabel')?.value, '8J53CLK87pEBEIqL88YD');
+  assert.equal(findParam(t.parameter, 'phoneConversionNumber')?.value, '(555) 010-0000');
+  assert.equal(findParam(t.parameter, 'conversionId')?.value, '123456789');
+  assert.equal(findParam(t.parameter, 'conversionLabel')?.value, 'TESTLABEL123');
   // The legacy gtag call-conversion extras are NOT part of the native awcc tag.
   assert.equal(findParam(t.parameter, 'phoneConversionCountryCode'), undefined);
 });
@@ -833,10 +833,10 @@ test('findGa4BaseTag: gaawc / G- / GT- / {{var→G-}} present; Ads ({{var→AW-}
   assert.equal(findGa4BaseTag(snap([{ ...g({ type: 'gaawc', name: 'GA4 Config' }) }]))?.name, 'GA4 Config');
   assert.equal(findGa4BaseTag(snap([g({ name: 'G tag', parameter: [{ key: 'tagId', value: 'G-ABC123' }] })]))?.name, 'G tag');
   // GT- destination id is a real GA4 base tag (was a false-negative → duplicate).
-  assert.equal(findGa4BaseTag(snap([g({ name: 'GT tag', parameter: [{ key: 'tagId', value: 'GT-P3NGJTCV' }] })]))?.name, 'GT tag');
+  assert.equal(findGa4BaseTag(snap([g({ name: 'GT tag', parameter: [{ key: 'tagId', value: 'GT-ABCD123' }] })]))?.name, 'GT tag');
   // {{variable}} tagId is resolved: a constant → G- counts; → AW- (Ads) does NOT.
-  assert.equal(findGa4BaseTag(snap([g({ name: 'var GA4', parameter: [{ key: 'tagId', value: '{{GA4 - Variable}}' }] })], [cvar('GA4 - Variable', 'G-QHQL8N71DT')]))?.name, 'var GA4');
-  assert.equal(findGa4BaseTag(snap([g({ name: 'var Ads', parameter: [{ key: 'tagId', value: '{{Conversion ID}}' }] })], [cvar('Conversion ID', 'AW-16543357089')])), null);
+  assert.equal(findGa4BaseTag(snap([g({ name: 'var GA4', parameter: [{ key: 'tagId', value: '{{GA4 - Variable}}' }] })], [cvar('GA4 - Variable', 'G-ABC1234567')]))?.name, 'var GA4');
+  assert.equal(findGa4BaseTag(snap([g({ name: 'var Ads', parameter: [{ key: 'tagId', value: '{{Conversion ID}}' }] })], [cvar('Conversion ID', 'AW-987654321')])), null);
   // An unresolvable {{var}} (not a known constant) → not counted.
   assert.equal(findGa4BaseTag(snap([g({ name: 'var ?', parameter: [{ key: 'tagId', value: '{{Some Unknown}}' }] })])), null);
   assert.equal(findGa4BaseTag(snap([g({ name: 'Ads', parameter: [{ key: 'tagId', value: 'AW-999' }] })])), null);
@@ -4596,12 +4596,12 @@ test('ga4TagFields returns a GA4 tag event name + measurement id', () => {
   const tag = {
     type: 'gaawe',
     parameter: [
-      { type: 'template', key: 'eventName', value: 'why_restaurants_choose_chewbox_for_online_ordering' },
+      { type: 'template', key: 'eventName', value: 'why_customers_choose_example_for_online_ordering' },
       { type: 'template', key: 'measurementIdOverride', value: 'G-REAL12345' },
       { type: 'template', key: 'measurementId', value: '' },
     ],
   };
-  assert.deepEqual(ga4TagFields(tag), { eventName: 'why_restaurants_choose_chewbox_for_online_ordering', measurementId: 'G-REAL12345' });
+  assert.deepEqual(ga4TagFields(tag), { eventName: 'why_customers_choose_example_for_online_ordering', measurementId: 'G-REAL12345' });
 });
 test('ga4TagFields reads a Google tag measurement id from tagId', () => {
   assert.deepEqual(ga4TagFields({ type: 'googtag', parameter: [{ type: 'template', key: 'tagId', value: 'G-ABC123' }] }), { measurementId: 'G-ABC123' });

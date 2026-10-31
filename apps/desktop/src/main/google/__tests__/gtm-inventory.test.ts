@@ -40,7 +40,7 @@ const snapshot: ContainerSnapshot = {
       filter: [cond('contains', '{{Page URL}}', 'audit.tagdrishti.com/')] },
   ],
   variables: [
-    { variableId: '20', name: 'GA4 Variable', type: 'c', parameter: [tmpl('value', 'G-5LWQWGXHMD')] },
+    { variableId: '20', name: 'GA4 Variable', type: 'c', parameter: [tmpl('value', 'G-XXXXXXXXXX')] },
     { variableId: '21', name: 'DLV - ecommerce', type: 'v', parameter: [tmpl('name', 'ecommerce')] },
   ],
 };
@@ -96,7 +96,7 @@ check('empty-filter click trigger reads "None (all clicks)"', allClicks.conditio
 
 // Variable table
 const ga4v = inv.variables.find((v) => v.name === 'GA4 Variable')!;
-check('constant type + literal value', ga4v.type === 'Constant' && ga4v.value === 'G-5LWQWGXHMD', `${ga4v.type} / ${ga4v.value}`);
+check('constant type + literal value', ga4v.type === 'Constant' && ga4v.value === 'G-XXXXXXXXXX', `${ga4v.type} / ${ga4v.value}`);
 const dlv = inv.variables.find((v) => v.name === 'DLV - ecommerce')!;
 check('data layer variable label + source', dlv.type === 'Data Layer Variable' && dlv.value === 'dataLayer: ecommerce', `${dlv.type} / ${dlv.value}`);
 
