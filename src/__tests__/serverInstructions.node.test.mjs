@@ -11,6 +11,9 @@
  * export did not exist, so Section 2 fails with "buildInstructions is not a function" rather than on
  * the string. A red Section 2 is NOT evidence about wording; Section 1 is.
  *
+ * The last section drives a real server through a real client to check the tool-call argument
+ * element cap (GHSA-46jr-4wx8-v453) that createGtmMcpServer sets.
+ *
  * Imports the COMPILED module from dist. Run: node src/__tests__/serverInstructions.node.test.mjs
  */
 
@@ -166,6 +169,67 @@ await test('the server hands the client that same version in serverInfo', async 
   assert.ok(info, 'no serverInfo on the constructed server');
   assert.strictEqual(info.name, 'samarth-gtm-mcp');
   assert.strictEqual(info.version, SERVER_VERSION);
+});
+
+console.log('\nserverInstructions: tool-call argument element cap (GHSA-46jr-4wx8-v453)');
+
+// A real server, driven by a real client over the SDK's in-memory transport. Before the fix the
+// server set no maxToolInputElements (and SDK 1.30.0 had no such option), so a tools/call carrying
+// millions of array elements went straight into schema validation and could exhaust the heap of the
+// shared HTTP process. The calls below omit audit_container's required ids on purpose: if the cap
+// does not fire, schema validation rejects the call before the handler, so nothing reaches Google.
+const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
+const { MAX_TOOL_INPUT_ELEMENTS } = await import(pathToFileURL(distServer).href);
+
+async function callWithJunk(count) {
+  const server = createGtmMcpServer({});
+  const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverSide);
+  const client = new Client({ name: 'element-cap-test', version: '0.0.0' });
+  await client.connect(clientSide);
+  try {
+    const result = await client.callTool({
+      name: 'audit_container',
+      arguments: { junk: new Array(count).fill(0) },
+    });
+    return { isError: result.isError === true, text: result.content?.[0]?.text ?? '' };
+  } finally {
+    await client.close();
+    await server.close();
+  }
+}
+
+await test('the element cap is a positive finite number', async () => {
+  assert.ok(
+    Number.isInteger(MAX_TOOL_INPUT_ELEMENTS) && MAX_TOOL_INPUT_ELEMENTS > 0,
+    `MAX_TOOL_INPUT_ELEMENTS is ${MAX_TOOL_INPUT_ELEMENTS}; the server sets no element cap`
+  );
+});
+
+await test('REGRESSION: a tools/call with 500,000 argument elements is refused before schema validation', async () => {
+  // A fixed size, not one derived from the export, so this exercises the behaviour on any build.
+  const { isError, text } = await callWithJunk(500_000);
+  assert.ok(isError, 'an oversized tools/call was not refused');
+  assert.match(
+    text,
+    /more than the maximum of \d+ elements/,
+    `the call reached schema validation instead of the element cap: ${text.slice(0, 200)}`
+  );
+});
+
+await test('the refusal names the exported cap, and one element over it is enough', async () => {
+  const { isError, text } = await callWithJunk(MAX_TOOL_INPUT_ELEMENTS + 1);
+  assert.ok(isError, 'a tools/call one element over the cap was not refused');
+  assert.match(text, new RegExp(`more than the maximum of ${MAX_TOOL_INPUT_ELEMENTS} elements`));
+});
+
+await test('a tools/call under the element cap is not refused by it', async () => {
+  // No-regression guard: ordinary arguments still reach normal schema validation.
+  const { isError, text } = await callWithJunk(1000);
+  assert.ok(isError, 'expected the missing required ids to fail validation');
+  assert.ok(!/more than the maximum of/.test(text), `an ordinary call hit the element cap: ${text}`);
+  assert.match(text, /Input validation error/);
 });
 
 console.log(`\nserverInstructions: ${passed} passed, ${failed} failed`);

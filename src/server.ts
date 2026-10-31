@@ -44,6 +44,16 @@ function readPackageVersion(): string {
 
 export const SERVER_VERSION = readPackageVersion();
 
+/**
+ * Ceiling on the combined number of array elements and object members in one tools/call
+ * `arguments` payload (GHSA-46jr-4wx8-v453). Without it, one authenticated HTTP request inside the
+ * body limit could carry millions of elements and exhaust the shared process's heap during schema
+ * validation, taking every tenant's session down. The SDK option is off by default, so upgrading
+ * alone did not close it. Our largest legitimate input is a single GTM entity's parameter tree,
+ * which GTM's container size limit keeps far below this; a call over it gets an isError result.
+ */
+export const MAX_TOOL_INPUT_ELEMENTS = 100_000;
+
 export function createGtmMcpServer(auth: OAuth2Client): McpServer {
   const config = getGuardrailConfig();
 
@@ -52,6 +62,7 @@ export function createGtmMcpServer(auth: OAuth2Client): McpServer {
     {
       capabilities: { tools: {}, prompts: {} },
       instructions: buildInstructions(config),
+      maxToolInputElements: MAX_TOOL_INPUT_ELEMENTS,
     }
   );
 
