@@ -666,6 +666,15 @@ function isMarketingOrAnalyticsTag(tag: GtmTag): boolean {
 
 const ALL_PAGES_TRIGGER_TYPE = "pageview";
 
+// GTM's reserved built-in triggers (All Pages = 2147479553, Consent
+// Initialization = 2147479572, Initialization = 2147479573, ...) live in the
+// 2147479xxx band and are never returned by triggers.list, so a "does this
+// trigger exist?" check against the listed triggers alone would call every tag
+// on All Pages a broken reference. Mirrors src/utils/builtinTriggers.ts
+// (inlined: api/** may only import node:* at the top level).
+const BUILTIN_ALL_PAGES_TRIGGER_ID = "2147479553";
+const isBuiltinTriggerId = (id: string): boolean => /^2147479\d{3}$/.test(id);
+
 // ── Rules ────────────────────────────────────────────────────────────────
 
 // A. Dead / orphaned config
@@ -813,7 +822,7 @@ function ruleBrokenReferences(ctx: Ctx, out: AuditFinding[]) {
   for (const tag of ctx.tags) {
     const name = tag.name ?? "Unnamed tag";
     for (const tid of tag.firingTriggerId ?? []) {
-      if (!ctx.triggerIdSet.has(tid)) {
+      if (!ctx.triggerIdSet.has(tid) && !isBuiltinTriggerId(tid)) {
         pushFinding(out, {
           id: fid(`broken-fire:${tag.tagId}:${tid}`),
           category: "dead_config",
@@ -831,7 +840,7 @@ function ruleBrokenReferences(ctx: Ctx, out: AuditFinding[]) {
       }
     }
     for (const tid of tag.blockingTriggerId ?? []) {
-      if (!ctx.triggerIdSet.has(tid)) {
+      if (!ctx.triggerIdSet.has(tid) && !isBuiltinTriggerId(tid)) {
         pushFinding(out, {
           id: fid(`broken-block:${tag.tagId}:${tid}`),
           category: "dead_config",
@@ -1004,10 +1013,11 @@ function ruleGA4AllPages(ctx: Ctx, out: AuditFinding[]) {
   for (const tag of ctx.tags) {
     if (!isGA4Event(tag)) continue;
     const name = tag.name ?? "GA4 event";
-    const usesAllPages = (tag.firingTriggerId ?? []).some((tid) => {
-      const trig = ctx.triggerById.get(tid);
-      return trig?.type === ALL_PAGES_TRIGGER_TYPE;
-    });
+    const usesAllPages = (tag.firingTriggerId ?? []).some(
+      (tid) =>
+        tid === BUILTIN_ALL_PAGES_TRIGGER_ID ||
+        ctx.triggerById.get(tid)?.type === ALL_PAGES_TRIGGER_TYPE,
+    );
     if (usesAllPages) {
       pushFinding(out, {
         id: fid(`ga4-event-allpages:${tag.tagId}`),

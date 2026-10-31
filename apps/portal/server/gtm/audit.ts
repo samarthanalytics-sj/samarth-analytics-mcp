@@ -99,6 +99,14 @@ function isGA4Event(tag: GtmTag): boolean {
   return tag.type === "gaawe";
 }
 
+// GTM's reserved built-in triggers (All Pages = 2147479553, Consent
+// Initialization = 2147479572, ...) live in the 2147479xxx band and are never
+// returned by triggers.list, so they must not count as dangling references.
+// Mirrors src/utils/builtinTriggers.ts.
+function isBuiltinTriggerId(id: string): boolean {
+  return /^2147479\d{3}$/.test(id);
+}
+
 function looksGeneric(name: string): boolean {
   if (!name) return true;
   const n = name.trim().toLowerCase();
@@ -152,7 +160,7 @@ function ruleBrokenReferences(ctx: Ctx, out: AuditFinding[]) {
   for (const tag of ctx.tags) {
     const name = tag.name ?? "Unnamed tag";
     for (const tid of tag.firingTriggerId ?? []) {
-      if (!ctx.triggerIdSet.has(tid)) {
+      if (!ctx.triggerIdSet.has(tid) && !isBuiltinTriggerId(tid)) {
         out.push({
           id: fid(`broken-fire:${tag.tagId}:${tid}`),
           category: "ga4",
@@ -165,7 +173,7 @@ function ruleBrokenReferences(ctx: Ctx, out: AuditFinding[]) {
       }
     }
     for (const tid of tag.blockingTriggerId ?? []) {
-      if (!ctx.triggerIdSet.has(tid)) {
+      if (!ctx.triggerIdSet.has(tid) && !isBuiltinTriggerId(tid)) {
         out.push({
           id: fid(`broken-block:${tag.tagId}:${tid}`),
           category: "ga4",

@@ -40,6 +40,8 @@ import {
 import auditHandler from "../../api/gtm/audit";
 import consentAuditHandler from "../../api/gtm/consent-audit";
 import { encodeSessionCookie } from "../../server/gtm/session-cookie";
+// The Express dev-server auditor (node:crypto + types only).
+import { runAudit as runExpressAudit } from "../../server/gtm/audit";
 
 // ── tiny test harness (mirrors audit-accuracy.node.test.ts) ─────────────────
 
@@ -615,6 +617,73 @@ testAsync("R-ga4: a failed custom-dimensions read does not misflag params as unr
 testAsync("R-ga4: a failed custom-metrics read does not misflag params as unregistered", async () => {
   const findings = await auditWithGa4({ dimensions: OK_DIMS, metrics: FAILED_READ });
   assert.ok(!findings.some((x) => x.finding === UNREGISTERED_PARAMS));
+});
+
+// ── GTM built-in trigger ids (2147479xxx) ───────────────────────────────────
+// triggers.list never returns GTM's built-in triggers (All Pages = 2147479553,
+// Consent Initialization = 2147479572, ...), so a tag on one references an id
+// that is in no listed trigger. That is normal, not a broken reference.
+
+const BROKEN_FIRE = "Tag references a firing trigger that does not exist";
+const BROKEN_BLOCK = "Tag references a blocking trigger that does not exist";
+
+function webFixture(tags: unknown[], triggers: unknown[] = []): FixtureLike {
+  return { containerPublicId: "GTM-BUILTIN", usageContext: ["web"], config: { tags, triggers, variables: [] } };
+}
+
+async function auditFindings(fx: FixtureLike, extra: Array<(url: URL) => StubResponse | undefined> = [], body: Record<string, unknown> = {}) {
+  const r = await callRoute(auditHandler, { containerPublicId: fx.containerPublicId, ...body }, [...extra, gtmRoutes(fx)]);
+  assert.equal(r.status, 200, JSON.stringify(r.json).slice(0, 300));
+  return r.json as { findings: Array<{ id: string; finding?: string; affected?: string[] }>; [k: string]: any };
+}
+
+testAsync("R-builtin: a tag on the built-in All Pages trigger is not a broken reference", async () => {
+  // Regression: every tag on All Pages got a HIGH "firing trigger that does not
+  // exist" finding and publishSafe "no".
+  const out = await auditFindings(GA4_PARAMS_WEB);
+  assert.ok(!out.findings.some((f) => f.finding === BROKEN_FIRE), "built-in All Pages flagged as missing");
+  assert.ok(
+    out.findings.some((f) => f.finding === "GA4 Event tag is configured on an All Pages / pageview trigger"),
+    "a GA4 event tag on the built-in All Pages trigger should get the All Pages finding",
+  );
+});
+
+testAsync("R-builtin: built-in Consent Initialization / Initialization ids are not broken references either", async () => {
+  const out = await auditFindings(
+    webFixture([
+      { tagId: "1", name: "CMP", type: "html", firingTriggerId: ["2147479572"], blockingTriggerId: ["2147479573"], parameter: [] },
+    ]),
+  );
+  assert.ok(!out.findings.some((f) => f.finding === BROKEN_FIRE || f.finding === BROKEN_BLOCK));
+});
+
+testAsync("R-builtin control: an id just outside the built-in band is still flagged", async () => {
+  const out = await auditFindings(
+    webFixture([{ tagId: "1", name: "Stray", type: "html", firingTriggerId: ["2147478553"], parameter: [] }]),
+  );
+  assert.ok(out.findings.some((f) => f.finding === BROKEN_FIRE && (f.affected ?? []).includes("Stray")));
+});
+
+test("S-builtin: the Express auditor exempts built-in ids but still flags dangling ones", () => {
+  const summary = runExpressAudit(
+    {
+      tags: [
+        { tagId: "1", name: "Google tag", type: "googtag", firingTriggerId: ["2147479553"], blockingTriggerId: ["2147479572"] },
+        { tagId: "2", name: "Stray", type: "html", firingTriggerId: ["2147478553"] },
+      ],
+      triggers: [],
+      variables: [],
+      folders: [],
+      builtInVariables: [],
+    },
+    { containerPublicId: "GTM-BUILTIN" },
+  );
+  const broken = summary.findings.filter((f) => /missing (firing|blocking) trigger/.test(f.title ?? ""));
+  assert.deepEqual(
+    broken.map((f) => f.affects),
+    [["Stray"]],
+    `only the out-of-band id should be flagged, got ${JSON.stringify(broken.map((f) => f.description))}`,
+  );
 });
 
 for (const [name, fn] of asyncTests) {
