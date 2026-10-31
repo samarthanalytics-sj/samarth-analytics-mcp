@@ -4,9 +4,9 @@
  * The browser can never reach the MCP server directly: its HTTP transport sets no CORS headers and
  * its sessions live in process memory. This module is the only thing that talks to it.
  *
- * Two transports are supported. `stdio` spawns the built MCP server as a child process and is the
- * right default for a single-identity proof of concept. `http` connects to an already-running MCP
- * instance, which is what a multi-instance deployment uses later.
+ * Two transports are supported. `stdio` spawns the built MCP server as a child process, one per user
+ * in per-user identity mode. `http` connects to an already-running MCP instance and is
+ * single-identity only: it sends one orchestrator-wide bearer token, never a user's Google token.
  */
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { OrchestratorConfig } from './config.js';
@@ -70,6 +70,14 @@ export class McpConnection {
     );
 
     if (this.cfg.mcp.transport === 'http') {
+      // Nothing below forwards the user's token, so connecting would run this "per-user" session as
+      // the remote server's own identity. loadConfig refuses the combination; this is the backstop.
+      if (this.googleAccessToken) {
+        throw new Error(
+          'A per-user Google identity cannot be sent over MCP_TRANSPORT=http; refusing rather than ' +
+            "running as the remote MCP server's shared identity.",
+        );
+      }
       const { StreamableHTTPClientTransport } = await import(
         '@modelcontextprotocol/sdk/client/streamableHttp.js'
       );

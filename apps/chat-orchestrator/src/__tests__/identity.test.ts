@@ -91,6 +91,91 @@ test('single-identity mode leaves the environment untouched', () => {
   assert.equal(env.GOOGLE_ACCESS_TOKEN, undefined);
 });
 
+console.log('http transport cannot carry a per-user identity');
+
+await testAsync('a per-user connection refuses http instead of silently dropping the token', async () => {
+  // The http branch only ever sends MCP_AUTH_TOKEN. Connecting anyway would run Alice's "own"
+  // session as the remote server's identity, so the connection must refuse before dialling.
+  const cfg = {
+    mcp: { transport: 'http', url: 'http://127.0.0.1:1/mcp', env: {} },
+  } as unknown as OrchestratorConfig;
+  await assert.rejects(
+    () => new McpConnection(cfg, 'ya29.alice').connect(),
+    /per-user Google identity cannot be sent over MCP_TRANSPORT=http/,
+  );
+});
+
+/** Runs `fn` with exactly these variables set (undefined = unset), restoring them afterwards. */
+function withEnv<T>(vars: Record<string, string | undefined>, fn: () => T): T {
+  const saved: Record<string, string | undefined> = {};
+  for (const [key, value] of Object.entries(vars)) {
+    saved[key] = process.env[key];
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  try {
+    return fn();
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
+
+/** A complete per-user (supabase) configuration, so the transport is the only thing under test. */
+const PER_USER_ENV: Record<string, string | undefined> = {
+  NODE_ENV: undefined,
+  ORCHESTRATOR_DEV_NO_AUTH: undefined,
+  ORCHESTRATOR_SLACK_WEBHOOK_URL: undefined,
+  ORCHESTRATOR_TIMEZONE: undefined,
+  SUPABASE_JWKS_URL: 'https://p.supabase.co/auth/v1/.well-known/jwks.json',
+  OPENAI_API_KEY: 'sk-test',
+  GOOGLE_IDENTITY_MODE: 'supabase',
+  SUPABASE_FUNCTIONS_URL: 'https://p.supabase.co/functions/v1',
+  SUPABASE_ANON_KEY: 'anon',
+  GOOGLE_OAUTH_CLIENT_ID: 'cid.apps.googleusercontent.com',
+  GOOGLE_OAUTH_CLIENT_SECRET: 'csecret',
+  GOOGLE_ACCESS_TOKEN: undefined,
+  MCP_TRANSPORT: undefined,
+  MCP_URL: undefined,
+};
+
+// Imported here, not at the top: loading config.ts reads .env files into process.env, and only these
+// tests should see that.
+const { loadConfig } = await import('../config.js');
+
+test('boot refuses MCP_TRANSPORT=http with any per-user identity mode', () => {
+  const http = { MCP_TRANSPORT: 'http', MCP_URL: 'http://127.0.0.1:3001/mcp' };
+  for (const extra of [
+    {},
+    { NODE_ENV: 'production' },
+    { GOOGLE_IDENTITY_MODE: 'static', GOOGLE_ACCESS_TOKEN: 'ya29.shared' },
+  ]) {
+    assert.throws(
+      () => withEnv({ ...PER_USER_ENV, ...http, ...extra }, () => loadConfig()),
+      /MCP_TRANSPORT=http cannot carry a per-user Google token/,
+      `accepted http with ${JSON.stringify(extra)}`,
+    );
+  }
+});
+
+test('stdio per-user mode and single-identity http still load', () => {
+  assert.equal(withEnv(PER_USER_ENV, () => loadConfig()).mcp.transport, 'stdio');
+  const inheritHttp = withEnv(
+    { ...PER_USER_ENV, GOOGLE_IDENTITY_MODE: 'inherit', MCP_TRANSPORT: 'http', MCP_URL: 'http://127.0.0.1:3001/mcp' },
+    () => loadConfig(),
+  );
+  assert.equal(inheritHttp.mcp.transport, 'http');
+});
+
+test('an unknown MCP_TRANSPORT is refused rather than read as stdio', () => {
+  assert.throws(
+    () => withEnv({ ...PER_USER_ENV, MCP_TRANSPORT: 'htp' }, () => loadConfig()),
+    /MCP_TRANSPORT must be stdio or http/,
+  );
+});
+
 console.log('auth failure detection');
 
 test('google auth failures are recognized', () => {

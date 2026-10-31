@@ -22,7 +22,7 @@ browser (aitagmanager.com)
     |  HTTPS + Supabase JWT, SSE response
     v
 chat-orchestrator   <---- OpenAI (streaming, tool calling)
-    |  stdio or internal HTTP
+    |  stdio (per-user child) or internal HTTP (single identity, inherit mode only)
     v
 samarth-gtm-mcp  ----> Google GTM API v2 + GA4 APIs
 ```

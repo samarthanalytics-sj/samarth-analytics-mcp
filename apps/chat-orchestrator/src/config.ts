@@ -62,7 +62,10 @@ export interface OrchestratorConfig {
     requestTimeoutMs: number;
   };
   mcp: {
-    /** 'stdio' spawns the MCP server as a child process; 'http' connects to a running instance. */
+    /**
+     * 'stdio' spawns the MCP server as a child process; 'http' connects to a running instance. http
+     * is single-identity only (GOOGLE_IDENTITY_MODE=inherit): it has no way to send a user's token.
+     */
     transport: 'stdio' | 'http';
     command: string;
     args: string[];
@@ -261,6 +264,19 @@ export function loadConfig(): OrchestratorConfig {
         'share one Google account. Set GOOGLE_IDENTITY_MODE=supabase.',
     );
   }
+  const transport = process.env.MCP_TRANSPORT?.trim().toLowerCase() || 'stdio';
+  if (transport !== 'stdio' && transport !== 'http') {
+    throw new Error(`MCP_TRANSPORT must be stdio or http (got "${transport}").`);
+  }
+  // The http transport sends one orchestrator-wide MCP_AUTH_TOKEN and nothing per user, so a pooled
+  // "per-user" session would silently run as the remote MCP server's own Google identity: the same
+  // cross-tenant leak refused above, behind a banner claiming per-user identity.
+  if (transport === 'http' && identityMode !== 'inherit') {
+    throw new Error(
+      `MCP_TRANSPORT=http cannot carry a per-user Google token: every user would act as the remote ` +
+        `MCP server's own Google identity. Use MCP_TRANSPORT=stdio with GOOGLE_IDENTITY_MODE=${identityMode}.`,
+    );
+  }
   const functionsUrl = process.env.SUPABASE_FUNCTIONS_URL?.trim() ?? '';
   const anonKey = process.env.SUPABASE_ANON_KEY?.trim() ?? '';
   if (identityMode === 'supabase' && (!functionsUrl || !anonKey)) {
@@ -329,7 +345,7 @@ export function loadConfig(): OrchestratorConfig {
       requestTimeoutMs: num('OPENAI_TIMEOUT_MS', 180_000),
     },
     mcp: {
-      transport: (process.env.MCP_TRANSPORT as 'stdio' | 'http') ?? 'stdio',
+      transport,
       command: process.env.MCP_COMMAND?.trim() || process.execPath,
       args: list('MCP_ARGS', ['../../dist/index.js']),
       url: process.env.MCP_URL?.trim(),
