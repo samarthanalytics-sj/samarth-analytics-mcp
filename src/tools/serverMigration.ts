@@ -184,9 +184,9 @@ const CAPI_TOOLS: CapiSpec[] = [
   },
   {
     name: 'create_pinterest_capi_server_tag', defaultTagName: 'Pinterest CAPI Tag', gallery: ['pinterest', 'ss-gtm-template'],
-    description: 'Create a Pinterest Conversions API SERVER tag from the official template (pinterest/ss-gtm-template), imported automatically. advertiserId is the Pinterest Ad Account / tag id (public), apiAccessToken the Conversions API token. Omit `event` to inherit the incoming event name (auto-mapped); pass a Pinterest standard event (checkout, lead, signup, …) or a GA4 name to force one.',
-    fields: { advertiserId: z.string(), apiAccessToken: z.string().describe(tokenDoc('Pinterest Conversions API token')), event: z.string().optional(), testMode: z.boolean().optional() },
-    validate: (a) => firstMissing(need(a, 'advertiserId', 'the Pinterest advertiser id'), need(a, 'apiAccessToken', 'the API access token')),
+    description: 'Create a Pinterest Conversions API SERVER tag from the official template (pinterest/ss-gtm-template), imported automatically. advertiserId is the Pinterest Ad Account ID (549 followed by 9 digits, from Ads Manager; NOT the web Tag ID), apiAccessToken the Conversions API token. Omit `event` to inherit the incoming event name (auto-mapped); pass a Pinterest standard event (checkout, lead, signup, …) or a GA4 name to force one.',
+    fields: { advertiserId: z.string().describe('Pinterest Ad Account ID (549 followed by 9 digits), not the web Tag ID.'), apiAccessToken: z.string().describe(tokenDoc('Pinterest Conversions API token')), event: z.string().optional(), testMode: z.boolean().optional() },
+    validate: (a) => firstMissing(need(a, 'advertiserId', 'the Pinterest Ad Account ID, 549…'), need(a, 'apiAccessToken', 'the API access token')),
     build: (type, name, a, firingTriggerId) => buildPinterestCapiServerTag(type, name, s(a.advertiserId), s(a.apiAccessToken), { event: opt(a.event), testMode: b(a.testMode), firingTriggerId }),
   },
   {

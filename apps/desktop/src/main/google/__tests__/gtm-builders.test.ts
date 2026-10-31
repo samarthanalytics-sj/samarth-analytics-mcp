@@ -3865,8 +3865,10 @@ test('planWebToServerMigration: classifies GA4/Ads/Floodlight/Linker natives + M
   assert.equal(by('TikTok')?.serverTool, 'create_tiktok_capi_server_tag');
   assert.deepEqual(by('TikTok')?.derived, { pixelId: 'C7TK' }, 'TikTok pixel id read from the template pixel_code param');
   assert.deepEqual(by('TikTok')?.requires, ['accessToken']);
-  assert.deepEqual(by('Pinterest')?.derived, { advertiserId: '2613' });
-  assert.deepEqual(by('Pinterest')?.requires, ['apiAccessToken'], 'matches the builder param name');
+  // The web Tag ID is NOT the server advertiserId (the 549… Ad Account ID): informational only, and the
+  // Ad Account ID is always asked for.
+  assert.deepEqual(by('Pinterest')?.derived, { tagId: '2613' }, 'the web Tag ID is never carried as advertiserId');
+  assert.deepEqual(by('Pinterest')?.requires, ['advertiserId', 'apiAccessToken'], 'the Ad Account ID is not on the web tag');
   assert.deepEqual(by('Snapchat')?.derived, { pixelId: 'ab12-cd34' });
 
   // Native types are authoritative (no name guessing) and carry their corpus-verified id keys.
@@ -3885,7 +3887,9 @@ test('planWebToServerMigration: classifies GA4/Ads/Floodlight/Linker natives + M
   assert.deepEqual(by('Amazon Ads')?.derived, { tagIds: ['tag-987'] }, 'keyed + shaped as the typed tool takes it');
   assert.deepEqual(by('Amazon Ads')?.requires, []);
   assert.equal(by('StackAdapt')?.serverTool, 'create_stackadapt_server_tag');
-  assert.deepEqual(by('StackAdapt')?.derived, { pixelID: 'SA-55' });
+  // saq('ts', …) is the Universal Pixel: carried as pixelType universal, never left to default to conv.
+  assert.deepEqual(by('StackAdapt')?.derived, { pixelID: 'SA-55', pixelType: 'universal' });
+  assert.deepEqual(by('StackAdapt')?.requires, []);
   assert.equal(by('X (Twitter)')?.status, 'typed-tool', 'X has a typed builder (Tier-1)');
   assert.equal(by('X (Twitter)')?.serverTool, 'create_x_capi_server_tag');
   assert.deepEqual(by('X (Twitter)')?.derived, { pixelId: 'o1abc' });

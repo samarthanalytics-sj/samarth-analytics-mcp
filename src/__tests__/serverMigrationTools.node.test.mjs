@@ -152,6 +152,31 @@ await test('plan_server_migration_from_web: a {{variable}} id is never carried i
   assert.ok(!JSON.stringify(res.items.map((i) => i.derived)).includes('{{'), 'no web-container variable reference is ever carried');
 });
 
+await test('plan_server_migration_from_web: the Pinterest Tag ID is never the advertiserId; a saq(ts) StackAdapt id is a universal pixel', async () => {
+  const client = stubClient({
+    tags: [
+      { tagId: '1', name: 'Pinterest Tag', type: 'cvt_PIN1', parameter: [P('tagId', '2613000000000')] },
+      { tagId: '2', name: 'Pin snippet', type: 'html', parameter: [P('html', "<script>pintrk('load','2614000000000')</script>")] },
+      { tagId: '3', name: 'StackAdapt', type: 'html', parameter: [P('html', "<script>saq('ts','SA-55')</script>")] },
+      // A template id with no snippet: its pixel type is unknown, so it must be asked for, not defaulted to conv.
+      { tagId: '4', name: 'StackAdapt conv', type: 'cvt_SA1', parameter: [P('pixelID', 'SA-77')] },
+    ],
+  });
+  const res = json(await callValidated(serverWith(client), 'plan_server_migration_from_web', WS));
+  const pins = res.items.filter((i) => i.destination === 'Pinterest');
+  assert.equal(pins.length, 2);
+  for (const p of pins) {
+    assert.equal(p.derived.advertiserId, undefined, `${p.webTag}: the web Tag ID is not the Ad Account ID`);
+    assert.deepEqual(p.requires, ['advertiserId', 'apiAccessToken'], `${p.webTag}: the Ad Account ID is required`);
+  }
+  assert.deepEqual(pins.map((p) => p.derived.tagId), ['2613000000000', '2614000000000'], 'the Tag ID is still reported, as information');
+  const sa = (name) => res.items.find((i) => i.webTag === name);
+  assert.deepEqual(sa('StackAdapt').derived, { pixelID: 'SA-55', pixelType: 'universal' });
+  assert.deepEqual(sa('StackAdapt').requires, []);
+  assert.deepEqual(sa('StackAdapt conv').derived, { pixelID: 'SA-77' });
+  assert.deepEqual(sa('StackAdapt conv').requires, ['pixelType']);
+});
+
 await test('a CAPI tool with the template already installed: no import, tag created with the cvt type, credentials and trigger', async () => {
   const client = stubClient({ templates: [INSTALLED('stape-io', 'reddit-tag', 'RD01')] });
   const res = json(await callValidated(serverWith(client), 'create_reddit_capi_server_tag', { ...WS, pixelId: '{{Reddit Pixel}}', accessToken: '{{Reddit Token}}', event: 'purchase', eventId: '{{Event ID}}', firingTriggerId: ['5'], confirm: true }));

@@ -2095,8 +2095,9 @@ const SERVER_MIGRATION_HEURISTICS: ReadonlyArray<{
   re: RegExp; destination: string; serverTool: string; requires: string[]; note: string;
   /** Omitted for a platform whose web tag carries no public id (Yelp, Spotify): nothing to derive. */
   derivedKey?: string; idKeys?: string[]; snippetRe?: RegExp; idOptional?: boolean; idArray?: boolean;
-  /** Further ids read off the snippet (AdRoll carries advertiser AND pixel ids). */
-  extra?: Array<{ key: string; re: RegExp }>;
+  /** Further ids read off the snippet (AdRoll carries advertiser AND pixel ids). `value`, when set, is
+   *  what a match of `re` yields instead of its first capture group (StackAdapt saq('ts') = universal). */
+  extra?: Array<{ key: string; re: RegExp; value?: string }>;
   status?: ServerMigrationItem['status'];
 }> = [
   { re: /tiktok|ttq\s*\(/i, destination: 'TikTok', serverTool: 'create_tiktok_capi_server_tag', requires: ['accessToken'], note: 'TikTok Events API server tag.',
@@ -2104,8 +2105,12 @@ const SERVER_MIGRATION_HEURISTICS: ReadonlyArray<{
   { re: /linkedin|_linkedin_partner_id|lintrk|licdn\.com/i, destination: 'LinkedIn', serverTool: 'create_linkedin_capi_server_tag', requires: ['accessToken', 'conversionRuleUrn'],
     note: 'LinkedIn CAPI server tag. The web Partner ID is informational: the server tag fires on a Conversion Rule URN, which the caller must supply.',
     derivedKey: 'partnerId', idKeys: ['partnerId', 'id'], snippetRe: /_linkedin_partner_id\s*=\s*['"]([^'"]+)['"]/i, idOptional: true },
-  { re: /pinterest|pintrk\s*\(/i, destination: 'Pinterest', serverTool: 'create_pinterest_capi_server_tag', requires: ['apiAccessToken'], note: 'Pinterest CAPI server tag.',
-    derivedKey: 'advertiserId', idKeys: ['tagId', 'advertiserId'], snippetRe: /pintrk\s*\(\s*['"]load['"]\s*,\s*['"]([^'"]+)['"]/i },
+  // The web Pinterest Tag ID (pintrk load / the template's tagId) is NOT the server tag's advertiserId: that
+  // is the Ad Account ID (549 + 9 digits) from Ads Manager, which no web tag carries. Report the Tag ID as
+  // information only and always ask for the advertiserId.
+  { re: /pinterest|pintrk\s*\(/i, destination: 'Pinterest', serverTool: 'create_pinterest_capi_server_tag', requires: ['advertiserId', 'apiAccessToken'],
+    note: 'Pinterest CAPI server tag. The web Tag ID (pintrk load / tagId) is informational: the server tag needs the Pinterest Ad Account ID (advertiserId, 549 followed by 9 digits) from Ads Manager, which is not on the web tag.',
+    derivedKey: 'tagId', idKeys: ['tagId'], snippetRe: /pintrk\s*\(\s*['"]load['"]\s*,\s*['"]([^'"]+)['"]/i, idOptional: true },
   { re: /reddit|rdt\s*\(/i, destination: 'Reddit', serverTool: 'create_reddit_capi_server_tag', requires: ['accessToken'], note: 'Reddit CAPI server tag.',
     derivedKey: 'pixelId', idKeys: ['accountId', 'pixelId'], snippetRe: /rdt\s*\(\s*['"]init['"]\s*,\s*['"]([^'"]+)['"]/i },
   { re: /snap(chat)?|snaptr\s*\(/i, destination: 'Snapchat', serverTool: 'create_snapchat_capi_server_tag', requires: ['apiAccessToken'], note: 'Snapchat CAPI server tag.',
@@ -2115,8 +2120,12 @@ const SERVER_MIGRATION_HEURISTICS: ReadonlyArray<{
   // Builders + typed tools already exist for these two; they were simply never planned.
   { re: /amazon[\s_-]?(ads?|pixel|tag)|amzn\s*\(|amazon-adsystem/i, destination: 'Amazon Ads', serverTool: 'create_amazon_capi_server_tag', requires: [], note: 'Amazon Ads CAPI server tag (region defaults to NA; pass tagRegion for EU).',
     derivedKey: 'tagIds', idArray: true, idKeys: ['tagId'], snippetRe: /amzn\s*\(\s*['"]addTag['"]\s*,\s*['"]([^'"]+)['"]/i },
-  { re: /stackadapt|\bsaq\s*\(|srv\.stackadapt/i, destination: 'StackAdapt', serverTool: 'create_stackadapt_server_tag', requires: [], note: 'StackAdapt server-side pixel.',
-    derivedKey: 'pixelID', idKeys: ['pixelID', 'pixelId'], snippetRe: /saq\s*\(\s*['"]ts['"]\s*,\s*['"]([^'"]+)['"]/i },
+  // The id in saq('ts', …) is the Universal Pixel, so it carries pixelType universal (the tool otherwise
+  // defaults to conv and would send it as a conversion id); with no such snippet the type is required.
+  { re: /stackadapt|\bsaq\s*\(|srv\.stackadapt/i, destination: 'StackAdapt', serverTool: 'create_stackadapt_server_tag', requires: [],
+    note: 'StackAdapt server-side pixel. An id read from saq(\'ts\', …) is the Universal Pixel (pixelType universal); otherwise pass the pixel type (rt / lal / conv / universal).',
+    derivedKey: 'pixelID', idKeys: ['pixelID', 'pixelId'], snippetRe: /saq\s*\(\s*['"]ts['"]\s*,\s*['"]([^'"]+)['"]/i,
+    extra: [{ key: 'pixelType', re: /saq\s*\(\s*['"]ts['"]\s*,/i, value: 'universal' }] },
   // X (Twitter): the server tag needs the per-conversion X "Event ID" (tw-…) from X Ads Events Manager
   // — a different thing from a dedup id — plus a Pixel Access Token (or OAuth 1.0a keys). Neither is
   // on the web tag; only the Pixel ID is.
@@ -2338,7 +2347,10 @@ export function planWebToServerMigration(snapshot: ContainerSnapshot): ServerMig
     if (hit) {
       const pairs: Array<[string, string]> = [];
       if (hit.derivedKey) pairs.push([hit.derivedKey, (hit.idKeys ?? []).map((k) => pv(t, k)).find(Boolean) || (hit.snippetRe?.exec(html)?.[1] ?? '').trim()]);
-      for (const x of hit.extra ?? []) pairs.push([x.key, (x.re.exec(html)?.[1] ?? '').trim()]);
+      for (const x of hit.extra ?? []) {
+        const m = x.re.exec(html);
+        pairs.push([x.key, m ? (x.value ?? (m[1] ?? '').trim()) : '']);
+      }
       const typed = (hit.status ?? 'typed-tool') === 'typed-tool';
       const c = carry(pairs, typed ? pairs.map(([k]) => k) : []);
       const derived: Record<string, string | string[]> = { ...c.derived };
