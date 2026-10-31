@@ -104,6 +104,36 @@ export interface SafeFetchResult {
   body: string;
 }
 
+/** Discard a body we will not read, so its socket is released now rather than at timeout or GC. */
+async function discardBody(res: Response): Promise<void> {
+  await res.body?.cancel().catch(() => {});
+}
+
+/**
+ * Read at most `max` bytes of the body, then cancel the rest. res.text() would buffer ALL of it
+ * before any slice: a chunked body with no Content-Length, or a small gzip body that inflates (fetch
+ * decodes Content-Encoding before res.body), costs hundreds of MB. res.body is already decoded, so
+ * counting bytes here bounds the decoded size too.
+ */
+async function readCapped(res: Response, max: number): Promise<string> {
+  if (!res.body) return '';
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let kept = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const take = Math.min(value.byteLength, max - kept);
+    chunks.push(take === value.byteLength ? value : value.subarray(0, take));
+    kept += take;
+    if (kept >= max) {
+      await reader.cancel().catch(() => {});
+      break;
+    }
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks));
+}
+
 /**
  * SSRF-safe HTTP GET: follows redirects MANUALLY, re-checking requestAllowed at every hop, so a
  * public host cannot redirect us at a private/loopback/metadata address. Returns the final status
@@ -123,15 +153,24 @@ export async function safeFetch(
       signal: AbortSignal.timeout(timeoutMs),
     });
     if (res.status >= 300 && res.status < 400) {
+      await discardBody(res);
       const loc = res.headers.get('location');
       if (!loc) return { status: res.status, finalUrl: current, body: '' };
       current = new URL(loc, current).href;
       continue;
     }
-    // Bound memory: reject a declared-huge body, and cap what we keep/parse.
+    // Bound memory: reject a declared-huge body, and stop READING at the cap (a declared length
+    // cannot be trusted: chunked bodies have none, and a gzip body declares its compressed size).
     const declared = Number(res.headers.get('content-length') || 0);
-    if (declared > MAX_BODY_BYTES) throw new Error('response too large');
-    const body = res.status >= 400 ? '' : (await res.text()).slice(0, MAX_BODY_BYTES);
+    if (declared > MAX_BODY_BYTES) {
+      await discardBody(res);
+      throw new Error('response too large');
+    }
+    if (res.status >= 400) {
+      await discardBody(res);
+      return { status: res.status, finalUrl: current, body: '' };
+    }
+    const body = await readCapped(res, MAX_BODY_BYTES);
     return { status: res.status, finalUrl: current, body };
   }
   throw new Error('too many redirects');

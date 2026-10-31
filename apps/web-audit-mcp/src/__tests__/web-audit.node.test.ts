@@ -16,7 +16,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { urlAllowed } from '../utils/urlGuard.js';
-import { createRequestGuard } from '../utils/safeFetch.js';
+import { createRequestGuard, safeFetch } from '../utils/safeFetch.js';
 import {
   classifyUrl,
   parseQuery,
@@ -1475,6 +1475,55 @@ check('embed: HubSpot embed surfaces beside an unrelated search form', buildSugg
         JSON.stringify(skipped),
       );
       check('robots: skipping an off-site sitemap does not mark the site unreachable', found.sitemapStatus === 'found');
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  }
+
+  // safeFetch's body cap used to be a Content-Length check plus res.text().slice(): a chunked body
+  // (no Content-Length) or a gzip body that inflates was buffered WHOLE before the slice. It must stop
+  // reading at the cap, and release bodies it does not read (3xx, >=400). IP literals: no DNS.
+  {
+    const CAP = 8_000_000;
+    const CHUNK = 64 * 1024;
+    const streamOf = (totalBytes: number) => {
+      const stat = { pulled: 0, cancelled: false };
+      const stream = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (stat.pulled >= totalBytes) return controller.close();
+          const n = Math.min(CHUNK, totalBytes - stat.pulled);
+          stat.pulled += n;
+          controller.enqueue(new Uint8Array(n).fill(97));
+        },
+        cancel() {
+          stat.cancelled = true;
+        },
+      });
+      return { stream, stat };
+    };
+    const huge = streamOf(24 * 1024 * 1024); // far past the cap, with no Content-Length
+    const errorBody = streamOf(1024);
+    const redirectBody = streamOf(1024);
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (url === 'http://203.0.113.10/huge.xml') return new Response(huge.stream, { status: 200 });
+      if (url === 'http://203.0.113.10/boom') return new Response(errorBody.stream, { status: 500 });
+      if (url === 'http://203.0.113.10/moved') {
+        return new Response(redirectBody.stream, { status: 302, headers: { location: '/small' } });
+      }
+      if (url === 'http://203.0.113.10/small') return new Response('ok', { status: 200 });
+      return new Response('', { status: 404 });
+    }) as typeof fetch;
+    try {
+      const big = await safeFetch('http://203.0.113.10/huge.xml', 5_000, 'application/xml');
+      check('safeFetch cap: the body kept is at most the cap', big.body.length <= CAP && big.body.length > 0, String(big.body.length));
+      check('safeFetch cap: reading stops at the cap instead of buffering the whole body', huge.stat.pulled < CAP + 4 * CHUNK, String(huge.stat.pulled));
+      check('safeFetch cap: the rest of the body is cancelled', huge.stat.cancelled === true);
+      const err = await safeFetch('http://203.0.113.10/boom', 5_000);
+      check('safeFetch cap: a >=400 body is cancelled, not left open', err.status === 500 && err.body === '' && errorBody.stat.cancelled === true);
+      const moved = await safeFetch('http://203.0.113.10/moved', 5_000);
+      check('safeFetch cap: a redirect body is cancelled before the next hop', moved.body === 'ok' && redirectBody.stat.cancelled === true, JSON.stringify(moved));
     } finally {
       globalThis.fetch = realFetch;
     }
