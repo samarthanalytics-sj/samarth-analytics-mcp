@@ -306,8 +306,9 @@ export function registerServerMigrationTools(server: McpServer, getClient: () =>
       description:
         'READ-ONLY: given a WEB container, list every tag that can move to a SERVER container and the plan to port each: ' +
         'which server tool builds it (the create_*_capi_server_tag / create_server_tag tools here), the public ids read off the ' +
-        'web tag (`derived` - Pixel IDs from template params or the fbq/ttq/pintrk/rdt/snaptr/uet/twq init calls, so the server ' +
-        'tag is created pre-filled), and the secrets you must still ask the user for (`requires` - CAPI access tokens are never in ' +
+        'web tag (`derived` - Pixel IDs from template params or the fbq/ttq/pintrk/rdt/snaptr/uet/twq init calls, which pre-fill the ' +
+        'server tag where the web id IS the server field; the Pinterest Tag ID and LinkedIn Partner ID are informational only, the ' +
+        'server tag needs a different id listed in `requires`), and the secrets you must still ask the user for (`requires` - CAPI access tokens are never in ' +
         'a web container). Creates NOTHING. GA4 is reported once in `ga4` (port it with create_server_tag platform "ga4" as the ' +
         'relay, or the setup_server_side_container prompt; a {{Constant}} Measurement ID is resolved to its value, a Lookup/RegEx ' +
         'Table to its G- outputs (one holding only AW-/GT- ids is a Google Ads tag, not GA4), any other {{variable}} id is listed in ' +

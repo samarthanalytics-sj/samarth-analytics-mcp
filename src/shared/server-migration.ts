@@ -2093,7 +2093,8 @@ export interface ServerMigrationPlan {
  *  init call. When the id is found the plan carries it in `derived`, so the server tag is created
  *  pre-filled and only the secret is left to type; when a typed tool's id is NOT found it is listed in
  *  `requires`, since the tool refuses without it. `idOptional` marks an id the server tool does not take
- *  (LinkedIn's Partner ID), `idArray` one the tool takes as an array (Amazon's tagIds).
+ *  (LinkedIn's Partner ID, Pinterest's Tag ID: reported for information, never pre-filled), `idArray`
+ *  one the tool takes as an array (Amazon's tagIds).
  *
  *  ORDER MATTERS (first hit wins): LinkedIn precedes Snapchat because a LinkedIn Custom HTML snippet
  *  loads from snap.licdn.com, which `/snap/` would otherwise claim. */
