@@ -1,9 +1,10 @@
 import { readJsonFile, writeJsonFileAtomic } from '../storage/json-file';
 import { MAX_INTERVAL_MINUTES, assertTimerMs } from './timer-limits';
-import { auditChanges } from '../google/audit-runner';
+import { auditChanges, type WorkspaceCtx } from '../google/audit-runner';
+import { runAsAccount } from '../google/account-scope';
 import type { GoogleDataService } from '../google/data-service';
 import type { AuditHistoryStore } from '../storage/audit-history';
-import type { AccountView, MonitorAlert, MonitorConfig, MonitorStatus } from '../../shared/ipc';
+import type { AccountView, GtmContext, MonitorAlert, MonitorConfig, MonitorStatus } from '../../shared/ipc';
 
 /** Minimum auto-audit interval — never hammer the GTM API. */
 const MIN_INTERVAL_MINUTES = 5;
@@ -120,22 +121,26 @@ export class MonitorService {
     if (!active || !active.hasGoogleToken || !ctx?.accountId || !ctx.containerId || !ctx.workspaceId) {
       return null; // nothing to monitor yet
     }
+    // Pin every GTM call of this audit to the account whose remembered container it is. An audit makes
+    // several calls (container list, workspace snapshot, the paired web containers of a server one);
+    // unpinned, an account switch mid-audit read this account's container with the NEW account's token,
+    // and the failure (or a partial snapshot) was recorded against this container.
+    const ws = { accountId: ctx.accountId, containerId: ctx.containerId, workspaceId: ctx.workspaceId };
+    return runAsAccount(active.id, () => this.audit(ctx, ws));
+  }
+
+  private async audit(ctx: GtmContext, ws: WorkspaceCtx): Promise<MonitorAlert | null> {
     try {
-      const res = await auditChanges(
-        this.deps.data,
-        this.deps.history,
-        { accountId: ctx.accountId, containerId: ctx.containerId, workspaceId: ctx.workspaceId },
-        this.now()
-      );
+      const res = await auditChanges(this.deps.data, this.deps.history, ws, this.now());
       this.lastRunAt = this.now();
       this.lastError = null;
       if (res.firstRun || res.drift.newFindings.length === 0) return null; // baseline / no regressions
       const alert: MonitorAlert = {
         at: this.lastRunAt,
-        accountId: ctx.accountId,
-        containerId: ctx.containerId,
+        accountId: ws.accountId,
+        containerId: ws.containerId,
         containerName: ctx.containerName,
-        workspaceId: ctx.workspaceId,
+        workspaceId: ws.workspaceId,
         resolvedCount: res.drift.resolvedFindings.length,
         newFindings: res.drift.newFindings.map((f) => ({
           severity: f.severity,

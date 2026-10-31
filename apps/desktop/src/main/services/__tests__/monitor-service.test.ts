@@ -124,6 +124,42 @@ async function main(): Promise<void> {
     assert.equal(service.status().lastError, 'boom');
   });
 
+  // Regression: the GTM monitor read the active account's remembered container ONCE, but every GTM call
+  // of the audit re-resolved the ACTIVE account's token. An account switch mid-audit read acct1's
+  // container with acct2's token, so the audit failed (or read a partial snapshot) and that was recorded
+  // against acct1's container. End to end through the REAL data service, every Google request answered
+  // by a per-account fake auth client (googleapis routes each request through auth.request), the same
+  // way the GA4 / Ads monitor regressions are tested.
+  await test('account switch mid-audit: every GTM call stays on the account that owns the container', async () => {
+    const { GoogleDataService } = await import('../../google/data-service');
+    type Ctor = ConstructorParameters<typeof GoogleDataService>;
+    const accountA = activeView({ id: 'acct1' });
+    const accountB = activeView({ id: 'acct2', email: 'b@c.com', gtmContext: { accountId: '9', containerId: '8', containerName: 'Other', workspaceId: '7' } });
+    let current: AccountView = accountA;
+    const registry = { getActiveView: () => current, listViews: () => [accountA, accountB] };
+    const used: string[] = [];
+    const fakeAuth = (id: string): unknown => ({
+      request: async (opts: { url?: unknown }) => {
+        used.push(id);
+        current = accountB; // the user picks another account while the audit's first call is in flight
+        if (id !== 'acct1') throw new Error('The caller does not have permission');
+        return { data: {}, status: 200, headers: {}, config: opts };
+      },
+    });
+    const data = new GoogleDataService(registry as unknown as Ctor[0], { getClient: (id: string) => fakeAuth(id) } as unknown as Ctor[1]);
+    const service = new MonitorService({
+      registry,
+      data,
+      history: new AuditHistoryStore(join(dir, 'pinned.json')),
+      emit: () => undefined,
+      now: () => 1,
+    });
+    assert.equal(await service.runOnce(), null, 'baseline run');
+    assert.ok(used.length > 1, `the audit made several GTM calls: ${used.length}`);
+    assert.equal(current.id, 'acct2', 'the active account really did change mid-audit');
+    assert.deepEqual([...new Set(used)], ['acct1'], 'every call authenticated as the account that owns the container');
+    assert.equal(service.status().lastError, null, 'no failure was recorded against acct1');
+  });
 
   await test('SERVER container: the pair is monitored; a wired web tag losing its server URL raises an alert', async () => {
     // A server container is remembered. Its account also holds one web container whose Google tag
