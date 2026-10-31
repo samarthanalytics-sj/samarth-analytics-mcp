@@ -7,6 +7,7 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { gtmId } from '../utils/schemas.js';
 import type { GtmClient } from '../utils/gtmClient.js';
 import { paginate, paginationFields, DEFAULT_MAX_PAGES } from '../utils/pagination.js';
 import { buildTruncationNotice } from '../utils/exportCompleteness.js';
@@ -22,9 +23,9 @@ export function registerExportTools(server: McpServer, getClient: () => GtmClien
         'This is a read-only operation. ' +
         'Use this for documentation, auditing, or feeding container data to other tools.',
       inputSchema: z.object({
-        accountId: z.string(),
-        containerId: z.string(),
-        workspaceId: z.string(),
+        accountId: gtmId,
+        containerId: gtmId,
+        workspaceId: gtmId,
         format: z
           .enum(['full', 'summary', 'names_only'])
           .optional()

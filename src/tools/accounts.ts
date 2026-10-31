@@ -5,6 +5,7 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { gtmId } from '../utils/schemas.js';
 import type { GtmClient } from '../utils/gtmClient.js';
 import { paginate, paginationFields, buildListResult } from '../utils/pagination.js';
 import { jsonResult, errorResult } from '../utils/toolResponse.js';
@@ -55,7 +56,7 @@ export function registerAccountTools(server: McpServer, getClient: () => GtmClie
     {
       description: 'Get details of a specific GTM account.',
       inputSchema: z.object({
-        accountId: z.string().describe('The GTM account ID (numeric string).'),
+        accountId: gtmId.describe('The GTM account ID (numeric string).'),
       }),
     },
     async ({ accountId }) => {

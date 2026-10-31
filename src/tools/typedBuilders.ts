@@ -26,6 +26,7 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { gtmId } from '../utils/schemas.js';
 import type { GtmClient } from '../utils/gtmClient.js';
 import { checkGuardrails, getGuardrailConfig, formatGoogleError } from '../utils/guardrails.js';
 import { jsonResult, textResult, errorResult, errorText } from '../utils/toolResponse.js';
@@ -50,9 +51,9 @@ import {
 import type { tagmanager_v2 } from 'googleapis';
 
 const wsBase = z.object({
-  accountId: z.string().describe('The GTM account ID.'),
-  containerId: z.string().describe('The GTM container ID.'),
-  workspaceId: z.string().describe('The GTM workspace ID.'),
+  accountId: gtmId.describe('The GTM account ID.'),
+  containerId: gtmId.describe('The GTM container ID.'),
+  workspaceId: gtmId.describe('The GTM workspace ID.'),
 });
 
 /**

@@ -4,6 +4,7 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { gtmId } from '../utils/schemas.js';
 import type { GtmClient } from '../utils/gtmClient.js';
 import { checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
 import { paginate, paginationFields, buildListResult } from '../utils/pagination.js';
@@ -13,9 +14,9 @@ import { addEventParameters, mergeParametersByKey } from '../utils/tagParams.js'
 import { gtmParameterArray, gtmParameterArray as parameterSchema } from '../utils/paramSchema.js';
 
 const wsBase = z.object({
-  accountId: z.string().describe('The GTM account ID.'),
-  containerId: z.string().describe('The GTM container ID.'),
-  workspaceId: z.string().describe('The GTM workspace ID.'),
+  accountId: gtmId.describe('The GTM account ID.'),
+  containerId: gtmId.describe('The GTM container ID.'),
+  workspaceId: gtmId.describe('The GTM workspace ID.'),
 });
 
 /**
@@ -65,7 +66,7 @@ export function registerTagTools(server: McpServer, getClient: () => GtmClient):
     {
       description: 'Get details of a specific GTM tag.',
       inputSchema: wsBase.extend({
-        tagId: z.string().describe('The GTM tag ID.'),
+        tagId: gtmId.describe('The GTM tag ID.'),
       }),
     },
     async ({ accountId, containerId, workspaceId, tagId }) => {
@@ -148,7 +149,7 @@ export function registerTagTools(server: McpServer, getClient: () => GtmClient):
         '`parameter` is MERGED with the existing parameters BY KEY (a same-key param replaces, new keys are added, untouched keys are kept), so you will NOT wipe a GA4 tag\'s eventName/measurementId. ' +
         'To add GA4 EVENT parameters to a gaawe tag, prefer tags_add_ga4_event_parameters (event params live in the nested eventSettingsTable, which this generic parameter list cannot express).',
       inputSchema: wsBase.extend({
-        tagId: z.string().describe('The GTM tag ID to update.'),
+        tagId: gtmId.describe('The GTM tag ID to update.'),
         name: z.string().optional().describe('New tag name.'),
         type: z
           .string()
@@ -210,7 +211,7 @@ export function registerTagTools(server: McpServer, getClient: () => GtmClient):
         'Fetches the tag, APPENDS the parameters to its eventSettingsTable (the correct place for GA4 event parameters — top-level params are ignored by GA4 event tags), and saves the FULL tag so eventName/measurementId stay intact. ' +
         'A parameter whose name already exists has its value updated (not duplicated). Values may be GTM variables, e.g. {{Click Text}}.',
       inputSchema: wsBase.extend({
-        tagId: z.string().describe('The GA4 Event (gaawe) tag ID to update.'),
+        tagId: gtmId.describe('The GA4 Event (gaawe) tag ID to update.'),
         parameters: z
           .array(z.object({ name: z.string(), value: z.string() }))
           .min(1)
@@ -255,7 +256,7 @@ export function registerTagTools(server: McpServer, getClient: () => GtmClient):
         '[DELETE] Delete a GTM tag. Requires GTM_MCP_ENABLE_DELETES=true and confirm=true. ' +
         'This is irreversible in the workspace (the tag is removed from the workspace).',
       inputSchema: wsBase.extend({
-        tagId: z.string().describe('The GTM tag ID to delete.'),
+        tagId: gtmId.describe('The GTM tag ID to delete.'),
         confirm: z.boolean().describe('Must be true to confirm this delete operation.'),
       }),
     },

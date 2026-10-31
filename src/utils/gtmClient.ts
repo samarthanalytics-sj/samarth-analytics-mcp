@@ -10,6 +10,7 @@
 import { tagmanager, tagmanager_v2 } from 'googleapis/build/src/apis/tagmanager/index.js';
 import type { OAuth2Client } from 'google-auth-library';
 import { buildRetryOptions } from './apiRetry.js';
+import { buildRequestGuardOptions } from './googleRequestGuard.js';
 
 export type GtmClient = tagmanager_v2.Tagmanager;
 
@@ -24,7 +25,9 @@ export function getGtmClient(auth: OAuth2Client): GtmClient {
   if (!client) {
     // Retry options apply to every request: transient 429/5xx on READ methods
     // back off and retry; mutations are never auto-retried. See apiRetry.ts.
-    client = tagmanager({ version: 'v2', auth, ...buildRetryOptions() });
+    // The request guard refuses any request whose URL a path argument has
+    // retargeted (an extra ':verb', '?' or '#'). See googleRequestGuard.ts.
+    client = tagmanager({ version: 'v2', auth, ...buildRetryOptions(), ...buildRequestGuardOptions() });
     _clients.set(auth, client);
   }
   return client;

@@ -8,7 +8,9 @@
  *   - env tuning (GTM_MCP_RETRY_MAX etc.) including the 0-disables contract,
  *   - the read-only-client POST opt-in,
  *   - jittered backoff stays within [0.5x, 1.5x] and respects the cap,
- *   - retryBackoff/onRetryAttempt never throw on malformed errors.
+ *   - retryBackoff/onRetryAttempt never throw on malformed errors,
+ *   - the request guard spread in beside these options (googleRequestGuard.ts) refuses a request
+ *     whose URL a path argument retargeted, through the real googleapis clients.
  *
  * Run: node src/__tests__/apiRetry.node.test.mjs
  */
@@ -208,6 +210,117 @@ await test('retryBackoff still works when the error carries no headers', () => {
   const opts = buildRetryOptions({});
   assert.doesNotThrow(() => opts.retryConfig.retryBackoff(undefined, 0));
   assert.doesNotThrow(() => opts.retryConfig.retryBackoff({ response: {} }, 0));
+});
+
+// ── Request guard (utils/googleRequestGuard.ts) ─────────────────────────────────────────────────
+// The other option every client factory spreads in next to the retry options. googleapis expands
+// {+path} / {+parent} / {+name} as reserved strings, so an id of '2/versions/5:publish#' turned
+// workspace_quick_preview into POST .../versions/5:publish. The tool schemas refuse such ids; this
+// is the backstop for any field they miss, exercised here through the REAL googleapis clients the
+// server builds. fetchImplementation is a stub, so nothing leaves the process.
+console.log('\nGoogle request guard (real clients, stubbed fetch):');
+
+const distGuard = path.resolve(__dirname, '../../dist/utils/googleRequestGuard.js');
+const { googleRequestProblem } = await import(pathToFileURL(distGuard).href);
+const { getGtmClient } = await import(pathToFileURL(path.resolve(__dirname, '../../dist/utils/gtmClient.js')).href);
+const { getGa4AdminAlphaClient, getGa4DataClient } = await import(
+  pathToFileURL(path.resolve(__dirname, '../../dist/utils/ga4Client.js')).href
+);
+const { OAuth2Client } = await import('google-auth-library');
+
+const auth = new OAuth2Client();
+auth.setCredentials({ access_token: 'test-token', expiry_date: Date.now() + 3_600_000 });
+const sent = [];
+const stubFetch = {
+  fetchImplementation: async (url, init) => {
+    sent.push(`${init.method} ${url}`);
+    return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+  },
+};
+const gtm = getGtmClient(auth);
+const ga4 = getGa4AdminAlphaClient(auth);
+const ga4Data = getGa4DataClient(auth);
+
+/** Run one request; report what reached fetch, or the refusal. */
+async function attempt(fn) {
+  sent.length = 0;
+  const started = Date.now();
+  try {
+    await fn();
+    return { sent: [...sent], error: null, ms: Date.now() - started };
+  } catch (e) {
+    return { sent: [...sent], error: e, ms: Date.now() - started };
+  }
+}
+
+await test('well-formed requests go out exactly as the method template builds them', async () => {
+  const cases = [
+    [() => gtm.accounts.containers.workspaces.quick_preview({ path: 'accounts/1/containers/2/workspaces/3' }, stubFetch),
+      'POST https://tagmanager.googleapis.com/tagmanager/v2/accounts/1/containers/2/workspaces/3:quick_preview'],
+    [() => gtm.accounts.containers.workspaces.tags.list({ parent: 'accounts/1/containers/2/workspaces/3', pageToken: 'a/b:c?d#e' }, stubFetch),
+      'GET https://tagmanager.googleapis.com/tagmanager/v2/accounts/1/containers/2/workspaces/3/tags?pageToken=a%2Fb%3Ac%3Fd%23e'],
+    [() => gtm.accounts.containers.workspaces.tags.update({ path: 'accounts/1/containers/2/workspaces/3/tags/4', fingerprint: '9', requestBody: {} }, stubFetch),
+      'PUT https://tagmanager.googleapis.com/tagmanager/v2/accounts/1/containers/2/workspaces/3/tags/4?fingerprint=9'],
+    [() => gtm.accounts.containers.versions.live({ parent: 'accounts/1/containers/2' }, stubFetch),
+      'GET https://tagmanager.googleapis.com/tagmanager/v2/accounts/1/containers/2/versions:live'],
+    [() => gtm.accounts.containers.combine({ path: 'accounts/1/containers/2', containerId: '9', settingSource: 'other' }, stubFetch),
+      'POST https://tagmanager.googleapis.com/tagmanager/v2/accounts/1/containers/2:combine?containerId=9&settingSource=other'],
+    [() => gtm.accounts.list({}, stubFetch), 'GET https://tagmanager.googleapis.com/tagmanager/v2/accounts'],
+    [() => ga4.properties.customDimensions.archive({ name: 'properties/1/customDimensions/7', requestBody: {} }, stubFetch),
+      'POST https://analyticsadmin.googleapis.com/v1alpha/properties/1/customDimensions/7:archive'],
+    [() => ga4.properties.customDimensions.patch({ name: 'properties/1/customDimensions/7', updateMask: 'displayName', requestBody: {} }, stubFetch),
+      'PATCH https://analyticsadmin.googleapis.com/v1alpha/properties/1/customDimensions/7?updateMask=displayName'],
+    [() => ga4Data.properties.runReport({ property: 'properties/1', requestBody: {} }, stubFetch),
+      'POST https://analyticsdata.googleapis.com/v1beta/properties/1:runReport'],
+  ];
+  for (const [fn, expected] of cases) {
+    const r = await attempt(fn);
+    assert.strictEqual(r.error, null, `${expected}: ${r.error?.message}`);
+    assert.deepStrictEqual(r.sent, [expected]);
+  }
+});
+
+await test('a path argument that retargets the request is refused before fetch, and never retried', async () => {
+  const cases = [
+    // read-tier quick_preview -> versions/5:publish (the reported exploit)
+    () => gtm.accounts.containers.workspaces.quick_preview({ path: 'accounts/1/containers/2/versions/5:publish#/workspaces/3' }, stubFetch),
+    // -> containers/2:combine with an attacker query
+    () => gtm.accounts.containers.workspaces.quick_preview({ path: 'accounts/1/containers/2:combine?containerId=999&settingSource=other#/workspaces/3' }, stubFetch),
+    // the same without '#': the template suffix lands in the query instead
+    () => gtm.accounts.containers.workspaces.quick_preview({ path: 'accounts/1/containers/2:combine?x=1/workspaces/3' }, stubFetch),
+    () => gtm.accounts.containers.workspaces.folders.entities({ path: 'accounts/1/containers/2/versions/7:publish#/workspaces/3/folders/4' }, stubFetch),
+    () => gtm.accounts.containers.versions.set_latest({ path: 'accounts/1/containers/2/versions/5:publish#' }, stubFetch),
+    // a ':verb' before the template's own suffix, a ':verb' on a PUT, traversal, escapes, a query on a GET
+    () => gtm.accounts.containers.workspaces.tags.create({ parent: 'accounts/1/containers/2/workspaces/3:sync', requestBody: {} }, stubFetch),
+    () => gtm.accounts.containers.workspaces.tags.update({ path: 'accounts/1/containers/2/workspaces/3:sync', requestBody: {} }, stubFetch),
+    () => gtm.accounts.containers.workspaces.tags.get({ path: 'accounts/1/containers/2/workspaces/3/tags/../../../../2' }, stubFetch),
+    () => gtm.accounts.containers.workspaces.tags.get({ path: 'accounts/1/containers/2/workspaces/3/tags/%2e%2e' }, stubFetch),
+    () => gtm.accounts.containers.workspaces.tags.get({ path: 'accounts/1/containers/2/workspaces/3/tags/4?x=1' }, stubFetch),
+    // GA4: create -> irreversible :archive, and '..' -> accessBindings:batchDelete
+    () => ga4.properties.audiences.create({ parent: 'properties/1/customDimensions/7:archive#', requestBody: {} }, stubFetch),
+    () => ga4.properties.channelGroups.create({ parent: 'properties/1/../../accounts/123/accessBindings:batchDelete#', requestBody: {} }, stubFetch),
+    () => ga4.properties.customDimensions.patch({ name: 'properties/1/customDimensions/7:archive', requestBody: {} }, stubFetch),
+  ];
+  for (const fn of cases) {
+    const r = await attempt(fn);
+    assert.ok(r.error, `expected a refusal for ${fn.toString().slice(6, 120)}`);
+    assert.match(r.error.message, /Refused to send this Google API request/);
+    assert.deepStrictEqual(r.sent, [], `nothing may reach fetch: ${r.sent.join(' | ')}`);
+    // gaxios would retry a failed GET with backoff (>= 250ms); a refusal is permanent.
+    assert.ok(r.ms < 200, `a refusal must not be retried (took ${r.ms}ms)`);
+  }
+});
+
+await test('googleRequestProblem: the request gaxios is about to send, judged in isolation', () => {
+  const ser = (p) => new URLSearchParams(p).toString();
+  const ok = (url, method = 'GET', params) => googleRequestProblem({ url, method, params, paramsSerializer: ser });
+  assert.strictEqual(ok('https://tagmanager.googleapis.com/tagmanager/v2/accounts/1/containers/2/workspaces/3:quick_preview', 'POST'), null);
+  assert.strictEqual(ok('https://tagmanager.googleapis.com/tagmanager/v2/accounts/1/containers/2/workspaces/3/tags?pageToken=x', 'GET', { pageToken: 'x' }), null);
+  assert.ok(ok('https://tagmanager.googleapis.com/tagmanager/v2/accounts/1/containers/2/versions/5:publish#/workspaces/3:quick_preview', 'POST'));
+  // A query that is not exactly the request's own params (gaxios joined with "&" after a smuggled "?").
+  assert.ok(ok('https://tagmanager.googleapis.com/tagmanager/v2/accounts/1/containers/2/tags/4?x=1&fingerprint=9', 'PUT', { fingerprint: '9' }));
+  assert.ok(ok('https://tagmanager.googleapis.com/tagmanager/v2/accounts//containers/2', 'GET'), 'an empty id segment');
+  assert.ok(ok('https://analyticsadmin.googleapis.com/v1beta/properties/1:archive', 'DELETE'), 'no DELETE carries a :verb');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

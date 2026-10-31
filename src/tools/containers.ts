@@ -4,6 +4,7 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { gtmId, pathSegmentId } from '../utils/schemas.js';
 import type { GtmClient } from '../utils/gtmClient.js';
 import { checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
 import { paginate, paginationFields, buildListResult } from '../utils/pagination.js';
@@ -16,7 +17,7 @@ export function registerContainerTools(server: McpServer, getClient: () => GtmCl
     {
       description: 'List all GTM containers within a GTM account. Automatically follows pagination to return all containers.',
       inputSchema: z.object({
-        accountId: z.string().describe('The GTM account ID.'),
+        accountId: gtmId.describe('The GTM account ID.'),
       }).extend(paginationFields),
     },
     async ({ accountId, pageToken, maxPages }) => {
@@ -41,8 +42,8 @@ export function registerContainerTools(server: McpServer, getClient: () => GtmCl
     {
       description: 'Get details of a specific GTM container.',
       inputSchema: z.object({
-        accountId: z.string().describe('The GTM account ID.'),
-        containerId: z.string().describe('The GTM container ID.'),
+        accountId: gtmId.describe('The GTM account ID.'),
+        containerId: gtmId.describe('The GTM container ID.'),
       }),
     },
     async ({ accountId, containerId }) => {
@@ -65,7 +66,7 @@ export function registerContainerTools(server: McpServer, getClient: () => GtmCl
       description:
         '[WRITE] Create a new GTM container. Requires GTM_MCP_ENABLE_WRITES=true and confirm=true.',
       inputSchema: z.object({
-        accountId: z.string().describe('The GTM account ID.'),
+        accountId: gtmId.describe('The GTM account ID.'),
         name: z.string().describe('Container name.'),
         usageContext: z
           .array(z.enum(['web', 'androidSdk5', 'iosSdk5', 'amp', 'server']))
@@ -103,8 +104,8 @@ export function registerContainerTools(server: McpServer, getClient: () => GtmCl
         'Read-modify-write via containers.update so the other container fields are preserved; rejects a non-server container. ' +
         'Records the URL in config only — it does NOT deploy the host. Requires GTM_MCP_ENABLE_WRITES=true and confirm=true.',
       inputSchema: z.object({
-        accountId: z.string().describe('The GTM account ID.'),
-        containerId: z.string().describe('The SERVER container ID.'),
+        accountId: gtmId.describe('The GTM account ID.'),
+        containerId: gtmId.describe('The SERVER container ID.'),
         serverUrls: z.array(z.string()).describe('The https tagging-server URL(s) to record on the container.'),
         confirm: z.boolean().describe('Must be true to confirm this write operation.'),
       }),
@@ -143,8 +144,8 @@ export function registerContainerTools(server: McpServer, getClient: () => GtmCl
     {
       description: 'Get the GTM installation snippet (HTML/JS tagging code) for a container.',
       inputSchema: z.object({
-        accountId: z.string().describe('The GTM account ID.'),
-        containerId: z.string().describe('The GTM container ID.'),
+        accountId: gtmId.describe('The GTM account ID.'),
+        containerId: gtmId.describe('The GTM container ID.'),
       }),
     },
     async ({ accountId, containerId }) => {
@@ -190,8 +191,8 @@ export function registerContainerTools(server: McpServer, getClient: () => GtmCl
         'Requires GTM_MCP_ENABLE_WRITES=true and confirm=true. ' +
         '⚠️  This merges the source container identified by containerIdToCombine into the target container.',
       inputSchema: z.object({
-        accountId: z.string().describe('The GTM account ID.'),
-        containerId: z.string().describe('The target container ID (the surviving container).'),
+        accountId: gtmId.describe('The GTM account ID.'),
+        containerId: gtmId.describe('The target container ID (the surviving container).'),
         containerIdToCombine: z.string().describe('The container ID to merge into the target.'),
         settingSource: z
           .enum(['settingSourceUnspecified', 'current', 'other'])
@@ -233,8 +234,8 @@ export function registerContainerTools(server: McpServer, getClient: () => GtmCl
         '[WRITE] Move a Tag ID out of a container into a new container. ' +
         'Requires GTM_MCP_ENABLE_WRITES=true and confirm=true.',
       inputSchema: z.object({
-        accountId: z.string().describe('The GTM account ID.'),
-        containerId: z.string().describe('The source container ID.'),
+        accountId: gtmId.describe('The GTM account ID.'),
+        containerId: gtmId.describe('The source container ID.'),
         tagId: z.string().describe('The Tag ID to move.'),
         tagName: z.string().optional().describe('Name for the new tag created in the destination container.'),
         copySettings: z.boolean().optional().describe('Whether to copy container settings.'),
@@ -274,8 +275,8 @@ export function registerContainerTools(server: McpServer, getClient: () => GtmCl
     {
       description: 'List all destinations (linked Google tags / GA4 destinations) for a GTM container.',
       inputSchema: z.object({
-        accountId: z.string().describe('The GTM account ID.'),
-        containerId: z.string().describe('The GTM container ID.'),
+        accountId: gtmId.describe('The GTM account ID.'),
+        containerId: gtmId.describe('The GTM container ID.'),
       }),
     },
     async ({ accountId, containerId }) => {
@@ -303,9 +304,9 @@ export function registerContainerTools(server: McpServer, getClient: () => GtmCl
     {
       description: 'Get details of a specific GTM destination.',
       inputSchema: z.object({
-        accountId: z.string().describe('The GTM account ID.'),
-        containerId: z.string().describe('The GTM container ID.'),
-        destinationId: z.string().describe('The destination ID.'),
+        accountId: gtmId.describe('The GTM account ID.'),
+        containerId: gtmId.describe('The GTM container ID.'),
+        destinationId: pathSegmentId.describe('The destination ID.'),
       }),
     },
     async ({ accountId, containerId, destinationId }) => {
@@ -329,8 +330,8 @@ export function registerContainerTools(server: McpServer, getClient: () => GtmCl
         '[WRITE] Link a destination (Google tag / GA4 destination) to a GTM container. ' +
         'Requires GTM_MCP_ENABLE_WRITES=true and confirm=true.',
       inputSchema: z.object({
-        accountId: z.string().describe('The GTM account ID.'),
-        containerId: z.string().describe('The GTM container ID.'),
+        accountId: gtmId.describe('The GTM account ID.'),
+        containerId: gtmId.describe('The GTM container ID.'),
         destinationId: z.string().describe('The destination ID to link (e.g. "G-XXXXXXX").'),
         allowUserPermissionFeatureUpdate: z.boolean().optional(),
         confirm: z.boolean().describe('Must be true to confirm this write operation.'),

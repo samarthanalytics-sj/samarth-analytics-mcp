@@ -8,6 +8,7 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { gtmId } from '../utils/schemas.js';
 import type { GtmClient } from '../utils/gtmClient.js';
 import { checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
 import { jsonResult, textResult, errorResult } from '../utils/toolResponse.js';
@@ -15,7 +16,7 @@ import { paginate, paginationFields, buildListResult } from '../utils/pagination
 import type { tagmanager_v2 } from 'googleapis';
 
 const accountBase = z.object({
-  accountId: z.string().describe('The GTM account ID.'),
+  accountId: gtmId.describe('The GTM account ID.'),
 });
 
 const accountPermission = z
@@ -29,7 +30,7 @@ const containerPermission = z
 const containerAccessSchema = z
   .array(
     z.object({
-      containerId: z.string().describe('The GTM container ID.'),
+      containerId: gtmId.describe('The GTM container ID.'),
       permission: containerPermission,
     })
   )
@@ -68,7 +69,7 @@ export function registerUserPermissionTools(server: McpServer, getClient: () => 
     {
       description: 'Get a specific user permission record for a GTM account.',
       inputSchema: accountBase.extend({
-        userPermissionId: z.string().describe('The user permission ID.'),
+        userPermissionId: gtmId.describe('The user permission ID.'),
       }),
     },
     async ({ accountId, userPermissionId }) => {
@@ -130,7 +131,7 @@ export function registerUserPermissionTools(server: McpServer, getClient: () => 
         'Requires GTM_MCP_ENABLE_WRITES=true and confirm=true. ' +
         'Provide the full intended access (account + container) as the API replaces the record.',
       inputSchema: accountBase.extend({
-        userPermissionId: z.string().describe('The user permission ID to update.'),
+        userPermissionId: gtmId.describe('The user permission ID to update.'),
         accountPermission: accountPermission.optional(),
         containerAccess: containerAccessSchema,
         confirm: z.boolean().describe('Must be true to confirm this write operation.'),
@@ -167,7 +168,7 @@ export function registerUserPermissionTools(server: McpServer, getClient: () => 
         '[DELETE] Revoke a user\'s access to a GTM account. ' +
         'Requires GTM_MCP_ENABLE_DELETES=true and confirm=true.',
       inputSchema: accountBase.extend({
-        userPermissionId: z.string().describe('The user permission ID to delete.'),
+        userPermissionId: gtmId.describe('The user permission ID to delete.'),
         confirm: z.boolean().describe('Must be true to confirm this delete operation.'),
       }),
     },

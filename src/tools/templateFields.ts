@@ -26,14 +26,15 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { gtmId } from '../utils/schemas.js';
 import type { GtmClient } from '../utils/gtmClient.js';
 import { paginate } from '../utils/pagination.js';
 import { jsonResult, errorResult, errorText } from '../utils/toolResponse.js';
 
 const wsBase = z.object({
-  accountId: z.string().describe('The GTM account ID.'),
-  containerId: z.string().describe('The GTM container ID.'),
-  workspaceId: z.string().describe('The GTM workspace ID.'),
+  accountId: gtmId.describe('The GTM account ID.'),
+  containerId: gtmId.describe('The GTM container ID.'),
+  workspaceId: gtmId.describe('The GTM workspace ID.'),
 });
 
 export interface TemplateField {
@@ -197,7 +198,7 @@ export function registerTemplateFieldTools(server: McpServer, getClient: () => G
         'Only works for custom and gallery templates: GTM\'s ~68 BUILT-IN vendor templates carry no ' +
         'source, so for those use tags_type_profile against a container that already has one.',
       inputSchema: wsBase.extend({
-        templateId: z.string().describe('The template ID, from templates_list.'),
+        templateId: gtmId.describe('The template ID, from templates_list.'),
       }),
     },
     async ({ accountId, containerId, workspaceId, templateId }) => {

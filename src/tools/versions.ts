@@ -5,17 +5,18 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { gtmId, gtmVersionIdOrLive } from '../utils/schemas.js';
 import type { GtmClient } from '../utils/gtmClient.js';
 import { checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
 import { paginate, paginationFields, buildListResult } from '../utils/pagination.js';
 import { jsonResult, textResult, errorResult } from '../utils/toolResponse.js';
 
 const containerBase = z.object({
-  accountId: z.string(),
-  containerId: z.string(),
+  accountId: gtmId,
+  containerId: gtmId,
 });
 
-const wsBase = containerBase.extend({ workspaceId: z.string() });
+const wsBase = containerBase.extend({ workspaceId: gtmId });
 
 export function registerVersionTools(server: McpServer, getClient: () => GtmClient): void {
   // ── versions/list ────────────────────────────────────────────────────────
@@ -59,7 +60,7 @@ export function registerVersionTools(server: McpServer, getClient: () => GtmClie
     {
       description: 'Get the full contents of a specific GTM container version. Pass "live" as containerVersionId to get the currently live version.',
       inputSchema: containerBase.extend({
-        containerVersionId: z.string().describe('The container version ID, or "live" for the current live version.'),
+        containerVersionId: gtmVersionIdOrLive.describe('The container version ID, or "live" for the current live version.'),
       }),
     },
     async ({ accountId, containerId, containerVersionId }) => {
@@ -118,7 +119,7 @@ export function registerVersionTools(server: McpServer, getClient: () => GtmClie
         'Note: This does NOT publish. Use versions_publish to go live. ' +
         'Requires GTM_MCP_ENABLE_WRITES=true and confirm=true.',
       inputSchema: containerBase.extend({
-        containerVersionId: z.string().describe('The version ID to set as latest.'),
+        containerVersionId: gtmId.describe('The version ID to set as latest.'),
         confirm: z.boolean(),
       }),
     },
@@ -148,7 +149,7 @@ export function registerVersionTools(server: McpServer, getClient: () => GtmClie
         '[WRITE] Undelete a previously deleted GTM container version. ' +
         'Requires GTM_MCP_ENABLE_WRITES=true and confirm=true.',
       inputSchema: containerBase.extend({
-        containerVersionId: z.string(),
+        containerVersionId: gtmId,
         confirm: z.boolean(),
       }),
     },
@@ -179,7 +180,7 @@ export function registerVersionTools(server: McpServer, getClient: () => GtmClie
         'Requires GTM_MCP_ENABLE_DELETES=true and confirm=true. ' +
         'Cannot delete a currently published (live) version.',
       inputSchema: containerBase.extend({
-        containerVersionId: z.string(),
+        containerVersionId: gtmId,
         confirm: z.boolean(),
       }),
     },

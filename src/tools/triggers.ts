@@ -9,7 +9,7 @@ import { checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
 import { paginate, paginationFields, buildListResult } from '../utils/pagination.js';
 import { jsonResult, textResult, errorResult, errorText } from '../utils/toolResponse.js';
 import { googleErrorStatus, explainMissingEntity } from '../utils/writeDiagnostics.js';
-import { workspaceScope as wsBase } from '../utils/schemas.js';
+import { gtmId, workspaceScope as wsBase } from '../utils/schemas.js';
 import { gtmParameterArray } from '../utils/paramSchema.js';
 import { mergeParametersByKey } from '../utils/tagParams.js';
 import type { tagmanager_v2 } from 'googleapis';
@@ -135,7 +135,7 @@ export function registerTriggerTools(server: McpServer, getClient: () => GtmClie
     'triggers_get',
     {
       description: 'Get a specific GTM trigger.',
-      inputSchema: wsBase.extend({ triggerId: z.string() }),
+      inputSchema: wsBase.extend({ triggerId: gtmId }),
     },
     async ({ accountId, containerId, workspaceId, triggerId }) => {
       try {
@@ -198,7 +198,7 @@ export function registerTriggerTools(server: McpServer, getClient: () => GtmClie
       description:
         '[WRITE] Update a GTM trigger (read-modify-write — omitted fields are preserved; `parameter` is merged by key). Requires GTM_MCP_ENABLE_WRITES=true and confirm=true.',
       inputSchema: wsBase.extend({
-        triggerId: z.string(),
+        triggerId: gtmId,
         name: z.string().optional(),
         type: z.string().optional(),
         filter: conditionSchema,
@@ -255,7 +255,7 @@ export function registerTriggerTools(server: McpServer, getClient: () => GtmClie
     {
       description: '[DELETE] Delete a GTM trigger. Requires GTM_MCP_ENABLE_DELETES=true and confirm=true.',
       inputSchema: wsBase.extend({
-        triggerId: z.string(),
+        triggerId: gtmId,
         confirm: z.boolean(),
       }),
     },

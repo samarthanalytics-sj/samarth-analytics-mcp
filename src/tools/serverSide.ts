@@ -15,6 +15,7 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { gtmId } from '../utils/schemas.js';
 import type { GtmClient } from '../utils/gtmClient.js';
 import { checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
 import { paginate, paginationFields, buildListResult } from '../utils/pagination.js';
@@ -95,9 +96,9 @@ function decorateTemplate(
 }
 
 const wsBase = z.object({
-  accountId: z.string().describe('The GTM account ID.'),
-  containerId: z.string().describe('The GTM container ID.'),
-  workspaceId: z.string().describe('The GTM workspace ID.'),
+  accountId: gtmId.describe('The GTM account ID.'),
+  containerId: gtmId.describe('The GTM container ID.'),
+  workspaceId: gtmId.describe('The GTM workspace ID.'),
 });
 
 function parseBody(bodyJson: string): { ok: true; value: Record<string, unknown> } | { ok: false } {
@@ -148,7 +149,7 @@ function registerResource(server: McpServer, getClient: () => GtmClient, spec: R
     `${spec.toolPrefix}_get`,
     {
       description: `Get a specific GTM ${spec.label.replace(/s$/, '')}.`,
-      inputSchema: wsBase.extend({ [spec.idArg]: z.string().describe(`The ${spec.label} ID.`) }),
+      inputSchema: wsBase.extend({ [spec.idArg]: gtmId.describe(`The ${spec.label} ID.`) }),
     },
     async (args) => {
       const { accountId, containerId, workspaceId } = args as Record<string, string>;
@@ -213,7 +214,7 @@ function registerResource(server: McpServer, getClient: () => GtmClient, spec: R
         `Requires GTM_MCP_ENABLE_WRITES=true and confirm=true. ` +
         `Pass the full resource as a JSON string in bodyJson.`,
       inputSchema: wsBase.extend({
-        [spec.idArg]: z.string().describe(`The ${spec.label} ID to update.`),
+        [spec.idArg]: gtmId.describe(`The ${spec.label} ID to update.`),
         bodyJson: z.string().describe(`Full ${spec.label} resource as a JSON string.`),
         fingerprint: z.string().optional().describe('Current fingerprint (for optimistic locking).'),
         confirm: z.boolean().describe('Must be true to confirm this write operation.'),
@@ -253,7 +254,7 @@ function registerResource(server: McpServer, getClient: () => GtmClient, spec: R
         `[DELETE] Delete a GTM ${spec.label.replace(/s$/, '')}. ` +
         `Requires GTM_MCP_ENABLE_DELETES=true and confirm=true.`,
       inputSchema: wsBase.extend({
-        [spec.idArg]: z.string().describe(`The ${spec.label} ID to delete.`),
+        [spec.idArg]: gtmId.describe(`The ${spec.label} ID to delete.`),
         confirm: z.boolean().describe('Must be true to confirm this delete operation.'),
       }),
     },
@@ -284,7 +285,7 @@ function registerResource(server: McpServer, getClient: () => GtmClient, spec: R
           `[WRITE] Revert workspace changes to a GTM ${spec.label.replace(/s$/, '')} back to its last container-version state. ` +
           `Requires GTM_MCP_ENABLE_WRITES=true and confirm=true.`,
         inputSchema: wsBase.extend({
-          [spec.idArg]: z.string().describe(`The ${spec.label} ID to revert.`),
+          [spec.idArg]: gtmId.describe(`The ${spec.label} ID to revert.`),
           fingerprint: z.string().optional().describe('Current fingerprint (for optimistic locking).'),
           confirm: z.boolean().describe('Must be true to confirm this write operation.'),
         }),

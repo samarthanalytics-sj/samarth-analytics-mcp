@@ -21,6 +21,7 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { gtmId } from '../utils/schemas.js';
 import type { GtmClient } from '../utils/gtmClient.js';
 import { checkGuardrails, getGuardrailConfig, formatGoogleError } from '../utils/guardrails.js';
 import { paginate } from '../utils/pagination.js';
@@ -59,9 +60,9 @@ import {
 } from '../shared/server-migration.js';
 
 const wsBase = z.object({
-  accountId: z.string().describe('GTM account ID.'),
-  containerId: z.string().describe('The SERVER container ID (for the plan tool: the WEB container).'),
-  workspaceId: z.string().describe('Workspace ID.'),
+  accountId: gtmId.describe('GTM account ID.'),
+  containerId: gtmId.describe('The SERVER container ID (for the plan tool: the WEB container).'),
+  workspaceId: gtmId.describe('Workspace ID.'),
 });
 const rowsSchema = z
   .array(z.object({ name: z.string(), value: z.string() }))
