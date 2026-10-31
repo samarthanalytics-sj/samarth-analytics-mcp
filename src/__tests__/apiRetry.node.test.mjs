@@ -311,6 +311,53 @@ await test('a path argument that retargets the request is refused before fetch, 
   }
 });
 
+// templates_import_from_gallery has no googleapis method, so importFromGallery calls the client's
+// OAuth2Client directly. That bypassed the method options the factory sets, so the guard above never
+// saw the request. Stubbed at the fetch layer through the auth's own transport defaults.
+const { importFromGallery } = await import(pathToFileURL(path.resolve(__dirname, '../../dist/tools/serverSide.js')).href);
+const importSent = [];
+const importAuth = new OAuth2Client({
+  transporterOptions: {
+    fetchImplementation: async (url, init) => {
+      importSent.push(`${init.method} ${url}`);
+      return new Response('{"templateId":"9"}', { status: 200, headers: { 'content-type': 'application/json' } });
+    },
+  },
+});
+importAuth.setCredentials({ access_token: 'test-token', expiry_date: Date.now() + 3_600_000 });
+const importClient = getGtmClient(importAuth);
+
+await test('importFromGallery (a raw auth.request) goes out unchanged when its parent is well-formed', async () => {
+  importSent.length = 0;
+  const tpl = await importFromGallery(importClient, 'accounts/1/containers/2/workspaces/3', 'owner-x', 'repo-y');
+  assert.deepStrictEqual(tpl, { templateId: '9' });
+  assert.deepStrictEqual(importSent, [
+    'POST https://tagmanager.googleapis.com/tagmanager/v2/accounts/1/containers/2/workspaces/3/templates:import_from_gallery' +
+      '?galleryOwner=owner-x&galleryRepository=repo-y&acknowledgePermissions=true',
+  ]);
+});
+
+await test('REGRESSION: importFromGallery refuses a smuggled parent before fetch, like every client method', async () => {
+  for (const parent of [
+    // -> POST .../versions/5:publish (the '#' drops the real suffix and the query)
+    'accounts/1/containers/2/versions/5:publish#',
+    // -> POST .../containers/2:combine with the gallery params tacked onto an attacker query
+    'accounts/1/containers/2:combine?containerId=999&settingSource=other',
+    // traversal out of the workspace
+    'accounts/1/containers/2/workspaces/3/../../../../2',
+  ]) {
+    importSent.length = 0;
+    const started = Date.now();
+    await assert.rejects(
+      importFromGallery(importClient, parent, 'owner-x', 'repo-y'),
+      /Refused to send this Google API request/,
+      parent
+    );
+    assert.deepStrictEqual(importSent, [], `nothing may reach fetch for ${parent}: ${importSent.join(' | ')}`);
+    assert.ok(Date.now() - started < 200, 'a refusal is not retried');
+  }
+});
+
 await test('googleRequestProblem: the request gaxios is about to send, judged in isolation', () => {
   const ser = (p) => new URLSearchParams(p).toString();
   const ok = (url, method = 'GET', params) => googleRequestProblem({ url, method, params, paramsSerializer: ser });

@@ -17,6 +17,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { gtmId } from '../utils/schemas.js';
 import type { GtmClient } from '../utils/gtmClient.js';
+import { buildRetryOptions } from '../utils/apiRetry.js';
+import { buildRequestGuardOptions } from '../utils/googleRequestGuard.js';
 import { checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
 import { paginate, paginationFields, buildListResult } from '../utils/pagination.js';
 import { jsonResult, textResult, errorResult, errorText } from '../utils/toolResponse.js';
@@ -510,8 +512,11 @@ function registerGalleryImport(server: McpServer, getClient: () => GtmClient): v
  * "api.import_from_gallery is not a function" against a live container.)
  *
  * The REST endpoint exists regardless, so this issues the request through the client's own
- * OAuth2Client. That matters: it reuses the same credentials, refresh behaviour and retry
- * configuration as every other call, rather than introducing a second way of talking to Google.
+ * OAuth2Client. That reuses the same credentials and refresh behaviour as every other call, rather
+ * than introducing a second way of talking to Google. A raw auth.request does NOT get the options the
+ * client factory sets on its methods (gtmClient.ts), though, so the request guard and retry options
+ * are passed on the request itself: without the guard, a parent that a path argument had retargeted
+ * (an extra ':verb', '?' or '#') would go out as-is. See googleRequestGuard.ts.
  *
  * The alternative was upgrading or adding a Google client package for one method. Not worth the
  * dependency risk across a 179-tool server.
@@ -550,6 +555,11 @@ export async function importFromGallery(
       // not a real one. The permissions stay visible on the imported template.
       acknowledgePermissions: true,
     },
+    // The same options every client method gets from the factory: a POST is never retried, and a
+    // request whose URL is not exactly `<parent>/templates:import_from_gallery?<params>` is refused
+    // before it is sent.
+    ...buildRetryOptions(),
+    ...buildRequestGuardOptions(),
   });
 
   const data = res.data as Record<string, unknown> | null;
