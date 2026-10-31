@@ -7,7 +7,8 @@
   "scripts": {
     "build": "vite build",
     "dev": "vite",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit && npm run test",
+    "test": "node src/__tests__/authorizeRequest.node.test.mjs"
   },
   "dependencies": {
     "@stytch/react": "^19.18.1",
