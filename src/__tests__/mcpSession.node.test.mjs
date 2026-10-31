@@ -720,6 +720,29 @@ async function waitFor(pred, ms) {
 
 console.log('\nindex.ts end to end: multi-user mode (mock Stytch)');
 
+await e2e('REGRESSION: a Stytch JWKS outage is a 503 to retry, not a 401 that forces re-auth', async () => {
+  const stytch = await startMockStytch();
+  stytch.state.jwks = { kids: ['k1'], delayMs: 0, status: 503 };
+  const srv = await startServer(stytch.env);
+  try {
+    let r = await post(srv.base, INIT_BODY, { authorization: `Bearer ${stytchToken()}` });
+    assert.strictEqual(r.status, 503, await r.text());
+    assert.strictEqual(r.headers.get('www-authenticate'), null, 'an outage must not send an OAuth challenge');
+    assert.ok(r.headers.get('retry-after'), 'say when to retry');
+    r = await post(srv.base, INIT_BODY, { authorization: `Bearer ${stytchToken()}` });
+    assert.strictEqual(r.status, 503);
+    // A token that is genuinely bad is still a 401 challenge.
+    const unsigned = `${Buffer.from('{"alg":"none"}').toString('base64url')}.e30.`;
+    r = await post(srv.base, INIT_BODY, { authorization: `Bearer ${unsigned}` });
+    assert.strictEqual(r.status, 401);
+    assert.match(r.headers.get('www-authenticate') ?? '', /resource_metadata=/);
+    assert.strictEqual(stytch.state.jwksHits, 1, 'requests inside the retry backoff must not refetch the JWKS');
+  } finally {
+    await srv.stop();
+    await stytch.stop();
+  }
+});
+
 await e2e('REGRESSION: a client that hangs up during async auth does not pin its session forever', async () => {
   const stytch = await startMockStytch();
   // A short TTL so the idle sweep runs within the test.

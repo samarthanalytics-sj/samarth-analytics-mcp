@@ -44,7 +44,11 @@ import {
   sessionOwnedBy,
   redactSessionId,
 } from './utils/mcpSession.js';
-import { createStytchTokenValidator, resolveStytchTokenPins } from './auth/stytchTokenValidator.js';
+import {
+  createStytchTokenValidator,
+  JwksUnavailableError,
+  resolveStytchTokenPins,
+} from './auth/stytchTokenValidator.js';
 import type { StytchClaims } from './auth/stytchTokenValidator.js';
 
 async function main(): Promise<void> {
@@ -261,12 +265,23 @@ async function startHttpServer(auth: OAuth2Client): Promise<void> {
         send401(res, 'Missing bearer token.');
         return undefined;
       }
-      // Step 1 — validate the Stytch JWT. A failure here is genuinely an
-      // auth problem (bad signature/expiry/issuer), so it stays a 401 challenge.
+      // Step 1 — validate the Stytch JWT. A failure here is an auth problem (bad
+      // signature/expiry/issuer), so it stays a 401 challenge - EXCEPT when Stytch's JWKS
+      // could not be fetched and no usable cached copy remains: that is an upstream outage,
+      // and a 401 challenge would send every connected client back through OAuth. Like
+      // step 2's upstream failures it is answered without a challenge (503 + Retry-After).
       let claims: StytchClaims;
       try {
         claims = await validator!.validate(m[1]);
       } catch (err) {
+        if (err instanceof JwksUnavailableError) {
+          console.error(`[samarth-gtm-mcp] token validation unavailable: ${err.message}`);
+          res.setHeader('Retry-After', '30');
+          res.status(503).json({
+            error: 'Authorization server keys are temporarily unavailable; retry shortly.',
+          });
+          return undefined;
+        }
         console.error(
           '[samarth-gtm-mcp] token validation failed:',
           err instanceof Error ? err.message : String(err)

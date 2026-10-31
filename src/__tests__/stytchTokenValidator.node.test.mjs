@@ -25,7 +25,8 @@ if (!existsSync(distMod)) {
   console.error(`\n✗ validator test: ${distMod} not found. Run "npm run build" first.`);
   process.exit(1);
 }
-const { createStytchTokenValidator, resolveStytchTokenPins } = await import(pathToFileURL(distMod).href);
+const { createStytchTokenValidator, resolveStytchTokenPins, JwksUnavailableError, TokenValidationError } =
+  await import(pathToFileURL(distMod).href);
 
 const b64url = (buf) => Buffer.from(buf).toString('base64url');
 
@@ -349,6 +350,136 @@ await test('a rotated kid is still picked up once the refresh cooldown passes', 
   const claims = await v.validate(signJwt(goodPayload, { kid: 'key-2' }));
   assert.strictEqual(claims.memberId, 'member-123');
   assert.strictEqual(n, 3, `rotation should refresh after the cooldown, got ${n}`);
+});
+
+// ── JWKS refresh failures (REGRESSION) ────────────────────────────────────────
+// A failed refetch at the cache TTL used to throw away the still-valid cached keys, so a brief Stytch
+// outage turned every request into a 401 challenge and pushed every client back through OAuth. It also
+// refetched on every request with no backoff, and concurrent requests each started their own fetch.
+
+/** fetch whose behaviour is switched by `mode`: 'ok' | 503 | 'network' | 'badjson'. */
+function scriptedFetch() {
+  const s = { mode: 'ok', calls: 0, delayMs: 0, sawSignal: true };
+  s.fetchImpl = async (_url, init) => {
+    s.calls += 1;
+    if (!init?.signal) s.sawSignal = false;
+    if (s.delayMs) await new Promise((r) => setTimeout(r, s.delayMs));
+    if (s.mode === 'network') throw new TypeError('fetch failed');
+    if (s.mode === 'badjson') {
+      return { ok: true, status: 200, json: async () => { throw new SyntaxError('Unexpected token <'); } };
+    }
+    if (typeof s.mode === 'number') return { ok: false, status: s.mode, json: async () => ({}) };
+    return { ok: true, status: 200, json: async () => JWKS };
+  };
+  return s;
+}
+
+const isUnavailable = (err) => {
+  assert.ok(typeof JwksUnavailableError === 'function', 'JwksUnavailableError is not exported');
+  assert.ok(err instanceof JwksUnavailableError, `expected JwksUnavailableError, got ${err?.name}: ${err?.message}`);
+  assert.ok(!(err instanceof TokenValidationError), 'an upstream outage must not look like a bad token');
+  return true;
+};
+
+const HOUR = 3_600_000;
+// These tests move the clock hours ahead, so the token has to outlive them.
+const longLived = { ...goodPayload, exp: nowSec + 24 * 3600 };
+
+await test('REGRESSION: after the cache TTL a failed refresh keeps accepting tokens with the last good keys', async () => {
+  let clock = NOW;
+  const f = scriptedFetch();
+  const v = createStytchTokenValidator({ jwksUrl: 'https://x/jwks', fetchImpl: f.fetchImpl, now: () => clock });
+  await v.validate(signJwt(longLived)); // fetch 1 caches the keys
+  clock = NOW + HOUR + 1; // past the 1h TTL
+  for (const mode of [503, 'network', 'badjson']) {
+    f.mode = mode;
+    const claims = await v.validate(signJwt(longLived));
+    assert.strictEqual(claims.memberId, 'member-123', `mode ${mode}`);
+    clock += 31_000; // past the retry backoff, so each mode really is fetched
+  }
+  assert.strictEqual(f.calls, 4, `expected 1 good fetch + 3 failed refreshes, got ${f.calls}`);
+});
+
+await test('REGRESSION: a failed fetch with nothing cached is JwksUnavailableError, not a token error', async () => {
+  for (const mode of [503, 'network', 'badjson']) {
+    const f = scriptedFetch();
+    f.mode = mode;
+    const v = createStytchTokenValidator({ jwksUrl: 'https://x/jwks', fetchImpl: f.fetchImpl, now: () => NOW });
+    await assert.rejects(() => v.validate(signJwt(longLived)), isUnavailable, `mode ${mode}`);
+  }
+});
+
+await test('the stale keys are bounded: past cache TTL + max stale, a failed refresh rejects', async () => {
+  let clock = NOW;
+  const f = scriptedFetch();
+  const v = createStytchTokenValidator({ jwksUrl: 'https://x/jwks', fetchImpl: f.fetchImpl, now: () => clock });
+  await v.validate(signJwt(longLived));
+  f.mode = 503;
+  clock = NOW + 7 * HOUR + 1; // default 1h cache + 6h stale window
+  await assert.rejects(() => v.validate(signJwt(longLived)), isUnavailable);
+});
+
+await test('REGRESSION: concurrent validations after the TTL share ONE JWKS fetch', async () => {
+  let clock = NOW;
+  const f = scriptedFetch();
+  const v = createStytchTokenValidator({ jwksUrl: 'https://x/jwks', fetchImpl: f.fetchImpl, now: () => clock });
+  await v.validate(signJwt(longLived));
+  clock = NOW + HOUR + 1;
+  f.delayMs = 20;
+  const results = await Promise.all(Array.from({ length: 5 }, () => v.validate(signJwt(longLived))));
+  assert.strictEqual(results.length, 5);
+  assert.strictEqual(f.calls, 2, `expected 1 initial + 1 shared refresh, got ${f.calls}`);
+});
+
+await test('REGRESSION: failures back off instead of refetching on every request', async () => {
+  let clock = NOW;
+  const f = scriptedFetch();
+  const v = createStytchTokenValidator({ jwksUrl: 'https://x/jwks', fetchImpl: f.fetchImpl, now: () => clock });
+  await v.validate(signJwt(longLived));
+  clock = NOW + HOUR + 1;
+  f.mode = 503;
+  for (let i = 0; i < 5; i++) await v.validate(signJwt(longLived)); // all served from the stale keys
+  assert.strictEqual(f.calls, 2, `only the first failed refresh may reach Stytch, got ${f.calls}`);
+  clock += 31_000; // backoff over
+  f.mode = 'ok';
+  await v.validate(signJwt(longLived));
+  assert.strictEqual(f.calls, 3, 'after the backoff the refresh is retried');
+  await v.validate(signJwt(longLived));
+  assert.strictEqual(f.calls, 3, 'a successful refresh is cached again');
+});
+
+await test('an unknown kid is still rejected as a bad token while refreshes fail', async () => {
+  const f = scriptedFetch();
+  const v = createStytchTokenValidator({ jwksUrl: 'https://x/jwks', fetchImpl: f.fetchImpl, now: () => NOW });
+  await v.validate(signJwt(goodPayload));
+  f.mode = 503;
+  await assert.rejects(() => v.validate(signJwt(goodPayload, { kid: 'never-published' })), (err) => {
+    assert.ok(err instanceof TokenValidationError, err?.name);
+    assert.match(err.message, /no JWKS key/);
+    return true;
+  });
+});
+
+await test('REGRESSION: a JWKS fetch that never answers is aborted by a timeout', async () => {
+  const s = { signal: undefined };
+  const hangingFetch = (_url, init) => {
+    s.signal = init?.signal;
+    if (!init?.signal) return Promise.reject(new Error('JWKS fetch issued without a timeout signal'));
+    return new Promise((_, reject) => init.signal.addEventListener('abort', () => reject(init.signal.reason)));
+  };
+  const v = createStytchTokenValidator({
+    jwksUrl: 'https://x/jwks',
+    fetchImpl: hangingFetch,
+    now: () => NOW,
+    jwksFetchTimeoutMs: 50,
+  });
+  // The race timer keeps the event loop alive while the (unref'd) abort timer runs.
+  const outcome = await Promise.race([
+    v.validate(signJwt(goodPayload)).then(() => 'accepted', (err) => err),
+    new Promise((r) => setTimeout(() => r('hung'), 2000)),
+  ]);
+  assert.notStrictEqual(outcome, 'hung', 'the fetch was never aborted');
+  isUnavailable(outcome);
 });
 
 await test('malformed token → rejected', async () => {

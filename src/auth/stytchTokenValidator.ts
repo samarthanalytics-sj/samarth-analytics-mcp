@@ -42,6 +42,13 @@ export interface ValidatorConfig {
   fetchImpl?: typeof fetch;
   /** JWKS cache lifetime (ms). Default 1h. */
   jwksCacheMs?: number;
+  /** How long past jwksCacheMs the last good JWKS may still be used while refreshes fail (ms).
+   *  Bounded so a key Stytch withdrew is not trusted forever. Default 6h. */
+  jwksMaxStaleMs?: number;
+  /** After a failed JWKS fetch, no new fetch is attempted for this long (ms). Default 30s. */
+  jwksRetryBackoffMs?: number;
+  /** Abort a JWKS fetch that has not answered within this long (ms). Default 5s. */
+  jwksFetchTimeoutMs?: number;
   /** Allowed clock skew for exp/nbf (seconds). Default 30. */
   clockSkewSeconds?: number;
   /** Log decoded claims to stderr (bring-up only). */
@@ -52,6 +59,18 @@ export class TokenValidationError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'TokenValidationError';
+  }
+}
+
+/**
+ * The JWKS could not be fetched (network error, timeout, non-2xx or unreadable body) and no usable
+ * cached copy remains. This is an upstream outage, not a bad token: callers must NOT answer it with
+ * a 401 challenge, which sends every connected client back through OAuth.
+ */
+export class JwksUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'JwksUnavailableError';
   }
 }
 
@@ -106,10 +125,21 @@ export function createStytchTokenValidator(cfg: ValidatorConfig): StytchTokenVal
   const now = cfg.now ?? (() => Date.now());
   const fetchImpl = cfg.fetchImpl ?? fetch;
   const cacheMs = cfg.jwksCacheMs ?? 3_600_000;
+  const maxStaleMs = cfg.jwksMaxStaleMs ?? 6 * 3_600_000;
+  const retryBackoffMs = cfg.jwksRetryBackoffMs ?? 30_000;
+  const fetchTimeoutMs = cfg.jwksFetchTimeoutMs ?? 5_000;
   const skew = (cfg.clockSkewSeconds ?? 30) * 1000;
 
   let cachedKeys: Jwk[] | null = null;
   let fetchedAt = 0;
+  // Refresh failure handling. A failed refetch used to throw away the still-valid cached keys, so a
+  // brief Stytch outage at the cache TTL turned every request into a 401 challenge (every client
+  // re-ran OAuth), every request fetched again with no backoff, and concurrent requests each started
+  // their own fetch. Now: one shared in-flight fetch with a timeout, a retry backoff after a failure,
+  // and the last good keys served for a bounded stale window.
+  let inflight: Promise<Jwk[]> | null = null;
+  let nextRetryAt = Number.NEGATIVE_INFINITY;
+  let lastFailure: JwksUnavailableError | null = null;
   // Throttle for kid-miss refreshes. A kid we have never seen used to force a JWKS
   // fetch on EVERY request, so anyone who can reach /mcp could turn unauthenticated
   // traffic into the same volume of outbound requests to Stytch, and once Stytch rate
@@ -119,18 +149,73 @@ export function createStytchTokenValidator(cfg: ValidatorConfig): StytchTokenVal
   // -Infinity so the first kid miss of the process always refreshes, whatever the clock.
   let lastForcedRefreshAt = Number.NEGATIVE_INFINITY;
 
+  async function fetchKeys(): Promise<Jwk[]> {
+    let res: Response;
+    try {
+      res = await fetchImpl(cfg.jwksUrl, { signal: AbortSignal.timeout(fetchTimeoutMs) });
+    } catch (err) {
+      throw new JwksUnavailableError(
+        `JWKS fetch failed: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+    if (!res.ok) {
+      throw new JwksUnavailableError(`JWKS fetch failed: HTTP ${res.status}`);
+    }
+    let body: { keys?: Jwk[] };
+    try {
+      body = (await res.json()) as { keys?: Jwk[] };
+    } catch {
+      throw new JwksUnavailableError('JWKS fetch failed: response was not valid JSON');
+    }
+    return Array.isArray(body.keys) ? body.keys : [];
+  }
+
+  /** The last good keys while they are inside the stale window; otherwise the upstream failure. */
+  function staleKeysOr(err: JwksUnavailableError): Jwk[] {
+    if (cachedKeys && now() - fetchedAt < cacheMs + maxStaleMs) return cachedKeys;
+    throw err;
+  }
+
   async function getKeys(forceRefresh: boolean): Promise<Jwk[]> {
     if (!forceRefresh && cachedKeys && now() - fetchedAt < cacheMs) {
       return cachedKeys;
     }
-    const res = await fetchImpl(cfg.jwksUrl);
-    if (!res.ok) {
-      throw new TokenValidationError(`JWKS fetch failed: HTTP ${res.status}`);
+    // Inside the backoff after a failure: do not hit Stytch again for every request.
+    if (!inflight && now() < nextRetryAt && lastFailure) {
+      return staleKeysOr(lastFailure);
     }
-    const body = (await res.json()) as { keys?: Jwk[] };
-    cachedKeys = Array.isArray(body.keys) ? body.keys : [];
-    fetchedAt = now();
-    return cachedKeys;
+    if (!inflight) {
+      inflight = fetchKeys()
+        .then(
+          (keys) => {
+            cachedKeys = keys;
+            fetchedAt = now();
+            lastFailure = null;
+            nextRetryAt = Number.NEGATIVE_INFINITY;
+            return keys;
+          },
+          (err: JwksUnavailableError) => {
+            lastFailure = err;
+            nextRetryAt = now() + retryBackoffMs;
+            // Logged once per failed fetch (not per request), to stderr only.
+            const age = cachedKeys ? `${Math.round((now() - fetchedAt) / 1000)}s old` : 'none';
+            console.error(
+              `[samarth-gtm-mcp] ${err.message}; retrying in ${Math.round(retryBackoffMs / 1000)}s ` +
+                `(cached JWKS: ${age})`
+            );
+            throw err;
+          }
+        )
+        .finally(() => {
+          inflight = null;
+        });
+    }
+    try {
+      return await inflight;
+    } catch (err) {
+      if (err instanceof JwksUnavailableError) return staleKeysOr(err);
+      throw err;
+    }
   }
 
   async function findKey(kid: string | undefined): Promise<Jwk> {
