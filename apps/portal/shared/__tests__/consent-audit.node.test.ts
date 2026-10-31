@@ -1238,6 +1238,52 @@ test("G20 reconcile gating-vs-vendor needs ads denied (analytics-only denial -> 
   assert.ok(hasNo(f, "consent-reconcile-gating-vs-vendor"));
 });
 
+// ════════════════════════════════════════════════════════════════════════════
+// GROUP H — built-in Consent Initialization trigger
+// ════════════════════════════════════════════════════════════════════════════
+
+// GTM's built-in "Consent Initialization - All Pages" trigger. triggers.list
+// never returns built-ins, so these fixtures pass `triggers: []` like the
+// real callers do.
+const CONSENT_INIT_BUILTIN = "2147479572";
+const consentDefaultHtml = (partial: Partial<ConsentTag> = {}): ConsentTag =>
+  tag({
+    tagId: "10",
+    name: "Consent default",
+    type: "html",
+    firingTriggerId: [CONSENT_INIT_BUILTIN],
+    ...partial,
+  });
+const googleTagAllPages = tag({ tagId: "11", name: "Google tag", type: "googtag", firingTriggerId: [ALL_PAGES] });
+const consentBlob = blobWith({ hasDefault: true, fields: CONSENT_V2_FIELDS, passthrough: true, redaction: true, region: true });
+
+test("H01 consent default tag on built-in Consent Initialization -> hasConsentInitTrigger", () => {
+  const i = detectConsentInit(cfg({ tags: [consentDefaultHtml(), googleTagAllPages], textBlob: consentBlob }));
+  assert.ok(i.hasConsentInitTrigger);
+});
+test("H02 consent default on built-in Consent Initialization + Google tag on All Pages -> no ordering finding", () => {
+  // Regression: only triggers.list was consulted, so the canonical correct setup
+  // was told to "place the consent default tag on the Consent Initialization trigger".
+  const f = runConsentConfigRules(cfg({ tags: [consentDefaultHtml(), googleTagAllPages], textBlob: consentBlob }));
+  assert.ok(hasNo(f, "consent-config-ordering"));
+});
+test("H03 CMP template on built-in Consent Initialization -> no 'no consent signals' finding", () => {
+  const cmp = tag({ tagId: "12", name: "Cookiebot CMP", type: "cvt_123_45", firingTriggerId: [CONSENT_INIT_BUILTIN] });
+  const f = runConsentConfigRules(cfg({ tags: [cmp, googleTagAllPages], textBlob: "cookiebot cmp\ncvt_123_45" }));
+  assert.ok(hasNo(f, "consent-config-none"));
+});
+test("H04 paused consent tag on built-in Consent Initialization does not count -> ordering finding", () => {
+  const f = runConsentConfigRules(
+    cfg({ tags: [consentDefaultHtml({ paused: true }), googleTagAllPages], textBlob: consentBlob }),
+  );
+  assert.ok(has(f, "consent-config-ordering"));
+});
+test("H05 GA4 tag on built-in Consent Initialization is not a consent setup -> ordering finding", () => {
+  const ga4OnInit = tag({ tagId: "13", name: "GA4 config", type: "gaawc", firingTriggerId: [CONSENT_INIT_BUILTIN] });
+  const f = runConsentConfigRules(cfg({ tags: [ga4OnInit, googleTagAllPages], textBlob: consentBlob }));
+  assert.ok(has(f, "consent-config-ordering"));
+});
+
 // ── run summary ──────────────────────────────────────────────────────────--
 
 const total = passed + failed;

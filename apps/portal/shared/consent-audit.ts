@@ -58,6 +58,8 @@ export interface ConsentTag {
   type?: string;
   parameter?: ConsentParam[];
   firingTriggerId?: string[];
+  /** Paused tags never fire. */
+  paused?: boolean;
   /** GTM per-tag consent settings (consentStatus: NOT_SET | NEEDED | NOT_NEEDED). */
   consentSettings?: { consentStatus?: string; consentType?: { value?: string } };
   /** Sequencing — a tag that must fire before this one (setup) / after (teardown). */
@@ -295,6 +297,14 @@ function push(out: ConsentFinding[], f: ConsentFinding): void {
 // 1. CONFIG checks — inspect GTM configuration only. Source: CONFIG.
 // ════════════════════════════════════════════════════════════════════════════
 
+/**
+ * GTM built-in "Consent Initialization - All Pages" trigger. triggers.list never
+ * returns built-in triggers, so a consent-default / CMP tag firing on it is only
+ * visible from the tag side (mirrors CONSENT_INIT_TRIGGER_ID in
+ * apps/desktop/src/main/google/gtm-builders.ts).
+ */
+const CONSENT_INIT_TRIGGER_ID = "2147479572";
+
 /** Detect consent initialisation: a Consent Mode default in tags/triggers/text. */
 export function detectConsentInit(cfg: ConsentConfigInput): {
   hasDefault: boolean;
@@ -307,9 +317,20 @@ export function detectConsentInit(cfg: ConsentConfigInput): {
     || /consent[_\s-]?default/.test(blob);
   const hasUpdate = /consent['"\s,]*update|gtag\(['"]consent['"],\s*['"]update/.test(blob)
     || /consent[_\s-]?update/.test(blob);
-  const hasConsentInitTrigger = cfg.triggers.some(
-    (t) => lc(t.type) === "consentinit" || /consent[\s_-]?initialization/.test(lc(t.name)),
-  );
+  const hasConsentInitTrigger =
+    cfg.triggers.some(
+      (t) => lc(t.type) === "consentinit" || /consent[\s_-]?initialization/.test(lc(t.name)),
+    ) ||
+    // A live consent-default / CMP tag on the BUILT-IN Consent Initialization
+    // trigger. A data sender (GA4, Ads, vendor pixel) placed there is not a
+    // consent setup, and a paused tag never fires, so neither counts.
+    cfg.tags.some(
+      (t) =>
+        !t.paused &&
+        !isMarketingOrAnalyticsTag(t) &&
+        !isGa4Config(t) &&
+        (t.firingTriggerId ?? []).map(String).includes(CONSENT_INIT_TRIGGER_ID),
+    );
   const fieldsSeen = new Set<ConsentField>();
   for (const f of CONSENT_V2_FIELDS) {
     if (blob.includes(f)) fieldsSeen.add(f);
