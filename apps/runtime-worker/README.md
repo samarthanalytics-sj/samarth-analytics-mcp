@@ -131,7 +131,10 @@ tokens only via the host's environment.
 ## Deploy
 
 A `Dockerfile` is included (based on the official Playwright image, which ships
-Chromium + system deps). Examples:
+Chromium + system deps). The image only carries the browsers for its own
+Playwright version, so its `FROM` tag and the exact `playwright` version in
+`package.json` must be bumped together (`url-guard.test.mjs` checks this).
+Examples:
 
 ```bash
 # Build & run a container anywhere

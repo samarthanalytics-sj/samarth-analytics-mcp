@@ -1,7 +1,10 @@
-// SSRF guard unit tests. Run with: node --test url-guard.test.mjs
+// Runtime worker tests. Run with: node --test url-guard.test.mjs
+// SSRF guard unit tests first, then the Docker image contents. Node built-ins
+// only: CI installs nothing for this worker.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { urlAllowed, createRequestGuard, watchLanding } from "./url-guard.mjs";
 
 test("allows ordinary public http(s) URLs", () => {
@@ -304,4 +307,48 @@ test("capture.mjs checks the landing before it records anything from a page", as
   assert.ok(first > goto && first < finalUrl, `landing@${first} finalUrl@${finalUrl}`);
   assert.ok(late > reads, `late landing@${late} reads@${reads}`);
   assert.match(src, /capturePage\(context, url, \{[^}]*requestAllowed/, "the context's guard is passed in");
+});
+
+// ── Docker image contents ───────────────────────────────────────────────────
+
+const dockerfile = readFileSync(new URL("./Dockerfile", import.meta.url), "utf8");
+const workerPkg = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8"));
+
+test("Dockerfile copies every module the image runs, and everything they import", () => {
+  const copied = new Set();
+  for (const line of dockerfile.split("\n")) {
+    const m = /^COPY\s+(.+)$/.exec(line.trim());
+    if (!m) continue;
+    const parts = m[1].split(/\s+/).filter((p) => !p.startsWith("--"));
+    parts.pop(); // destination
+    for (const p of parts) copied.add(p.replace(/^\.\//, ""));
+  }
+  const cmd = /^CMD\s+\[\s*"node",\s*"([^"]+)"/m.exec(dockerfile)?.[1];
+  assert.ok(cmd, "Dockerfile has a CMD [\"node\", ...]");
+  // The CMD entry, every `node <file>.mjs` npm script, and every copied module.
+  const entries = new Set([cmd, ...[...copied].filter((f) => f.endsWith(".mjs"))]);
+  for (const script of Object.values(workerPkg.scripts ?? {})) {
+    for (const m of script.matchAll(/\bnode\s+([\w.-]+\.mjs)\b/g)) entries.add(m[1]);
+  }
+  const seen = new Set();
+  const queue = [...entries];
+  while (queue.length) {
+    const file = queue.shift();
+    if (seen.has(file)) continue;
+    seen.add(file);
+    assert.ok(copied.has(file), `${file} is needed at runtime but the Dockerfile never COPYs it`);
+    const src = readFileSync(new URL(`./${file}`, import.meta.url), "utf8");
+    const rel = /(?:\bfrom\s*|\bimport\s*\(?\s*)["']\.\/([^"']+)["']/g;
+    for (const m of src.matchAll(rel)) queue.push(m[1]);
+  }
+  assert.ok(seen.has("url-guard.mjs"), "the import walk reached url-guard.mjs");
+});
+
+test("Dockerfile base image ships the browsers for the exact pinned playwright", () => {
+  // The image installs from package.json alone (no lockfile reaches the build), and its
+  // /ms-playwright only holds browsers for the tag's version, so a range would drift.
+  const pinned = workerPkg.optionalDependencies?.playwright ?? workerPkg.dependencies?.playwright;
+  assert.match(String(pinned), /^\d+\.\d+\.\d+$/, `playwright must be pinned exactly, got ${pinned}`);
+  const tag = /^FROM\s+mcr\.microsoft\.com\/playwright:v(\d+\.\d+\.\d+)-\S+/m.exec(dockerfile)?.[1];
+  assert.equal(tag, pinned, `FROM tag v${tag} must equal package.json playwright ${pinned}`);
 });

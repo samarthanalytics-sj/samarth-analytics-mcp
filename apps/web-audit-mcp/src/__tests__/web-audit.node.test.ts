@@ -1864,6 +1864,31 @@ await withHttpEnv(
   },
 );
 
+// ── Docker image: base-image browsers match the installed Playwright ─────────
+// The Playwright image only ships browser builds for its own version and the Dockerfile never runs
+// `playwright install`, so a lockfile playwright newer than the FROM tag makes every
+// chromium.launch() fail with "Executable doesn't exist" while /health still reports OK.
+{
+  const dockerfile = readFileSync(new URL('../../Dockerfile', import.meta.url), 'utf8');
+  const lock = JSON.parse(readFileSync(new URL('../../package-lock.json', import.meta.url), 'utf8')) as {
+    packages: Record<string, { version?: string }>;
+  };
+  const fromTag = /^FROM\s+mcr\.microsoft\.com\/playwright:v(\d+\.\d+\.\d+)-\S+/m.exec(dockerfile)?.[1];
+  const locked = lock.packages['node_modules/playwright']?.version;
+  const lockedCore = lock.packages['node_modules/playwright-core']?.version;
+  check('docker: web-audit image is FROM a versioned Playwright base image', Boolean(fromTag), String(fromTag));
+  check(
+    'docker: web-audit Playwright base-image tag equals the lockfile playwright version',
+    Boolean(locked) && fromTag === locked,
+    `FROM v${fromTag} vs lockfile playwright ${locked}`,
+  );
+  check(
+    'docker: web-audit lockfile playwright-core matches playwright',
+    Boolean(lockedCore) && lockedCore === locked,
+    `playwright ${locked} vs playwright-core ${lockedCore}`,
+  );
+}
+
 // ── tag-presence reconciliation (configured vs fired) ───────────────────────
 
 const reconContainer = {
