@@ -25,6 +25,7 @@ import crypto from "node:crypto";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { runConsentAudit, type ConsentFinding } from "../consent-audit";
 import {
@@ -466,6 +467,92 @@ test("R-guard: api/** routes import only node:* and `import type` at the top lev
   };
   walk(API_DIR);
   assert.deepEqual(offenders, []);
+});
+
+test("R-guard: every relative runtime import reachable from api/** names its .js file", () => {
+  // @vercel/node transpiles each .ts to its own .js ES module without bundling
+  // or rewriting specifiers, and plain Node resolves no extensionless relative
+  // import: `await import("../../shared/consent-audit")` built and traced fine,
+  // then threw ERR_MODULE_NOT_FOUND on every authenticated audit. tsx (tests,
+  // `vercel dev`, the Express server) resolves either form, hiding it.
+  // Read from the AST, so comments, strings and type positions such as
+  // `typeof import("…")` are ignored. A load whose target is not a string
+  // literal cannot be checked, so it is reported as `<non-literal …>`.
+  const runtimeSpecifiers = (file: string): string[] => {
+    const sf = ts.createSourceFile(file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    const out: string[] = [];
+    const literal = (n: ts.Node | undefined): string | undefined =>
+      n && (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) ? n.text : undefined;
+    const isRequire = (callee: ts.Expression): boolean =>
+      (ts.isIdentifier(callee) && callee.text === "require") ||
+      (ts.isCallExpression(callee) && ts.isIdentifier(callee.expression) && callee.expression.text === "createRequire");
+    const walkNode = (node: ts.Node): void => {
+      if (ts.isImportDeclaration(node)) {
+        const clause = node.importClause;
+        const named = clause?.namedBindings;
+        const typeOnly =
+          clause?.isTypeOnly ||
+          (clause && !clause.name && named && ts.isNamedImports(named) && named.elements.length > 0 &&
+            named.elements.every((e) => e.isTypeOnly));
+        if (!typeOnly) out.push(literal(node.moduleSpecifier) ?? "<non-literal import>");
+      } else if (ts.isExportDeclaration(node)) {
+        if (!node.isTypeOnly && node.moduleSpecifier) out.push(literal(node.moduleSpecifier) ?? "<non-literal export>");
+      } else if (ts.isImportEqualsDeclaration(node)) {
+        if (!node.isTypeOnly && ts.isExternalModuleReference(node.moduleReference)) {
+          out.push(literal(node.moduleReference.expression) ?? "<non-literal require>");
+        }
+      } else if (ts.isCallExpression(node)) {
+        if (node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+          out.push(literal(node.arguments[0]) ?? `<non-literal import(${node.arguments[0]?.getText(sf) ?? ""})>`);
+        } else if (isRequire(node.expression)) {
+          out.push(literal(node.arguments[0]) ?? `<non-literal require(${node.arguments[0]?.getText(sf) ?? ""})>`);
+        }
+      }
+      ts.forEachChild(node, walkNode);
+    };
+    walkNode(sf);
+    return out;
+  };
+  const offenders: string[] = [];
+  const seen = new Set<string>();
+  const visit = (file: string): void => {
+    if (seen.has(file)) return;
+    seen.add(file);
+    for (const spec of runtimeSpecifiers(file)) {
+      const rel = `${path.relative(API_DIR, file)} -> ${spec}`;
+      // tsconfig path aliases exist only for tsc, tsx and bundlers.
+      if (spec.startsWith("<non-literal") || spec.startsWith("@/") || spec.startsWith("@shared/")) {
+        offenders.push(rel);
+        continue;
+      }
+      if (!spec.startsWith(".")) continue;
+      if (!spec.endsWith(".js")) {
+        offenders.push(rel);
+        continue;
+      }
+      const target = path.resolve(path.dirname(file), spec.replace(/\.js$/, ".ts"));
+      try {
+        statSync(target);
+      } catch {
+        offenders.push(`${rel} (no ${path.basename(target)})`);
+        continue;
+      }
+      visit(target);
+    }
+  };
+  const walk = (dir: string): void => {
+    for (const name of readdirSync(dir)) {
+      const p = path.join(dir, name);
+      if (statSync(p).isDirectory()) walk(p);
+      else if (p.endsWith(".ts")) visit(p);
+    }
+  };
+  walk(API_DIR);
+  assert.deepEqual(offenders, []);
+  // The lazy engine imports were followed, so their own imports were checked too.
+  for (const engine of ["consent-audit.ts", "audit-accuracy.ts"]) {
+    assert.ok([...seen].some((f) => f.endsWith(path.join("shared", engine))), `${engine} was not reached`);
+  }
 });
 
 testAsync("R-auth: /api/gtm/audit without a session is a clean 401", async () => {
