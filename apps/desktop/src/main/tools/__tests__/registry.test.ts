@@ -917,6 +917,60 @@ async function main(): Promise<void> {
     assert.deepEqual(fd2.calls.filter((c) => c.startsWith('runServerRuntimeProbe')), ['runServerRuntimeProbe:1:2:3:G-ABC123'], 'exactly one probe after approval');
   });
 
+  await test('gtm:applyFix (runAuditFix) runs ONLY audit-fix tools; a delete fix walks the two-step delete confirmation', async () => {
+    // Regression: the audit panel's applyFix ran ANY tool name the renderer sent, through a full GTM
+    // registry whose confirm fn approved every card - so batch deletes, container creates and the
+    // live-GA4 probe all ran with their approval cards silently answered.
+    const { runAuditFix, auditFixConfirm } = await import('../../suggestions/audit-fix');
+    const ws = { accountId: '1', containerId: '2', workspaceId: '3' };
+    const fd = fakeData();
+    const data = fd.data;
+    for (const fix of [
+      { tool: 'batch_delete_gtm_entities', args: { ...ws, triggers: [{ id: '7' }] } },
+      { tool: 'delete_unused_gtm_variables', args: ws },
+      { tool: 'delete_gtm_tag', args: { ...ws, tagId: '9' } },
+      { tool: 'probe_server_runtime', args: ws },
+      { tool: 'create_server_container', args: { accountId: '1', name: 'S' } },
+    ]) {
+      await assert.rejects(() => runAuditFix(data, fix), /not an audit fix/, `${fix.tool} is refused`);
+    }
+    assert.equal(fd.calls.length, 0, 'a refused fix reaches nothing');
+    await assert.rejects(() => runAuditFix(data, { tool: 'set_gtm_tag_paused' }), /Invalid fix/);
+
+    // The fixes the audit engine emits still run.
+    await runAuditFix(data, { tool: 'set_gtm_tag_paused', args: { ...ws, tagId: '5', paused: false } });
+    assert.ok(fd.calls.includes('setPaused:1:2:3:5:false'), 'a pause fix applies');
+    await runAuditFix(data, { tool: 'delete_gtm_trigger', args: { ...ws, triggerId: '7', name: 'Unused' } });
+    assert.ok(fd.calls.includes('deleteTrigger:1:2:3:7'), 'a delete fix applies after its two-step confirmation');
+
+    // That confirmation is the registry's own two-step delete sequence, answered for that tool only.
+    const seen: Array<{ tool: string; destructive?: boolean; requireTextConfirm?: string }> = [];
+    const inner = auditFixConfirm('delete_gtm_variable');
+    const spy: ConfirmFn = async (p) => { seen.push({ tool: p.tool, destructive: p.destructive, requireTextConfirm: p.requireTextConfirm }); return inner(p); };
+    const fdv = fakeData();
+    await buildToolRegistry(fdv.data, spy, 'gtm').execute('delete_gtm_variable', { ...ws, variableId: '4' });
+    assert.deepEqual(seen, [
+      { tool: 'delete_gtm_variable', destructive: true, requireTextConfirm: undefined },
+      { tool: 'delete_gtm_variable', destructive: true, requireTextConfirm: 'delete' },
+    ], 'the plan card, then the type-"delete" final card - the same two steps the chat shows');
+    assert.ok(fdv.calls.includes('deleteVar:1:2:3:4'));
+
+    // Every other card is declined: a one-click approval card (the live-GA4 probe), another tool's
+    // card, the final card out of order, or a third card.
+    const probeFd = fakeData();
+    const probeOut = JSON.parse(await buildToolRegistry(probeFd.data, auditFixConfirm('set_gtm_tag_paused'), 'gtm').execute('probe_server_runtime', ws));
+    assert.equal(probeOut.declined, true, 'an approval card is never auto-approved');
+    assert.ok(!probeFd.calls.some((c) => c.startsWith('runServerRuntimeProbe')), 'no hit sent');
+    const c = auditFixConfirm('delete_gtm_trigger');
+    const card = (o: Partial<{ tool: string; destructive: boolean; requireTextConfirm: string }>) => ({ tool: 'delete_gtm_trigger', summary: '', details: { x: 1 }, ...o });
+    assert.equal(await c(card({ tool: 'delete_gtm_variable', destructive: true })), null, 'another tool');
+    assert.equal(await c(card({ destructive: true, requireTextConfirm: 'delete' })), null, 'the final card before the plan card');
+    assert.equal(await c(card({})), null, 'a non-destructive card');
+    assert.deepEqual(await c(card({ destructive: true })), { x: 1 });
+    assert.deepEqual(await c(card({ destructive: true, requireTextConfirm: 'delete' })), { x: 1 });
+    assert.equal(await c(card({ destructive: true, requireTextConfirm: 'delete' })), null, 'no third approval');
+  });
+
   await test('the approval card is told which live surface a write lands on (platform)', async () => {
     // The card wording must be truthful per product: a GTM write is a draft; GA4/Ads are live. The
     // registry stamps every write proposal with its platform so the card can say so. (Audit fix.)

@@ -6,10 +6,11 @@
 //                         trigger, …) through the existing approval-gated tools.
 //
 // The fix already carries its workspace ids (auditWorkspace injects them last),
-// so applyFix just runs it. The confirm fn auto-approves because the RENDERER
-// performed an explicit confirmation (a stronger one for destructive deletes)
-// before invoking this — write tools still only exist because a confirm fn is
-// supplied, and nothing is ever published.
+// so applyFix just runs it - but ONLY when it names one of the audit engine's fix
+// tools (AUDIT_FIX_TOOLS). The RENDERER performs an explicit confirmation (a
+// stronger one for destructive deletes) before invoking this, and the confirm fn
+// answers only a destructive fix's two-step delete confirmation for that tool
+// (suggestions/audit-fix.ts). Nothing is ever published.
 
 import { ipcMain, dialog, BrowserWindow } from 'electron';
 import { writeFile, unlink } from 'node:fs/promises';
@@ -25,6 +26,7 @@ import { buildServerPlan } from '../google/server-plan';
 import { googleTagConfigValue } from '../google/gtm-builders';
 import type { ServerCoverageView } from '../../shared/ipc';
 import { buildToolRegistry, type ConfirmFn } from '../tools/registry';
+import { runAuditFix } from './audit-fix';
 import { buildVariable, findGa4BaseTag, ga4VariablePlan } from '../google/gtm-builders';
 import { withQuotaRetry } from '../google/quota-retry';
 import { reportHtmlDocument, dedupedReportPath } from '../google/ga4-report-export';
@@ -575,20 +577,10 @@ export function registerGtmAuditIpc(data: GoogleDataService, memory?: MemoryStor
     return withQuotaRetry(() => data.setGa4TagEventName(accountId, containerId, workspaceId, tagName, eventName), { maxRetries: 3 });
   });
 
-  ipcMain.handle('gtm:applyFix', async (_e, fix: unknown) => {
-    const f = (fix && typeof fix === 'object' ? fix : {}) as { tool?: string; args?: Record<string, unknown> };
-    if (!f.tool || !f.args || typeof f.args !== 'object') throw new Error('Invalid fix.');
-    const approve: ConfirmFn = async (p) => p.details; // renderer already confirmed
-    const reg = buildToolRegistry(data, approve, 'gtm');
-    // GTM's per-minute write quota trips during big batches — retry the transient
-    // 429 / "Quota exceeded" with exponential backoff (default 3 retries) instead of
-    // failing the fix. f.tool/f.args are constants here, so a retry is idempotent.
-    const tool = f.tool;
-    const args = f.args;
-    // 5 retries (more than the default) — a saturated per-minute quota during a big batch
-    // can need several backoffs before a single write gets through.
-    return JSON.parse(await withQuotaRetry(() => reg.execute(tool, args), { maxRetries: 5 })) as unknown;
-  });
+  // Only the tools the audit engine emits as fixes run here, and a destructive one still walks the
+  // registry's two-step delete confirmation (answered for that tool only, standing in for the panel's
+  // own confirm). Any other tool name is refused - see audit-fix.ts.
+  ipcMain.handle('gtm:applyFix', async (_e, fix: unknown) => runAuditFix(data, fix));
 
   // Create a complete SERVER container FROM a web container in one step: derive the web container's
   // GA4 Measurement ID, bootstrap the server container (container + GA4 client + trigger + GA4 relay

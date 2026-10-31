@@ -1058,8 +1058,22 @@ export function buildAllowParamsTransformation(name: string, allowedParams: stri
 
 /* ───────────── Container audit ───────────── */
 
+/**
+ * Every tool an audit finding's `fix` can name. AuditFix.tool is typed to this list, so the audit
+ * engine cannot emit a fix for any other tool until it is added here, and the Container audit
+ * panel's gtm:applyFix runs ONLY these (see suggestions/audit-fix.ts): it executes a fix the
+ * renderer sends with a confirm fn standing in for the panel's own confirmation, so it must never
+ * reach bulk deletes, container creates or the live-GA4 runtime probe.
+ */
+export const AUDIT_FIX_TOOLS = ['set_gtm_tag_paused', 'set_gtm_tag_consent', 'update_gtm_tag', 'delete_gtm_trigger', 'delete_gtm_variable'] as const;
+export type AuditFixTool = (typeof AUDIT_FIX_TOOLS)[number];
+/** True when `name` is a tool an audit fix may run. PURE. */
+export function isAuditFixTool(name: unknown): name is AuditFixTool {
+  return typeof name === 'string' && (AUDIT_FIX_TOOLS as readonly string[]).includes(name);
+}
+
 export interface AuditFix {
-  tool: string;
+  tool: AuditFixTool;
   args: Record<string, unknown>;
 }
 export interface AuditFinding {
