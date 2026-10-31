@@ -127,7 +127,7 @@ A job that fails it is failed with the reason.
 | `RUNTIME_WORKER_ALLOW_UNAUTHENTICATED` | Local development only: exactly `true` lets the server start without a token, and it then binds `127.0.0.1` only. |
 | `RUNTIME_WORKER_ALLOWLIST` | Comma-separated host suffixes the worker may load (e.g. `example.com,shop.example`). When unset, any public http(s) URL is allowed. |
 | `RUNTIME_WORKER_MAX_URLS` | Max URLs per request (default 10, hard cap 25). |
-| `RUNTIME_WORKER_MAX_CONCURRENT` | Max `/capture` requests in flight (default 2). Each one launches its own Chromium; extra requests get `429 busy` with `Retry-After`. |
+| `RUNTIME_WORKER_MAX_CONCURRENT` | Max `/capture` requests in flight (default 2; `0` or less means 1). Each one launches its own Chromium; extra requests get `429 busy` with `Retry-After`. |
 | `RUNTIME_WORKER_MAX_WAIT` | Max per-page settle time, ms (default 8000). |
 | `RUNTIME_WORKER_TIMEOUT` | Max navigation timeout, ms (default 30000). |
 | `PORT` | Listen port (default 8080). |

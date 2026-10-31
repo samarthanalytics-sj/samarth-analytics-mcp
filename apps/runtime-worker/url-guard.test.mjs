@@ -551,6 +551,21 @@ test("captures in flight are capped: extra requests get 429 and slots are releas
   }
 });
 
+test("RUNTIME_WORKER_MAX_CONCURRENT: 0 or negative clamps to 1; only missing or non-numeric takes the default 2", async () => {
+  // `Math.floor(0) || 2` read an explicit 0 as unset, so a worker capped at "0" ran two Chromiums.
+  for (const [value, expected] of [["0", 1], ["-3", 1], ["3", 3], [undefined, 2], ["", 2], ["abc", 2]]) {
+    const env = { RUNTIME_WORKER_TOKEN: "s3cret-token" };
+    if (value !== undefined) env.RUNTIME_WORKER_MAX_CONCURRENT = value;
+    const w = await startWorker(env);
+    try {
+      assert.equal(w.kind, "listening", w.stderr);
+      assert.equal((await http(w.port)).json.maxConcurrent, expected, `RUNTIME_WORKER_MAX_CONCURRENT=${JSON.stringify(value)}`);
+    } finally {
+      await w.stop();
+    }
+  }
+});
+
 // ── queue-consumer.mjs: the same URL admission as HTTP mode ─────────────────
 
 test("queue jobs go through the SSRF guard, allowlist and URL cap before any capture", async () => {

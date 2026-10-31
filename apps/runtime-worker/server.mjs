@@ -22,9 +22,10 @@
 //                            this for a private/internal deployment.
 //   RUNTIME_WORKER_MAX_URLS  Max URLs per request (default 10, hard cap 25).
 //   RUNTIME_WORKER_MAX_CONCURRENT
-//                            Max /capture requests in flight (default 2). Each
-//                            one launches its own Chromium; extra requests get
-//                            429 instead of exhausting the host's memory.
+//                            Max /capture requests in flight (default 2; 0 or
+//                            less means 1). Each one launches its own Chromium;
+//                            extra requests get 429 instead of exhausting the
+//                            host's memory.
 //   RUNTIME_WORKER_MAX_WAIT  Max per-page settle time in ms (default 8000).
 //   RUNTIME_WORKER_TIMEOUT   Max navigation timeout in ms (default 30000).
 //   PORT                     Listen port (default 8080).
@@ -44,7 +45,13 @@ const ALLOWLIST = (process.env.RUNTIME_WORKER_ALLOWLIST ?? "")
   .map((s) => s.trim().toLowerCase())
   .filter(Boolean);
 const MAX_URLS = Math.min(Number(process.env.RUNTIME_WORKER_MAX_URLS) || 10, 25);
-const MAX_CONCURRENT = Math.max(1, Math.floor(Number(process.env.RUNTIME_WORKER_MAX_CONCURRENT)) || 2);
+// 0 or a negative value clamps to 1: `Math.floor(0) || 2` used to read an explicit 0 as unset and
+// allow 2. Only a missing, empty or non-numeric value takes the default.
+const MAX_CONCURRENT = (() => {
+  const raw = (process.env.RUNTIME_WORKER_MAX_CONCURRENT ?? "").trim();
+  const n = raw === "" ? NaN : Math.floor(Number(raw));
+  return Number.isFinite(n) ? Math.max(1, n) : 2;
+})();
 const MAX_WAIT = Number(process.env.RUNTIME_WORKER_MAX_WAIT) || 8000;
 const NAV_TIMEOUT = Number(process.env.RUNTIME_WORKER_TIMEOUT) || 30000;
 const MAX_BODY_BYTES = 256 * 1024;
