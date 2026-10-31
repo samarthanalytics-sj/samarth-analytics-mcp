@@ -2,12 +2,13 @@
  * Web Audit MCP — pure-logic test suite (no browser required).
  * Run: tsx apps/web-audit-mcp/src/__tests__/web-audit.node.test.ts
  *
- * Covers the SSRF guard, CMP registry shape + text heuristics, form PII
+ * Covers the SSRF guard, CMP registry shape + text heuristics, the generic CMP
+ * heuristic's pick rules and click guards, form PII
  * analysis, the banner compliance rules over fixture captures, the RuntimeInput
  * bridge into the shared Consent Mode v2 engine, and the GTM container bridge
  * (parseGtmContainer + reconciled-coverage escalation in runConsentEngine).
- * A few in-page form-extraction checks run in Chromium when Playwright is installed and self-skip
- * otherwise.
+ * A few in-page form-extraction and CMP click checks run in Chromium when Playwright is installed and
+ * self-skip otherwise.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -30,7 +31,20 @@ import {
   type PwRoute,
 } from '../agent/browser.js';
 import { runCapture } from '../verify/capture/capture.js';
-import { CMP_VENDORS, ACCEPT_TEXT_RE, REJECT_TEXT_RE } from '../agent/cmp.js';
+import {
+  CMP_VENDORS,
+  ACCEPT_TEXT_RE,
+  REJECT_TEXT_RE,
+  cmpControlEligible,
+  cmpContainerEligible,
+  pickGenericCmp,
+  blockDuringCmpClick,
+  detectCmp,
+  interactWithCmp,
+  type CmpControlFacts,
+  type CmpContainerFacts,
+  type CmpDetection,
+} from '../agent/cmp.js';
 import { analyzeForms, classifyFieldPii, extractFormsInPage, type RawForm, type RawFormField } from '../agent/forms.js';
 import { buildFillPlan, classifyFieldRole, selectorFor, localeById, US_LOCALE } from '../agent/form-fill.js';
 import { sameSite, normalizeUrl, urlPriority, crawlSite } from '../agent/crawler.js';
@@ -802,6 +816,221 @@ check('cmp: reject text fr', REJECT_TEXT_RE.test('Continuer sans accepter'));
 check('cmp: accept not matching reject', !REJECT_TEXT_RE.test('Accept all cookies'));
 check('cmp: reject not matching accept', !ACCEPT_TEXT_RE.test('Reject all'));
 check('cmp: privacy-policy link is neither', !ACCEPT_TEXT_RE.test('Privacy policy') && !REJECT_TEXT_RE.test('Privacy policy'));
+
+// ── CMP generic heuristic: which controls / containers it may pick (pure) ─────────────────────────
+// The autonomous audit agent may only click consent-banner controls. The page reports facts; these
+// rules decide. A wrong "yes" is a click (or a form submit) on a live site.
+const ctl = (over: Partial<CmpControlFacts> = {}): CmpControlFacts => ({
+  tag: 'BUTTON', type: 'submit', href: null, inForm: false, label: 'Accept all', selector: 'html > body > div > button', ...over,
+});
+const box = (over: Partial<CmpContainerFacts> = {}): CmpContainerFacts => ({
+  selector: 'html > body > div.cookie-banner', idClass: ' cookie-banner', aria: '', consentText: true, privacyText: false,
+  hasTextEntry: false, controls: [ctl()], ...over,
+});
+
+check('cmp-pick: a bare <button> outside any form is a consent control', cmpControlEligible(ctl()));
+check('cmp-pick: <input type=button> is a consent control', cmpControlEligible(ctl({ tag: 'INPUT', type: 'button' })));
+check('cmp-pick: a form-owned <button type=button> does not submit and stays eligible', cmpControlEligible(ctl({ type: 'button', inForm: true })));
+check('cmp-pick: a form-owned submit button ("OK") is NOT a consent control', !cmpControlEligible(ctl({ label: 'OK', inForm: true })));
+check('cmp-pick: a form-owned button with no/unknown type (submits by default) is NOT one', !cmpControlEligible(ctl({ type: '', inForm: true })));
+check('cmp-pick: <input type=submit|image|reset> is never one, in a form or not',
+  ['submit', 'image', 'reset'].every((type) => !cmpControlEligible(ctl({ tag: 'INPUT', type })) && !cmpControlEligible(ctl({ tag: 'INPUT', type, inForm: true }))));
+check('cmp-pick: a link to another page (a[href="/x"], absolute URL) is NOT one',
+  !cmpControlEligible(ctl({ tag: 'A', type: '', href: '/x' })) && !cmpControlEligible(ctl({ tag: 'A', type: '', href: 'https://acme.example/accept' })));
+check('cmp-pick: a button inside a real link is NOT one', !cmpControlEligible(ctl({ href: '/subscribe' })));
+check('cmp-pick: #hash, javascript: and empty hrefs stay eligible (script-driven banner links)',
+  ['#', '#accept', 'javascript:void(0)', 'javascript:acceptCookies()', ''].every((href) => cmpControlEligible(ctl({ tag: 'A', type: '', href }))));
+check('cmp-pick: a control with no unique selector is never picked', !cmpControlEligible(ctl({ selector: null })));
+
+check('cmp-pick: a cookie-named container with cookie wording is a banner', cmpContainerEligible(box()));
+check('cmp-pick: a newsletter "banner" whose only wording is "privacy" is NOT a consent banner',
+  !cmpContainerEligible(box({ selector: 'html > body > section.newsletter-banner', idClass: ' newsletter-banner', consentText: false, privacyText: true })));
+check('cmp-pick: "privacy" wording still counts in a container named for cookies/consent',
+  cmpContainerEligible(box({ idClass: 'cookie-consent ', consentText: false, privacyText: true })));
+check('cmp-pick: a generic notice with cookie wording is still a banner', cmpContainerEligible(box({ idClass: ' site-notice' })));
+check('cmp-pick: a container holding a text/email field is a form, not a consent banner', !cmpContainerEligible(box({ hasTextEntry: true })));
+check('cmp-pick: a container with no unique selector is never picked', !cmpContainerEligible(box({ selector: null })));
+check('cmp-pick: a container not named cookie-ish is never picked', !cmpContainerEligible(box({ idClass: ' hero ' })));
+
+{
+  // F10 repro: <section class="newsletter-banner"><p>We respect your privacy.</p><form method=post>
+  // <input name=email><input type=submit value=OK></form></section> was picked, and its OK clicked.
+  const newsletter = box({
+    selector: 'html > body > section.newsletter-banner', idClass: ' newsletter-banner', consentText: false, privacyText: true,
+    hasTextEntry: true, controls: [ctl({ tag: 'INPUT', type: 'submit', inForm: true, label: 'OK', selector: 'html > body > section > form > input:nth-of-type(2)' })],
+  });
+  check('cmp-pick: the newsletter section is not detected as a consent banner', pickGenericCmp([newsletter]).detected === false);
+
+  // F10 repro: a real #cookie-banner (accept only) and, later, a footer "notice" with an "I agree" control.
+  const banner = box({ selector: '#cookie-banner', idClass: 'cookie-banner ', controls: [ctl({ label: 'Accept', selector: '#cookie-accept' })] });
+  const footerForm = box({
+    selector: 'html > body > footer > div.footer-notice', idClass: ' footer-notice',
+    controls: [ctl({ label: 'I agree', inForm: true, selector: 'html > body > footer > div > form > button' })],
+  });
+  const footerBtn = box({
+    selector: 'html > body > footer > div.footer-notice', idClass: ' footer-notice',
+    controls: [ctl({ type: 'button', label: 'I agree', selector: 'html > body > footer > div > button' })],
+  });
+  const pickA = pickGenericCmp([banner, footerForm]);
+  check('cmp-pick: a later footer notice whose "I agree" submits a form never wins over the real banner',
+    pickA.presenceSelector === '#cookie-banner' && pickA.accept?.selector === '#cookie-accept', JSON.stringify(pickA));
+  const pickB = pickGenericCmp([banner, footerBtn]);
+  check('cmp-pick: an earlier #cookie-banner beats a later generic .footer-notice (no more last-match-wins)',
+    pickB.presenceSelector === '#cookie-banner', JSON.stringify(pickB));
+  const pickC = pickGenericCmp([footerBtn, banner]);
+  check('cmp-pick: a cookie-named container outranks an earlier generic notice',
+    pickC.presenceSelector === '#cookie-banner', JSON.stringify(pickC));
+  const first = box({ selector: '#a', idClass: 'cookie-a ', controls: [ctl({ selector: '#a-ok' })] });
+  const second = box({ selector: '#b', idClass: 'cookie-b ', controls: [ctl({ selector: '#b-ok' })] });
+  check('cmp-pick: between equals, the first in document order wins', pickGenericCmp([first, second]).presenceSelector === '#a');
+  const both = box({
+    selector: '#c', idClass: 'site-notice ',
+    controls: [ctl({ selector: '#c-yes' }), ctl({ label: 'Reject all', selector: '#c-no' })],
+  });
+  const pickD = pickGenericCmp([first, both]);
+  check('cmp-pick: a banner offering both accept and reject ranks first',
+    pickD.presenceSelector === '#c' && pickD.accept?.selector === '#c-yes' && pickD.reject?.selector === '#c-no', JSON.stringify(pickD));
+  const mixed = box({
+    selector: '#d', controls: [ctl({ label: 'OK', inForm: true, selector: '#d-form-ok' }), ctl({ label: 'Accept', selector: '#d-accept' })],
+  });
+  check('cmp-pick: a form-submit control is skipped, the banner\'s real button is used', pickGenericCmp([mixed]).accept?.selector === '#d-accept');
+  check('cmp-pick: nothing eligible → not detected', pickGenericCmp([box({ controls: [ctl({ tag: 'A', href: '/x' })] })]).detected === false);
+  check('cmp-pick: junk from the page is not detected', pickGenericCmp(null as unknown as CmpContainerFacts[]).detected === false);
+}
+
+// ── CMP heuristic click: what the network guard refuses (pure) ───────────────────────────────────
+{
+  const page = 'https://acme.example/pricing';
+  check('cmp-net: a form POST / API write is refused',
+    ['POST', 'PUT', 'PATCH', 'DELETE', 'post'].every((method) => blockDuringCmpClick({ method, url: 'https://acme.example/subscribe', mainFrameNavigation: false, pageUrl: page })));
+  check('cmp-net: a POST navigation (form submit) is refused', blockDuringCmpClick({ method: 'POST', url: page, mainFrameNavigation: true, pageUrl: page }));
+  check('cmp-net: a main-frame navigation to another page is refused',
+    blockDuringCmpClick({ method: 'GET', url: 'https://acme.example/subscribe?email=', mainFrameNavigation: true, pageUrl: page }));
+  check('cmp-net: a plain reload of the same page is let through (banners that reload to apply consent)',
+    !blockDuringCmpClick({ method: 'GET', url: page, mainFrameNavigation: true, pageUrl: page + '#top' }));
+  check('cmp-net: subresource GETs (post-consent tags, scripts) are untouched',
+    !blockDuringCmpClick({ method: 'GET', url: 'https://region1.google-analytics.com/g/collect?v=2&en=page_view', mainFrameNavigation: false, pageUrl: page }) &&
+    !blockDuringCmpClick({ method: 'HEAD', url: 'https://acme.example/x.js', mainFrameNavigation: false, pageUrl: page }));
+}
+
+// ── interactWithCmp against a fake page ──────────────────────────────────────────────────────────
+{
+  type Handler = (route: unknown) => Promise<void>;
+  const facts = [box({ selector: '#cookie-banner', idClass: 'cookie-banner ', controls: [ctl({ label: 'Accept', selector: '#cookie-banner > button' })] })];
+  const heuristic: CmpDetection = {
+    detected: true, vendorName: 'Custom / unknown CMP', presenceSelector: '#cookie-banner',
+    accept: { selector: '#cookie-banner > button', text: 'Accept' }, rejectOnFirstLayer: false, method: 'heuristic',
+  };
+  const fake = (opts: { facts?: CmpContainerFacts[]; mainVisible?: boolean; routeFails?: boolean; armFails?: boolean } = {}) => {
+    const state = {
+      calls: [] as string[], clicked: [] as string[], routed: [] as Handler[], unrouted: [] as unknown[], framesUsed: 0, queried: [] as string[],
+    };
+    const mainFrame = { main: true };
+    const el = (name: string, visibleEl: boolean) => ({
+      isVisible: async () => visibleEl,
+      click: async () => { state.clicked.push(name); },
+    });
+    const page = {
+      url: () => 'https://acme.example/',
+      mainFrame: () => mainFrame,
+      route: async (_p: string, h: Handler) => {
+        if (opts.routeFails) throw new Error('route unavailable');
+        state.calls.push('route');
+        state.routed.push(h);
+      },
+      unroute: async (_p: string, h: unknown) => { state.calls.push('unroute'); state.unrouted.push(h); },
+      evaluate: async (fn: { name: string }) => {
+        state.calls.push(fn.name);
+        if (fn.name === 'armCmpClickGuards') {
+          if (opts.armFails) throw new Error('page closed');
+          return true;
+        }
+        if (fn.name === 'gatherCmpFactsInPage') return opts.facts ?? facts;
+        if (fn.name === 'markCmpTarget' || fn.name === 'disarmCmpClickGuards') return true;
+        return undefined;
+      },
+      $: async (selector: string) => {
+        state.queried.push(selector);
+        state.calls.push('$');
+        return el('main:' + selector, opts.mainVisible ?? true);
+      },
+      // An iframe (ad, embed) whose element matches any selector: the heuristic must never reach it.
+      frames: () => {
+        state.framesUsed += 1;
+        return [{ url: () => 'https://ads.example/', $: async () => el('iframe', true) }];
+      },
+    };
+    return { page: page as unknown as PwPage, state, mainFrame };
+  };
+
+  {
+    const { page, state, mainFrame } = fake();
+    const res = await interactWithCmp(page, heuristic, 'accept');
+    check('cmp-click: a heuristic banner button is clicked', res.clicked === true && state.clicked.length === 1, JSON.stringify(res));
+    check('cmp-click: the click goes to the marked element in the main frame, never an iframe',
+      state.framesUsed === 0 && state.queried.length === 1 && state.queried[0].startsWith('[data-wa-cmp-target='), JSON.stringify(state.queried));
+    check('cmp-click: network guard, then in-page guards, then a re-scan, then the click; all undone after',
+      state.calls.join(',') === 'route,armCmpClickGuards,gatherCmpFactsInPage,markCmpTarget,$,disarmCmpClickGuards,unroute', state.calls.join(','));
+    check('cmp-click: the same network handler is installed and removed', state.routed.length === 1 && state.unrouted[0] === state.routed[0]);
+
+    const handler = state.routed[0];
+    const drive = async (req: { url: string; method: string; nav: boolean; frame: unknown }): Promise<string> => {
+      let outcome = '';
+      await handler({
+        request: () => ({ url: () => req.url, method: () => req.method, isNavigationRequest: () => req.nav, frame: () => req.frame }),
+        abort: async (code?: string) => { outcome = `abort:${code ?? ''}`; },
+        fallback: async () => { outcome = 'fallback'; },
+      });
+      return outcome;
+    };
+    check('cmp-click/network: a main-frame navigation off the page is aborted',
+      (await drive({ url: 'https://acme.example/subscribe', method: 'GET', nav: true, frame: mainFrame })) === 'abort:aborted');
+    check('cmp-click/network: a form POST is aborted',
+      (await drive({ url: 'https://acme.example/subscribe', method: 'POST', nav: true, frame: mainFrame })) === 'abort:aborted');
+    check('cmp-click/network: a reload of the page falls through to the SSRF guard',
+      (await drive({ url: 'https://acme.example/', method: 'GET', nav: true, frame: mainFrame })) === 'fallback');
+    check('cmp-click/network: an iframe loading after consent falls through to the SSRF guard',
+      (await drive({ url: 'https://www.youtube.com/embed/x', method: 'GET', nav: true, frame: { child: true } })) === 'fallback');
+  }
+  {
+    // F31: the main-frame match is hidden; the old code then clicked the first visible match in ANY frame.
+    const { page, state } = fake({ mainVisible: false });
+    const res = await interactWithCmp(page, heuristic, 'accept');
+    check('cmp-click: a hidden main-frame match is NOT replaced by an iframe element', res.clicked === false && state.clicked.length === 0 && state.framesUsed === 0,
+      JSON.stringify({ res, clicked: state.clicked }));
+  }
+  {
+    const moved = [box({ selector: '#cookie-banner', idClass: 'cookie-banner ', controls: [ctl({ label: 'Accept', selector: 'html > body > div:nth-of-type(2) > button' })] })];
+    const { page, state } = fake({ facts: moved });
+    const res = await interactWithCmp(page, heuristic, 'accept');
+    check('cmp-click: if the re-scan no longer picks the same control, nothing is clicked',
+      res.clicked === false && state.clicked.length === 0 && /changed/.test(res.note ?? ''), JSON.stringify(res));
+    check('cmp-click: ...and the guards are still undone', state.calls.includes('disarmCmpClickGuards') && state.unrouted.length === 1);
+  }
+  {
+    const { page, state } = fake({ routeFails: true });
+    const res = await interactWithCmp(page, heuristic, 'accept');
+    check('cmp-click: no network guard → nothing armed or clicked (fails closed)', res.clicked === false && state.calls.length === 0 && state.clicked.length === 0);
+  }
+  {
+    const { page, state } = fake({ armFails: true });
+    const res = await interactWithCmp(page, heuristic, 'accept');
+    check('cmp-click: in-page guards not armed → nothing clicked, network guard removed',
+      res.clicked === false && state.clicked.length === 0 && state.unrouted.length === 1);
+  }
+  {
+    // The vendor path is unchanged: registry selectors, iframe fallback kept (TrustArc / TCF render in one).
+    const { page, state } = fake({ mainVisible: false });
+    const vendor: CmpDetection = {
+      detected: true, vendorId: 'trustarc', vendorName: 'TrustArc', presenceSelector: '#truste-consent-track',
+      accept: { selector: '#truste-consent-button' }, rejectOnFirstLayer: false, method: 'vendor',
+    };
+    const res = await interactWithCmp(page, vendor, 'accept');
+    check('cmp-click: vendor CMPs keep the registry click (and its iframe fallback), unguarded',
+      res.clicked === true && state.clicked.join() === 'iframe' && state.routed.length === 0 && state.queried[0] === '#truste-consent-button',
+      JSON.stringify({ res, state }));
+  }
+}
 
 // ── crawler helpers ─────────────────────────────────────────────────────────
 
@@ -2106,6 +2335,101 @@ check('embed: HubSpot embed surfaces beside an unrelated search form', buildSugg
         (await formIdsOn(`<html><body>${FORM}<div id="onetrust-banner-sdk">${bannerForm}</div></body></html>`)).join() === 'contact');
       check('cmp-filter: a form inside a generic .cookie-banner is still excluded, even under a flagged <body>',
         (await formIdsOn(`<html><body class="cookies-not-set">${FORM}<div class="cookie-banner">${bannerForm}</div></body></html>`)).join() === 'contact');
+
+      // ── CMP heuristic end to end (F10 / F31 repros) on a fake host: every request is answered locally ──
+      // `writes` is what actually reached the "server" past the click guards: any non-GET, or any path but /.
+      const cmpCtx = await browser.newContext();
+      const site: { html: string; writes: string[] } = { html: '', writes: [] };
+      type FulfillRoute = PwRoute & { fulfill(o: { status: number; contentType: string; body: string }): Promise<void> };
+      await cmpCtx.route('**/*', (route) => {
+        const req = route.request();
+        const u = new URL(req.url());
+        if (u.hostname !== 'site.example.test') return route.abort();
+        if (req.method() !== 'GET' || u.pathname !== '/') site.writes.push(`${req.method()} ${u.pathname}`);
+        return (route as FulfillRoute).fulfill({ status: 200, contentType: 'text/html', body: u.pathname === '/' ? site.html : '<p>left the page</p>' });
+      });
+      const onBanner = async (html: string, action: 'accept' | 'reject') => {
+        site.html = html;
+        site.writes = [];
+        const p = await cmpCtx.newPage();
+        try {
+          await p.addInitScript({ content: 'window.__name = (f) => f' }); // tsx keepNames, as above
+          await p.goto('https://site.example.test/', { waitUntil: 'load' });
+          const det = await detectCmp(p);
+          const res = await interactWithCmp(p, det, action);
+          await p.waitForTimeout(400);
+          const clicked = await p.evaluate<string | null>('window.__clicked || null').catch(() => 'page gone');
+          const restored = await p
+            .evaluate<boolean>('String(HTMLFormElement.prototype.submit).includes("[native code]") && !document.querySelector("[data-wa-cmp-target]")')
+            .catch(() => false);
+          return { det, res, clicked, url: p.url(), writes: site.writes.slice(), restored };
+        } finally {
+          await p.close();
+        }
+      };
+
+      const newsletter = await onBanner(
+        '<html><body><h1>Shop</h1><section class="newsletter-banner"><p>We respect your privacy.</p>' +
+          '<form action="/subscribe" method="post"><input name="email"><input type="submit" value="OK"></form></section></body></html>',
+        'accept',
+      );
+      check('cmp-e2e: a newsletter "banner" is not taken for a consent banner, and its form is never submitted',
+        !newsletter.det.detected && !newsletter.res.clicked && newsletter.writes.length === 0, JSON.stringify(newsletter));
+
+      const footer = await onBanner(
+        '<html><body><div id="cookie-banner"><p>We use cookies to improve your experience.</p>' +
+          '<button id="cookie-accept" onclick="window.__clicked=\'banner\'">Accept</button></div><main><p>Content</p></main>' +
+          '<footer><div class="footer-notice"><p>Read our privacy and cookie policy.</p><form action="/agree" method="post">' +
+          '<button onclick="window.__clicked=\'footer\'">I agree</button></form></div></footer></body></html>',
+        'accept',
+      );
+      check('cmp-e2e: the real #cookie-banner wins over a later footer notice, and no form is posted',
+        footer.det.presenceSelector === '#cookie-banner' && footer.res.clicked && footer.clicked === 'banner' && footer.writes.length === 0,
+        JSON.stringify(footer));
+
+      const nested = await onBanner(
+        '<html><body><div class="products"><div><div><div><div><button onclick="window.__clicked=\'cart\'">Add to cart</button>' +
+          '</div></div></div></div></div><div class="cookie-bar"><p>This site uses cookies.</p><div><div><div><div>' +
+          '<button onclick="window.__clicked=\'accept\'">Accept</button></div></div></div></div></div></body></html>',
+        'accept',
+      );
+      check('cmp-e2e: a banner button nested 4 divs deep is clicked, not the earlier "Add to cart" its old selector matched',
+        nested.res.clicked && nested.clicked === 'accept', JSON.stringify(nested));
+
+      const privacyForm = await onBanner(
+        '<html><body><div class="privacy-notice"><p>We value your privacy and use cookies.</p><form action="/signup" method="post">' +
+          '<input type="email" name="email"><input type="submit" value="I agree"></form></div></body></html>',
+        'accept',
+      );
+      check('cmp-e2e: an "I agree" submit in a privacy-notice form is never clicked or submitted',
+        !privacyForm.res.clicked && privacyForm.writes.length === 0, JSON.stringify(privacyForm));
+
+      // Defence in depth: an eligible banner button whose own handler submits a form or navigates away.
+      const sneaky =
+        '<html><body><div id="cookie-banner"><p>We use cookies.</p>' +
+        '<button id="yes" type="button" onclick="window.__clicked=\'accept\'; document.getElementById(\'f\').submit()">Accept</button>' +
+        '<button id="no" type="button" onclick="window.__clicked=\'reject\'; location.href=\'/elsewhere\'">Reject</button></div>' +
+        '<form id="f" method="post" action="/subscribe"><input type="hidden" name="x" value="1"></form></body></html>';
+      const sneakyAccept = await onBanner(sneaky, 'accept');
+      check('cmp-e2e: a banner button that calls form.submit() is clicked but submits nothing',
+        sneakyAccept.res.clicked && sneakyAccept.clicked === 'accept' && sneakyAccept.writes.length === 0 &&
+          sneakyAccept.url === 'https://site.example.test/',
+        JSON.stringify(sneakyAccept));
+      check('cmp-e2e: the in-page guards are undone after the click', sneakyAccept.restored, JSON.stringify(sneakyAccept));
+      const sneakyReject = await onBanner(sneaky, 'reject');
+      check('cmp-e2e: a banner button that sets location.href is clicked but the page never leaves',
+        sneakyReject.res.clicked && sneakyReject.clicked === 'reject' && sneakyReject.writes.length === 0 &&
+          sneakyReject.url === 'https://site.example.test/',
+        JSON.stringify(sneakyReject));
+
+      const plain = await onBanner(
+        '<html><body><div class="cookie-notice"><p>We use cookies.</p><button onclick="window.__clicked=\'a\'">Accept all</button>' +
+          '<button onclick="window.__clicked=\'r\'">Reject all</button></div></body></html>',
+        'reject',
+      );
+      check('cmp-e2e: a plain custom banner is still detected and its reject clicked',
+        plain.det.detected && plain.det.method === 'heuristic' && plain.res.clicked && plain.clicked === 'r', JSON.stringify(plain));
+      await cmpCtx.close();
     } finally {
       await browser.close();
     }
