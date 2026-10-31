@@ -4,8 +4,9 @@
  */
 import {
   formSignature, MAX_INTERACTIVE_CLICKS, ctaRank, selectCtas, armInteractionGuards, blockDuringDiscovery, discoverInteractiveForms,
-  type CtaFacts,
+  gatherCtaFacts, type CtaFacts,
 } from '../interactive-forms.js';
+import { el, miniPage, inPage, type MiniDocument, type MiniElement } from '../../__tests__/_mini-dom.js';
 import type { FormAnalysis, RawForm } from '../../forms.js';
 import type { PwPage } from '../../browser.js';
 
@@ -121,6 +122,30 @@ check('ctaRank: a plain <div> without dialog markup is never a candidate', ctaRa
   check('selectCtas: never more than MAX_INTERACTIVE_CLICKS', many.length === MAX_INTERACTIVE_CLICKS);
   const unsafe = selectCtas([cta({ label: 'Subscribe', nearFields: true }), cta({ label: 'Add to cart', attrs: { 'aria-controls': 'cart' } })]);
   check('selectCtas: a page with only unsafe controls clicks nothing', unsafe.length === 0);
+}
+
+// ── gatherCtaFacts' consent-banner filter, run on a minimal DOM (no browser) ─────────────────────────
+// Consent tooling flags the page ROOT (WordPress Cookie Notice's body.cookies-not-set, cookieconsent's
+// html.show--consent, Modernizr's html.cookies). The generic cookie/consent arm matched it, so every
+// control read as a consent control and discovery clicked nothing on those sites.
+{
+  const factsOn = (doc: MiniDocument): CtaFacts[] => inPage(doc, () => gatherCtaFacts());
+  const demo = (): MiniElement => el('button', {}, ['Book a demo']);
+  for (const [name, over] of [
+    ['<body class="cookies-not-set">', { body: { class: 'home cookies-not-set' } }],
+    ['<html class="show--consent">', { html: { class: 'show--consent' } }],
+    ['<html class="js cookies">', { html: { class: 'js cookies' } }],
+  ] as const) {
+    const facts = factsOn(miniPage([demo()], over));
+    check(`gatherCtaFacts: "Book a demo" under ${name} is not a consent control, and is selected`,
+      facts.length === 1 && facts[0].inCmp === false && selectCtas(facts).length === 1, JSON.stringify(facts));
+  }
+  const inGeneric = factsOn(miniPage([el('div', { class: 'cookie-banner' }, [demo()])], { body: { class: 'cookies-not-set' } }));
+  check('gatherCtaFacts: a control inside a generic .cookie-banner is still a consent control (never clicked)',
+    inGeneric.length === 1 && inGeneric[0].inCmp === true && selectCtas(inGeneric).length === 0, JSON.stringify(inGeneric));
+  const inVendor = factsOn(miniPage([el('div', { id: 'onetrust-banner-sdk' }, [demo()])]));
+  check('gatherCtaFacts: a control inside #onetrust-banner-sdk is still a consent control (never clicked)',
+    inVendor.length === 1 && inVendor[0].inCmp === true && selectCtas(inVendor).length === 0, JSON.stringify(inVendor));
 }
 
 // ── N20: the in-page guards, run against stubbed browser globals ─────────────────────────────────────

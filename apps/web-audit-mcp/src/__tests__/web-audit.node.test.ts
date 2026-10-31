@@ -46,6 +46,7 @@ import {
   type CmpDetection,
 } from '../agent/cmp.js';
 import { analyzeForms, classifyFieldPii, extractFormsInPage, type RawForm, type RawFormField } from '../agent/forms.js';
+import { gatherCtaFacts, selectCtas, type CtaFacts } from '../agent/tag-suggest/interactive-forms.js';
 import { el, miniPage, inPage, type MiniDocument, type MiniElement } from '../agent/__tests__/_mini-dom.js';
 import { buildFillPlan, classifyFieldRole, selectorFor, localeById, US_LOCALE } from '../agent/form-fill.js';
 import { sameSite, normalizeUrl, urlPriority, crawlSite } from '../agent/crawler.js';
@@ -2460,6 +2461,19 @@ check('embed: HubSpot embed surfaces beside an unrelated search form', buildSugg
       check('cmp-e2e: a plain custom banner is still detected and its reject clicked',
         plain.det.detected && plain.det.method === 'heuristic' && plain.res.clicked && plain.clicked === 'r', JSON.stringify(plain));
       await cmpCtx.close();
+
+      // Interactive discovery's own CMP filter (gatherCtaFacts) must not read a flagged ROOT as a banner.
+      const ctaFactsOn = async (html: string): Promise<CtaFacts[]> => {
+        await page.setContent(html);
+        await page.evaluate('window.__name = (f) => f');
+        return page.evaluate<CtaFacts[]>(gatherCtaFacts);
+      };
+      const demo = await ctaFactsOn('<html class="show--consent"><body class="cookies-not-set"><button>Book a demo</button></body></html>');
+      check('cta-cmp: "Book a demo" under a flagged <html>/<body> is not a consent control (chromium)',
+        demo.length === 1 && demo[0].inCmp === false && selectCtas(demo).length === 1, JSON.stringify(demo));
+      const inBanner = await ctaFactsOn('<html><body class="cookies-not-set"><div class="cookie-banner"><button>Request a demo</button></div></body></html>');
+      check('cta-cmp: a control inside a generic .cookie-banner is still a consent control (chromium)',
+        inBanner.length === 1 && inBanner[0].inCmp === true, JSON.stringify(inBanner));
     } finally {
       await browser.close();
     }

@@ -204,16 +204,32 @@ export function armInteractionGuards(): boolean {
 }
 
 /** Report every visible control that could be a popup opener, tagging each with its index so clickCta
- *  can find it again. Judging happens in Node (selectCtas); this only measures. */
-function gatherCtaFacts(): CtaFacts[] {
+ *  can find it again. Judging happens in Node (selectCtas); this only measures. Exported for its
+ *  browser-free test only; it runs inside the page. */
+export function gatherCtaFacts(): CtaFacts[] {
   const MODAL_ATTRS = ['aria-haspopup', 'aria-controls', 'data-modal', 'data-toggle', 'data-target', 'data-bs-toggle', 'data-bs-target', 'data-micromodal-trigger', 'data-fancybox'];
   const NAV_SEL = 'nav, [role="navigation"], [role="menubar"], [role="menu"], [role="tablist"], [role="tab"]';
-  // Same CMP containers forms.ts skips.
-  const CMP_SEL =
+  // Same CMP containers forms.ts skips, split the same way: a vendor container anywhere above the
+  // control, but a generic cookie/consent id/class only BELOW the document root. Consent tooling flags
+  // <body>/<html> itself (WordPress Cookie Notice's body.cookies-not-set, cookieconsent's
+  // html.show--consent, Modernizr's html.cookies), and closest() climbs that far, so every control on
+  // such a page read as a consent control and nothing was clicked. closest() returns the NEAREST match,
+  // so when that is body/html, nothing between the control and the root is a banner.
+  const CMP_VENDOR_SEL =
     '#onetrust-banner-sdk, #onetrust-consent-sdk, #CybotCookiebotDialog, #usercentrics-root, #didomi-host, ' +
     '#qc-cmp2-container, #truste-consent-track, .cmplz-cookiebanner, .cky-consent-container, #iubenda-cs-banner, ' +
-    '.osano-cm-window, #cmpbox, #BorlabsCookieBox, #fast-cmp-form, ' +
-    '[class*="cookie" i], [id*="cookie" i], [class*="consent" i], [id*="consent" i]';
+    '.osano-cm-window, #cmpbox, #BorlabsCookieBox, #fast-cmp-form';
+  const CMP_GENERIC_SEL = '[class*="cookie" i], [id*="cookie" i], [class*="consent" i], [id*="consent" i]';
+  const inCmp = (el: Element): boolean => {
+    try {
+      if (el.closest(CMP_VENDOR_SEL)) return true;
+      const g = el.closest(CMP_GENERIC_SEL);
+      const d = el.ownerDocument;
+      return !!g && g !== d.body && g !== d.documentElement;
+    } catch {
+      return false;
+    }
+  };
   // Same text-ish field set forms.ts uses to find a JS/div form.
   const TEXTISH_SEL =
     'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"]):not([type="image"]):not([type="reset"]), textarea';
@@ -280,7 +296,7 @@ function gatherCtaFacts(): CtaFacts[] {
       inForm: !!el.closest('form') || !!owner || el.hasAttribute('form') || el.hasAttribute('formaction'),
       nearFields: nearFields(el),
       inNav: within(el, NAV_SEL),
-      inCmp: within(el, CMP_SEL),
+      inCmp: inCmp(el),
     });
   }
   return out;
