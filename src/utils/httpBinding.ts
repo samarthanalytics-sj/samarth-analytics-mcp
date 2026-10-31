@@ -17,6 +17,8 @@
  * PURE, so the matrix is unit-testable without binding a socket.
  */
 
+import { isIPv4, isIPv6 } from 'node:net';
+
 export type AuthMode = 'stytch' | 'static-token' | 'none';
 
 export interface HttpBinding {
@@ -83,7 +85,7 @@ export function resolveHttpBinding(env: NodeJS.ProcessEnv = process.env): HttpBi
   const host = explicitHost || defaultHost;
 
   // The genuinely dangerous combination, reachable only by opting in twice.
-  if (authMode === 'none' && host !== LOOPBACK && host !== '::1' && host !== 'localhost') {
+  if (authMode === 'none' && !isLoopbackHost(host)) {
     return {
       host,
       authMode,
@@ -97,8 +99,39 @@ export function resolveHttpBinding(env: NodeJS.ProcessEnv = process.env): HttpBi
   return { host, authMode };
 }
 
-/** Loopback names as the WHATWG URL parser reports a hostname (no port; IPv6 in brackets). */
-const LOOPBACK_HOSTNAMES = ['localhost', '127.0.0.1', '[::1]'];
+/**
+ * Is this hostname - as the WHATWG URL parser reports one: lowercase, IPv4 in dotted-quad, IPv6
+ * compressed and in brackets - a loopback address? `localhost`, all of 127.0.0.0/8 (every one of them
+ * is loopback on Linux), `[::1]`, and IPv4-mapped 127/8 (`[::ffff:7fXX:XXXX]`). IP literals can never
+ * be the product of DNS rebinding, so accepting the whole range does not weaken the Host check.
+ */
+function isLoopbackHostname(hostname: string): boolean {
+  if (hostname === 'localhost' || hostname === '[::1]') return true;
+  if (isIPv4(hostname)) return hostname.startsWith('127.');
+  const mapped = /^\[::ffff:([0-9a-f]{1,4}):[0-9a-f]{1,4}\]$/.exec(hostname);
+  return !!mapped && parseInt(mapped[1], 16) >> 8 === 127;
+}
+
+/**
+ * Is the configured bind host (GTM_MCP_HTTP_HOST) a loopback address, however it is spelled? This used
+ * to be an exact match on `127.0.0.1`, `::1` and `localhost`, so `LOCALHOST`, `localhost.`, `127.1`,
+ * `127.0.0.2`, `0:0:0:0:0:0:0:1` or `::ffff:127.0.0.1` all bound loopback WITHOUT the DNS-rebinding
+ * guard, under a warning that wrongly called the server public. The host is canonicalised the way the
+ * WHATWG URL parser does it; anything that does not parse as a bare host is not loopback.
+ */
+export function isLoopbackHost(host: string): boolean {
+  const h = host.trim();
+  if (!/^[A-Za-z0-9.:[\]_-]+$/.test(h)) return false; // a bare host only: no path or userinfo
+  if (h.includes(':') && !isIPv6(h) && !/^\[[^\]]+\]$/.test(h)) return false; // nor a port
+  let hostname: string;
+  try {
+    hostname = new URL(`http://${isIPv6(h) ? `[${h}]` : h}`).hostname;
+  } catch {
+    return false;
+  }
+  // `localhost.` is the fully qualified spelling of `localhost`.
+  return isLoopbackHostname(hostname === 'localhost.' ? 'localhost' : hostname);
+}
 
 /**
  * Whether requests need a DNS-rebinding guard: the unauthenticated server bound to loopback.
@@ -111,7 +144,7 @@ const LOOPBACK_HOSTNAMES = ['localhost', '127.0.0.1', '[::1]'];
  * header we cannot predict, so both are left alone.
  */
 export function needsRebindingGuard(b: HttpBinding): boolean {
-  return b.authMode === 'none' && (b.host === LOOPBACK || b.host === '::1' || b.host === 'localhost');
+  return b.authMode === 'none' && isLoopbackHost(b.host);
 }
 
 /**
@@ -130,7 +163,7 @@ export function rebindingRejection(
   } catch {
     return `Invalid Host header: ${hostHeader}`;
   }
-  if (!LOOPBACK_HOSTNAMES.includes(hostname)) return `Invalid Host: ${hostname}`;
+  if (!isLoopbackHostname(hostname)) return `Invalid Host: ${hostname}`;
   if (originHeader !== undefined) {
     let origin: URL;
     try {
@@ -139,7 +172,7 @@ export function rebindingRejection(
       return `Invalid Origin: ${originHeader}`;
     }
     const webScheme = origin.protocol === 'http:' || origin.protocol === 'https:';
-    if (!webScheme || !LOOPBACK_HOSTNAMES.includes(origin.hostname)) {
+    if (!webScheme || !isLoopbackHostname(origin.hostname)) {
       return `Invalid Origin: ${originHeader}`;
     }
   }

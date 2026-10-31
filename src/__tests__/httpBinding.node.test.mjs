@@ -29,6 +29,7 @@ const {
   bindingBanner,
   needsRebindingGuard,
   rebindingRejection,
+  isLoopbackHost,
   LOOPBACK,
   ALL_INTERFACES,
 } = await import(pathToFileURL(distPath).href);
@@ -250,6 +251,65 @@ await test('REGRESSION: a foreign or opaque Origin is rejected even with a loopb
   for (const o of ['https://evil.example', 'http://evil.example:3001', 'null', 'file:///tmp/x.html', 'not a url']) {
     assert.match(rebindingRejection('127.0.0.1:3001', o) ?? '', /Invalid Origin/, o);
   }
+});
+
+// Loopback used to be an exact match on three strings, so other spellings of a loopback host bound
+// loopback with NO rebinding guard, under a warning that called the server public.
+const OTHER_LOOPBACK_SPELLINGS = [
+  'LOCALHOST',
+  'Localhost',
+  'localhost.',
+  '127.1',
+  '127.0.0.2',
+  '127.255.255.254',
+  '0:0:0:0:0:0:0:1',
+  '[::1]',
+  '::ffff:127.0.0.1',
+  ' 127.0.0.1 ',
+];
+const NOT_LOOPBACK = [
+  ALL_INTERFACES,
+  '::',
+  '10.0.0.5',
+  '128.0.0.1',
+  '126.255.255.255',
+  '::ffff:10.0.0.1',
+  'example.com',
+  'localhost.example.com',
+  '127.0.0.1.nip.io',
+  '127.0.0.1:3001',
+  'user@127.0.0.1',
+];
+
+await test('REGRESSION: every spelling of a loopback bind host is guarded and draws no public warning', () => {
+  for (const h of OTHER_LOOPBACK_SPELLINGS) {
+    const b = resolveHttpBinding({ GTM_MCP_HTTP_ALLOW_UNAUTHENTICATED: 'true', GTM_MCP_HTTP_HOST: h });
+    assert.strictEqual(b.refuse, undefined, h);
+    assert.strictEqual(needsRebindingGuard(b), true, `${JSON.stringify(h)} binds loopback, so it needs the guard`);
+    assert.strictEqual(b.warning, undefined, `${JSON.stringify(h)} is not public`);
+  }
+  assert.ok(typeof isLoopbackHost === 'function', 'isLoopbackHost is not exported');
+  for (const h of OTHER_LOOPBACK_SPELLINGS) assert.strictEqual(isLoopbackHost(h), true, h);
+});
+
+await test('non-loopback bind hosts still warn and are not guarded', () => {
+  for (const h of NOT_LOOPBACK) {
+    const b = resolveHttpBinding({ GTM_MCP_HTTP_ALLOW_UNAUTHENTICATED: 'true', GTM_MCP_HTTP_HOST: h });
+    assert.match(b.warning ?? '', /UNAUTHENTICATED/, `${JSON.stringify(h)} must warn`);
+    assert.strictEqual(needsRebindingGuard(b), false, h);
+    if (typeof isLoopbackHost === 'function') assert.strictEqual(isLoopbackHost(h), false, h);
+  }
+});
+
+await test('a client of any loopback address passes the guard; rebound names still do not', () => {
+  for (const h of ['127.0.0.2:3001', '[::ffff:7f00:1]:3001', '127.1:3001', '[0:0:0:0:0:0:0:1]:3001']) {
+    assert.strictEqual(rebindingRejection(h, undefined), undefined, h);
+  }
+  assert.strictEqual(rebindingRejection('127.0.0.2:3001', 'http://127.0.0.2:3001'), undefined);
+  for (const h of ['127.0.0.1.nip.io:3001', '128.0.0.1:3001', '[::ffff:a00:1]:3001', 'localhost.example.com']) {
+    assert.match(rebindingRejection(h, undefined) ?? '', /Invalid Host/, h);
+  }
+  assert.match(rebindingRejection('127.0.0.2:3001', 'http://127.0.0.1.nip.io') ?? '', /Invalid Origin/);
 });
 
 await test('index.ts installs the guard as middleware ahead of the /mcp routes', () => {
