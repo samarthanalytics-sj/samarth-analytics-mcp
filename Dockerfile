@@ -14,7 +14,7 @@
 # so introspection (initialize / tools/list) works on a bare container.
 
 # ── Stage 1: build the MCP server (TypeScript → dist/) ──────────────────────
-FROM node:20-alpine AS build
+FROM node:22-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts
@@ -23,7 +23,7 @@ COPY src ./src
 RUN npm run build
 
 # ── Stage 2: build the authorize React app (Stytch login + consent) ─────────
-FROM node:20-alpine AS authorize-build
+FROM node:22-alpine AS authorize-build
 WORKDIR /app/authorize
 COPY apps/mcp-authorize/package.json apps/mcp-authorize/package-lock.json ./
 # npm ci: install exactly the committed lockfile. `npm install` re-resolved on
@@ -33,7 +33,7 @@ COPY apps/mcp-authorize/ ./
 RUN npm run build
 
 # ── Stage 3: runtime ────────────────────────────────────────────────────────
-FROM node:20-alpine
+FROM node:22-alpine
 WORKDIR /app
 ENV NODE_ENV=production
 # Where the server serves the authorize UI from (see src/index.ts).

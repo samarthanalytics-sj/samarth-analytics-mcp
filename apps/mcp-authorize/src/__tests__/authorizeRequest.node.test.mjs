@@ -8,7 +8,7 @@
  *
  * No browser, no Stytch, no extra deps: the module is transpiled with the
  * package's own TypeScript and imported from a data: URL, so this runs on
- * Node 20 (CI) without a TS loader.
+ * plain Node without a TS loader.
  *
  * Run: npm --prefix apps/mcp-authorize test   (also part of `run check`)
  */

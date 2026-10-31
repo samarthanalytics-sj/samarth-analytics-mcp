@@ -558,7 +558,7 @@ Fly.io has no request timeout limitations and supports persistent WebSocket/SSE 
 ### Docker
 
 ```dockerfile
-FROM node:20-alpine
+FROM node:22-alpine
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci --omit=dev

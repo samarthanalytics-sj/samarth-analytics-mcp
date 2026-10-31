@@ -266,7 +266,7 @@ async function takePdfSlot(max: number): Promise<() => void> {
  * Bytes the worker holds, or null while that cannot be told yet.
  *
  * Node 22.16+ reports a worker's own heap and external (ArrayBuffer) memory, read through an
- * interrupt, so it answers while pdf.js is busy. Older Node, which the Docker image runs, has no
+ * interrupt, so it answers while pdf.js is busy (the Docker image runs Node 22). Older Node has no
  * per-worker figure; there the process's growth since the worker finished loading pdf.js stands in
  * (`baselineRss`, null until then, because loading it is a fixed cost and not the file's). That
  * overstates, since anything else growing at the same time counts too, which errs on refusing.
