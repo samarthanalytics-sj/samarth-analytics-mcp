@@ -1,7 +1,10 @@
-/** Pure audit-export formatters (CSV + Markdown). Run: tsx src/renderer/src/__tests__/audit-export.test.ts */
+/** Pure renderer helpers: audit-export formatters (CSV + Markdown) and the state guards that keep
+ *  async results on the selection they were requested for (state-guards.ts).
+ *  Run: tsx src/renderer/src/__tests__/audit-export.test.ts */
 import assert from 'node:assert/strict';
 import { auditToCsv, auditToMarkdown, sortFindings } from '../audit-export';
-import type { AuditReportView, AuditFindingView } from '../../../shared/ipc';
+import { gtmScopeKey, canRunAudit } from '../state-guards';
+import type { AuditReportView, AuditFindingView, GtmContext } from '../../../shared/ipc';
 
 let passed = 0, failed = 0;
 function test(name: string, fn: () => void): void {
@@ -69,6 +72,27 @@ test('auditToMarkdown: clean container has no table, states it is clean', () => 
   const md = auditToMarkdown(report([]));
   assert.ok(md.includes('No issues found'));
   assert.ok(!md.includes('| # | Severity'), 'no table when there are no findings');
+});
+
+console.log('\nRenderer state guards:');
+
+test('gtmScopeKey: a container or workspace switch is a new scope; a rename is not (container audit report)', () => {
+  const key = (c: GtmContext): string => gtmScopeKey(c); // the panel passes the account's whole GtmContext
+  const a: GtmContext = { accountId: '1', accountName: 'Acct', containerId: '10', containerName: 'A', workspaceId: '4', workspaceName: 'Default' };
+  assert.notEqual(key(a), key({ ...a, containerId: '11', containerName: 'B' }), 'other container');
+  assert.notEqual(key(a), key({ ...a, workspaceId: '5' }), 'other workspace of the same container');
+  assert.equal(key(a), key({ ...a, containerName: 'A (renamed)', workspaceName: 'Renamed' }), 'names are labels, not scope');
+  assert.equal(gtmScopeKey(undefined), gtmScopeKey({}), 'no context is one stable scope');
+});
+
+test('canRunAudit: Re-run waits for a batch or row write still in flight', () => {
+  const idle = { ready: true, running: false, applyingAll: false, fix: {} };
+  assert.equal(canRunAudit(idle), true);
+  assert.equal(canRunAudit({ ...idle, applyingAll: true }), false, 'blocked during Apply all / bulk delete');
+  assert.equal(canRunAudit({ ...idle, fix: { 3: { state: 'done' }, 7: { state: 'fixing' } } }), false, 'blocked while a row write is in flight');
+  assert.equal(canRunAudit({ ...idle, fix: { 3: { state: 'done' }, 7: { state: 'err' }, 9: { state: 'confirm' } } }), true, 'finished rows do not block');
+  assert.equal(canRunAudit({ ...idle, running: true }), false);
+  assert.equal(canRunAudit({ ...idle, ready: false }), false);
 });
 
 console.log(`\naudit-export: ${passed} passed, ${failed} failed`);

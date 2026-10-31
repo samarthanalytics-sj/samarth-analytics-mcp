@@ -91,6 +91,7 @@ import { AdsMonitoringPanel } from './AdsMonitoringPanel';
 import { TagTypeIcon } from './TagTypeIcon';
 import { gtmTypeLabel } from '../../shared/tag-brand';
 import { auditToCsv, auditToMarkdown } from './audit-export';
+import { gtmScopeKey, canRunAudit } from './state-guards';
 
 const DEFAULT_MODEL: Record<LlmProvider, string> = {
   anthropic: 'claude-opus-4-8',
@@ -9010,12 +9011,38 @@ function ContainerAuditPanel({
   // "show debug": run context (scope + counts), the config-audit boundary +
   // runtime-required checks, and a preview of the exact tool+args each fix calls.
   const [showDebug, setShowDebug] = useState(false);
+  // The GTM context the report was run against (its names label the exports, so a file's name and
+  // header always describe the findings inside it).
+  const [reportCtx, setReportCtx] = useState<GtmContext | null>(null);
 
   const ctx = active?.gtmContext;
   const ready = Boolean(active?.hasGoogleToken && ctx?.accountId && ctx?.containerId && ctx?.workspaceId);
 
+  // A report, and every fix / delete / export built from it, belongs to the container + workspace it
+  // was run against (each finding's fix args carry those ids). Switching either in the GTM bar keeps
+  // this panel mounted, so drop the old report, stop a running batch from launching more writes at the
+  // old container, and bump the generation so a late audit result or row write for it is discarded.
+  const ctxKey = gtmScopeKey(ctx);
+  const scopeGen = useRef(0);
+  useEffect(() => {
+    scopeGen.current += 1;
+    cancelRef.current = true;
+    setReport(null);
+    setReportCtx(null);
+    setFix({});
+    setSelectedDel({});
+    setDelConfirm(null);
+    setTypeFilter('all');
+    setSearch('');
+    setExportNote('');
+  }, [ctxKey]);
+
   async function runAudit(): Promise<void> {
-    if (!ready || !ctx || running) return;
+    // Never while a batch or row write is in flight: they record results by the current report's row
+    // index, and this replaces the report and resets the fix map.
+    if (!ctx || !canRunAudit({ ready, running, applyingAll, fix: fixRef.current })) return;
+    const gen = scopeGen.current;
+    const ranFor = ctx;
     onError('');
     setRunning(true);
     setFix({});
@@ -9024,7 +9051,10 @@ function ContainerAuditPanel({
     setSelectedDel({});
     setDelConfirm(null);
     try {
-      setReport(await window.desktop.gtm.audit(ctx.accountId!, ctx.containerId!, ctx.workspaceId!));
+      const r = await window.desktop.gtm.audit(ctx.accountId!, ctx.containerId!, ctx.workspaceId!);
+      if (gen !== scopeGen.current) return; // the user switched container / workspace meanwhile
+      setReport(r);
+      setReportCtx(ranFor);
       setExportNote('');
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
@@ -9040,26 +9070,28 @@ function ContainerAuditPanel({
     if (!report || exporting) return;
     setExporting(true);
     setExportNote('');
+    // Label the file with the context the report was RUN against, not whatever the bar shows now.
+    const sc = reportCtx ?? ctx;
     try {
       const md = (): string =>
         auditToMarkdown(report, {
-          account: ctx?.accountName,
-          container: ctx?.containerName,
-          workspace: ctx?.workspaceName ?? undefined,
+          account: sc?.accountName,
+          container: sc?.containerName,
+          workspace: sc?.workspaceName ?? undefined,
           generatedAt: new Date().toLocaleString(),
         });
       // Filename carries BOTH container and workspace, so audits of different workspaces of the same
       // container don't collide on disk (e.g. "GTM audit - www-samarthanalytics-com-Default-Workspace").
       const slug = (s: string | undefined | null): string => (s ?? '').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '');
-      const cLabel = slug(ctx?.containerName) || 'container';
-      const wLabel = slug(ctx?.workspaceName);
+      const cLabel = slug(sc?.containerName) || 'container';
+      const wLabel = slug(sc?.workspaceName);
       const label = wLabel ? `${cLabel}-${wLabel}` : cLabel;
       const saved =
         format === 'pdf'
           ? await window.desktop.gtm.exportAuditPdf(`GTM audit - ${label}`, report, {
-              account: ctx?.accountName,
-              container: ctx?.containerName,
-              workspace: ctx?.workspaceName ?? undefined,
+              account: sc?.accountName,
+              container: sc?.containerName,
+              workspace: sc?.workspaceName ?? undefined,
               generatedAt: new Date().toLocaleString(),
             })
           : await window.desktop.gtm.exportAudit(`GTM audit - ${label}.${format}`, format === 'csv' ? auditToCsv(report) : md());
@@ -9087,13 +9119,16 @@ function ContainerAuditPanel({
       setFix((s) => ({ ...s, [i]: { state: 'confirm' } }));
       return;
     }
+    const gen = scopeGen.current;
     setFix((s) => ({ ...s, [i]: { state: 'fixing' } }));
     try {
       await window.desktop.gtm.applyFix(toRun);
-      setFix((s) => ({ ...s, [i]: { state: 'done' } }));
+      // Row i belongs to the report on screen when the write started; after a container / workspace
+      // switch the fix map is a different report's, so leave it alone.
+      if (gen === scopeGen.current) setFix((s) => ({ ...s, [i]: { state: 'done' } }));
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      setFix((s) => ({ ...s, [i]: { state: 'err', msg } }));
+      if (gen === scopeGen.current) setFix((s) => ({ ...s, [i]: { state: 'err', msg } }));
       onError(msg);
     }
   }
@@ -9231,6 +9266,7 @@ function ContainerAuditPanel({
           continue;
         }
         if (done > 0) await new Promise((r) => setTimeout(r, 400)); // pace under the per-minute quota
+        if (cancelRef.current) break; // cancelled (or the container switched) during the pause
         await applyFix(i, findings[i], override?.(findings[i])); // one workspace write at a time
         done += 1;
         setBatchProgress({ done, total: targets.length });
@@ -9267,6 +9303,7 @@ function ContainerAuditPanel({
       for (const i of live) {
         if (cancelRef.current) break; // Cancel stops launching further deletes
         if (done > 0) await new Promise((r) => setTimeout(r, 400)); // pace under the per-minute quota
+        if (cancelRef.current) break; // cancelled (or the container switched) during the pause
         await applyFix(i, findings[i], undefined, { skipConfirm: true });
         done += 1;
         setBatchProgress({ done, total: live.length });
@@ -9314,7 +9351,11 @@ function ContainerAuditPanel({
             </div>
           )}
           <div style={{ marginTop: 10 }}>
-            <button style={styles.primaryBtn} onClick={runAudit} disabled={!ready || running}>
+            <button
+              style={{ ...styles.primaryBtn, ...disabledStyle(applyingAll || anyFixing) }}
+              onClick={runAudit}
+              disabled={!canRunAudit({ ready, running, applyingAll, fix })}
+            >
               {running ? 'Auditing…' : report ? 'Re-run audit' : 'Run audit'}
             </button>
           </div>
