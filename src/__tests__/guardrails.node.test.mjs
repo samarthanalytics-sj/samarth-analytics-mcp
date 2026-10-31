@@ -5,6 +5,12 @@
  */
 
 import assert from 'assert';
+import { spawnSync } from 'child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'fs';
+import os from 'os';
+import path from 'path';
+import { createRequire } from 'module';
+import { fileURLToPath, pathToFileURL } from 'url';
 
 // Inline the tested logic to avoid heavy imports in this environment
 
@@ -122,12 +128,10 @@ test('full path with resource', () => {
 // GTM_MCP_ENABLE_DELETES=false - a server configured to refuse deletes - it locked users out.
 console.log('\nuser_permissions_update tiering:');
 
-const { existsSync } = await import('fs');
-const { fileURLToPath, pathToFileURL } = await import('url');
-const nodePath = (await import('path')).default;
-const here = nodePath.dirname(fileURLToPath(import.meta.url));
-const distUserPerms = nodePath.resolve(here, '../../dist/tools/userPermissions.js');
-const distSdk = nodePath.resolve(here, '../../node_modules/@modelcontextprotocol/sdk/dist/esm/server/mcp.js');
+// existsSync / fileURLToPath / pathToFileURL / path come from the static imports at the top.
+const here = path.dirname(fileURLToPath(import.meta.url));
+const distUserPerms = path.resolve(here, '../../dist/tools/userPermissions.js');
+const distSdk = path.resolve(here, '../../node_modules/@modelcontextprotocol/sdk/dist/esm/server/mcp.js');
 if (!existsSync(distUserPerms)) {
   console.error(`\n✗ guardrails test: ${distUserPerms} not found. Run "npm run build" before "npm test".`);
   process.exit(1);
@@ -235,6 +239,112 @@ await testAsync('with deletes enabled, an explicit revocation is allowed', () =>
     assert.ok(!r.isError, resText(r));
     assert.deepStrictEqual(calls.find((c) => c.verb === 'update').params.requestBody, { accountAccess: { permission: 'noAccess' }, containerAccess: [] });
   }));
+
+// ── smoke-all-tools child environment ──────────────────────────────────────
+// scripts/smoke-all-tools.mjs calls EVERY tool (deletes, archives and publishes included) with
+// confirm:true, and promises each one fails at the auth or guardrail layer before reaching Google.
+// It stripped GTM_MCP_ENABLE_* but never GA4_MCP_ENABLE_*, and it only DELETED keys - which the
+// server's `import 'dotenv/config'` then refilled from a developer .env in the repo root.
+console.log('\nsmoke-all-tools child environment:');
+
+// `here` is declared once above (user_permissions_update section).
+const repoRoot = path.resolve(here, '../..');
+const smokePath = path.join(repoRoot, 'scripts/smoke-all-tools.mjs');
+const smokeSrc = readFileSync(smokePath, 'utf-8');
+const ALL_FLAGS = [
+  'GTM_MCP_ENABLE_WRITES',
+  'GTM_MCP_ENABLE_PUBLISH',
+  'GTM_MCP_ENABLE_DELETES',
+  'GA4_MCP_ENABLE_WRITES',
+  'GA4_MCP_ENABLE_DELETES',
+];
+const CREDS = [
+  'GOOGLE_ACCESS_TOKEN',
+  'GOOGLE_REFRESH_TOKEN',
+  'GOOGLE_SERVICE_ACCOUNT_KEY_FILE',
+  'GOOGLE_OAUTH_CLIENT_ID',
+  'GOOGLE_OAUTH_CLIENT_SECRET',
+  'GOOGLE_CLIENT_ID',
+  'GOOGLE_CLIENT_SECRET',
+  'SAMARTH_GOOGLE_OAUTH_CLIENT_ID',
+  'SAMARTH_GOOGLE_OAUTH_CLIENT_SECRET',
+];
+// What a developer shell + .env might hold.
+const HOSTILE = {
+  ...Object.fromEntries(ALL_FLAGS.map((k) => [k, 'true'])),
+  ...Object.fromEntries(CREDS.map((k) => [k, `leaked-${k}`])),
+  GOOGLE_APPLICATION_CREDENTIALS: '/home/dev/.config/gcloud/application_default_credentials.json',
+  GTM_MCP_TOKEN_FILE: '/repo/.gtm-mcp-tokens.json',
+  DOTENV_CONFIG_PATH: '/repo/.env',
+  DOTENV_CONFIG_OVERRIDE: 'true',
+};
+
+// Importing the pre-fix script would RUN it (spawn the server and call every tool), so check that it
+// only runs when executed directly before importing it.
+let smoke;
+test('REGRESSION: importing smoke-all-tools does not run it', () => {
+  assert.match(smokeSrc, /if \(isMainModule\(\)\)/, 'main() runs unconditionally at import');
+});
+if (/if \(isMainModule\(\)\)/.test(smokeSrc)) smoke = await import(pathToFileURL(smokePath).href);
+
+test('REGRESSION: every write/publish/delete flag, GA4 included, is pinned to "false"', () => {
+  assert.ok(smoke && typeof smoke.buildSmokeChildEnv === 'function', 'buildSmokeChildEnv not exported');
+  const env = smoke.buildSmokeChildEnv(HOSTILE, '/tmp/smoke-sandbox');
+  for (const k of ALL_FLAGS) assert.strictEqual(env[k], 'false', k);
+  // Present but empty, so dotenv cannot fill them in again.
+  for (const k of CREDS) assert.strictEqual(env[k], '', k);
+  assert.strictEqual(env.DRY_RUN, 'true');
+  assert.strictEqual(env.DOTENV_CONFIG_OVERRIDE, undefined, 'a parent DOTENV_CONFIG_OVERRIDE must not survive');
+  for (const k of ['DOTENV_CONFIG_PATH', 'GTM_MCP_TOKEN_FILE', 'GOOGLE_APPLICATION_CREDENTIALS']) {
+    assert.ok(env[k].startsWith('/tmp/smoke-sandbox'), `${k} must point into the sandbox, got ${env[k]}`);
+  }
+});
+
+test("REGRESSION: the server's dotenv load cannot bring credentials or flags back", () => {
+  assert.ok(smoke && typeof smoke.buildSmokeChildEnv === 'function', 'buildSmokeChildEnv not exported');
+  // A repo-root .env full of credentials and enabled flags, and the child started right next to it:
+  // the worst case even if the sandbox cwd were lost.
+  const repoLike = mkdtempSync(path.join(os.tmpdir(), 'smoke-env-repo-'));
+  const sandbox = mkdtempSync(path.join(os.tmpdir(), 'smoke-env-sandbox-'));
+  try {
+    writeFileSync(
+      path.join(repoLike, '.env'),
+      Object.entries(HOSTILE)
+        .filter(([k]) => !k.startsWith('DOTENV_'))
+        .map(([k, v]) => `${k}=${v}`)
+        .join('\n') + '\n'
+    );
+    const env = smoke.buildSmokeChildEnv(HOSTILE, sandbox);
+    const dotenvConfig = createRequire(import.meta.url).resolve('dotenv/config');
+    const probe =
+      `await import(${JSON.stringify(pathToFileURL(dotenvConfig).href)});` +
+      `const keys = ${JSON.stringify([...ALL_FLAGS, ...CREDS, 'GOOGLE_APPLICATION_CREDENTIALS', 'GTM_MCP_TOKEN_FILE'])};` +
+      'console.log(JSON.stringify(Object.fromEntries(keys.map((k) => [k, process.env[k]]))));';
+    const r = spawnSync(process.execPath, ['--input-type=module', '-e', probe], { cwd: repoLike, env, encoding: 'utf-8' });
+    assert.strictEqual(r.status, 0, r.stderr);
+    const seen = JSON.parse(r.stdout.trim().split('\n').pop());
+    for (const k of ALL_FLAGS) assert.strictEqual(seen[k], 'false', `${k} came back from .env`);
+    for (const k of CREDS) assert.strictEqual(seen[k], '', `${k} came back from .env`);
+    assert.ok(!existsSync(seen.GOOGLE_APPLICATION_CREDENTIALS), 'ADC must point at a file that does not exist');
+    assert.ok(seen.GTM_MCP_TOKEN_FILE.startsWith(sandbox), seen.GTM_MCP_TOKEN_FILE);
+  } finally {
+    rmSync(repoLike, { recursive: true, force: true });
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
+test('the child runs in the sandbox and the run aborts if the server still loads credentials', () => {
+  assert.match(smokeSrc, /cwd: sandbox/, 'the child must not run in the repo root next to .env');
+  // The abort keys on the exact lines buildGoogleAuth logs; keep the two in sync.
+  const googleAuthSrc = readFileSync(path.join(repoRoot, 'src/auth/googleAuth.ts'), 'utf-8');
+  for (const line of ['[auth] Using OAuth2 user credentials', '[auth] Using service account credentials']) {
+    assert.ok(googleAuthSrc.includes(line), `googleAuth.ts no longer logs "${line}"`);
+    assert.ok(smokeSrc.includes(line.replace('[auth] Using ', '')), `smoke-all-tools does not detect "${line}"`);
+  }
+  const abort = smokeSrc.indexOf('if (credentialsLoaded)');
+  assert.ok(abort >= 0, 'no credential-leak abort');
+  assert.ok(abort < smokeSrc.indexOf('"tools/call"'), 'the abort must run before any tool is called');
+});
 
 // ── Summary ────────────────────────────────────────────────────────────────
 console.log(`\n${passed} passed, ${failed} failed`);
