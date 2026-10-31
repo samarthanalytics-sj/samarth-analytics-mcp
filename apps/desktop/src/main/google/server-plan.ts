@@ -101,19 +101,22 @@ export function findStapeDataClient(server: ServerContainerSnapshot | null): { c
   }
   return null;
 }
-/** A trigger row as GoogleDataService.listGtmTriggers returns it (no raw customEventFilter). */
-export interface ListedTrigger { triggerId: string; name: string; type: string; customEventName: string; conditions: string[] }
+/** A trigger row as GoogleDataService.listGtmTriggers returns it (no raw customEventFilter).
+ *  customEventExact is true only for an exact, non-negated `{{_event}} equals <name>` match. */
+export interface ListedTrigger { triggerId: string; name: string; type: string; customEventName: string; customEventExact?: boolean; conditions: string[] }
 
 /**
  * The apply step's Custom Event trigger for one CAPI event: REUSE an existing trigger that fires on
  * exactly that event with no extra conditions, else CREATE one under a name no trigger already has.
  * Reads the fields listGtmTriggers actually returns (customEventName is decoded from the {{_event}}
  * filter; conditions excludes it), so a trigger made by an earlier run is found again instead of
- * being duplicated. The name loop never re-offers a taken name, so a later run cannot hit GTM's
- * duplicate-name error. PURE.
+ * being duplicated. customEventName keeps no operator, so reuse also requires customEventExact: a
+ * regex, 'contains' or negated event match would fire the CAPI tag on other events, sending them to
+ * the ad platform as conversions. The name loop never re-offers a taken name, so a later run cannot
+ * hit GTM's duplicate-name error. PURE.
  */
 export function eventTriggerFor(triggers: readonly ListedTrigger[], eventName: string): { reuse: string } | { create: string } {
-  const hit = triggers.find((t) => t.type === 'customEvent' && t.customEventName === eventName && t.conditions.length === 0);
+  const hit = triggers.find((t) => t.type === 'customEvent' && t.customEventName === eventName && t.customEventExact === true && t.conditions.length === 0);
   if (hit) return { reuse: hit.triggerId };
   const nrm = (x: string): string => x.trim().toLowerCase();
   const taken = new Set(triggers.map((t) => nrm(t.name)));

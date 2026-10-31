@@ -311,11 +311,22 @@ test('apply: an existing Custom Event trigger (listGtmTriggers row) is REUSED, n
   // conditions but no raw customEventFilter. The old match read customEventFilter, so it never found
   // a trigger from an earlier run and created "ce - purchase (server)" next to "ce - purchase".
   const rows: ListedTrigger[] = [
-    { triggerId: '7', name: 'ce - purchase', type: 'customEvent', customEventName: 'purchase', conditions: [] },
+    { triggerId: '7', name: 'ce - purchase', type: 'customEvent', customEventName: 'purchase', customEventExact: true, conditions: [] },
     { triggerId: '8', name: 'All Pages', type: 'pageview', customEventName: '', conditions: [] },
   ];
   assert.deepEqual(eventTriggerFor(rows, 'purchase'), { reuse: '7' });
   assert.deepEqual(eventTriggerFor(rows, 'lead'), { create: 'ce - lead' }, 'a missing event gets the plain name');
+});
+
+test('apply: a regex / contains / negated event trigger is NOT reused as "event equals X"', () => {
+  // customEventName drops the operator, so `{{_event}} matches regex purchase` (unanchored: also
+  // purchase_refund), `contains purchase` and `NOT equals purchase` all list as "purchase" with no
+  // conditions. Reusing one fired the new CAPI tag on other events, sent to the platform as conversions.
+  const inexact: ListedTrigger = { triggerId: '7', name: 'ce - purchase', type: 'customEvent', customEventName: 'purchase', customEventExact: false, conditions: [] };
+  assert.deepEqual(eventTriggerFor([inexact], 'purchase'), { create: 'ce - purchase (server)' });
+  const { customEventExact: _omit, ...unknownOp } = inexact;
+  assert.deepEqual(eventTriggerFor([unknownOp], 'purchase'), { create: 'ce - purchase (server)' }, 'a row that does not say it is exact is not reused');
+  assert.deepEqual(eventTriggerFor([inexact, { ...inexact, triggerId: '11', name: 'purchase exact', customEventExact: true }], 'purchase'), { reuse: '11' }, 'an exact sibling is still reused');
 });
 
 test('apply: a trigger with extra conditions is not reused, and a new one always gets a FREE name', () => {

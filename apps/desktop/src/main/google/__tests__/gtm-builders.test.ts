@@ -19,6 +19,7 @@ import {
   applyTriggerWaitDefaults,
   normalizeTimerTrigger,
   customEventNameOf,
+  customEventIsExactEquals,
   describeTriggerConditions,
   findExistingTrigger,
   buildEnvironmentSnippet,
@@ -1580,6 +1581,27 @@ test('customEventNameOf extracts the dataLayer event from a customEvent trigger'
   const tr = buildTrigger({ name: 'CE - Product View', kind: 'custom_event', eventName: 'product_view' });
   assert.equal(customEventNameOf(tr as unknown as Record<string, unknown>), 'product_view');
   assert.equal(customEventNameOf({ type: 'pageview' }), '', 'non-custom-event → empty');
+});
+
+test('customEventIsExactEquals: only a single, non-negated, case-sensitive {{_event}} equals match', () => {
+  const ev = (type: string, extra: Array<{ key: string; value: string }> = []) => ({
+    type: 'customEvent',
+    customEventFilter: [{ type, parameter: [{ type: 'template', key: 'arg0', value: '{{_event}}' }, { type: 'template', key: 'arg1', value: 'purchase' }, ...extra.map((p) => ({ type: 'boolean', ...p }))] }],
+  });
+  const built = buildTrigger({ name: 'CE - Purchase', kind: 'custom_event', eventName: 'purchase' });
+  assert.equal(customEventIsExactEquals(built as unknown as Record<string, unknown>), true, 'the trigger the app builds is exact');
+  assert.equal(customEventIsExactEquals(ev('equals')), true);
+  // All of these decode to customEventName 'purchase' yet fire on other events.
+  assert.equal(customEventNameOf(ev('matchRegex')), 'purchase');
+  assert.equal(customEventIsExactEquals(ev('matchRegex')), false, 'regex is unanchored in GTM: also purchase_refund');
+  assert.equal(customEventIsExactEquals(ev('contains')), false);
+  assert.equal(customEventIsExactEquals(ev('equals', [{ key: 'negate', value: 'true' }])), false, 'negated: every event EXCEPT purchase');
+  assert.equal(customEventIsExactEquals(ev('equals', [{ key: 'ignore_case', value: 'true' }])), false);
+  const two = ev('equals');
+  two.customEventFilter.push({ ...two.customEventFilter[0] });
+  assert.equal(customEventIsExactEquals(two), false, 'more than one condition');
+  assert.equal(customEventIsExactEquals({ type: 'customEvent', customEventFilter: [{ type: 'equals', parameter: [{ key: 'arg0', value: '{{Page Path}}' }, { key: 'arg1', value: '/x' }] }] }), false, 'not on {{_event}}');
+  assert.equal(customEventIsExactEquals({ type: 'pageview' }), false);
 });
 
 test('describeTriggerConditions decodes filter conditions to readable strings', () => {

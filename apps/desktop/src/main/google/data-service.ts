@@ -6,7 +6,7 @@ import type { OAuth2Client } from 'google-auth-library';
 import type { AccountClientManager } from './account-clients';
 import type { RegistryService } from '../services/registry-service';
 import type { ContainerSnapshot, ServerContainerSnapshot } from './gtm-builders';
-import { ga4TagFields, readGa4EventParameters, applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, normalizeTriggerType, setCustomEventName, customEventNameOf, describeTriggerConditions, buildGa4Client, buildGa4ServerTag, buildStapeDataTag, buildStapeDataClient, buildServerAllEventsTrigger, buildServerEventTrigger, buildAdsConversionServerTag, buildMetaEmqVariables, buildTikTokEmqVariables, buildEcommerceDlvVariables, buildGa4EventTag, buildTrigger, planTriggerRetarget, type TriggerInput, buildGtmClient, buildVariable, sanitizeName, matchesServerContainer, customTemplateType, upsertGoogleTagConfig, taggingUrlFirstPartyIssue, parseTemplateParameters, summariseTagTypes, type TemplateField, type TagTypeProfile, triggerUsageBreakdown, detectMetaTags, planWebToServerMigration, evaluateTrackingSetup, GA4_ECOMMERCE_FUNNEL_EVENTS, type TrackingSetupReport, type TrackingSetupCheck } from './gtm-builders';
+import { ga4TagFields, readGa4EventParameters, applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, normalizeTriggerType, setCustomEventName, customEventNameOf, customEventIsExactEquals, describeTriggerConditions, buildGa4Client, buildGa4ServerTag, buildStapeDataTag, buildStapeDataClient, buildServerAllEventsTrigger, buildServerEventTrigger, buildAdsConversionServerTag, buildMetaEmqVariables, buildTikTokEmqVariables, buildEcommerceDlvVariables, buildGa4EventTag, buildTrigger, planTriggerRetarget, type TriggerInput, buildGtmClient, buildVariable, sanitizeName, matchesServerContainer, customTemplateType, upsertGoogleTagConfig, taggingUrlFirstPartyIssue, parseTemplateParameters, summariseTagTypes, type TemplateField, type TagTypeProfile, triggerUsageBreakdown, detectMetaTags, planWebToServerMigration, evaluateTrackingSetup, GA4_ECOMMERCE_FUNNEL_EVENTS, type TrackingSetupReport, type TrackingSetupCheck } from './gtm-builders';
 import {
   galleryCoordinatesFor, matchInstalledTemplate, templateInstallError,
 } from '../../../../../src/shared/gtm-template-sources';
@@ -1654,7 +1654,7 @@ export class GoogleDataService {
     accountId: string,
     containerId: string,
     workspaceId: string
-  ): Promise<Array<{ triggerId: string; name: string; type: string; customEventName: string; conditions: string[] }>> {
+  ): Promise<Array<{ triggerId: string; name: string; type: string; customEventName: string; customEventExact?: boolean; conditions: string[] }>> {
     const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
     const gtm = tagmanager({ version: 'v2', auth });
     const parent = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`;
@@ -1670,6 +1670,9 @@ export class GoogleDataService {
       // For Custom Event triggers, surface the dataLayer event so callers can detect a
       // duplicate that fires on the same event under a different name.
       customEventName: customEventNameOf(t as unknown as Record<string, unknown>),
+      // customEventName drops the operator: false here means the event match is a regex, a
+      // 'contains', negated or case-insensitive, so it does NOT fire on exactly that one event.
+      ...(t.type === 'customEvent' ? { customEventExact: customEventIsExactEquals(t as unknown as Record<string, unknown>) } : {}),
       // The REAL firing conditions decoded from filter/autoEventFilter (e.g.
       // "{{Click Classes}} contains res-brochure-download"). Without this a caller
       // answering "check trigger conditions" can only guess them from the name.
@@ -2137,7 +2140,7 @@ export class GoogleDataService {
         requestBody: { name: trName, type: 'customEvent', customEventFilter: [{ type: 'equals', parameter: [{ type: 'template', key: 'arg0', value: '{{_event}}' }, { type: 'template', key: 'arg1', value: eventName }] }] },
       }));
       const id = created.data.triggerId ?? '';
-      localTriggers.push({ triggerId: id, name: trName, type: 'customEvent', customEventName: eventName, conditions: [] });
+      localTriggers.push({ triggerId: id, name: trName, type: 'customEvent', customEventName: eventName, customEventExact: true, conditions: [] });
       return id;
     };
     for (const id of capiIds) {

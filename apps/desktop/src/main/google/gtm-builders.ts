@@ -367,6 +367,26 @@ export function customEventNameOf(trigger: Record<string, unknown>): string {
   return '';
 }
 
+/**
+ * True only when a Custom Event trigger's event match is EXACTLY `{{_event}} equals <name>`: one
+ * customEventFilter condition, type 'equals', on {{_event}}, with a value, not negated and not
+ * case-insensitive. customEventNameOf reads only arg0/arg1, so a regex (unanchored in GTM), a
+ * 'contains' or a negated condition all decode to the same name; anything reusing a trigger to
+ * mean "fires on exactly this event" must check this too, or it fires on more (or other) events.
+ * PURE.
+ */
+export function customEventIsExactEquals(trigger: Record<string, unknown>): boolean {
+  const cef = (trigger as { customEventFilter?: unknown }).customEventFilter;
+  if (!Array.isArray(cef) || cef.length !== 1) return false;
+  const cond = cef[0] as { type?: unknown; parameter?: unknown };
+  if (String(cond?.type ?? '') !== 'equals') return false;
+  const params = Array.isArray(cond.parameter) ? (cond.parameter as Array<{ key?: unknown; value?: unknown }>) : [];
+  const val = (k: string): string => String(params.find((p) => p?.key === k)?.value ?? '');
+  if (val('arg0') !== '{{_event}}' || !val('arg1')) return false;
+  if (val('negate') === 'true' || val('ignore_case') === 'true') return false;
+  return true;
+}
+
 /** How a trigger CONDITION's operator prints in readable form. Keys are the GTM API
  *  Condition.type enum; anything unmapped falls through to the raw type string. */
 const CONDITION_OPERATOR_WORD: Record<string, string> = {
