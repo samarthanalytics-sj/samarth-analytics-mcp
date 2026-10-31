@@ -24,6 +24,21 @@ function check(name: string, ok: boolean, detail?: string): void {
   else { failed += 1; failures.push(`x ${name}${detail ? ' - ' + detail : ''}`); }
 }
 
+/** Would GTM fire this planned {{Click URL}} condition on a link with this href? Click URL is the
+ *  anchor's href as the browser serializes it, and a web container's matchRegex is a case-sensitive
+ *  JS RegExp test (no ignore_case is set on these triggers). */
+function firesOn(tag: { clickUrlValue?: string; clickUrlOperator?: string } | undefined, href: string): boolean {
+  const v = tag?.clickUrlValue;
+  if (!v) return false;
+  let url = href;
+  try { url = new URL(href).href; } catch { /* keep it as written */ }
+  switch (tag?.clickUrlOperator ?? 'contains') {
+    case 'matchRegex': return new RegExp(v).test(url);
+    case 'equals': return url === v;
+    default: return url.includes(v);
+  }
+}
+
 // ── tel: hrefs ──
 {
   check('plain tel href', phoneFromTelHref('tel:+15551234567') === '+15551234567');
@@ -109,6 +124,89 @@ function check(name: string, ok: boolean, detail?: string): void {
   check('too-short junk never becomes a number', mergePhoneSightings([{ raw: '12345', source: 'text', page: '/a' }]).length === 0);
 }
 
+// ── a national form with a trunk 0 is the same line as its international form ──
+{
+  const uk = mergePhoneSightings([
+    { raw: 'tel:+442079460958', source: 'tel_link', page: '/' },
+    { raw: 'tel:020 7946 0958', source: 'tel_link', page: '/contact' },
+  ]);
+  check('UK: +44 20 7946 0958 and 020 7946 0958 merge into ONE line', uk.length === 1 && uk[0].e164 === '+442079460958' && uk[0].occurrences === 2, JSON.stringify(uk.map((u) => u.key)));
+  const ukText = mergePhoneSightings([
+    { raw: 'tel:+442079460958', source: 'tel_link', page: '/' },
+    { raw: '020 7946 0958', source: 'text', page: '/' },
+  ]);
+  check('UK: the national text form joins the clickable line instead of becoming a second number', ukText.length === 1 && ukText[0].clickable && ukText[0].key === '+442079460958', JSON.stringify(ukText.map((u) => u.key)));
+  const india = mergePhoneSightings([
+    { raw: '+919876543210', source: 'text', page: '/' },
+    { raw: '098765 43210', source: 'text', page: '/' },
+  ]);
+  check('India: +91 and 0-prefixed national forms merge', india.length === 1 && india[0].e164 === '+919876543210', JSON.stringify(india.map((u) => u.key)));
+  const au = mergePhoneSightings([
+    { raw: 'tel:+61298765432', source: 'tel_link', page: '/' },
+    { raw: 'tel:(02) 9876 5432', source: 'tel_link', page: '/' },
+  ]);
+  check('Australia: +61 2 and (02) forms merge', au.length === 1 && au[0].e164 === '+61298765432', JSON.stringify(au.map((u) => u.key)));
+  const alone = mergePhoneSightings([{ raw: '020 7946 0958', source: 'text', page: '/' }]);
+  check('a national form on its own is still never given a guessed country', alone.length === 1 && alone[0].key === 'digits:02079460958' && alone[0].e164 === null);
+  const nanp = mergePhoneSightings([
+    { raw: 'tel:+12079460958', source: 'tel_link', page: '/' },
+    { raw: '020 7946 0958', source: 'text', page: '/' },
+  ]);
+  check('a NANP number never absorbs a trunk-0 national number', nanp.length === 2, JSON.stringify(nanp.map((u) => u.key)));
+  const plan = buildPhoneConversionPlan({ phones: uk, existingActions: [], existingTagNames: [], hasConversionLinker: true });
+  check('the merged UK line plans ONE action, not two', plan.steps.length === 1 && plan.summary.creatingActions === 1);
+  check('and its one trigger fires on both ways the line is linked', firesOn(plan.steps[0].tag, 'tel:+442079460958') && firesOn(plan.steps[0].tag, 'tel:020 7946 0958'), plan.steps[0].tag?.clickUrlValue);
+  const auPlan = buildPhoneConversionPlan({ phones: au, existingActions: [], existingTagNames: [], hasConversionLinker: true });
+  check('a merged line with a 9-digit national number fires on both forms too', firesOn(auPlan.steps[0].tag, 'tel:+61298765432') && firesOn(auPlan.steps[0].tag, 'tel:(02) 9876 5432'), auPlan.steps[0].tag?.clickUrlValue);
+}
+
+// ── the click trigger fires on the tel: hrefs the site actually wrote ──
+{
+  const planFor = (sightings: RawPhoneSighting[]) =>
+    buildPhoneConversionPlan({ phones: mergePhoneSightings(sightings), existingActions: [], existingTagNames: [], hasConversionLinker: true });
+  const tagFor = (href: string) => planFor([{ raw: href, source: 'tel_link', page: '/a' }]).steps[0]?.tag;
+  // GTM's {{Click URL}} is the href as written, never the E.164 form, so a contains on "tel:+1800..."
+  // never fired on any of these.
+  for (const href of [
+    'tel:+1-800-555-1234',
+    'tel:(555) 123-4567',
+    'tel:(555)%20123-4567',
+    'tel:(+44)2079460958',
+    'tel:00442079460958',
+    'tel:+1 555 123 4567',
+    'tel:%2B15551234567',
+    'tel:+15551234567;ext=99',
+    'tel:+15551234567',
+  ]) {
+    check(`the planned trigger fires on its own href ${href}`, firesOn(tagFor(href), href), tagFor(href)?.clickUrlValue);
+  }
+
+  const t = tagFor('tel:+1-800-555-1234');
+  check('a different number never fires it', !firesOn(t, 'tel:+1-800-555-1235') && !firesOn(t, 'tel:+1-900-555-1234') && !firesOn(t, 'tel:+1-800-555-12345') && !firesOn(t, 'mailto:sales@example.com'));
+
+  // The +1 was inferred from other evidence on the site, so the E.164 form is not in the href at all.
+  const inferred = planFor([
+    { raw: 'tel:+15559998888', source: 'tel_link', page: '/a' },
+    { raw: 'tel:5551234567', source: 'tel_link', page: '/b' },
+  ]);
+  const bare = inferred.steps.find((st) => st.phone.e164 === '+15551234567')?.tag;
+  const other = inferred.steps.find((st) => st.phone.e164 === '+15559998888')?.tag;
+  check('a bare href whose +1 was inferred still fires its own trigger', firesOn(bare, 'tel:5551234567'), bare?.clickUrlValue);
+  check('two lines on one site never fire each other\'s trigger', !firesOn(bare, 'tel:+15559998888') && !firesOn(other, 'tel:5551234567') && firesOn(other, 'tel:+15559998888'));
+
+  const merged = planFor([
+    { raw: 'tel:+15551234567', source: 'tel_link', page: '/a' },
+    { raw: 'tel:(555) 123-4567', source: 'tel_link', page: '/b' },
+    { raw: 'tel:1-555-123-4567', source: 'tel_link', page: '/c' },
+  ]);
+  check('one line linked three ways is ONE step whose trigger fires on all three',
+    merged.steps.length === 1 && ['tel:+15551234567', 'tel:(555) 123-4567', 'tel:1-555-123-4567'].every((h) => firesOn(merged.steps[0].tag, h)), merged.steps[0]?.tag?.clickUrlValue);
+
+  // A short local number never merges with a longer one, so its trigger must not fire on one either.
+  const local = tagFor('tel:555-1234');
+  check('a short local number fires on its own href only', firesOn(local, 'tel:555-1234') && firesOn(local, 'tel:005551234') && !firesOn(local, 'tel:+1-212-555-1234'), local?.clickUrlValue);
+}
+
 // ── determinism: the same page always produces the same plan ──
 {
   const a: RawPhoneSighting[] = [
@@ -133,7 +231,8 @@ function check(name: string, ok: boolean, detail?: string): void {
 
   const fresh = buildPhoneConversionPlan({ phones: [clickable], existingActions: [], existingTagNames: [], hasConversionLinker: false });
   check('a clickable number plans a create + a click-scoped tag', fresh.steps[0].method === 'click_to_call' && Boolean(fresh.steps[0].createAction) && fresh.steps[0].tag?.platform === 'google_ads_conversion');
-  check('the trigger is scoped to THIS number, not to tel: generally', fresh.steps[0].tag?.clickUrlValue === 'tel:+15551234567');
+  check('the trigger is scoped to THIS number, not to tel: generally',
+    fresh.steps[0].tag?.clickUrlOperator === 'matchRegex' && firesOn(fresh.steps[0].tag, 'tel:+15551234567') && !firesOn(fresh.steps[0].tag, 'tel:+15559998888') && !firesOn(fresh.steps[0].tag, 'mailto:a@b.com'));
   check('the category is the phone-call lead category', fresh.steps[0].createAction?.category === 'PHONE_CALL_LEAD' && fresh.steps[0].createAction?.type === 'WEBPAGE');
   check('a missing Conversion Linker is planned ONCE for the container', fresh.createConversionLinker === true);
   check('the summary counts what will happen', fresh.summary.total === 1 && fresh.summary.creatingActions === 1 && fresh.summary.clickToCall === 1);

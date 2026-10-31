@@ -184,6 +184,18 @@ const sameLine = (a: string, b: string): boolean => {
   return short.length >= 10 && long.endsWith(short);
 };
 
+/** A national form with a single trunk "0" ("020 7946 0958", "098765 43210", "(02) 9876 5432") is the
+ *  same line as the international form it dials ("+44 20 7946 0958"): drop the trunk 0 and the rest is
+ *  the national significant number the international form ends with. The country code must be 2-3
+ *  digits and not start with 1, so a NANP number can never absorb a national one, and the caller only
+ *  applies this against a cluster whose country code came from an explicit international form. */
+const trunkLine = (intl: string, national: string): boolean => {
+  if (!/^0[1-9]/.test(national)) return false; // a single trunk 0, never the "00" access prefix
+  const nsn = national.slice(1);
+  const cc = intl.slice(0, intl.length - nsn.length);
+  return nsn.length >= 9 && /^[2-9]\d{1,2}$/.test(cc) && intl.endsWith(nsn);
+};
+
 /**
  * Merge raw sightings into unique numbers.
  *
@@ -232,7 +244,9 @@ export function mergePhoneSightings(sightings: readonly RawPhoneSighting[], opts
   }
   const clusters: Cluster[] = [];
   for (const { s, n, value } of ordered) {
-    let c = clusters.find((x) => sameLine(x.digits, n.digits));
+    // Longest digits sort first, so a confident international cluster already exists by the time its
+    // shorter national (trunk 0) form arrives.
+    let c = clusters.find((x) => sameLine(x.digits, n.digits) || (x.confident && !n.confident && trunkLine(x.digits, n.digits)));
     if (!c) {
       c = { digits: n.digits, e164: n.e164, confident: n.confident, clickable: false, sources: new Set(), pages: new Set(), labels: new Set(), variants: new Set(), occurrences: 0 };
       clusters.push(c);
@@ -367,6 +381,35 @@ function findExistingAction(p: UniquePhone, actions: PhonePlanInput['existingAct
   });
 }
 
+/** Any run of separators between two digits of a {{Click URL}}: punctuation, spaces, a literal or
+ *  percent-encoded "+", and a percent-escape such as %20. A plain \D* would NOT cover %20, because the
+ *  escape itself contains digits; consuming each escape whole also stops a digit inside one from being
+ *  read as part of the number. */
+const TEL_SEP = '(?:[^\\d%]|%\\w\\w)*';
+
+/**
+ * The {{Click URL}} matchRegex value for one clickable number.
+ *
+ * GTM's Click URL is the anchor's href exactly as the site wrote it ("tel:+1-800-555-1234",
+ * "tel:(555)%20123-4567", "tel:020 7946 0958"), never the E.164 form this module derives, so a
+ * contains/equals on "tel:+18005551234" can never fire on a punctuated or national-format link.
+ * The pattern instead requires the digits EVERY observed form of this line ends with (the shared
+ * suffix, at most 10 digits, which is how the merge recognises a line), with any separators between
+ * them and nothing but a tel: parameter (;ext=, ;phone-context=), a pause (,) or an extension marker
+ * after them. Leading digits (country code, "00", a national trunk 0, a NANP "1") may vary, because
+ * the merge treats those forms as the same line; a number shorter than 10 digits never merges with a
+ * longer one, so it only tolerates a leading "00" international access prefix.
+ */
+function telClickUrlPattern(p: Pick<UniquePhone, 'digits' | 'variants'>): string {
+  const forms = [p.digits, ...p.variants.map((v) => normalizePhone(v, null).digits)].filter((d) => d.length >= MIN_DIGITS);
+  let tail = p.digits.slice(-10);
+  for (const f of forms) while (tail && !f.endsWith(tail)) tail = tail.slice(1);
+  if (tail.length < MIN_DIGITS) tail = p.digits.slice(-10);
+  const anyLead = tail.length >= 10 || tail.length < p.digits.length;
+  const lead = anyLead ? '(?:[^%]|%\\w\\w)*' : `${TEL_SEP}(?:0${TEL_SEP}0${TEL_SEP})?`;
+  return `^tel:${lead}${tail.split('').join(TEL_SEP)}${TEL_SEP}(?:[;,?#A-Za-z]|$)`;
+}
+
 /**
  * Build the complete, reviewable implementation plan. PURE: every decision comes from the inputs,
  * so the plan the user approves is exactly what the writes will do.
@@ -391,10 +434,11 @@ export function buildPhoneConversionPlan(input: PhonePlanInput): PhonePlan {
           platform: 'google_ads_conversion',
           triggerName: names.triggerName,
           // The trigger is scoped to THIS number's own tel: href, which is what makes each tag fire
-          // only for its own line. contains (not equals) because the same line is written with and
-          // without punctuation across a site.
-          clickUrlValue: `tel:${p.e164 ?? p.digits}`,
-          clickUrlOperator: 'contains',
+          // only for its own line. A regex on the digits, not contains on the E.164 form: the same
+          // line is written with punctuation, spaces and national prefixes across a site, and contains
+          // cannot match a value with punctuation inside it.
+          clickUrlValue: telClickUrlPattern(p),
+          clickUrlOperator: 'matchRegex',
         },
         tagExists,
         reason: existing && !reusable
