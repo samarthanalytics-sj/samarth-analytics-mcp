@@ -9,8 +9,9 @@ import { ApprovalBroker } from '../approvals.js';
 import { approvalGate } from '../writeTiers.js';
 import type { OrchestratorConfig } from '../config.js';
 import { McpConnection } from '../mcp-client.js';
-import type { OpenAiClient } from '../openai.js';
+import { OpenAiError, type OpenAiClient } from '../openai.js';
 import type { UsageMeter } from '../usage.js';
+import type { AuditRecorder } from '../audit.js';
 import type { StreamEvent, ToolDef } from '../types.js';
 
 let passed = 0;
@@ -608,6 +609,60 @@ await testAsync('a card nobody answers is withdrawn when the budget runs out', a
   assert.match(results(events)[0]?.summary ?? '', /ran out of time/, 'not blamed on the user');
   assert.equal(doneReason(events), 'time_budget');
   assert.equal(approvals.stats().pending, 0);
+});
+
+console.log('a model call that fails on its own still closes the turn');
+
+await testAsync('a model error after a tool round is billed and recorded, then reported', async () => {
+  // Only an aborted turn used to reach finish(). A 400 context_length_exceeded, the request's own
+  // timeout or a 429 after the retries was rethrown past it, so the tokens of every earlier round
+  // went unbilled and the assistant row was never written.
+  const bills: number[] = [];
+  const turns: { stopReason: string; promptTokens: number; completionTokens: number }[] = [];
+  const failure = new OpenAiError('maximum context length exceeded', 400, 'context_length_exceeded');
+  let round = 0;
+  const llm = {
+    async streamChat(_m: unknown, _t: unknown, cbs: { onUsage?: (u: Record<string, number>) => void }) {
+      round++;
+      if (round > 1) throw failure;
+      cbs.onUsage?.({ promptTokens: 1_000, completionTokens: 50, cachedTokens: 0 });
+      return {
+        content: '',
+        finishReason: 'tool_calls',
+        toolCalls: [{ id: 'call_0', type: 'function' as const, function: { name: 'tags_list', arguments: '{}' } }],
+      };
+    },
+  } as unknown as OpenAiClient;
+  const mcp = {
+    listTools: () => CATALOG,
+    getInstructions: () => '',
+    callTool: async () => ({ ok: true, text: '{}' }),
+  } as unknown as McpConnection;
+
+  await assert.rejects(
+    runTurn({
+      cfg: TURN_CFG,
+      mcp,
+      llm,
+      history: [{ role: 'user', content: 'zzz' }],
+      context: { product: 'gtm' },
+      user: { id: 'user-1' },
+      emit: () => {},
+      signal: new AbortController().signal,
+      usage: { record: (_user: string, tokens: number) => bills.push(tokens) } as unknown as UsageMeter,
+      audit: {
+        recordAssistantTurn: (_c: unknown, _u: unknown, t: (typeof turns)[number]) => turns.push(t),
+        recordToolEvent: () => {},
+      } as unknown as AuditRecorder,
+      conversationId: 'conv-1',
+    }),
+    (err: unknown) => err === failure,
+    'the caller must still see the error, to report it',
+  );
+  assert.deepEqual(bills, [1_050], 'the first round\'s tokens must be billed, once');
+  assert.equal(turns.length, 1, 'the assistant row must be written, once');
+  assert.equal(turns[0].stopReason, 'error');
+  assert.equal(turns[0].promptTokens, 1_000);
 });
 
 console.log(`\n${passed} assertions passed`);

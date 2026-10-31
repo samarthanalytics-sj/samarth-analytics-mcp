@@ -107,15 +107,27 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
   const onCallerAbort = (): void => turn.abort();
   args.signal.addEventListener('abort', onCallerAbort, { once: true });
   if (args.signal.aborted) turn.abort();
+  // Filled in by runTurnWithin once there is something to bill, so a turn that THROWS is closed too.
+  // A model call that fails on its own (its request timer, a 400 context_length_exceeded, a 429
+  // after the retries) used to leave without finish(): the tokens of every earlier round went
+  // unbilled and the assistant row was never written. The caller still reports the error.
+  const closing: { finish?: (reason: string) => void } = {};
   try {
-    await runTurnWithin(args, turn.signal);
+    await runTurnWithin(args, turn.signal, closing);
+  } catch (err) {
+    closing.finish?.('error');
+    throw err;
   } finally {
     clearTimeout(timer);
     args.signal.removeEventListener('abort', onCallerAbort);
   }
 }
 
-async function runTurnWithin(args: RunTurnArgs, turnSignal: AbortSignal): Promise<void> {
+async function runTurnWithin(
+  args: RunTurnArgs,
+  turnSignal: AbortSignal,
+  closing: { finish?: (reason: string) => void },
+): Promise<void> {
   const { cfg, llm, context, user, emit, signal } = args;
   const startedAt = Date.now();
   // An MCP tool call may use what is left of the turn, and never less than the 60 s the SDK applied
@@ -351,8 +363,14 @@ async function runTurnWithin(args: RunTurnArgs, turnSignal: AbortSignal): Promis
     propertyId: context.propertyId,
   };
 
-  /** Writes the closing record for this turn. Called on every exit path, including the budgets. */
+  /**
+   * Writes the closing record for this turn. Called on every exit path, including the budgets and,
+   * through runTurn, a thrown error. Once only, so a throw after a normal finish bills nothing twice.
+   */
+  let finished = false;
   const finish = (reason: string): void => {
+    if (finished) return;
+    finished = true;
     // Billed on every exit path, including the budget stops. A turn that was cut short still cost
     // whatever it spent before stopping, and not charging for it would let a caller get unlimited
     // work by always hitting the ceiling.
@@ -366,6 +384,7 @@ async function runTurnWithin(args: RunTurnArgs, turnSignal: AbortSignal): Promis
       stopReason: reason,
     });
   };
+  closing.finish = finish;
 
   for (;;) {
     if (signal.aborted) {
