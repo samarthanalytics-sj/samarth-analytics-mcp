@@ -427,17 +427,25 @@ await leaseFencingChecks("mirror", InMemoryJobQueue);
 // The real module, when this Node can strip TypeScript types natively. CI's
 // Node 20 cannot, so there the mirror above is the gate (as for the rest of
 // this file); `npm test` on Node >= 22.18 exercises ../jobs.ts itself.
+// Only "this Node cannot load .ts at all" is a skip: ERR_UNKNOWN_FILE_EXTENSION
+// (no type stripping, e.g. Node 20 or --no-experimental-strip-types) or
+// ERR_NO_TYPESCRIPT (a Node built without TypeScript support). Anything else —
+// a syntax error, a missing import, a throw at module load — means jobs.ts is
+// broken and must fail the suite, not be skipped silently.
+const CANNOT_LOAD_TS = new Set(["ERR_UNKNOWN_FILE_EXTENSION", "ERR_NO_TYPESCRIPT"]);
 let realJobs = null;
+let skipReason = null;
 try {
   realJobs = await import("../jobs.ts");
-} catch {
-  realJobs = null;
+} catch (e) {
+  if (!CANNOT_LOAD_TS.has(e?.code)) throw e;
+  skipReason = e.code;
 }
 if (realJobs) {
   await leaseFencingChecks("jobs.ts", realJobs.InMemoryJobQueue);
 } else {
   // eslint-disable-next-line no-console
-  console.log("  skip [jobs.ts] lease fencing (this Node cannot import .ts; mirror checked instead)");
+  console.log(`  skip [jobs.ts] lease fencing (this Node cannot import .ts: ${skipReason}; mirror checked instead)`);
 }
 
 // The runtime worker's queue consumer shares the complete/fail contract.
