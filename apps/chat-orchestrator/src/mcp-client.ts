@@ -222,14 +222,31 @@ export class McpConnection {
    * A name this server never listed is refused here rather than forwarded. Callers are expected to
    * check their own permitted set first (the chat loop does); this is the backstop for one that
    * does not, so no caller can reach a tool the catalog does not account for.
+   *
+   * `timeoutMs` replaces the SDK's own per-request limit, which is 60 s whenever none is given. A
+   * caller with a longer budget of its own (a site scan, a chat turn) must pass it, or the SDK fails
+   * the call at one minute with "Request timed out" before that budget can ever take effect.
    */
-  async callTool(name: string, args: Record<string, unknown>): Promise<{ ok: boolean; text: string }> {
+  async callTool(
+    name: string,
+    args: Record<string, unknown>,
+    opts: { timeoutMs?: number } = {},
+  ): Promise<{ ok: boolean; text: string }> {
     try {
       const client = this.requireClient();
       if (!this.tools.some((t) => t.name === name)) {
         return { ok: false, text: `Tool call refused: "${name}" is not a tool this server provides.` };
       }
-      const result = await client.callTool({ name, arguments: args });
+      const timeout =
+        opts.timeoutMs !== undefined && Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0
+          ? // Clamped: past 2^31-1 ms setTimeout fires at once, which would fail every call.
+            Math.min(opts.timeoutMs, 2_147_483_647)
+          : undefined;
+      const result = await client.callTool(
+        { name, arguments: args },
+        undefined,
+        timeout === undefined ? undefined : { timeout },
+      );
       const blocks = Array.isArray(result.content) ? result.content : [];
       const text = blocks
         .map((c: { type?: string; text?: string }) => (c.type === 'text' ? (c.text ?? '') : ''))

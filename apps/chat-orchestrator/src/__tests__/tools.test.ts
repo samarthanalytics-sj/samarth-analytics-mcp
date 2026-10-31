@@ -2,6 +2,7 @@
  * Tool scoping and truncation tests. No network, no credentials.
  */
 import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
 import { capToolResult, compactToolHistory, productOf, scopeTools, toOpenAiTools } from '../tools.js';
 import { runTurn } from '../loop.js';
 import { ApprovalBroker } from '../approvals.js';
@@ -307,6 +308,9 @@ const TURN_CFG = {
   },
 } as unknown as OrchestratorConfig;
 
+/** What reached the MCP: the tool, its arguments, and the request options the turn passed. */
+type Forwarded = { name: string; args: Record<string, unknown>; opts?: { timeoutMs?: number } };
+
 /**
  * Runs one real turn against stubs: the model makes exactly `calls`, then answers. Returns what
  * reached the MCP, what was streamed, and what was billed.
@@ -322,15 +326,15 @@ async function turnWith(
     /** Sees each event as it is streamed, e.g. to act like the user when a card appears. */
     onEmit?: (e: StreamEvent) => void;
   } = {},
-): Promise<{ forwarded: { name: string; args: Record<string, unknown> }[]; events: StreamEvent[]; billed: number | null }> {
-  const forwarded: { name: string; args: Record<string, unknown> }[] = [];
+): Promise<{ forwarded: Forwarded[]; events: StreamEvent[]; billed: number | null }> {
+  const forwarded: Forwarded[] = [];
   const events: StreamEvent[] = [];
   let billed: number | null = null;
   const mcp = {
     listTools: () => CATALOG,
     getInstructions: () => '',
-    async callTool(name: string, args: Record<string, unknown>) {
-      forwarded.push({ name, args });
+    async callTool(name: string, args: Record<string, unknown>, opts?: { timeoutMs?: number }) {
+      forwarded.push({ name, args, opts });
       return { ok: true, text: '{}' };
     },
   } as unknown as McpConnection;
@@ -425,6 +429,58 @@ await testAsync('the connection itself refuses a name its server never listed', 
   const ran = await conn.callTool('tags_list', {});
   assert.equal(ran.ok, true);
   assert.deepEqual(sent, ['tags_list'], 'only the listed tool may reach the server');
+});
+
+console.log('MCP request timeouts');
+
+/**
+ * A real stdio MCP child, so the SDK's own request timer is what is under test rather than a fake
+ * of it. `slow` answers after 400 ms.
+ */
+function stubChildConfig(): OrchestratorConfig {
+  const require = createRequire(import.meta.url);
+  const server = require.resolve('@modelcontextprotocol/sdk/server/mcp.js');
+  const stdio = require.resolve('@modelcontextprotocol/sdk/server/stdio.js');
+  const code = `
+    const { McpServer } = require(${JSON.stringify(server)});
+    const { StdioServerTransport } = require(${JSON.stringify(stdio)});
+    const server = new McpServer({ name: 'stub', version: '0.0.0' });
+    server.registerTool('slow', { description: 'answers after 400 ms' }, async () => {
+      await new Promise((r) => setTimeout(r, 400));
+      return { content: [{ type: 'text', text: 'done' }] };
+    });
+    server.connect(new StdioServerTransport());
+  `;
+  return {
+    mcp: { transport: 'stdio', command: process.execPath, args: ['-e', code], env: {} },
+  } as unknown as OrchestratorConfig;
+}
+
+await testAsync("a tool call runs to the caller's timeout, not the SDK's fixed one", async () => {
+  // Scaled down: the SDK's default is 60 s, and every scan past a minute failed at it whatever the
+  // scanner's own 20-minute or 170-second deadline said. The caller's number must be the one used.
+  const conn = new McpConnection(stubChildConfig());
+  await conn.connect();
+  try {
+    const cut = await conn.callTool('slow', {}, { timeoutMs: 100 });
+    assert.equal(cut.ok, false, 'a 100 ms limit was ignored');
+    assert.match(cut.text, /Request timed out/);
+    assert.deepEqual(await conn.callTool('slow', {}, { timeoutMs: 5_000 }), { ok: true, text: 'done' });
+  } finally {
+    await conn.close();
+  }
+});
+
+await testAsync('a chat tool call may use the rest of the turn, and never less than 60 s', async () => {
+  const withBudget = (maxTurnMs: number) =>
+    ({ ...TURN_CFG, limits: { ...TURN_CFG.limits, maxTurnMs } }) as OrchestratorConfig;
+
+  const long = await turnWith([{ name: 'tags_list', arguments: '{}' }], { cfg: withBudget(240_000) });
+  const given = long.forwarded[0]?.opts?.timeoutMs ?? 0;
+  assert.ok(given > 200_000 && given <= 240_000, `a 240 s turn gave its tool call ${given} ms`);
+
+  const short = await turnWith([{ name: 'tags_list', arguments: '{}' }], { cfg: withBudget(30_000) });
+  assert.equal(short.forwarded[0]?.opts?.timeoutMs, 60_000, 'the old 60 s is the floor');
 });
 
 console.log('tool arguments that are JSON but not an object');

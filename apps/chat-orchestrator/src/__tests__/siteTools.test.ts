@@ -10,7 +10,15 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import { DeadlineError } from '../deadline.js';
-import { ScanError, type ScanResult, type SiteScanner } from '../scan-client.js';
+import {
+  DISCOVER_TIMEOUT_MS,
+  SCAN_TIMEOUT_MS,
+  ScanError,
+  SiteScanner,
+  type ScanResult,
+} from '../scan-client.js';
+import type { McpConnection } from '../mcp-client.js';
+import type { OrchestratorConfig } from '../config.js';
 import {
   CHAT_DEFAULT_PAGES,
   CHAT_MAX_PAGES,
@@ -400,4 +408,34 @@ test('nothing this file emits uses an em dash', () => {
     JSON.stringify(toChatSuggestion({ ...CTA, platform: 'meta_pixel' }, 0)),
   ];
   for (const s of surfaces) assert.doesNotMatch(s, /—/);
+});
+
+// ── the scanner's own MCP connection ───────────────────────────────────────
+
+/** A scanner already holding `conn` as its child, so nothing is spawned. */
+function scannerOn(conn: Partial<McpConnection>): SiteScanner {
+  const scanner = new SiteScanner({} as OrchestratorConfig);
+  Object.assign(scanner as unknown as Record<string, unknown>, { connection: conn });
+  return scanner;
+}
+
+test('a scan or discovery lets the MCP request outlast its own deadline', async () => {
+  // With no timeout passed, the SDK failed every request at 60 s, so a scan of more than about 20
+  // pages died with a raw "Request timed out" and the deadline's own advice never fired.
+  const asked: (number | undefined)[] = [];
+  const scanner = scannerOn({
+    async callTool(_name: string, _args: Record<string, unknown>, opts?: { timeoutMs?: number }) {
+      asked.push(opts?.timeoutMs);
+      return { ok: true, text: '{}' };
+    },
+  });
+  await scanner.scan('https://example.com');
+  await scanner.scan('https://example.com', { timeoutMs: 170_000 });
+  await scanner.discover('https://example.com');
+  await scanner.discover('https://example.com', { timeoutMs: 30_000 });
+  const [scan, chatScan, discover, chatDiscover] = asked.map((ms) => ms ?? 0);
+  assert.ok(scan > SCAN_TIMEOUT_MS, `a page scan asked for ${scan} ms`);
+  assert.ok(chatScan > 170_000, `a chat scan asked for ${chatScan} ms`);
+  assert.ok(discover > DISCOVER_TIMEOUT_MS, `a discovery asked for ${discover} ms`);
+  assert.ok(chatDiscover > 30_000, `a chat discovery asked for ${chatDiscover} ms`);
 });

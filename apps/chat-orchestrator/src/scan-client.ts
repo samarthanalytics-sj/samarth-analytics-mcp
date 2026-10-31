@@ -246,13 +246,18 @@ export class SiteScanner {
     opts: { sitemaps?: string[]; crawlOnly?: boolean; timeoutMs?: number } = {},
   ): Promise<DiscoverResult> {
     const conn = await this.connect();
+    const waitMs = opts.timeoutMs ?? DISCOVER_TIMEOUT_MS;
     const { ok, text } = await deadline(
-      conn.callTool('site_pages_discover', {
-        url,
-        ...(opts.sitemaps?.length ? { sitemaps: opts.sitemaps } : {}),
-        ...(opts.crawlOnly ? { crawlOnly: true } : {}),
-      }),
-      opts.timeoutMs ?? DISCOVER_TIMEOUT_MS,
+      conn.callTool(
+        'site_pages_discover',
+        {
+          url,
+          ...(opts.sitemaps?.length ? { sitemaps: opts.sitemaps } : {}),
+          ...(opts.crawlOnly ? { crawlOnly: true } : {}),
+        },
+        { timeoutMs: requestTimeoutFor(waitMs) },
+      ),
+      waitMs,
       'Listing the pages took too long and was stopped. The site may be slow to answer.',
     );
     if (!ok) throw new ScanError(text, 'discover_failed');
@@ -284,17 +289,22 @@ export class SiteScanner {
    */
   async scan(url: string, opts: ScanOptions = {}): Promise<ScanResult> {
     const conn = await this.connect();
+    const waitMs = opts.timeoutMs ?? SCAN_TIMEOUT_MS;
     const { ok, text } = await deadline(
-      conn.callTool('gtm_tag_suggestions', {
-        url,
-        ...(opts.maxPages ? { maxPages: opts.maxPages } : {}),
-        ...(opts.maxDepth ? { maxDepth: opts.maxDepth } : {}),
-        ...(opts.platforms?.length ? { platforms: opts.platforms } : {}),
-        ...(opts.captureImages ? { captureImages: true } : {}),
-        ...(opts.skipBlog ? { skipBlog: true } : {}),
-        ...(opts.pages?.length ? { pages: opts.pages } : {}),
-      }),
-      opts.timeoutMs ?? SCAN_TIMEOUT_MS,
+      conn.callTool(
+        'gtm_tag_suggestions',
+        {
+          url,
+          ...(opts.maxPages ? { maxPages: opts.maxPages } : {}),
+          ...(opts.maxDepth ? { maxDepth: opts.maxDepth } : {}),
+          ...(opts.platforms?.length ? { platforms: opts.platforms } : {}),
+          ...(opts.captureImages ? { captureImages: true } : {}),
+          ...(opts.skipBlog ? { skipBlog: true } : {}),
+          ...(opts.pages?.length ? { pages: opts.pages } : {}),
+        },
+        { timeoutMs: requestTimeoutFor(waitMs) },
+      ),
+      waitMs,
       'The scan took too long and was stopped. Try fewer pages.',
     );
     if (!ok) throw new ScanError(text, 'scan_failed');
@@ -340,3 +350,15 @@ export const SCAN_TIMEOUT_MS = 1_200_000;
 
 /** A discovery is HTTP GETs against public URLs, so a minute is already generous. */
 export const DISCOVER_TIMEOUT_MS = 60_000;
+
+/**
+ * The MCP request limit for a call bounded by `deadline(waitMs)`.
+ *
+ * Without one the SDK fails every request at 60 s, so any scan past a minute came back as a raw
+ * "Request timed out" and the twenty-minute and chat deadlines never took effect. Set a little past
+ * the deadline so the deadline, and its message saying what to do instead, is what fires. A
+ * disabled deadline (see deadline.ts) leaves the SDK default in place.
+ */
+function requestTimeoutFor(waitMs: number): number | undefined {
+  return Number.isFinite(waitMs) && waitMs > 0 ? waitMs + 5_000 : undefined;
+}

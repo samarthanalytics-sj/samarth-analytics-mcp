@@ -39,6 +39,9 @@ import type { ChatContext, ChatMessage, StreamEvent } from './types.js';
 import type { EventInput } from './events.js';
 import { explainError } from './explain.js';
 
+/** The MCP SDK's own per-request default, kept as the floor for a chat tool call. */
+const MIN_TOOL_TIMEOUT_MS = 60_000;
+
 export interface RunTurnArgs {
   cfg: OrchestratorConfig;
   mcp: McpConnection;
@@ -115,6 +118,11 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
 async function runTurnWithin(args: RunTurnArgs, turnSignal: AbortSignal): Promise<void> {
   const { cfg, llm, context, user, emit, signal } = args;
   const startedAt = Date.now();
+  // An MCP tool call may use what is left of the turn, and never less than the 60 s the SDK applied
+  // before: with no timeout passed, a slow audit or export failed at one minute with minutes to spare.
+  const toolTimeout = (): { timeoutMs: number } => ({
+    timeoutMs: Math.max(MIN_TOOL_TIMEOUT_MS, cfg.limits.maxTurnMs - (Date.now() - startedAt)),
+  });
   let mcp = args.mcp;
   // One refresh per turn. A second failure is a real authorization problem, not an expiry, and
   // looping on it would just burn tokens.
@@ -771,7 +779,7 @@ async function runTurnWithin(args: RunTurnArgs, turnSignal: AbortSignal): Promis
         parsedArgs.confirm = true;
       }
 
-      let { ok, text } = await mcp.callTool(call.function.name, parsedArgs);
+      let { ok, text } = await mcp.callTool(call.function.name, parsedArgs, toolTimeout());
 
       if (!ok && !authRetryUsed && args.onAuthFailure && isGoogleAuthFailure(text)) {
         authRetryUsed = true;
@@ -783,7 +791,7 @@ async function runTurnWithin(args: RunTurnArgs, turnSignal: AbortSignal): Promis
         );
         try {
           mcp = await args.onAuthFailure();
-          ({ ok, text } = await mcp.callTool(call.function.name, parsedArgs));
+          ({ ok, text } = await mcp.callTool(call.function.name, parsedArgs, toolTimeout()));
         } catch (err) {
           text =
             err instanceof GoogleIdentityError
