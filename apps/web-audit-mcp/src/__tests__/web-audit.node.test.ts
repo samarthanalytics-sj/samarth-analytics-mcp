@@ -47,7 +47,7 @@ import {
 } from '../agent/cmp.js';
 import { analyzeForms, classifyFieldPii, extractFormsInPage, type RawForm, type RawFormField } from '../agent/forms.js';
 import { gatherCtaFacts, selectCtas, type CtaFacts } from '../agent/tag-suggest/interactive-forms.js';
-import { el, miniPage, inPage, type MiniDocument, type MiniElement } from '../agent/__tests__/_mini-dom.js';
+import { el, miniPage, inPage, type Box, type ElOpts, type MiniDocument, type MiniElement } from '../agent/__tests__/_mini-dom.js';
 import { buildFillPlan, classifyFieldRole, selectorFor, localeById, US_LOCALE } from '../agent/form-fill.js';
 import { sameSite, normalizeUrl, urlPriority, crawlSite } from '../agent/crawler.js';
 import { buildExclude, attachRects, resolvePageList } from '../agent/tag-suggest/scan.js';
@@ -2326,6 +2326,32 @@ check('embed: HubSpot embed surfaces beside an unrelated search form', buildSugg
     formIds(miniPage([contact(), el('div', { class: 'cookie-banner' }, [banner()])], { body: { class: 'cookies-not-set' } })) === 'contact');
 }
 
+// ── form rects inside a same-origin iframe are in TOP-page coordinates ──────────────────────────────
+// A HubSpot v2 form renders into a same-origin iframe. It was measured in the iframe's own viewport, so
+// a form at y=2400 on the page was ringed near (0, 0) on the full-page screenshot.
+{
+  const framedForm = (rect: Box, view: { scrollY?: number; innerHeight?: number } = {}): MiniDocument =>
+    miniPage([el('form', { id: 'hs' }, [el('input', { type: 'email', name: 'email' })], { rect })], { view: { innerWidth: 500, innerHeight: view.innerHeight ?? 700, scrollY: view.scrollY ?? 0 } });
+  const top = (inner: MiniDocument, frame: Partial<ElOpts> = {}): MiniDocument =>
+    miniPage([el('iframe', { class: 'hs-form-iframe' }, [], { rect: { x: 20, y: 2350, w: 504, h: 704 }, clientLeft: 2, clientTop: 2, contentDocument: inner, ...frame })], { view: { scrollY: 50 } });
+  const rectsOn = (doc: MiniDocument) => inPage(doc, () => extractFormsInPage()).map((f) => f.rect);
+
+  const [r] = rectsOn(top(framedForm({ x: 10, y: 30, w: 480, h: 600 })));
+  // page = frame box (20, 2350) + border (2) + the form in the frame (10, 30) + the top document's scroll (0, 50)
+  check('rect: a form in a same-origin iframe is offset by the iframe\'s place on the page',
+    r?.x === 32 && r?.y === 2432 && r?.w === 480 && r?.h === 600, JSON.stringify(r));
+  const [scrolled] = rectsOn(top(framedForm({ x: 10, y: -170, w: 480, h: 600 }, { scrollY: 200 })));
+  check('rect: the iframe\'s own scroll is not added twice (its rects already reflect it)',
+    scrolled?.y === 2232, JSON.stringify(scrolled));
+  const [padded] = rectsOn(top(framedForm({ x: 10, y: 30, w: 480, h: 600 }), { style: { paddingLeft: '5px', paddingTop: '7px' } }));
+  check('rect: the iframe\'s padding is counted (its content starts inside it)', padded?.x === 37 && padded?.y === 2439, JSON.stringify(padded));
+  const [clipped] = rectsOn(top(framedForm({ x: 10, y: 900, w: 480, h: 200 }, { innerHeight: 700 })));
+  check('rect: a form scrolled or clipped out of its iframe\'s viewport gets no rect (not one below the frame)',
+    clipped === undefined, JSON.stringify(clipped));
+  const [plain] = rectsOn(miniPage([el('form', { id: 'c' }, [el('input', { type: 'email', name: 'email' })], { rect: { x: 40, y: 100, w: 300, h: 200 } })], { view: { scrollY: 900 } }));
+  check('rect: a top-document form is unchanged (viewport + scroll)', plain?.x === 40 && plain?.y === 1000, JSON.stringify(plain));
+}
+
 // ── form extraction in a real page: the generic cookie/consent CMP filter ──────────────────────────
 // extractFormsInPage runs IN the page, so these checks need Chromium. They self-skip when Playwright or
 // its browser is not installed (CI installs neither), so the suite still needs no browser; the
@@ -2461,6 +2487,18 @@ check('embed: HubSpot embed surfaces beside an unrelated search form', buildSugg
       check('cmp-e2e: a plain custom banner is still detected and its reject clicked',
         plain.det.detected && plain.det.method === 'heuristic' && plain.res.clicked && plain.clicked === 'r', JSON.stringify(plain));
       await cmpCtx.close();
+
+      // A form in a same-origin iframe is ringed where the iframe sits on the page, not near (0, 0).
+      // The frame: 2000px down, a 3px border; the form: 8px in (the frame body's default margin).
+      await page.setContent(
+        '<html><body style="margin:0"><div style="height:2000px"></div>' +
+          '<iframe style="border:3px solid #000;width:600px;height:400px;display:block" ' +
+          'srcdoc="<form id=hs><input type=email name=email></form>"></iframe></body></html>',
+      );
+      await page.evaluate('window.__name = (f) => f');
+      const framed = (await page.evaluate<RawForm[]>(extractFormsInPage)).find((f) => f.formId === 'hs');
+      check('rect: a form in a same-origin iframe is measured in top-page coordinates (chromium)',
+        framed?.rect?.x === 11 && framed?.rect?.y === 2011, JSON.stringify(framed?.rect));
 
       // Interactive discovery's own CMP filter (gatherCtaFacts) must not read a flagged ROOT as a banner.
       const ctaFactsOn = async (html: string): Promise<CtaFacts[]> => {

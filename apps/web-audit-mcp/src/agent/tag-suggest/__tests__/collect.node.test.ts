@@ -6,6 +6,7 @@ import { classifyElement, classifyPageElements, classifyCtaIntent, isStyledButto
 import { buildSuggestions } from '../suggest.js';
 import { PROVIDER_SELECTORS, PROVIDER_ID_PREFIXES } from '../providers.js';
 import type { PageSignals } from '../types.js';
+import { el, miniPage, inPage, type MiniDocument } from '../../__tests__/_mini-dom.js';
 
 let passed = 0;
 let failed = 0;
@@ -362,6 +363,35 @@ check('share: "Copy" alone (no "link") → NOT share (avoids copy-code buttons)'
         !JSON.stringify(got[0] ?? {}).includes(inst(1)), JSON.stringify(t));
     }
   }
+}
+
+// -- element rects inside a same-origin iframe are in TOP-page coordinates ------
+// collectPageInBrowser scans same-origin iframes (HubSpot/Typeform/Marketo render there), but measured
+// what it found in the iframe's own viewport, so a mailto link 2400px down the page was ringed near (0, 0)
+// on the full-page screenshot. Run on a minimal DOM: the collector is stringified into the page, and CI
+// has no browser.
+{
+  const framed = miniPage(
+    [el('a', { href: 'mailto:hi@acme.example' }, ['Email us'], { rect: { x: 10, y: 30, w: 120, h: 20 } }),
+      el('a', { href: 'mailto:far@acme.example' }, ['Below the frame'], { rect: { x: 10, y: 900, w: 120, h: 20 } })],
+    { view: { innerWidth: 500, innerHeight: 700 } },
+  );
+  const doc: MiniDocument = miniPage(
+    [el('a', { href: 'tel:+15551234567' }, ['Call'], { rect: { x: 40, y: 100, w: 80, h: 20 } }),
+      el('iframe', {}, [], { rect: { x: 20, y: 2350, w: 504, h: 704 }, clientLeft: 2, clientTop: 2, contentDocument: framed })],
+    { view: { scrollY: 50 } },
+  );
+  const raw = inPage(doc, () => collectPageInBrowser());
+  const rectOf = (href: string) => raw.elements.find((e) => e.href === href)?.rect;
+  const inFrame = rectOf('mailto:hi@acme.example');
+  // page = frame box (20, 2350) + border (2) + the link in the frame (10, 30) + the top document's scroll (0, 50)
+  check('rect: a link in a same-origin iframe is offset by the iframe\'s place on the page',
+    inFrame?.x === 32 && inFrame?.y === 2432 && inFrame?.w === 120 && inFrame?.h === 20, JSON.stringify(inFrame));
+  check('rect: a link clipped out of its iframe\'s viewport gets no rect (not one below the frame)',
+    raw.elements.some((e) => e.href === 'mailto:far@acme.example') && rectOf('mailto:far@acme.example') === undefined,
+    JSON.stringify(rectOf('mailto:far@acme.example')));
+  const top = rectOf('tel:+15551234567');
+  check('rect: a top-document link is unchanged (viewport + scroll)', top?.x === 40 && top?.y === 150, JSON.stringify(top));
 }
 
 console.log(`\nTag-collect: ${passed} passed, ${failed} failed`);
