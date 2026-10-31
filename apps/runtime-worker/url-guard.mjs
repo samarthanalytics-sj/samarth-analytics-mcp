@@ -167,6 +167,9 @@ const MAX_GUARDED_HOSTS = 500;
  * closed on a resolution error. The answer is remembered per host (in-flight
  * lookups shared) because the interceptor sees every subresource; create one
  * guard per browser context so the memo lives no longer than the capture.
+ * Only a real answer is remembered: a failed lookup refuses the requests
+ * waiting on it and is then forgotten, so one transient resolver error
+ * (EAI_AGAIN) does not block that host for every remaining URL in the state.
  *
  * The name is checked before Chromium resolves it itself, so a host that
  * re-points between the two lookups (DNS rebinding) is not fully closed; that
@@ -180,6 +183,8 @@ const MAX_GUARDED_HOSTS = 500;
  */
 export function createRequestGuard(lookup = dnsLookup) {
   const byHost = new Map();
+  // true = all public, false = resolves private, null = the lookup itself
+  // failed (refused, but not an answer about the host, so never remembered).
   const resolvesPublic = async (hostname) => {
     try {
       const addrs = await lookup(hostname, { all: true });
@@ -189,7 +194,7 @@ export function createRequestGuard(lookup = dnsLookup) {
       }
       return addrs.length > 0;
     } catch {
-      return false; // fail closed on resolution error
+      return null; // resolution error: fail closed below, and forget it
     }
   };
   return async (rawUrl) => {
@@ -204,9 +209,16 @@ export function createRequestGuard(lookup = dnsLookup) {
     let verdict = byHost.get(hostname);
     if (!verdict) {
       if (byHost.size >= MAX_GUARDED_HOSTS) byHost.clear();
-      verdict = resolvesPublic(hostname);
-      byHost.set(hostname, verdict);
+      const pending = resolvesPublic(hostname);
+      verdict = pending;
+      byHost.set(hostname, pending);
+      // Registered before any caller awaits, so it runs first: by the time
+      // this request is refused, the failed lookup is gone and the next
+      // request for the host retries it.
+      void pending.then((v) => {
+        if (v === null && byHost.get(hostname) === pending) byHost.delete(hostname);
+      });
     }
-    return verdict;
+    return (await verdict) === true; // a lookup error (null) still fails closed
   };
 }

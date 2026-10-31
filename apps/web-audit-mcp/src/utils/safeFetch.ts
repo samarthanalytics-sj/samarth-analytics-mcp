@@ -17,8 +17,12 @@ const isIpLiteral = (hostname: string): boolean => /^[\d.]+$/.test(hostname) || 
 /** The slice of dns.promises.lookup this module uses; injectable so the guard is testable offline. */
 export type HostLookup = (hostname: string, options: { all: true }) => Promise<{ address: string; family: number }[]>;
 
-/** True when every address `hostname` resolves to is public. Fails closed on a resolution error. */
-async function resolvesPublic(hostname: string, lookup: HostLookup): Promise<boolean> {
+/**
+ * True when every address `hostname` resolves to is public, false when any is private. Null when
+ * the lookup itself failed: callers fail closed on it, but it is not an answer about the host, so a
+ * memo must not keep it (one EAI_AGAIN would otherwise block that host for the rest of the scan).
+ */
+async function resolvesPublic(hostname: string, lookup: HostLookup): Promise<boolean | null> {
   try {
     const addrs = await lookup(hostname, { all: true });
     for (const { address, family } of addrs) {
@@ -27,7 +31,7 @@ async function resolvesPublic(hostname: string, lookup: HostLookup): Promise<boo
     }
     return addrs.length > 0;
   } catch {
-    return false; // fail closed on resolution error
+    return null; // resolution error: refused by the caller, never remembered
   }
 }
 
@@ -42,7 +46,7 @@ export async function requestAllowed(rawUrl: string): Promise<boolean> {
     return false;
   }
   if (isIpLiteral(hostname)) return true; // already covered by urlAllowed above
-  return resolvesPublic(hostname, dnsLookup);
+  return (await resolvesPublic(hostname, dnsLookup)) === true; // fail closed on a lookup error
 }
 
 /** Bound on remembered hosts, so a page that fans out to thousands of hosts cannot grow it forever. */
@@ -54,6 +58,10 @@ const MAX_GUARDED_HOSTS = 500;
  * from one CDN costs one lookup rather than 200. Create one per browser context so the memo lives
  * no longer than the page load it serves.
  *
+ * Only a real answer is remembered. A failed lookup refuses the requests waiting on it and is then
+ * forgotten, so the next request for that host asks again: one guard can serve every page a scan
+ * worker or crawl loads, and a transient resolver error must not block a host for all of them.
+ *
  * This checks the name before Chromium resolves it itself, so a host that re-points between the
  * two lookups (DNS rebinding) is still not fully closed; that needs Chromium's own resolver pinned
  * (--host-resolver-rules) or an egress proxy. What it does close is the common case the string
@@ -61,7 +69,7 @@ const MAX_GUARDED_HOSTS = 500;
  * 127.0.0.1.nip.io, a docker service name).
  */
 export function createRequestGuard(lookup: HostLookup = dnsLookup): (rawUrl: string) => Promise<boolean> {
-  const byHost = new Map<string, Promise<boolean>>();
+  const byHost = new Map<string, Promise<boolean | null>>();
   return async (rawUrl: string): Promise<boolean> => {
     if (!urlAllowed(rawUrl, []).ok) return false;
     let hostname: string;
@@ -74,10 +82,16 @@ export function createRequestGuard(lookup: HostLookup = dnsLookup): (rawUrl: str
     let verdict = byHost.get(hostname);
     if (!verdict) {
       if (byHost.size >= MAX_GUARDED_HOSTS) byHost.clear();
-      verdict = resolvesPublic(hostname, lookup);
-      byHost.set(hostname, verdict);
+      const pending = resolvesPublic(hostname, lookup);
+      verdict = pending;
+      byHost.set(hostname, pending);
+      // Registered before any caller awaits, so it runs first: by the time this request is
+      // refused, the failed lookup is already gone and the next request retries it.
+      void pending.then((v) => {
+        if (v === null && byHost.get(hostname) === pending) byHost.delete(hostname);
+      });
     }
-    return verdict;
+    return (await verdict) === true; // a lookup error (null) still fails closed
   };
 }
 

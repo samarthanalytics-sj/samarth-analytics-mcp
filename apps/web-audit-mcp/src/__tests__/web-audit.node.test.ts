@@ -174,6 +174,24 @@ const dnsTable: Record<string, string[]> = {
   check('request guard: IP literals and string-check failures never hit DNS', calls.length === before);
   const many = await Promise.all(Array.from({ length: 20 }, (_, i) => allowed(`https://cdn.example.com/a${i}.js`)));
   check('request guard: one lookup per host', many.every(Boolean) && calls.filter((h) => h === 'cdn.example.com').length === 1);
+  check('request guard: a private answer is remembered', (await allowed('http://db/x')) === false && calls.filter((h) => h === 'db').length === 1);
+}
+// A scan worker or crawl reuses one guard for every page; a single transient lookup error used to be
+// cached as "blocked" and refuse that host (the site itself, or its CDN) for the rest of the run.
+{
+  let failures = 1;
+  const calls: string[] = [];
+  const allowed = createRequestGuard(async (hostname: string) => {
+    calls.push(hostname);
+    if (failures > 0) {
+      failures -= 1;
+      throw Object.assign(new Error(`getaddrinfo EAI_AGAIN ${hostname}`), { code: 'EAI_AGAIN' });
+    }
+    return [{ address: PUBLIC_IP, family: 4 }];
+  });
+  check('request guard: fails closed while the lookup errors', (await allowed('https://flaky.example.com/')) === false);
+  check('request guard: a failed lookup is retried, not remembered', (await allowed('https://flaky.example.com/next')) === true);
+  check('request guard: the real answer is then remembered', (await allowed('https://flaky.example.com/again')) === true && calls.length === 2, calls.join(','));
 }
 
 /** Drive a captured Playwright route handler with a fake route; returns what it decided. */

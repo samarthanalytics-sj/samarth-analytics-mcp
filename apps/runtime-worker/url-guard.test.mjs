@@ -178,3 +178,31 @@ test("request guard resolves each host once per guard", async () => {
   await createRequestGuard(lookup)("https://cdn.example.com/x.js");
   assert.equal(calls.length, 2);
 });
+
+test("request guard does not remember a failed lookup, so a transient error is retried", async () => {
+  // One guard serves every URL of a consent state: a single EAI_AGAIN used to be
+  // cached as "blocked" and refuse that host for all the remaining pages.
+  let failures = 1;
+  const calls = [];
+  const lookup = async (hostname) => {
+    calls.push(hostname);
+    if (failures > 0) {
+      failures -= 1;
+      throw Object.assign(new Error(`getaddrinfo EAI_AGAIN ${hostname}`), { code: "EAI_AGAIN" });
+    }
+    return [{ address: "93.184.216.34", family: 4 }];
+  };
+  const allowed = createRequestGuard(lookup);
+  assert.equal(await allowed("https://flaky.example.com/"), false, "fails closed while the lookup fails");
+  assert.equal(await allowed("https://flaky.example.com/next"), true, "retried after the error");
+  assert.equal(await allowed("https://flaky.example.com/again"), true, "and the real answer is then remembered");
+  assert.deepEqual(calls, ["flaky.example.com", "flaky.example.com"]);
+});
+
+test("request guard still remembers a private answer (the retry is for errors only)", async () => {
+  const { lookup, calls } = fakeLookup({ "inside.example.com": [{ address: "10.0.0.7", family: 4 }] });
+  const allowed = createRequestGuard(lookup);
+  assert.equal(await allowed("http://inside.example.com/a"), false);
+  assert.equal(await allowed("http://inside.example.com/b"), false);
+  assert.equal(calls.length, 1);
+});
