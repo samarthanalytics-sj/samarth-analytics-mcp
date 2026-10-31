@@ -20,8 +20,8 @@
 // unit-tested without a browser; scanSiteForTagSuggestions is the thin browser
 // glue, mirroring compliance.ts (crawl, then re-open a ranked page subset).
 
-import { loadPlaywright, PlaywrightMissingError, openInstrumentedPage } from '../browser.js';
-import { crawlSite, normalizeUrl, sameSite, type CrawledPage } from '../crawler.js';
+import { loadPlaywright, PlaywrightMissingError, openInstrumentedPage, type PwResponse } from '../browser.js';
+import { crawlSite, normalizeUrl, sameSite, blockNoteOf, type CrawledPage } from '../crawler.js';
 import { scanForms } from '../forms.js';
 import { discoverInteractiveForms } from './interactive-forms.js';
 import { loadConfig, clampOpt } from '../../utils/config.js';
@@ -296,6 +296,21 @@ export function accountNotScanned(
 export function scanResponseFailure(status: number | null, headers: HeaderBag): string | null {
   if (status === null || status < 400) return null;
   return botBlockReason(status, headers) ?? `http ${status}`;
+}
+
+/**
+ * scanResponseFailure for a worker's live goto response, judged on the FULL header list.
+ *
+ * Playwright's headers() leaves Set-Cookie out, so a block whose only marker is a vendor cookie
+ * (PerimeterX _px3, Imperva visid_incap, DataDome, Akamai _abck) read as a bare "http 403" and the
+ * "the site blocked the scanner" warning never fired. The crawler's blockNoteOf reads allHeaders() for
+ * a block status only, bounded, falling back to headers(), so a navigation never hangs on it.
+ */
+export async function workerResponseFailure(resp: Pick<PwResponse, 'status' | 'headers' | 'allHeaders'>): Promise<string | null> {
+  const status = resp.status();
+  const plain = scanResponseFailure(status, {});
+  if (plain === null) return null;
+  return (await blockNoteOf(resp, status)) ?? plain;
 }
 
 const CREATE_NOTE =
@@ -625,7 +640,7 @@ export async function scanSiteForTagSuggestions(
               continue;
             }
             // A bot challenge or an error page is not a page with no forms: name it, and do not scan it.
-            const failure = resp ? scanResponseFailure(resp.status(), resp.headers()) : null;
+            const failure = resp ? await workerResponseFailure(resp) : null;
             if (failure) {
               collectFailures.push({ url: target.url, reason: failure });
               continue;
