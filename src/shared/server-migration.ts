@@ -2263,6 +2263,29 @@ export function planWebToServerMigration(snapshot: ContainerSnapshot): ServerMig
     if (val) constants.set(String(v.name ?? '').trim().toLowerCase(), val);
   }
   const resolve = (x: string): string => x.replace(/\{\{([^}]+)\}\}/g, (m, n: string) => constants.get(n.trim().toLowerCase()) ?? m).trim();
+  // A Google tag whose id is ONE non-Constant {{variable}}: a Lookup / RegEx Table's literal outputs
+  // (map values + the default) say whether it holds GA4 ids ('ga4', with those G- ids) or only other ids
+  // such as AW- / DC- / GT- ('not-ga4': a Google Ads tag, not GA4). Anything not statically readable (a
+  // data layer or JavaScript variable, an empty table, an output that is itself a variable) is 'unknown'.
+  const variablesByName = new Map((snapshot.variables ?? []).map((v) => [String(v.name ?? '').trim().toLowerCase(), v]));
+  const googtagRefKind = (ref: string): { kind: 'ga4' | 'not-ga4' | 'unknown'; ids: string[] } => {
+    const m = /^\{\{([^}]+)\}\}$/.exec(ref);
+    const v = m ? variablesByName.get(m[1].trim().toLowerCase()) : undefined;
+    const vType = String(v?.type ?? '').toLowerCase();
+    if (!v || (vType !== 'smm' && vType !== 'remm')) return { kind: 'unknown', ids: [] };
+    type TableParam = { key?: string; value?: unknown; list?: Array<{ map?: Array<{ key?: string; value?: unknown }> }> };
+    const params = (v.parameter ?? []) as TableParam[];
+    const useDefault = String(params.find((p) => p.key === 'setDefaultValue')?.value ?? '').toLowerCase() !== 'false';
+    const outputs: string[] = [];
+    for (const p of params) {
+      if (p.key === 'defaultValue' && useDefault) outputs.push(String(p.value ?? ''));
+      if (p.key === 'map') for (const row of p.list ?? []) for (const f of row.map ?? []) if (f.key === 'value') outputs.push(String(f.value ?? ''));
+    }
+    const values = outputs.map(resolve).filter(Boolean);
+    const ids = values.filter((x) => /^G-/i.test(x)).map((x) => x.toUpperCase());
+    if (ids.length) return { kind: 'ga4', ids };
+    return values.length && !values.some((x) => x.includes('{{')) ? { kind: 'not-ga4', ids: [] } : { kind: 'unknown', ids: [] };
+  };
   // Carry the web tag's public ids into `derived`. Any {{variable}} left after Constant resolution is NOT
   // copied: the server container has no such variable, so the server tag would reference one that does
   // not exist. That id goes to `missing` (for `requires`) and the note names the web variable; a
@@ -2291,9 +2314,13 @@ export function planWebToServerMigration(snapshot: ContainerSnapshot): ServerMig
   for (const t of snapshot.tags) {
     const type = String(t.type ?? '');
     // GA4: aggregated into the relay, collect the measurement id. A {{Constant}} id resolves to its
-    // literal; any other {{variable}} id is reported in ga4.unresolvedRefs instead of dropping GA4.
-    const googtagId = type === 'googtag' ? pv(t, 'tagId') : '';
-    if ((type === 'googtag' && (/^G-/i.test(resolve(googtagId)) || /^\{\{[^}]+\}\}$/.test(resolve(googtagId)))) || type === 'gaawe') {
+    // literal; a Lookup / RegEx Table id contributes its G- outputs (one holding only AW-/GT- ids is a
+    // Google Ads tag and falls through, like a literal AW- id); any other {{variable}} id is reported in
+    // ga4.unresolvedRefs instead of dropping GA4.
+    const googtagId = type === 'googtag' ? resolve(pv(t, 'tagId')) : '';
+    const googtagRef = /^\{\{[^}]+\}\}$/.test(googtagId) ? googtagRefKind(googtagId) : null;
+    if ((type === 'googtag' && (/^G-/i.test(googtagId) || (googtagRef && googtagRef.kind !== 'not-ga4'))) || type === 'gaawe') {
+      if (googtagRef?.kind === 'ga4') { for (const id of googtagRef.ids) measurementIds.add(id); continue; }
       const keys = ['tagId', 'measurementIdOverride', 'measurementId'];
       const mid = keys.map((k) => resolve(pv(t, k))).find((x) => /^G-/i.test(x));
       if (mid) measurementIds.add(mid.toUpperCase());

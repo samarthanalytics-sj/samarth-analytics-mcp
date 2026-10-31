@@ -121,6 +121,43 @@ await test('plan_server_migration_from_web: a {{Constant}} GA4 Measurement ID re
   assert.equal(r2.items.length, 0);
 });
 
+await test('plan_server_migration_from_web: a Google tag whose Lookup Table holds only AW- ids is Google Ads, never GA4', async () => {
+  const table = (name, rows, def) => ({
+    variableId: name, name, type: 'smm',
+    parameter: [
+      { type: 'boolean', key: 'setDefaultValue', value: def ? 'true' : 'false' },
+      { type: 'template', key: 'input', value: '{{Page Hostname}}' },
+      ...(def ? [P('defaultValue', def)] : []),
+      { type: 'list', key: 'map', list: rows.map(([k, v]) => ({ type: 'map', map: [P('key', k), P('value', v)] })) },
+    ],
+  });
+  // Ads-only container: no GA4 property exists, so there is nothing to relay and no G- id to ask for.
+  const ads = stubClient({
+    variables: [table('Ads Tag ID', [['example.com', 'AW-123456789']], 'AW-123456789')],
+    tags: [{ tagId: '1', name: 'Google Tag', type: 'googtag', parameter: [P('tagId', '{{Ads Tag ID}}')] }],
+  });
+  const r1 = json(await callValidated(serverWith(ads), 'plan_server_migration_from_web', WS));
+  assert.deepEqual(r1.ga4, { present: false, measurementIds: [] }, 'same result as a literal AW- Google tag');
+  assert.equal(r1.summary.auto, 0);
+
+  // A table whose outputs ARE G- ids contributes them, so nothing is left to ask for.
+  const ga4 = stubClient({
+    variables: [table('GA4 by host', [['example.com', 'G-PROD1'], ['staging.example.com', 'g-stage1']])],
+    tags: [{ tagId: '1', name: 'Google Tag', type: 'googtag', parameter: [P('tagId', '{{GA4 by host}}')] }],
+  });
+  const r2 = json(await callValidated(serverWith(ga4), 'plan_server_migration_from_web', WS));
+  assert.deepEqual(r2.ga4, { present: true, measurementIds: ['G-PROD1', 'G-STAGE1'] });
+  assert.equal(r2.summary.auto, 1);
+
+  // A data layer variable cannot be read statically: still reported for the user to confirm.
+  const dlv = stubClient({
+    variables: [{ variableId: 'v3', name: 'DLV - tag id', type: 'v', parameter: [P('name', 'tagId')] }],
+    tags: [{ tagId: '1', name: 'Google Tag', type: 'googtag', parameter: [P('tagId', '{{DLV - tag id}}')] }],
+  });
+  const r3 = json(await callValidated(serverWith(dlv), 'plan_server_migration_from_web', WS));
+  assert.deepEqual(r3.ga4, { present: true, measurementIds: [], unresolvedRefs: ['{{DLV - tag id}}'] });
+});
+
 await test('plan_server_migration_from_web: a {{variable}} id is never carried into derived; missing ids are required; keys match the tool fields', async () => {
   const client = stubClient({
     variables: [{ variableId: 'v1', name: 'TikTok ID', type: 'c', parameter: [P('value', 'C7TK')] }],
