@@ -46,6 +46,7 @@ import {
   type CmpDetection,
 } from '../agent/cmp.js';
 import { analyzeForms, classifyFieldPii, extractFormsInPage, type RawForm, type RawFormField } from '../agent/forms.js';
+import { el, miniPage, inPage, type MiniDocument, type MiniElement } from '../agent/__tests__/_mini-dom.js';
 import { buildFillPlan, classifyFieldRole, selectorFor, localeById, US_LOCALE } from '../agent/form-fill.js';
 import { sameSite, normalizeUrl, urlPriority, crawlSite } from '../agent/crawler.js';
 import { buildExclude, attachRects, resolvePageList } from '../agent/tag-suggest/scan.js';
@@ -2301,15 +2302,44 @@ check('embed: HubSpot embed surfaces beside an unrelated search form', buildSugg
   check('chosen: and the pages it cut are named', capped.rejected.length === 15);
 }
 
+// ── form extraction without a browser: the generic cookie/consent CMP filter ─────────────────────────
+// The Chromium block below self-skips when no browser is installed, and CI installs none, so on its own
+// a regression there passes CI unseen. The same extractFormsInPage runs here on a minimal DOM, in Node.
+{
+  const formIds = (doc: MiniDocument): string => inPage(doc, () => extractFormsInPage()).map((f) => f.formId || '(anon)').join();
+  const contact = (): MiniElement =>
+    el('form', { id: 'contact', action: '/c' }, [el('label', {}, ['Email ', el('input', { type: 'email', name: 'email' })]), el('button', {}, ['Send'])]);
+  const banner = (): MiniElement => el('form', { id: 'cmp' }, [el('input', { type: 'text', name: 'x' }), el('button', {}, ['Submit'])]);
+  check('cmp-filter (no browser): a plain contact form is found', formIds(miniPage([contact()])) === 'contact');
+  check('cmp-filter (no browser): <body class="cookies-not-set"> keeps the page\'s forms',
+    formIds(miniPage([contact()], { body: { class: 'home cookies-not-set' } })) === 'contact');
+  check('cmp-filter (no browser): <html class="show--consent"> keeps the page\'s forms',
+    formIds(miniPage([contact()], { html: { class: 'show--consent' } })) === 'contact');
+  check('cmp-filter (no browser): <html class="js cookies"> keeps the page\'s forms',
+    formIds(miniPage([contact()], { html: { class: 'js cookies' } })) === 'contact');
+  check('cmp-filter (no browser): <html id="consent-root"> keeps the page\'s forms',
+    formIds(miniPage([contact()], { html: { id: 'consent-root' } })) === 'contact');
+  check('cmp-filter (no browser): a form inside #onetrust-banner-sdk is still excluded',
+    formIds(miniPage([contact(), el('div', { id: 'onetrust-banner-sdk' }, [banner()])])) === 'contact');
+  check('cmp-filter (no browser): a form inside a generic .cookie-banner is still excluded, even under a flagged <body>',
+    formIds(miniPage([contact(), el('div', { class: 'cookie-banner' }, [banner()])], { body: { class: 'cookies-not-set' } })) === 'contact');
+}
+
 // ── form extraction in a real page: the generic cookie/consent CMP filter ──────────────────────────
 // extractFormsInPage runs IN the page, so these checks need Chromium. They self-skip when Playwright or
-// its browser is not installed (CI installs neither), so the suite still needs no browser.
+// its browser is not installed (CI installs neither), so the suite still needs no browser; the
+// browser-free mirror above is what CI runs. WEB_AUDIT_REQUIRE_BROWSER=1 turns the skip into a failure,
+// for a run that has installed Chromium and must not pass without these checks.
 {
   const pw = await loadPlaywright();
   const launchOpts = { headless: true, timeout: 15_000 };
   const browser = pw ? await pw.chromium.launch(launchOpts).catch(() => null) : null;
   if (!browser) {
-    console.log('web-audit: in-page form extraction checks SKIPPED (playwright/chromium not installed)');
+    if (process.env.WEB_AUDIT_REQUIRE_BROWSER === '1') {
+      check('in-page checks: chromium launches when WEB_AUDIT_REQUIRE_BROWSER=1', false, 'playwright or its chromium is not installed');
+    } else {
+      console.log('web-audit: in-page form extraction checks SKIPPED (playwright/chromium not installed)');
+    }
   } else {
     try {
       const page = (await (await browser.newContext()).newPage()) as PwPage & { setContent(html: string): Promise<void> };
