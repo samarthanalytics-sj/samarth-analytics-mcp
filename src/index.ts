@@ -377,13 +377,17 @@ async function startHttpServer(auth: OAuth2Client): Promise<void> {
   /** Guard a session against the idle sweep for the LIFE of a request. Counts it as in-flight and
    *  stamps lastActivity now; on the response closing (normal end, abort, or an SSE stream the client
    *  finally disconnects) decrements and re-stamps. Without this, lastActivity is only set when a
-   *  request begins, so a tool call or event stream that outlives the TTL gets closed mid-flight. */
+   *  request begins, so a tool call or event stream that outlives the TTL gets closed mid-flight.
+   *  Called AFTER the async auth step: a client that hung up during it has already emitted its one
+   *  'close', so counting it would pin inFlight above zero and exempt the session from the sweep
+   *  for the life of the process. */
   const trackRequest = (
     entry: { inFlight: number; lastActivity: number },
     res: import('express').Response,
   ): void => {
-    entry.inFlight += 1;
     entry.lastActivity = Date.now();
+    if (res.destroyed || res.closed) return; // 'close' already fired; it will not fire again
+    entry.inFlight += 1;
     res.once('close', () => {
       entry.inFlight = Math.max(0, entry.inFlight - 1);
       entry.lastActivity = Date.now();

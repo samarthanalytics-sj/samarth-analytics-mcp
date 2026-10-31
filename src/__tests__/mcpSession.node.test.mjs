@@ -15,8 +15,10 @@
 
 import assert from 'assert';
 import { spawn } from 'child_process';
+import crypto from 'crypto';
 import { once } from 'events';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs';
+import http from 'http';
 import net from 'net';
 import os from 'os';
 import { fileURLToPath, pathToFileURL } from 'url';
@@ -314,6 +316,18 @@ test('REGRESSION: the JSON body parser is never mounted globally, ahead of authe
   assert.ok(body < post.indexOf('decidePostRoute('), 'the route decision needs the parsed body');
 });
 
+test('REGRESSION: trackRequest does not count a response that closed during the async auth step', () => {
+  // trackRequest runs after `await resolveAuthForRequest`. A client that hung up during that await
+  // has already emitted its only 'close', so incrementing inFlight there pinned it above zero and the
+  // idle sweep skipped the session for the life of the process.
+  const at = indexCode.indexOf('const trackRequest');
+  assert.ok(at >= 0, 'trackRequest not found');
+  const fn = indexCode.slice(at, indexCode.indexOf('\n  };', at));
+  const guard = fn.search(/if \(res\.destroyed \|\| res\.closed\) return;/);
+  assert.ok(guard >= 0, 'trackRequest must bail out when the response has already closed');
+  assert.ok(guard < fn.indexOf('entry.inFlight += 1'), 'the closed check must come before the increment');
+});
+
 test('REGRESSION: the parser never inflates a compressed body', () => {
   // gzip turned an 8 kB unauthenticated request into an 8 MB JSON.parse.
   assert.ok(
@@ -455,6 +469,118 @@ await e2e('authenticated body errors are still JSON-RPC errors, and a normal ini
     assert.ok(r.headers.get('mcp-session-id'), 'initialize must mint a session');
   } finally {
     await srv.stop();
+  }
+});
+
+// ── Multi-user (Stytch) mode against a local mock of Stytch ───────────────────
+// The mock serves the project JWKS and the member's vaulted Google token. The Google token is a
+// placeholder and no tool ever runs, so nothing reaches Google or Stytch.
+const STYTCH_PROJECT = 'project-test-mcpsession-e2e';
+const { publicKey: e2ePub, privateKey: e2ePriv } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+const e2eJwk = (kid) => ({ ...e2ePub.export({ format: 'jwk' }), kid, use: 'sig', alg: 'RS256' });
+
+function stytchToken({ kid = 'k1', sub = 'member-test-e2e-1' } = {}) {
+  const nowSec = Math.floor(Date.now() / 1000);
+  const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
+  const head = b64({ alg: 'RS256', kid, typ: 'JWT' });
+  const body = b64({
+    aud: [STYTCH_PROJECT],
+    iss: `stytch.com/${STYTCH_PROJECT}`,
+    client_id: 'connected-app-test-e2e',
+    sub,
+    'https://stytch.com/organization': { organization_id: 'organization-test-e2e', slug: 'e2e' },
+    scope: 'openid email profile',
+    iat: nowSec,
+    nbf: nowSec,
+    exp: nowSec + 3600,
+  });
+  const sig = crypto.sign('RSA-SHA256', Buffer.from(`${head}.${body}`), e2ePriv).toString('base64url');
+  return `${head}.${body}.${sig}`;
+}
+
+/** Mock Stytch. `state.jwks` (keys, delayMs, status) is read on every JWKS request. */
+async function startMockStytch() {
+  const state = { jwks: { kids: ['k1'], delayMs: 0, status: 200 }, jwksHits: 0 };
+  const server = http.createServer(async (req, res) => {
+    if (req.url === '/jwks') {
+      state.jwksHits += 1;
+      const { kids, delayMs, status } = state.jwks;
+      if (delayMs) await new Promise((r) => setTimeout(r, delayMs));
+      res.writeHead(status, { 'content-type': 'application/json' });
+      res.end(status === 200 ? JSON.stringify({ keys: kids.map(e2eJwk) }) : '{"error":"unavailable"}');
+      return;
+    }
+    if (/\/oauth_providers\/google$/.test(req.url ?? '')) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          access_token: 'placeholder-not-a-google-token',
+          access_token_expires_in: 3600,
+          scopes: ['https://www.googleapis.com/auth/tagmanager.readonly'],
+        })
+      );
+      return;
+    }
+    res.writeHead(404).end();
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  return {
+    state,
+    env: {
+      STYTCH_PROJECT_ID: STYTCH_PROJECT,
+      STYTCH_SECRET: 'secret-test-e2e',
+      STYTCH_API_BASE: base,
+      STYTCH_JWKS_URL: `${base}/jwks`,
+    },
+    stop: () => new Promise((resolve) => server.close(resolve)),
+  };
+}
+
+async function activeSessions(base) {
+  return (await (await fetch(`${base}/health`)).json()).activeSessions;
+}
+
+async function waitFor(pred, ms) {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (await pred()) return true;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  return pred();
+}
+
+console.log('\nindex.ts end to end: multi-user mode (mock Stytch)');
+
+await e2e('REGRESSION: a client that hangs up during async auth does not pin its session forever', async () => {
+  const stytch = await startMockStytch();
+  // A short TTL so the idle sweep runs within the test.
+  const srv = await startServer({ ...stytch.env, GTM_MCP_HTTP_SESSION_TTL_MS: '1500' });
+  try {
+    const r = await post(srv.base, INIT_BODY, { authorization: `Bearer ${stytchToken()}` });
+    assert.strictEqual(r.status, 200, await r.text());
+    const sid = r.headers.get('mcp-session-id');
+    assert.ok(sid);
+    assert.strictEqual(await activeSessions(srv.base), 1);
+
+    // A token signed by a key the server has not cached forces a JWKS refetch, which the mock holds
+    // for 400 ms. The client gives up after 100 ms, so its response closes while auth is awaiting.
+    stytch.state.jwks = { kids: ['k1', 'k2'], delayMs: 400, status: 200 };
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 100);
+    await fetch(`${srv.base}/mcp`, {
+      headers: { accept: 'text/event-stream', authorization: `Bearer ${stytchToken({ kid: 'k2' })}`, 'mcp-session-id': sid },
+      signal: ac.signal,
+    }).then(
+      () => assert.fail('the request was expected to be aborted'),
+      (err) => assert.strictEqual(err.name, 'AbortError')
+    );
+    // Before the fix inFlight stayed at 1 and the sweep skipped this session for good.
+    const swept = await waitFor(async () => (await activeSessions(srv.base)) === 0, 6000);
+    assert.ok(swept, 'the abandoned session was never swept: its in-flight count leaked');
+  } finally {
+    await srv.stop();
+    await stytch.stop();
   }
 });
 
