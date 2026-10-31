@@ -155,13 +155,18 @@ async function wiring(): Promise<void> {
   const sent: string[] = [];
   globalThis.fetch = (async (u: unknown) => { sent.push(String(u)); return new Response(null, { status: 204 }); }) as typeof fetch;
   try {
+    type LiveSnap = { tags: ServerContainerSnapshot['tags']; triggers: unknown[]; variables: NonNullable<ServerContainerSnapshot['variables']> } | null;
     const svc = new GoogleDataService({} as never, {} as never) as unknown as {
       getServerContainerSnapshot: () => Promise<ServerContainerSnapshot>;
+      getGtmLiveVersionSnapshot: () => Promise<LiveSnap>;
       listGa4MeasurementIds: () => Promise<Array<{ measurementId: string; property: string; propertyDisplayName: string }>>;
       runServerRuntimeProbe: (a: string, c: string, w: string, o?: { measurementId?: string }) => Promise<unknown>;
     };
     const server = { taggingServerUrls: ['https://sgtm.example.com'], clients: [], tags: [relay('G-AAAA1111')], variables: [] } as unknown as ServerContainerSnapshot;
     svc.getServerContainerSnapshot = async () => server;
+    // Unless a case says otherwise, the published version matches the draft.
+    const liveFromDraft = async (): Promise<LiveSnap> => { const d = await svc.getServerContainerSnapshot(); return { tags: d.tags, triggers: [], variables: d.variables ?? [] }; };
+    svc.getGtmLiveVersionSnapshot = liveFromDraft;
     // The account CAN read G-BBBB2222's property: the refusal must still hold, because the server's
     // literal relay would deliver the probe into G-AAAA1111's property instead.
     svc.listGa4MeasurementIds = async () => [{ measurementId: 'G-BBBB2222', property: 'properties/2', propertyDisplayName: 'B' }];
@@ -176,6 +181,33 @@ async function wiring(): Promise<void> {
     try { await svc.runServerRuntimeProbe('1', '2', '3', { measurementId: 'G-TYPO0000' }); } catch (e) { err = (e as Error).message; }
     if (/no probe was sent/i.test(err) && sent.length === 0) { passed += 1; console.log('  ✓ runServerRuntimeProbe refuses an unreadable id behind an inheriting relay, with nothing sent'); }
     else { failed += 1; console.log(`  ✗ runServerRuntimeProbe refuses an unreadable id behind an inheriting relay, with nothing sent: err="${err}" sent=${sent.length}`); }
+
+    // Regression: the targets came from the DRAFT workspace, but the hit goes to the LIVE tagging
+    // server, which runs the PUBLISHED version. A relay repointed G-OLD -> G-NEW only in the draft
+    // passed the check and the live relay delivered the probe into G-OLD's production property.
+    svc.getServerContainerSnapshot = async () => ({ ...server, tags: [relay('G-NEW00000')] }) as ServerContainerSnapshot;
+    svc.getGtmLiveVersionSnapshot = async () => ({ tags: [relay('G-OLD00000')], triggers: [], variables: [] });
+    svc.listGa4MeasurementIds = async () => [{ measurementId: 'G-NEW00000', property: 'properties/9', propertyDisplayName: 'New' }];
+    err = '';
+    try { await svc.runServerRuntimeProbe('1', '2', '3', { measurementId: 'G-NEW00000' }); } catch (e) { err = (e as Error).message; }
+    if (/does not forward G-NEW00000/.test(err) && /G-OLD00000/.test(err) && /publish/i.test(err) && sent.length === 0) { passed += 1; console.log('  ✓ runServerRuntimeProbe checks the PUBLISHED relays, refusing an id only the draft forwards, with nothing sent'); }
+    else { failed += 1; console.log(`  ✗ runServerRuntimeProbe checks the PUBLISHED relays, refusing an id only the draft forwards, with nothing sent: err="${err}" sent=${sent.length}`); }
+
+    // A relay paused in the draft but live in the published version still receives the hit.
+    svc.getServerContainerSnapshot = async () => ({ ...server, tags: [relay('G-OLD00000', { paused: true }), relay('')] }) as ServerContainerSnapshot;
+    err = '';
+    try { await svc.runServerRuntimeProbe('1', '2', '3', { measurementId: 'G-NEW00000' }); } catch (e) { err = (e as Error).message; }
+    if (/does not forward G-NEW00000/.test(err) && sent.length === 0) { passed += 1; console.log('  ✓ runServerRuntimeProbe ignores a relay paused only in the draft, with nothing sent'); }
+    else { failed += 1; console.log(`  ✗ runServerRuntimeProbe ignores a relay paused only in the draft, with nothing sent: err="${err}" sent=${sent.length}`); }
+
+    // No published version: the live server forwards nothing, so nothing is sent.
+    svc.getServerContainerSnapshot = async () => server;
+    svc.getGtmLiveVersionSnapshot = async () => null;
+    err = '';
+    try { await svc.runServerRuntimeProbe('1', '2', '3', { measurementId: 'G-AAAA1111' }); } catch (e) { err = (e as Error).message; }
+    if (/no published version/i.test(err) && sent.length === 0) { passed += 1; console.log('  ✓ runServerRuntimeProbe refuses a container with no published version, with nothing sent'); }
+    else { failed += 1; console.log(`  ✗ runServerRuntimeProbe refuses a container with no published version, with nothing sent: err="${err}" sent=${sent.length}`); }
+    svc.getGtmLiveVersionSnapshot = liveFromDraft;
 
     // A same-origin tagging URL with a path, and the read-back: the hit goes to <prefix>/g/collect and
     // the realtime query is filtered to this probe's exact name. (A public IP literal keeps the SSRF

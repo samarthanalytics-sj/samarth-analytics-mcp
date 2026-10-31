@@ -2351,9 +2351,16 @@ export class GoogleDataService {
     const server = await this.getServerContainerSnapshot(accountId, containerId, workspaceId);
     const taggingUrl = (server.taggingServerUrls ?? []).find((u) => /^https:/i.test(u));
     if (!taggingUrl) throw new Error('This server container has no https tagging server URL recorded, so there is nothing to send the probe to. Record it first (set_server_container_tagging_url).');
+    // The hit goes to the LIVE tagging server, which runs the PUBLISHED version, not the draft
+    // workspace. Deciding where it lands from the draft let a relay repointed (or paused) in an
+    // unpublished draft pass the check while the live relay re-routed the probe into another
+    // production property. So the targets come from the live version; the draft is only used to
+    // explain a refusal.
+    const live = await this.getGtmLiveVersionSnapshot(accountId, containerId);
+    if (!live) throw new Error('This server container has no published version, so the live tagging server forwards nothing. No probe was sent. Publish the server container first.');
     // Which id to probe: the explicit one, else the single id the active relays forward. Several
     // ids means the caller must choose; guessing would probe a property the user did not mean.
-    const targets = probeTargets(server);
+    const targets = probeTargets(live);
     let measurementId = (opts?.measurementId ?? '').trim();
     if (!measurementId) {
       const relayIds = [...targets.forwarded];
@@ -2367,7 +2374,12 @@ export class GoogleDataService {
     // Refuse BEFORE sending an id this server would not deliver to (a literal relay re-routes it into
     // another production property) or one nothing corroborates and this account cannot read back.
     const refusal = probeTargetRefusal(targets, measurementId, Boolean(hit0));
-    if (refusal) throw new Error(refusal);
+    if (refusal) {
+      const draftAllows = probeTargetRefusal(probeTargets(server), measurementId, Boolean(hit0)) === null;
+      throw new Error(draftAllows
+        ? `${refusal} (Checked against the PUBLISHED version the live tagging server runs. The draft workspace would forward ${measurementId.toUpperCase()}, but that change is not live yet: publish the server container first, then probe.)`
+        : refusal);
+    }
     const hit = buildProbeHit({ taggingUrl, measurementId, suffix: probeSuffix() });
     const taggingHost = new URL(taggingUrl).host;
     const { requestAllowed } = await import('../suggestions/ssrf');
