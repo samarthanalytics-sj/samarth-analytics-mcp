@@ -92,7 +92,7 @@ import {
   rebindingRejection,
 } from '../http.js';
 import { request as httpRequest } from 'node:http';
-import { createWebAuditMcpServer } from '../server.js';
+import { createWebAuditMcpServer, MAX_TOOL_INPUT_ELEMENTS } from '../server.js';
 import { loadConfig } from '../utils/config.js';
 import { runConsentRuntimeRules } from '../../../portal/shared/consent-audit.js';
 import { detectEmbeddedForm } from '../agent/tag-suggest/providers.js';
@@ -1888,6 +1888,53 @@ await withHttpEnv(
     `playwright ${locked} vs playwright-core ${lockedCore}`,
   );
 }
+
+// ── HTTP transport: tool-call argument element cap ──────────────────────────
+// REGRESSION (GHSA-46jr-4wx8-v453): the server set no maxToolInputElements (SDK 1.30.0 had no such
+// option), so one authenticated tools/call inside the 8mb body limit could carry millions of array
+// elements into schema validation and exhaust the heap. site_crawl is called WITHOUT its required
+// url on purpose: if the cap does not fire, schema validation rejects the call before the handler,
+// so no browser is ever launched by this test.
+
+await withHttpEnv({ WEB_AUDIT_HTTP_AUTH_TOKEN: TEST_HTTP_TOKEN, WEB_AUDIT_HTTP_PORT: '0' }, async () => {
+  const h = await startHttpServer(createWebAuditMcpServer);
+  const url = `http://127.0.0.1:${h.port}/mcp`;
+  try {
+    const init = await fetch(url, { method: 'POST', headers: MCP_HEADERS, body: initBody(1) });
+    await init.text();
+    const sid = init.headers.get('mcp-session-id') ?? '';
+    const headers = { ...MCP_HEADERS, 'mcp-session-id': sid, 'mcp-protocol-version': '2025-06-18' };
+    const callWithJunk = async (count: number): Promise<string> => {
+      const body = JSON.stringify({
+        jsonrpc: '2.0',
+        id: 2,
+        method: 'tools/call',
+        params: { name: 'site_crawl', arguments: { junk: new Array(count).fill(0) } },
+      });
+      const r = await fetch(url, { method: 'POST', headers, body });
+      return `${r.status} ${await r.text()}`;
+    };
+    const over = await callWithJunk(500_000);
+    check(
+      'http element cap: a tools/call with 500,000 argument elements is refused before validation',
+      /more than the maximum of \d+ elements/.test(over) && /"isError":true/.test(over),
+      over.slice(0, 300),
+    );
+    check(
+      'http element cap: the refusal names the exported cap',
+      new RegExp(`more than the maximum of ${MAX_TOOL_INPUT_ELEMENTS} elements`).test(over),
+      over.slice(0, 300),
+    );
+    const under = await callWithJunk(1000);
+    check(
+      'http element cap: an ordinary call still reaches schema validation',
+      !/more than the maximum of/.test(under) && /Input validation error/.test(under),
+      under.slice(0, 300),
+    );
+  } finally {
+    await h.close();
+  }
+});
 
 // ── tag-presence reconciliation (configured vs fired) ───────────────────────
 

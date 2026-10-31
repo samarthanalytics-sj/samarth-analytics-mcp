@@ -9,12 +9,24 @@ import { loadConfig } from './utils/config.js';
 export const SERVER_NAME = 'samarth-web-audit-mcp';
 export const SERVER_VERSION = '0.1.0';
 
+/**
+ * Ceiling on the combined number of array elements and object members in one tools/call
+ * `arguments` payload (GHSA-46jr-4wx8-v453). Without it, one authenticated HTTP request inside the
+ * 8mb body limit could carry millions of elements and exhaust the heap during schema validation.
+ * The SDK option is off by default, so upgrading alone did not close it. The largest legitimate
+ * input is a full GTM container export passed as gtmContainer. At roughly 16 bytes of compact JSON
+ * per element, the cap admits an export of about 4 MB, well above what GTM's container size limit
+ * allows. A call over it gets an isError result.
+ */
+export const MAX_TOOL_INPUT_ELEMENTS = 250_000;
+
 export function createWebAuditMcpServer(): McpServer {
   const server = new McpServer(
     { name: SERVER_NAME, version: SERVER_VERSION },
     {
       capabilities: { tools: {} },
       instructions: buildInstructions(),
+      maxToolInputElements: MAX_TOOL_INPUT_ELEMENTS,
     },
   );
   registerAllTools(server);
