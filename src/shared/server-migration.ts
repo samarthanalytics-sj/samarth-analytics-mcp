@@ -544,13 +544,26 @@ export const META_STANDARD_EVENTS: string[] = [
   'Subscribe',
 ];
 
-/** Resolve free-text (e.g. "add to cart", "viewcontent", "Donate") to the CANONICAL Meta
- *  standard event, or null if it isn't a standard event (→ treat as custom). PURE. */
+/** Common GA4 (snake_case) event names → Meta standard event, ONLY where the normalized names differ
+ *  (purchase / add_to_cart / search / add_payment_info / add_to_wishlist already match directly). Keys
+ *  are normalized (lowercased, separators stripped). Without this, generate_lead would be sent as a
+ *  CUSTOM "generate_lead" event that never pairs with the Pixel's Lead for dedup. */
+const GA4_TO_META: Record<string, string> = {
+  viewitem: 'ViewContent',
+  begincheckout: 'InitiateCheckout',
+  generatelead: 'Lead',
+  signup: 'CompleteRegistration',
+  viewsearchresults: 'Search',
+};
+
+/** Resolve free-text (e.g. "add to cart", "viewcontent", "Donate") or a GA4 name (generate_lead,
+ *  begin_checkout, view_item, sign_up) to the CANONICAL Meta standard event, or null if it isn't a
+ *  standard event (→ treat as custom). A direct standard-name match wins over the GA4 alias. PURE. */
 export function metaStandardEvent(event: string): string | null {
   const norm = (event ?? '').trim().toLowerCase().replace(/[\s_-]/g, '');
   if (!norm) return null;
   for (const e of META_STANDARD_EVENTS) if (e.toLowerCase() === norm) return e;
-  return null;
+  return GA4_TO_META[norm] ?? null;
 }
 
 /** Recommended Meta Object Properties (event parameters) per event — the keys Meta expects for

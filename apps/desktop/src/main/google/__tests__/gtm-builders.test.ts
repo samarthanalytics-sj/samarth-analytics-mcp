@@ -2830,6 +2830,25 @@ test('buildMetaPixelTag: standard event → eventName=standard + standardEventNa
   assert.equal(((atc.parameter ?? []) as Array<{ key: string; value: string }>).find((x) => x.key === 'standardEventName')?.value, 'AddToCart');
 });
 
+test('metaStandardEvent maps GA4 names onto Meta standard events, so the CAPI tag pairs with the Pixel', () => {
+  assert.equal(metaStandardEvent('generate_lead'), 'Lead');
+  assert.equal(metaStandardEvent('begin_checkout'), 'InitiateCheckout');
+  assert.equal(metaStandardEvent('view_item'), 'ViewContent');
+  assert.equal(metaStandardEvent('sign_up'), 'CompleteRegistration');
+  assert.equal(metaStandardEvent('view_search_results'), 'Search');
+  // Direct standard names still win; a genuinely custom name stays custom.
+  assert.equal(metaStandardEvent('lead'), 'Lead');
+  assert.equal(metaStandardEvent('purchase'), 'Purchase');
+  assert.equal(metaStandardEvent('my_custom'), null);
+  const pv = (t: { parameter?: unknown[] }, key: string) => ((t.parameter ?? []) as Array<{ key: string; value: string }>).find((x) => x.key === key)?.value;
+  const lead = buildMetaCapiServerTag('cvt_5TP8W', 'x', 'P', 'T', 'generate_lead');
+  assert.equal(pv(lead, 'eventName'), 'standard', 'generate_lead is the standard Lead event, not a custom one');
+  assert.equal(pv(lead, 'eventNameStandard'), 'Lead');
+  assert.equal(pv(lead, 'eventNameCustom'), undefined);
+  const checkout = buildMetaCapiServerTag('cvt_5TP8W', 'x', 'P', 'T', 'begin_checkout');
+  assert.equal(pv(checkout, 'eventNameStandard'), 'InitiateCheckout');
+});
+
 test('META_EVENT_OBJECT_PROPERTIES carries the full per-event property set', () => {
   assert.deepEqual(META_EVENT_OBJECT_PROPERTIES.Purchase, ['content_ids', 'contents', 'content_type', 'value', 'currency', 'num_items', 'order_id', 'event_id']);
   assert.deepEqual(META_EVENT_OBJECT_PROPERTIES.ViewContent, ['content_ids', 'contents', 'content_type', 'content_name', 'content_category', 'value', 'currency']);

@@ -283,6 +283,15 @@ await test('Meta / TikTok / Snapchat CAPI tools create the ed - variables their 
   }
 });
 
+await test('create_meta_capi_server_tag: a GA4 event name is mapped to the Meta standard event (dedups with the Pixel)', async () => {
+  const client = stubClient({ templates: [INSTALLED('stape-io', 'facebook-tag', 'FB1')] });
+  await callValidated(serverWith(client), 'create_meta_capi_server_tag', { ...WS, pixelId: '1', accessToken: '{{T}}', event: 'generate_lead', confirm: true });
+  const tag = client.calls.find((c) => c.kind === 'tag').body;
+  assert.equal(paramVal(tag, 'eventName'), 'standard');
+  assert.equal(paramVal(tag, 'eventNameStandard'), 'Lead', 'generate_lead is sent as Lead, not a custom generate_lead');
+  assert.equal(paramVal(tag, 'eventNameCustom'), undefined);
+});
+
 await test('a CAPI tag create that fails after the template import says the template is already in the workspace', async () => {
   const client = stubClient();
   client.accounts.containers.workspaces.tags.create = async () => { throw new Error('Unknown variable reference'); };
