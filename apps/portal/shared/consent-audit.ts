@@ -712,9 +712,11 @@ function ruleRuntimeCookiesBeforeConsent(rt: RuntimeInput, out: ConsentFinding[]
   // Anchored per cookie name (not bare prefixes), so first-party cookies such as
   // `identity_session`, `ident` or `li_session` are not flagged. Based on the
   // verify engine's list (web-audit-mcp/src/verify/assert/helpers.ts) plus the
-  // GA/DoubleClick/LinkedIn cookies the previous prefix list already covered.
+  // GA/DoubleClick/LinkedIn/Snap cookies the previous prefix list already
+  // covered (incl. Snap's `_scid_r` and LinkedIn's `li_giant`), plus Snap's
+  // `_sctr`.
   const TRACKING_COOKIE =
-    /^(_ga($|_)|_gat($|_)|_gid$|_gac_|_gcl_|_fbp$|_fbc$|_uetsid$|_uetvid$|_uetmsclkid$|_ttp$|_scid$|_tt_|IDE$|MUID$|test_cookie$|li_gc$|li_sugr$|li_fat_id$|_pin_unauth$)/i;
+    /^(_ga($|_)|_gat($|_)|_gid$|_gac_|_gcl_|_fbp$|_fbc$|_uetsid$|_uetvid$|_uetmsclkid$|_ttp$|_scid($|_r$)|_sctr$|_tt_|IDE$|MUID$|test_cookie$|li_gc$|li_sugr$|li_fat_id$|li_giant$|_pin_unauth$)/i;
   for (const page of rt.pages) {
     const cookies = page.cookies ?? [];
     if (cookies.length === 0) continue;

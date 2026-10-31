@@ -1215,6 +1215,9 @@ test("G18b anchored tracker cookie names (incl. _ga_<id>, _gat_*, _gcl_*) are st
     "_ga", "_ga_ABC123", "_gat", "_gat_UA-1-1", "_gac_UA-1-1", "_gid", "_gcl_au", "_gcl_aw",
     "_fbp", "_fbc", "_uetsid", "_uetvid", "_ttp", "_scid", "IDE", "MUID", "test_cookie",
     "li_sugr", "li_fat_id", "_pin_unauth",
+    // Regression: the anchored rewrite dropped Snap's _scid_r / _sctr and
+    // LinkedIn's li_giant, which the old _scid / li_ prefixes covered.
+    "_scid_r", "_sctr", "li_giant",
   ];
   const f = runConsentRuntimeRules(
     rt([{ requestedUrl: "https://e/", consentState: "default_denied", cookies: names.map((name) => ({ name })) }]),
