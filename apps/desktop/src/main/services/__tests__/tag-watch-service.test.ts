@@ -112,6 +112,35 @@ test('a persisted interval past the timer limit loads clamped, and the armed del
   }
 });
 
+// Regression: only the constructor and setEnabled armed the timer, so enabling scheduled scans with no
+// target yet (or removing every target, which stops the timer) and THEN adding one left the UI saying
+// "Scheduled scans on" while nothing ran until the next app launch.
+test('enabling with no targets, then adding one, arms the schedule (and re-arms after remove-all)', async () => {
+  const DAY_MS = 24 * 3_600_000; // the default 24 h cadence: only this service's timers use it here
+  const armed: number[] = [];
+  const realSetInterval = globalThis.setInterval;
+  globalThis.setInterval = ((fn: () => void, ms?: number) => { if (Number(ms) === DAY_MS) armed.push(Number(ms)); return realSetInterval(fn, ms); }) as typeof setInterval;
+  const svc = new TagWatchService({ fetchGtagJs: async () => gtagJs(['purchase']), now: () => 1 });
+  try {
+    svc.setEnabled(true);
+    assert.equal(armed.length, 0, 'nothing to scan yet, so nothing armed');
+    await svc.addTarget('G-SVC');
+    assert.equal(armed.length, 1, 'the first target arms the scheduled scans');
+    await svc.addTarget('G-TWO');
+    assert.equal(armed.length, 1, 'a second target does not re-arm a running schedule');
+    svc.removeTarget('G-SVC');
+    svc.removeTarget('G-TWO');
+    await svc.addTarget('G-SVC');
+    assert.equal(armed.length, 2, 're-armed after the list was emptied and refilled');
+    svc.setEnabled(false);
+    await svc.addTarget('G-OFF');
+    assert.equal(armed.length, 2, 'adding while scheduled scans are off arms nothing');
+  } finally {
+    svc.stop();
+    globalThis.setInterval = realSetInterval;
+  }
+});
+
 test('buildTagWatchSlack: change list with field arrows; unparsed is a warning', async () => {
   const target = { measurementId: 'G-SVC', label: 'Store' } as TagWatchTarget;
   const p = buildTagWatchSlack(target, { at: 1, kind: 'changed', changes: [{ field: 'key events', before: 'a', after: 'b' }], summary: '' });

@@ -103,6 +103,9 @@ export class TagWatchService {
     if (this.config.targets.length >= MAX_TARGETS) throw new Error(`Tag watch is limited to ${MAX_TARGETS} targets.`);
     if (!this.config.targets.some((t) => t.measurementId === id)) {
       this.config.targets.push({ measurementId: id, label: label?.trim() || undefined, lastSnapshot: null, timeline: [], lastScanAt: null, lastParsed: false });
+      // Scheduled scans may have been switched on while the list was empty (or emptied by removes,
+      // which stop the timer): this first target is what arms them, not the next app launch.
+      if (this.config.enabled && !this.timer) this.start();
       this.persist();
       await this.scanTarget(id); // capture the baseline right away
     }
