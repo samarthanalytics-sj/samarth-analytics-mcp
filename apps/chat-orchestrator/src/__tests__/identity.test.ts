@@ -358,16 +358,24 @@ console.log('pool: replacing a child under a running turn');
  * A pool whose children are never spawned. connect/close are swapped on the prototype for the
  * duration of `fn`, and every close is recorded, which is the thing under test.
  */
-async function withStubbedChildren(fn: (closed: McpConnection[]) => Promise<void>): Promise<void> {
+async function withStubbedChildren(
+  fn: (closed: McpConnection[], spawned: McpConnection[]) => Promise<void>,
+  opts: { closeDelayMs?: number } = {},
+): Promise<void> {
   const proto = McpConnection.prototype as unknown as { connect(): Promise<void>; close(): Promise<void> };
   const { connect, close } = proto;
   const closed: McpConnection[] = [];
-  proto.connect = async () => {};
+  const spawned: McpConnection[] = [];
+  proto.connect = async function (this: McpConnection) {
+    spawned.push(this);
+  };
   proto.close = async function (this: McpConnection) {
+    // A real close waits for the child process to exit, which is not instant.
+    if (opts.closeDelayMs) await new Promise((r) => setTimeout(r, opts.closeDelayMs));
     closed.push(this);
   };
   try {
-    await fn(closed);
+    await fn(closed, spawned);
   } finally {
     proto.connect = connect;
     proto.close = close;
@@ -467,6 +475,52 @@ await testAsync('a dead child under a running turn is closed at once, not retire
     pool.release('u', running);
     assert.deepEqual(pool.stats(), { sessions: 1, busy: 1 });
     pool.release('u', next);
+  });
+});
+
+console.log('pool: concurrent requests replacing the same child');
+
+/**
+ * Two requests from one user arrive together and both find the child unusable. Only one may start a
+ * replacement. The first used to await closing the old child before claiming the user's start slot,
+ * so the second spawned meanwhile; the first then spawned again over it, and the second's child was
+ * left in no map at all: never released, never swept, never closed, and one pool slot short forever.
+ */
+async function raceTwoAcquires(prepare: (pool: McpPool, setToken: (t: string) => void) => Promise<void>): Promise<void> {
+  await withStubbedChildren(
+    async (closed, spawned) => {
+      const { pool, setToken } = poolWithTokens();
+      await prepare(pool, setToken);
+      const before = spawned.length;
+
+      const [a, b] = await Promise.all([pool.acquire('u', 'jwt'), pool.acquire('u', 'jwt')]);
+      assert.equal(spawned.length - before, 1, `${spawned.length - before} replacement children started for one user`);
+      assert.equal(a, b, 'the two requests were handed different children');
+      assert.deepEqual(pool.stats(), { sessions: 1, busy: 1 });
+
+      pool.release('u', a);
+      pool.release('u', b);
+      await pool.shutdown();
+      const leaked = spawned.filter((c) => !closed.includes(c));
+      assert.equal(leaked.length, 0, `${leaked.length} child(ren) outlived the pool`);
+    },
+    { closeDelayMs: 20 },
+  );
+}
+
+await testAsync('two concurrent acquires after the child exited start exactly one replacement', async () => {
+  await raceTwoAcquires(async (pool) => {
+    const first = await pool.acquire('u', 'jwt');
+    pool.release('u', first);
+    markExited(first);
+  });
+});
+
+await testAsync('two concurrent acquires after a token change start exactly one replacement', async () => {
+  await raceTwoAcquires(async (pool, setToken) => {
+    const first = await pool.acquire('u', 'jwt');
+    pool.release('u', first);
+    setToken('ya29.second');
   });
 });
 

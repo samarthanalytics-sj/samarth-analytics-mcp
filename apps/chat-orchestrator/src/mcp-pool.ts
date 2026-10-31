@@ -109,21 +109,28 @@ export class McpPool {
     return identity.accessToken;
   }
 
-  private async entryFor(userId: string, accessToken: string): Promise<PoolEntry> {
+  private entryFor(userId: string, accessToken: string): Promise<PoolEntry> {
+    // Collapse concurrent requests from the same user onto one replacement. Checked and claimed with
+    // no await in between: claiming only after awaiting the eviction below let a second request
+    // find no entry and no start in flight, spawn its own child, and then have it overwritten by
+    // this one's, leaving it in no map, so it was never released, swept or closed.
+    const pending = this.starting.get(userId);
+    if (pending) return pending;
+
+    let replacing: string | null = null;
     const existing = this.entries.get(userId);
     if (existing) {
       // A dead child is replaced even with the same token: reusing it fails every call "Not
       // connected", and each failed retry refreshed lastUsedAt so the idle sweep never removed it.
       const dead = existing.connection.isDead();
-      if (existing.accessToken === accessToken && !dead) return existing;
-      await this.evict(userId, dead ? 'child exited' : 'token changed');
+      if (existing.accessToken === accessToken && !dead) return Promise.resolve(existing);
+      replacing = dead ? 'child exited' : 'token changed';
     }
 
-    // Collapse concurrent first requests from the same user onto one spawn.
-    const pending = this.starting.get(userId);
-    if (pending) return pending;
-
-    const promise = this.spawn(userId, accessToken).finally(() => this.starting.delete(userId));
+    const promise = (async () => {
+      if (replacing) await this.evict(userId, replacing);
+      return this.spawn(userId, accessToken);
+    })().finally(() => this.starting.delete(userId));
     this.starting.set(userId, promise);
     return promise;
   }
