@@ -81,30 +81,48 @@ async function startHttpServer(auth: OAuth2Client): Promise<void> {
   // large tags_create html parameter), and body-parser answers with an HTML 413 that a JSON-RPC
   // client cannot parse - so the identical call succeeded over stdio and died over HTTP with an
   // unreadable error. 8mb matches the sibling apps/web-audit-mcp HTTP server.
+  //
+  // The parser is NOT mounted globally. It used to be the first app.use(), so every request -
+  // unauthenticated ones and POSTs to paths that do not exist included - was buffered to 8mb and
+  // JSON.parse'd on the event loop before /mcp sent its 401; with gzip inflation an 8 kB request
+  // became an 8 MB parse (~0.4 s blocked, ~170 MB heap). It now runs only inside POST /mcp, AFTER
+  // resolveAuthForRequest has passed (see readJsonBody), and never inflates: the MCP SDK's own
+  // transport reads request bodies uncompressed too, so no conforming client sends a compressed one.
   const bodyLimit = process.env.GTM_MCP_HTTP_BODY_LIMIT ?? '8mb';
-  app.use(express.json({ limit: bodyLimit }));
-  // Body-parser failures (oversized or malformed JSON) never reach a route, so convert them here
-  // into a JSON-RPC error body. Express's default error handler would send HTML.
-  app.use(
-    (
-      err: Error & { status?: number; type?: string },
-      _req: import('express').Request,
-      res: import('express').Response,
-      next: import('express').NextFunction
-    ): void => {
-      if (res.headersSent) {
-        next(err);
-        return;
-      }
-      const tooLarge = err.type === 'entity.too.large';
-      const message = tooLarge
-        ? `Request body exceeds the ${bodyLimit} limit. Raise GTM_MCP_HTTP_BODY_LIMIT if this call is legitimate.`
+  const jsonBody = express.json({ limit: bodyLimit, inflate: false });
+  // Body-parser failures (oversized, compressed or malformed JSON) answered as a JSON-RPC error body;
+  // Express's default error handler would send HTML.
+  const sendBodyParserError = (
+    res: import('express').Response,
+    err: Error & { status?: number; type?: string }
+  ): void => {
+    if (res.headersSent) return;
+    const tooLarge = err.type === 'entity.too.large';
+    const message = tooLarge
+      ? `Request body exceeds the ${bodyLimit} limit. Raise GTM_MCP_HTTP_BODY_LIMIT if this call is legitimate.`
+      : err.type === 'encoding.unsupported'
+        ? 'Compressed request bodies are not accepted; send the JSON-RPC body uncompressed.'
         : `Malformed request body: ${err.message}`;
-      res
-        .status(typeof err.status === 'number' ? err.status : 400)
-        .json({ jsonrpc: '2.0', error: { code: tooLarge ? -32600 : -32700, message }, id: null });
-    }
-  );
+    res
+      .status(typeof err.status === 'number' ? err.status : 400)
+      .json({ jsonrpc: '2.0', error: { code: tooLarge ? -32600 : -32700, message }, id: null });
+  };
+  /** Parse the JSON body of an ALREADY-AUTHENTICATED POST /mcp. Resolves false when the body was
+   *  rejected, in which case the JSON-RPC error response has already been sent. */
+  const readJsonBody = (
+    req: import('express').Request,
+    res: import('express').Response
+  ): Promise<boolean> =>
+    new Promise((resolve) => {
+      jsonBody(req, res, (err?: unknown) => {
+        if (err) {
+          sendBodyParserError(res, err as Error & { status?: number; type?: string });
+          resolve(false);
+          return;
+        }
+        resolve(true);
+      });
+    });
 
   // PORT is the conventional env var injected by hosts like Render/Fly;
   // GTM_MCP_HTTP_PORT takes precedence when explicitly set (blank counts as unset).
@@ -137,7 +155,7 @@ async function startHttpServer(auth: OAuth2Client): Promise<void> {
     console.error(`[samarth-gtm-mcp] WARNING: ${binding.warning}`);
   }
   // DNS-rebinding guard for the unauthenticated loopback server (see needsRebindingGuard). Registered
-  // before every route so POST, GET and DELETE /mcp are all covered.
+  // before every route so POST, GET and DELETE /mcp are all covered, before any body is read.
   if (needsRebindingGuard(binding)) {
     app.use((req, res, next) => {
       const reason = rebindingRejection(req.headers.host, req.headers.origin);
@@ -382,6 +400,8 @@ async function startHttpServer(auth: OAuth2Client): Promise<void> {
       const authed = await resolveAuthForRequest(req, res);
       if (!authed) return; // 401 already sent
       const { client: reqAuth, principal } = authed;
+      // Only now read the body: an unauthenticated caller never gets it buffered or parsed.
+      if (!(await readJsonBody(req, res))) return; // JSON-RPC body error already sent
 
       const sessionId = req.headers['mcp-session-id'] as string | undefined;
       const route = decidePostRoute(sessionId, ownsSession(sessionId, principal), req.body);

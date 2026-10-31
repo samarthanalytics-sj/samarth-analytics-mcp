@@ -14,9 +14,14 @@
  */
 
 import assert from 'assert';
-import { existsSync, readFileSync } from 'fs';
+import { spawn } from 'child_process';
+import { once } from 'events';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs';
+import net from 'net';
+import os from 'os';
 import { fileURLToPath, pathToFileURL } from 'url';
 import path from 'path';
+import { gzipSync } from 'zlib';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const distPath = path.resolve(here, '../../dist/utils/mcpSession.js');
@@ -287,6 +292,170 @@ test('REGRESSION: an idle sweep closes sessions the client never deleted', () =>
   assert.match(sweep[1], /lastActivity/);
   assert.match(sweep[1], /sessions\.delete\(/);
   assert.match(sweep[1], /transport\.close\(\)/);
+});
+
+/** The body of an `app.<method>('/mcp', ...)` handler, comments stripped. */
+function handlerCode(route) {
+  const at = indexCode.indexOf(route);
+  assert.ok(at >= 0, `${route} not found`);
+  return indexCode.slice(at, indexCode.indexOf('\n  });', at));
+}
+
+test('REGRESSION: the JSON body parser is never mounted globally, ahead of authentication', () => {
+  // It was the first app.use(), so every request - unauthenticated ones, POSTs to paths that do not
+  // exist - was buffered to 8mb and JSON.parse'd on the event loop before /mcp could send its 401.
+  assert.ok(!/app\.use\(\s*express\.json/.test(indexCode), 'express.json is mounted with app.use again');
+  assert.ok(!/app\.use\(\s*jsonBody/.test(indexCode), 'the parser is mounted with app.use again');
+  const post = handlerCode("app.post('/mcp'");
+  const auth = post.indexOf('resolveAuthForRequest(req, res)');
+  const body = post.indexOf('readJsonBody(req, res)');
+  assert.ok(auth >= 0 && body >= 0, 'POST /mcp must authenticate and then read the body');
+  assert.ok(auth < body, 'POST /mcp reads the body before authenticating');
+  assert.ok(body < post.indexOf('decidePostRoute('), 'the route decision needs the parsed body');
+});
+
+test('REGRESSION: the parser never inflates a compressed body', () => {
+  // gzip turned an 8 kB unauthenticated request into an 8 MB JSON.parse.
+  assert.ok(
+    /express\.json\(\s*\{\s*limit: bodyLimit,\s*inflate: false\s*\}\s*\)/.test(indexCode),
+    'express.json must be built with inflate: false'
+  );
+});
+
+// ── End to end: the real HTTP transport ───────────────────────────────────────
+// Spawns dist/index.js on a free loopback port with a scrubbed environment: no Google credentials,
+// no guardrail flags, a sandbox cwd and a dead DOTENV_CONFIG_PATH so a developer .env is never read.
+// Only the transport is exercised (initialize, ping, the session endpoints); no tool ever runs, so
+// nothing can reach Google.
+const serverEntry = path.resolve(here, '../../dist/index.js');
+const TOKEN = 'mcp-session-e2e-token';
+const INIT_BODY = JSON.stringify({
+  jsonrpc: '2.0',
+  id: 1,
+  method: 'initialize',
+  params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'mcpSession-e2e', version: '1' } },
+});
+const MCP_HEADERS = { 'content-type': 'application/json', accept: 'application/json, text/event-stream' };
+
+async function freePort() {
+  const srv = net.createServer();
+  await new Promise((resolve) => srv.listen(0, '127.0.0.1', resolve));
+  const { port } = srv.address();
+  await new Promise((resolve) => srv.close(resolve));
+  return port;
+}
+
+async function startServer(extraEnv = {}) {
+  const port = await freePort();
+  const sandbox = mkdtempSync(path.join(os.tmpdir(), 'mcp-session-e2e-'));
+  const env = {};
+  for (const [k, v] of Object.entries(process.env)) {
+    if (!/^(GOOGLE_|SAMARTH_|GTM_MCP_|GA4_MCP_|STYTCH_|DOTENV_)/i.test(k)) env[k] = v;
+  }
+  Object.assign(env, {
+    GTM_MCP_TRANSPORT: 'http',
+    GTM_MCP_HTTP_PORT: String(port),
+    GTM_MCP_HTTP_HOST: '127.0.0.1',
+    DOTENV_CONFIG_PATH: path.join(sandbox, 'no.env'),
+    CLOUDSDK_CONFIG: sandbox,
+    GOOGLE_APPLICATION_CREDENTIALS: path.join(sandbox, 'no-adc.json'),
+    GTM_MCP_TOKEN_FILE: path.join(sandbox, 'no-tokens.json'),
+    ...extraEnv,
+  });
+  const child = spawn(process.execPath, [serverEntry], { cwd: sandbox, env, stdio: ['ignore', 'ignore', 'pipe'] });
+  let stderr = '';
+  child.stderr.on('data', (c) => {
+    stderr = (stderr + c).slice(-8000);
+  });
+  const base = `http://127.0.0.1:${port}`;
+  const stop = async () => {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill();
+      await once(child, 'exit');
+    }
+    rmSync(sandbox, { recursive: true, force: true });
+  };
+  const deadline = Date.now() + 20_000;
+  for (;;) {
+    if (child.exitCode !== null) {
+      await stop();
+      throw new Error(`server exited during startup:\n${stderr}`);
+    }
+    try {
+      if ((await fetch(`${base}/health`)).ok) break;
+    } catch {
+      /* not listening yet */
+    }
+    if (Date.now() > deadline) {
+      await stop();
+      throw new Error(`server not ready after 20s:\n${stderr}`);
+    }
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return { base, stop, stderr: () => stderr };
+}
+
+async function e2e(name, fn) {
+  try {
+    await fn();
+    passed++;
+    console.log(`  ✓ ${name}`);
+  } catch (err) {
+    failed++;
+    console.error(`  ✗ ${name}`);
+    console.error(`    ${err.message}`);
+  }
+}
+
+const post = (base, body, headers = {}) =>
+  fetch(`${base}/mcp`, { method: 'POST', headers: { ...MCP_HEADERS, ...headers }, body });
+
+console.log('\nindex.ts end to end: request bodies are read only after authentication');
+
+await e2e('REGRESSION: unauthenticated requests are refused before their body is read', async () => {
+  const srv = await startServer({ GTM_MCP_HTTP_AUTH_TOKEN: TOKEN, GTM_MCP_HTTP_BODY_LIMIT: '1kb' });
+  try {
+    // Before the fix each of these was parsed first: the malformed body answered 400, the oversized
+    // one 413, and a POST to a path with no route still had its body buffered and parsed.
+    let r = await post(srv.base, '{');
+    assert.strictEqual(r.status, 401, 'malformed body without a token');
+    r = await post(srv.base, JSON.stringify({ pad: 'x'.repeat(4096) }));
+    assert.strictEqual(r.status, 401, 'oversized body without a token');
+    r = await post(srv.base, gzipSync(Buffer.from(INIT_BODY)), { 'content-encoding': 'gzip' });
+    assert.strictEqual(r.status, 401, 'gzip body without a token');
+    r = await fetch(`${srv.base}/no-such-route`, { method: 'POST', headers: MCP_HEADERS, body: '{' });
+    assert.strictEqual(r.status, 404, 'a POST to an unrouted path must not be parsed at all');
+  } finally {
+    await srv.stop();
+  }
+});
+
+await e2e('authenticated body errors are still JSON-RPC errors, and a normal initialize still works', async () => {
+  const srv = await startServer({ GTM_MCP_HTTP_AUTH_TOKEN: TOKEN, GTM_MCP_HTTP_BODY_LIMIT: '1kb' });
+  const auth = { authorization: `Bearer ${TOKEN}` };
+  try {
+    let r = await post(srv.base, '{', auth);
+    assert.strictEqual(r.status, 400);
+    let body = await r.json();
+    assert.strictEqual(body.jsonrpc, '2.0');
+    assert.strictEqual(body.error.code, -32700);
+    r = await post(srv.base, JSON.stringify({ pad: 'x'.repeat(4096) }), auth);
+    assert.strictEqual(r.status, 413);
+    body = await r.json();
+    assert.strictEqual(body.error.code, -32600);
+    assert.match(body.error.message, /GTM_MCP_HTTP_BODY_LIMIT/);
+    // A compressed body is refused (not inflated), as a JSON-RPC error rather than Express HTML.
+    r = await post(srv.base, gzipSync(Buffer.from(INIT_BODY)), { ...auth, 'content-encoding': 'gzip' });
+    assert.strictEqual(r.status, 415);
+    body = await r.json();
+    assert.strictEqual(body.jsonrpc, '2.0');
+    assert.match(body.error.message, /uncompressed/);
+    r = await post(srv.base, INIT_BODY, auth);
+    assert.strictEqual(r.status, 200, await r.text());
+    assert.ok(r.headers.get('mcp-session-id'), 'initialize must mint a session');
+  } finally {
+    await srv.stop();
+  }
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
