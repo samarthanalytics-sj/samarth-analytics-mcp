@@ -37,13 +37,23 @@ import type { EvidenceItem as AccuracyEvidenceItem } from "../../shared/audit-ac
  * - When uncertain, mark `needsManualReview: true` instead of guessing.
  */
 
-const COOKIE_VERSION = "v1";
+// Session cookie `v1e`: AES-256-GCM sealed tokens + absolute lifetime. Must
+// stay byte-compatible with server/gtm/session-cookie.ts and the other api/**
+// copies (keep them in lockstep). Sealed, not just signed, so a leaked cookie
+// does not expose the Google tokens; `iat` (sign-in time) caps a session at
+// SESSION_MAX_AGE_MS on the server however often the access token refreshes.
+// Signed-only `v1` session cookies are rejected (those users sign in again).
+const SESSION_COOKIE_VERSION = "v1e";
+const SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+const SESSION_CLOCK_SKEW_MS = 5 * 60 * 1000;
 const SESSION_COOKIE = "samarth_portal_sid";
 
 interface SessionTokensShape {
   accessToken: string;
   refreshToken?: string;
   expiresAt: number;
+  /** Sign-in time (ms epoch); bounds the session to SESSION_MAX_AGE_MS. */
+  iat?: number;
   email?: string;
   scopes?: string[];
 }
@@ -3706,20 +3716,66 @@ function base64UrlDecode(input: string): Buffer {
   return Buffer.from(padded.replace(/-/g, "+").replace(/_/g, "/"), "base64");
 }
 
-function signPayload(payload: string, secret: string): string {
-  return base64UrlEncode(
-    crypto.createHmac("sha256", secret).update(payload).digest(),
+function sessionCookieKey(secret: string): Buffer {
+  return Buffer.from(
+    crypto.hkdfSync(
+      "sha256",
+      secret,
+      "samarth-portal-session",
+      "samarth_portal_sid v1e aes-256-gcm",
+      32,
+    ),
   );
 }
 
-function safeEqual(a: string, b: string): boolean {
+function isSessionFresh(iat: unknown, now: number = Date.now()): iat is number {
+  return (
+    typeof iat === "number" &&
+    Number.isFinite(iat) &&
+    iat <= now + SESSION_CLOCK_SKEW_MS &&
+    now - iat <= SESSION_MAX_AGE_MS
+  );
+}
+
+function sealSessionPayload(payload: object, secret: string): string {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv(
+    "aes-256-gcm",
+    sessionCookieKey(secret),
+    iv,
+    { authTagLength: 16 },
+  );
+  cipher.setAAD(Buffer.from(SESSION_COOKIE_VERSION, "utf8"));
+  const body = Buffer.concat([
+    cipher.update(JSON.stringify(payload), "utf8"),
+    cipher.final(),
+  ]);
+  return `${SESSION_COOKIE_VERSION}.${base64UrlEncode(
+    Buffer.concat([iv, body, cipher.getAuthTag()]),
+  )}`;
+}
+
+function openSessionPayload(value: string, secret: string): unknown {
+  const parts = value.split(".");
+  if (parts.length !== 2 || parts[0] !== SESSION_COOKIE_VERSION) return null;
   try {
-    const bufA = Buffer.from(a);
-    const bufB = Buffer.from(b);
-    if (bufA.length !== bufB.length) return false;
-    return crypto.timingSafeEqual(bufA, bufB);
+    const raw = base64UrlDecode(parts[1]);
+    if (raw.length <= 12 + 16) return null;
+    const decipher = crypto.createDecipheriv(
+      "aes-256-gcm",
+      sessionCookieKey(secret),
+      raw.subarray(0, 12),
+      { authTagLength: 16 },
+    );
+    decipher.setAAD(Buffer.from(SESSION_COOKIE_VERSION, "utf8"));
+    decipher.setAuthTag(raw.subarray(raw.length - 16));
+    const json = Buffer.concat([
+      decipher.update(raw.subarray(12, raw.length - 16)),
+      decipher.final(),
+    ]).toString("utf8");
+    return JSON.parse(json);
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -3728,43 +3784,31 @@ function decodeSessionCookie(
   secret: string,
 ): SessionTokensShape | null {
   if (!value) return null;
-  const parts = value.split(".");
-  if (parts.length !== 3) return null;
-  const [version, body, sig] = parts;
-  if (version !== COOKIE_VERSION) return null;
-  let expected: string;
-  try {
-    expected = signPayload(`${version}.${body}`, secret);
-  } catch {
+  const parsed = openSessionPayload(value, secret) as Partial<SessionTokensShape> | null;
+  if (!parsed || typeof parsed !== "object" || typeof parsed.accessToken !== "string") {
     return null;
   }
-  if (!safeEqual(sig, expected)) return null;
-  try {
-    const json = base64UrlDecode(body).toString("utf8");
-    const parsed = JSON.parse(json) as Partial<SessionTokensShape> | null;
-    if (!parsed || typeof parsed.accessToken !== "string") return null;
-    return {
-      accessToken: parsed.accessToken,
-      refreshToken:
-        typeof parsed.refreshToken === "string"
-          ? parsed.refreshToken
-          : undefined,
-      expiresAt: typeof parsed.expiresAt === "number" ? parsed.expiresAt : 0,
-      email: typeof parsed.email === "string" ? parsed.email : undefined,
-      scopes: Array.isArray(parsed.scopes) ? parsed.scopes : [],
-    };
-  } catch {
-    return null;
-  }
+  const iat = parsed.iat;
+  if (!isSessionFresh(iat)) return null;
+  return {
+    accessToken: parsed.accessToken,
+    refreshToken:
+      typeof parsed.refreshToken === "string" ? parsed.refreshToken : undefined,
+    expiresAt: typeof parsed.expiresAt === "number" ? parsed.expiresAt : 0,
+    iat,
+    email: typeof parsed.email === "string" ? parsed.email : undefined,
+    scopes: Array.isArray(parsed.scopes) ? parsed.scopes : [],
+  };
 }
 
 function encodeSessionCookie(
   tokens: SessionTokensShape,
   secret: string,
 ): string {
-  const payload = `${COOKIE_VERSION}.${base64UrlEncode(JSON.stringify(tokens))}`;
-  const sig = signPayload(payload, secret);
-  return `${payload}.${sig}`;
+  return sealSessionPayload(
+    { ...tokens, iat: typeof tokens.iat === "number" ? tokens.iat : Date.now() },
+    secret,
+  );
 }
 
 function setSessionCookie(res: ServerResponse, value: string): void {

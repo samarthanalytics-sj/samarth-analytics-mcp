@@ -31,6 +31,12 @@ export interface SessionTokens {
   refreshToken?: string;
   /** ms epoch */
   expiresAt: number;
+  /**
+   * Sign-in time (ms epoch). Bounds the whole session to SESSION_MAX_AGE_MS:
+   * refreshing the access token keeps it, so a session cannot be extended
+   * indefinitely. The cookie encoder stamps it when missing.
+   */
+  iat?: number;
   email?: string;
   userName?: string;
   picture?: string;
@@ -63,6 +69,25 @@ export function resolvePortalOAuthClient(): OAuthClientConfig | null {
 
   if (!clientId || !clientSecret || !redirectUri) return null;
   return { clientId, clientSecret, redirectUri };
+}
+
+/**
+ * Absolute session lifetime (30 days, matching the cookie Max-Age). Enforced on
+ * the server, so a copied session cookie or session id stops working after this
+ * window however often its access token was refreshed.
+ */
+export const SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+/** Tolerated clock skew between instances for a just-minted `iat`. */
+const SESSION_CLOCK_SKEW_MS = 5 * 60 * 1000;
+
+/** True when `iat` is a sign-in time within SESSION_MAX_AGE_MS of `now`. */
+export function isSessionFresh(iat: unknown, now: number = Date.now()): iat is number {
+  return (
+    typeof iat === "number" &&
+    Number.isFinite(iat) &&
+    iat <= now + SESSION_CLOCK_SKEW_MS &&
+    now - iat <= SESSION_MAX_AGE_MS
+  );
 }
 
 // ── In-memory session store ──────────────────────────────────────────────
@@ -110,7 +135,13 @@ export function newSessionId(): string {
 
 export function getSession(sid: string | undefined): SessionTokens | null {
   if (!sid) return null;
-  return sessions.get(sid) ?? null;
+  const sess = sessions.get(sid);
+  if (!sess) return null;
+  if (!isSessionFresh(sess.iat)) {
+    sessions.delete(sid);
+    return null;
+  }
+  return sess;
 }
 
 export function setSession(sid: string, tokens: SessionTokens): void {
@@ -181,6 +212,7 @@ export async function exchangeCodeForTokens(
     accessToken: data.access_token,
     refreshToken: data.refresh_token,
     expiresAt: Date.now() + (data.expires_in - 30) * 1000,
+    iat: Date.now(),
     email,
     userName,
     picture,

@@ -39,7 +39,7 @@
       "id": 2,
       "name": "Token vault integration + dual-read/dual-write",
       "status": "not-started",
-      "goal": "Move OAuth token bytes out of the cookie into a secret manager; v2 session-id cookie with v1 fallback.",
+      "goal": "Move OAuth token bytes out of the cookie into a secret manager; v2 session-id cookie with v1e fallback.",
       "providerExamples": ["Supabase Vault", "GCP Secret Manager/KMS", "AWS Secrets Manager/KMS", "HashiCorp Vault"],
       "env": {
         "secret": ["SUPABASE_SERVICE_ROLE_KEY"],
@@ -52,10 +52,10 @@
       ],
       "successCriteria": [
         "fresh login mints v2 cookie with no token bytes",
-        "existing v1 sessions keep working (no forced re-consent)",
+        "existing v1e sessions keep working (no forced re-consent)",
         "refresh writes bytes to vault, never to Postgres/cookie"
       ],
-      "rollback": "Stop minting v2, keep v1 acceptance; unset vault vars.",
+      "rollback": "Stop minting v2, keep v1e acceptance; unset vault vars.",
       "security": ["no token bytes in DB", "vault-only resolution by backend identity", "TOKEN_VAULT_ALLOW_MEMORY absent in prod"]
     },
     {

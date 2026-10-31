@@ -160,7 +160,7 @@ time). Anything heavier — the shared audit engine, `googleapis` — is pulled 
 via `await import(...)` **inside the handler, after session/auth validation**.
 
 Consequence: each route inlines its own copy of the session/cookie/OAuth
-machinery (cookie parse, HMAC-signed-cookie decode, token refresh, `sendJson`,
+machinery (cookie parse, encrypted-cookie decode, token refresh, `sendJson`,
 `sendGtmError`). This duplication is **intentional and load-bearing** — a prior
 attempt to import a shared `api/_lib/*` module caused
 `FUNCTION_INVOCATION_FAILED` at cold start. The duplicated blocks are annotated
@@ -172,11 +172,13 @@ the inlining it would replace.)
 
 ### 3.3 Session / OAuth lifecycle
 
-Stateless **signed-cookie** sessions: tokens live in the cookie itself, signed
-with `PORTAL_SESSION_SECRET` via HMAC-SHA256 (`HttpOnly`, `SameSite=Lax`,
-`Secure` in prod, 30-day max-age). `getValidAccessToken` decodes the cookie,
-returns the access token if unexpired, otherwise refreshes via Google's token
-endpoint and rotates the cookie. The Express dev server (`server/gtm/oauth.ts`)
+Stateless **encrypted-cookie** sessions: tokens live in the cookie itself,
+sealed with AES-256-GCM under a key derived from `PORTAL_SESSION_SECRET`
+(`v1e` format; `HttpOnly`, `SameSite=Lax`, `Secure` in prod, 30-day max-age).
+The sealed payload carries `iat` (sign-in time) and every route rejects a
+session older than 30 days on the server. `getValidAccessToken` decodes the
+cookie, returns the access token if unexpired, otherwise refreshes via Google's
+token endpoint and rotates the cookie, keeping the original `iat`. The Express dev server (`server/gtm/oauth.ts`)
 additionally keeps a legacy in-memory map — fine locally, unsuitable for
 Vercel's multi-instance model, which is exactly why production is cookie-based.
 

@@ -333,9 +333,9 @@ before starting, and serve over HTTPS in production.
 
 The repo ships Vercel-compatible serverless handlers in `apps/portal/api/`.
 They reuse the same GTM client and audit logic as the Express routes, but
-swap the in-memory session map for a **stateless, HMAC-signed cookie** so
-the OAuth tokens survive across cold starts and different function
-instances.
+swap the in-memory session map for a **stateless, encrypted cookie**
+(AES-256-GCM, keyed from `PORTAL_SESSION_SECRET`) so the OAuth tokens
+survive across cold starts and different function instances.
 
 **Project root in Vercel:** `apps/portal` (the repo is a monorepo and the
 portal lives in a subfolder — point Vercel at it via *Project Settings →
@@ -387,10 +387,16 @@ you prefer to drive deploys from the workspace root, run
 `vercel --cwd apps/portal --prod`.
 
 **Limitations on Vercel:**
-- OAuth tokens live in a signed cookie on the user's browser, not in a
-  server-side store. They are protected by the user's HttpOnly + Secure
-  cookie. Access tokens expire after ~1 hour and are refreshed on demand
-  (rotating the cookie).
+- OAuth tokens live in an encrypted cookie on the user's browser, not in a
+  server-side store. The browser cannot read or alter them, and the cookie is
+  HttpOnly + Secure. Access tokens expire after ~1 hour and are refreshed on
+  demand (rotating the cookie).
+- Sessions end 30 days after sign-in, enforced on the server; refreshing does
+  not extend them. "Disconnect Google" clears the cookie but cannot invalidate
+  a copy of it taken earlier — that copy keeps working until its 30 days are
+  up, unless you rotate `PORTAL_SESSION_SECRET` or the user removes the app's
+  access in their Google account. Rotating `PORTAL_SESSION_SECRET` (or the
+  cookie-format change to `v1e`) signs everyone out once.
 - There is **no shared server-side state** — anything currently using the
   in-memory `Map` in `server/gtm/oauth.ts` (the session map and CSRF
   state map) is replaced by signed cookies in the Vercel handlers.

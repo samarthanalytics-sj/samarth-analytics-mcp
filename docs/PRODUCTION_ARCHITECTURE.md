@@ -143,10 +143,14 @@ they back is specified in [`API_JOBS.md`](./API_JOBS.md).
 
 ## 3. OAuth / session / token storage strategy
 
-**Today:** stateless signed cookie (`PORTAL_SESSION_SECRET`, HMAC-SHA256) holds
-the access/refresh tokens directly; refresh happens lazily and rotates the
-cookie. Simple, no infra, but tokens travel in the cookie and the cookie size
-grows with scope.
+**Today:** a stateless encrypted cookie (`v1e`: AES-256-GCM under a key derived
+from `PORTAL_SESSION_SECRET`) holds the access/refresh tokens; refresh happens
+lazily and rotates the cookie. The browser cannot read or alter the tokens, and
+every route rejects a session more than 30 days after sign-in (`iat` in the
+sealed payload; a refresh keeps it). Simple, no infra, but tokens travel in the
+cookie, the cookie size grows with scope, and sign-out only clears the cookie:
+a copied cookie stays usable until that 30-day limit. (`v1e` replaced the
+signed-only `v1`, whose tokens were readable; `v1` cookies are rejected.)
 
 **Production target — server-side token vault:**
 
@@ -161,8 +165,8 @@ grows with scope.
    against Google, and writes the new token back to the vault — never to
    Postgres, never to the cookie.
 
-**Migration path (no behavior change):** the cookie format is versioned (`v1`
-today). Introduce `v2` = session-id cookie. On read, accept both: `v1` keeps
+**Migration path (no behavior change):** the cookie format is versioned (`v1e`
+today). Introduce `v2` = session-id cookie. On read, accept both: `v1e` keeps
 working until expiry; new logins mint `v2`. The signed-cookie code stays as the
 fallback when no DB/vault is configured — `/api/system/capabilities` reports
 `sessionMode: "signed_cookie"` until `DATABASE_URL` is present, then
@@ -423,7 +427,7 @@ worker's HTTP `/capture` are unchanged. *Done.*
 **Phase 1 — Durable identity + discovery cache.** Provision Postgres; flesh out
 the `PostgresStore` skeleton (orgs/users/memberships, discovery snapshots). Wire
 Upstash for discovery SWR behind a feature check on `DATABASE_URL`/`UPSTASH_*`.
-Cookie stays `v1`; no UX change.
+Cookie stays `v1e`; no UX change.
 
 **Phase 2 — Token vault.** Introduce `v2` session-id cookie + secret-manager
 vault; dual-read cookies for backwards compatibility. Tokens leave the browser.

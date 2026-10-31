@@ -66,7 +66,7 @@ violate one is wrong, no matter how convenient:
 | Phase | Subsystem | Goal | Reversible by |
 | :-: | --- | --- | --- |
 | 1 | **Postgres / Supabase** | Deploy schema; read-only capability probe | Unset `DATABASE_URL` |
-| 2 | **Token vault** | Move token bytes out of cookie; dual-read/dual-write | Keep `v1` cookie fallback; unset vault vars |
+| 2 | **Token vault** | Move token bytes out of cookie; dual-read/dual-write | Keep `v1e` cookie fallback; unset vault vars |
 | 3 | **Redis / Upstash cache** | Read-through + SWR for discovery lists | Unset cache vars (falls back to no-op) |
 | 4 | **Async job queue** | Shadow-mode audits/captures (no client impact) | Keep synchronous path as default |
 | 5 | **Runtime worker** | Deploy headless-Chromium worker behind queue | Scale worker to 0; unset worker URL |
@@ -172,7 +172,7 @@ psql "$DATABASE_URL" -c "SELECT now();"
 
 **What it does.** Moves OAuth token *bytes* out of the signed cookie into an
 external secret manager, keyed by `oauth_connections.token_ref`. Introduces a `v2`
-session-id cookie while keeping the `v1` token-bearing cookie working until expiry.
+session-id cookie while keeping the `v1e` token-bearing cookie working until expiry.
 
 ### Provider-neutral steps
 
@@ -188,9 +188,9 @@ session-id cookie while keeping the `v1` token-bearing cookie working until expi
    provider and `/api/system/capabilities` flips `tokenVault` to `ready`.
 4. **Dual-write:** on new logins/refresh, write bytes to the vault and store only
    `token_ref` + metadata in `oauth_connections`; mint a `v2` session-id cookie.
-5. **Dual-read:** accept both cookie versions. `v1` (token-bearing) keeps working
+5. **Dual-read:** accept both cookie versions. `v1e` (token-bearing) keeps working
    until natural expiry; `v2` resolves bytes via the vault. No forced logout.
-6. After the `v1` max-age window elapses, drop `v1` acceptance.
+6. After the `v1e` max-age window elapses, drop `v1e` acceptance.
 
 > **Example — Supabase Vault.** pgsodium-backed, co-located with the Phase-1
 > Postgres. Detected via `SUPABASE_VAULT_URL` / `SUPABASE_SERVICE_ROLE_KEY`.
@@ -233,14 +233,14 @@ psql "$DATABASE_URL" -c "SELECT token_ref, scopes, has_refresh, access_expires_a
 
 - A fresh login mints a `v2` cookie; the cookie contains **no** token bytes (only
   a signed session id).
-- An existing `v1` session keeps working through the cutover (no forced re-consent).
+- An existing `v1e` session keeps working through the cutover (no forced re-consent).
 - Token refresh writes new bytes to the vault, never to Postgres or the cookie.
 - `oauth_connections` has `token_ref` populated and **no** token-byte column.
 
 ### Rollback
 
-- Unset the vault provider var(s) and stop minting `v2` → the signed-cookie `v1`
-  path resumes (it never stopped accepting `v1`). No data loss; the vault entries
+- Unset the vault provider var(s) and stop minting `v2` → the encrypted-cookie `v1e`
+  path resumes (it never stopped accepting `v1e`). No data loss; the vault entries
   can be deleted on a schedule.
 
 ### Security checks
@@ -633,7 +633,7 @@ curl -s "<prod-url>/api/system/capabilities" | jq '.readiness, .caveats'
 | Phase | One-line rollback |
 | :-: | --- |
 | 1 | Unset `DATABASE_URL`; app returns to stateless signed-cookie path. |
-| 2 | Stop minting `v2`, keep `v1` acceptance; unset vault vars. |
+| 2 | Stop minting `v2`, keep `v1e` acceptance; unset vault vars. |
 | 3 | Unset cache vars; `CacheStore` no-ops, reads hit Google. |
 | 4 | No-op the `JobQueue`; synchronous path is the only path. |
 | 5 | Scale worker to 0; unset `PORTAL_RUNTIME_WORKER_URL`. |

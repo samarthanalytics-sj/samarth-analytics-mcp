@@ -21,6 +21,7 @@
  */
 
 import assert from "node:assert";
+import crypto from "node:crypto";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -39,8 +40,18 @@ import {
 // The real Vercel route handlers (Vercel-safe at module load: node:* + types only).
 import auditHandler from "../../api/gtm/audit";
 import consentAuditHandler from "../../api/gtm/consent-audit";
+import sgtmHandler from "../../api/gtm/sgtm";
+import ga4AdminHandler from "../../api/ga4/admin";
 import accountsHandler from "../../api/gtm/accounts/index";
-import { encodeSessionCookie } from "../../server/gtm/session-cookie";
+import containersHandler from "../../api/gtm/accounts/[accountId]/containers/index";
+import workspacesHandler from "../../api/gtm/accounts/[accountId]/containers/[containerId]/workspaces";
+import oauthStatusHandler from "../../api/oauth/status";
+import oauthCallbackHandler from "../../api/oauth/callback";
+import {
+  decodeSessionCookie,
+  encodeOAuthStateCookie,
+  encodeSessionCookie,
+} from "../../server/gtm/session-cookie";
 // The Express dev-server auditor (node:crypto + types only).
 import { runAudit as runExpressAudit } from "../../server/gtm/audit";
 import { fetchWorkspaceContents, listAccounts } from "../../server/gtm/api";
@@ -338,8 +349,16 @@ async function callRoute(
   handler: (req: IncomingMessage, res: ServerResponse) => unknown,
   body: Record<string, unknown>,
   routes: Array<(url: URL) => StubResponse | undefined>,
-  opts: { authenticated?: boolean } = {},
-): Promise<{ status: number; json: any }> {
+  opts: {
+    authenticated?: boolean;
+    method?: string;
+    url?: string;
+    /** Extra/overriding session fields sealed into the default session cookie. */
+    session?: Record<string, unknown>;
+    /** Full Cookie header, built inside the route env; replaces the default. */
+    cookieHeader?: () => string;
+  } = {},
+): Promise<{ status: number; json: any; setCookies: string[] }> {
   const savedEnv: Record<string, string | undefined> = {};
   for (const [k, v] of Object.entries(ROUTE_ENV)) {
     savedEnv[k] = process.env[k];
@@ -360,19 +379,21 @@ async function callRoute(
     });
   }) as typeof fetch;
   try {
-    const cookie =
-      opts.authenticated === false
+    const cookie = opts.cookieHeader
+      ? opts.cookieHeader()
+      : opts.authenticated === false
         ? undefined
         : `samarth_portal_sid=${encodeURIComponent(
             encodeSessionCookie({
               accessToken: "test-access-token",
               expiresAt: Date.now() + 3_600_000,
               scopes: [],
+              ...opts.session,
             }),
           )}`;
     const req = {
-      method: "POST",
-      url: "/api/test",
+      method: opts.method ?? "POST",
+      url: opts.url ?? "/api/test",
       headers: cookie ? { cookie } : {},
       body: { accountId: "1", containerId: "2", workspaceId: "3", ...body },
     };
@@ -391,7 +412,19 @@ async function callRoute(
       },
     };
     await handler(req as unknown as IncomingMessage, res as unknown as ServerResponse);
-    return { status: res.statusCode, json: sent ? JSON.parse(sent) : null };
+    let json: any = null;
+    try {
+      json = sent ? JSON.parse(sent) : null;
+    } catch {
+      json = null; // HTML pages (OAuth callback errors) are not JSON
+    }
+    const rawSetCookie = headers["set-cookie"];
+    const setCookies = rawSetCookie === undefined
+      ? []
+      : Array.isArray(rawSetCookie)
+        ? rawSetCookie.map(String)
+        : [String(rawSetCookie)];
+    return { status: res.statusCode, json, setCookies };
   } finally {
     globalThis.fetch = realFetch;
     for (const [k, v] of Object.entries(savedEnv)) {
@@ -911,6 +944,171 @@ testAsync("R-paging: /api/gtm/accounts returns accounts from every page", async 
     out.json.accounts.map((a: { accountId: string }) => a.accountId),
     ["1", "2"],
   );
+});
+
+// ── Session cookie: every api/** copy agrees with server/gtm/session-cookie ──
+// Regression: the session cookie was signed-only base64 JSON with no issued-at.
+// Anyone holding a copy could read the Google tokens out of it, and every route
+// accepted it forever (each refresh re-minted it with a new Max-Age). Now the
+// tokens are sealed (AES-256-GCM) and every route enforces a 30-day absolute
+// lifetime from sign-in that a refresh does not extend.
+
+type RouteHandler = (req: IncomingMessage, res: ServerResponse) => unknown;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const GA4_SCOPE = "https://www.googleapis.com/auth/analytics.readonly";
+const STATUS_ROUTE = "/api/oauth/status";
+
+const SESSION_ROUTES: Array<{ name: string; handler: RouteHandler; method: string; url: string }> = [
+  { name: STATUS_ROUTE, handler: oauthStatusHandler, method: "GET", url: "/api/oauth/status" },
+  { name: "/api/gtm/accounts", handler: accountsHandler, method: "GET", url: "/api/gtm/accounts" },
+  {
+    name: "/api/gtm/accounts/:id/containers",
+    handler: containersHandler as RouteHandler,
+    method: "GET",
+    url: "/api/gtm/accounts/1/containers?accountId=1",
+  },
+  {
+    name: "/api/gtm/accounts/:id/containers/:id/workspaces",
+    handler: workspacesHandler as RouteHandler,
+    method: "GET",
+    url: "/api/gtm/accounts/1/containers/2/workspaces?accountId=1&containerId=2",
+  },
+  { name: "/api/gtm/audit", handler: auditHandler, method: "POST", url: "/api/gtm/audit" },
+  { name: "/api/gtm/consent-audit", handler: consentAuditHandler, method: "POST", url: "/api/gtm/consent-audit" },
+  { name: "/api/gtm/sgtm", handler: sgtmHandler, method: "POST", url: "/api/gtm/sgtm" },
+  { name: "/api/ga4/admin", handler: ga4AdminHandler, method: "POST", url: "/api/ga4/admin" },
+];
+
+function withRouteSecret<T>(fn: () => T): T {
+  const prev = process.env.PORTAL_SESSION_SECRET;
+  process.env.PORTAL_SESSION_SECRET = SECRET;
+  try {
+    return fn();
+  } finally {
+    if (prev === undefined) delete process.env.PORTAL_SESSION_SECRET;
+    else process.env.PORTAL_SESSION_SECRET = prev;
+  }
+}
+
+function sessionAccepted(route: { name: string }, r: { status: number; json: any }): boolean {
+  if (route.name === STATUS_ROUTE) return r.json?.connected === true;
+  return r.status !== 401 && r.json?.error !== "not_connected";
+}
+
+/** The pre-fix wire format: `v1.<base64url(json)>.<hmac>`, tokens readable. */
+function legacySignedCookie(tokens: Record<string, unknown>): string {
+  const payload = `v1.${Buffer.from(JSON.stringify(tokens)).toString("base64url")}`;
+  return `${payload}.${crypto.createHmac("sha256", SECRET).update(payload).digest("base64url")}`;
+}
+
+/** The session cookie a response set, decoded with the server module. */
+function sessionFromSetCookie(setCookies: string[]) {
+  const prefix = "samarth_portal_sid=";
+  const line = setCookies.find((c) => c.startsWith(prefix) && !c.startsWith(`${prefix};`));
+  if (!line) return null;
+  const raw = decodeURIComponent(line.slice(prefix.length).split(";")[0]);
+  return { raw, tokens: withRouteSecret(() => decodeSessionCookie(raw)) };
+}
+
+const tokenRefreshRoute = (url: URL): StubResponse | undefined =>
+  url.hostname === "oauth2.googleapis.com" && url.pathname === "/token"
+    ? { status: 200, body: { access_token: "refreshed-access-token", expires_in: 3600 } }
+    : undefined;
+
+for (const route of SESSION_ROUTES) {
+  const call = { method: route.method, url: route.url };
+
+  testAsync(`R-session ${route.name}: a fresh sealed session is accepted`, async () => {
+    const r = await callRoute(route.handler, {}, [], { ...call, session: { scopes: [GA4_SCOPE] } });
+    assert.ok(sessionAccepted(route, r), `${r.status} ${JSON.stringify(r.json).slice(0, 200)}`);
+  });
+
+  testAsync(`R-session ${route.name}: a sealed session past the 30-day lifetime is rejected`, async () => {
+    const r = await callRoute(route.handler, {}, [tokenRefreshRoute], {
+      ...call,
+      session: { scopes: [GA4_SCOPE], iat: Date.now() - 31 * DAY_MS, refreshToken: "1//old-refresh" },
+    });
+    assert.ok(!sessionAccepted(route, r), "a 31-day-old session must not be honoured");
+    if (route.name !== STATUS_ROUTE) assert.equal(r.status, 401);
+    assert.equal(sessionFromSetCookie(r.setCookies), null, "a stale session must not be re-minted");
+  });
+
+  testAsync(`R-session ${route.name}: a legacy signed-only v1 cookie is rejected`, async () => {
+    const legacy = legacySignedCookie({
+      accessToken: "test-access-token",
+      expiresAt: Date.now() + 3_600_000,
+      iat: Date.now(),
+      scopes: [GA4_SCOPE],
+    });
+    const r = await callRoute(route.handler, {}, [], {
+      ...call,
+      cookieHeader: () => `samarth_portal_sid=${encodeURIComponent(legacy)}`,
+    });
+    assert.ok(!sessionAccepted(route, r), "unencrypted v1 cookies are no longer accepted");
+  });
+
+  if (route.name === STATUS_ROUTE) continue; // status never refreshes
+
+  testAsync(`R-session ${route.name}: a token refresh keeps the original sign-in time`, async () => {
+    const iat = Date.now() - 10 * DAY_MS;
+    const r = await callRoute(route.handler, {}, [tokenRefreshRoute], {
+      ...call,
+      session: {
+        scopes: [GA4_SCOPE],
+        iat,
+        accessToken: "expired-access-token",
+        expiresAt: Date.now() - 1000,
+        refreshToken: "1//refresh-token",
+      },
+    });
+    assert.ok(sessionAccepted(route, r), `${r.status} ${JSON.stringify(r.json).slice(0, 200)}`);
+    const rotated = sessionFromSetCookie(r.setCookies);
+    assert.ok(rotated?.tokens, "the refreshed session cookie must decode");
+    assert.equal(rotated.tokens.accessToken, "refreshed-access-token");
+    assert.equal(rotated.tokens.refreshToken, "1//refresh-token");
+    assert.equal(rotated.tokens.iat, iat, "refresh must not extend the session");
+    assert.ok(!rotated.raw.includes("refreshed-access-token"), "rotated cookie leaks the token");
+  });
+}
+
+testAsync("R-session /api/oauth/callback mints a sealed session stamped with iat", async () => {
+  const { state, cookie: stateCookie } = withRouteSecret(() => encodeOAuthStateCookie());
+  const googleOAuth = (url: URL): StubResponse | undefined => {
+    if (url.hostname === "oauth2.googleapis.com" && url.pathname === "/token") {
+      return {
+        status: 200,
+        body: {
+          access_token: "fresh-access-token",
+          refresh_token: "1//fresh-refresh-token",
+          expires_in: 3600,
+          scope: `https://www.googleapis.com/auth/tagmanager.readonly ${GA4_SCOPE}`,
+        },
+      };
+    }
+    if (url.hostname === "openidconnect.googleapis.com") {
+      return { status: 200, body: { email: "user@example.com", name: "User", picture: "https://example.com/p.png" } };
+    }
+    return undefined;
+  };
+  const before = Date.now();
+  const r = await callRoute(oauthCallbackHandler, {}, [googleOAuth], {
+    method: "GET",
+    url: `/api/oauth/callback?code=test-code&state=${encodeURIComponent(state)}`,
+    cookieHeader: () => `samarth_portal_oauth_state=${encodeURIComponent(stateCookie)}`,
+  });
+  assert.equal(r.status, 302);
+  const minted = sessionFromSetCookie(r.setCookies);
+  assert.ok(minted?.tokens, "callback must set a session cookie the server module decodes");
+  assert.ok(minted.raw.startsWith("v1e."), minted.raw.slice(0, 8));
+  assert.equal(minted.tokens.refreshToken, "1//fresh-refresh-token");
+  assert.ok(
+    typeof minted.tokens.iat === "number" && minted.tokens.iat >= before && minted.tokens.iat <= Date.now(),
+    "iat must be the sign-in time",
+  );
+  const body = Buffer.from(minted.raw.split(".")[1], "base64url").toString("latin1");
+  for (const secret of ["1//fresh-refresh-token", "fresh-access-token", "user@example.com"]) {
+    assert.ok(!minted.raw.includes(secret) && !body.includes(secret), `session cookie exposes ${secret}`);
+  }
 });
 
 for (const [name, fn] of asyncTests) {

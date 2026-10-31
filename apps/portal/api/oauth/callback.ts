@@ -12,6 +12,10 @@ import crypto from "node:crypto";
  */
 
 const COOKIE_VERSION = "v1";
+// Session cookie `v1e`: AES-256-GCM sealed tokens + `iat` (sign-in time) for
+// the server-enforced 30-day absolute lifetime. Must stay byte-compatible with
+// server/gtm/session-cookie.ts and the other api/** copies.
+const SESSION_COOKIE_VERSION = "v1e";
 const SESSION_COOKIE = "samarth_portal_sid";
 const OAUTH_STATE_COOKIE = "samarth_portal_oauth_state";
 
@@ -19,6 +23,8 @@ interface SessionTokensShape {
   accessToken: string;
   refreshToken?: string;
   expiresAt: number;
+  /** Sign-in time (ms epoch); the server caps a session at 30 days from it. */
+  iat?: number;
   email?: string;
   userName?: string;
   picture?: string;
@@ -216,6 +222,7 @@ async function exchangeCodeForTokens(
     accessToken: data.access_token,
     refreshToken: data.refresh_token,
     expiresAt: Date.now() + (data.expires_in - 30) * 1000,
+    iat: Date.now(),
     email,
     userName,
     picture,
@@ -311,14 +318,45 @@ function verifyStateCookie(
   return safeEqual(state, presented);
 }
 
+function sessionCookieKey(secret: string): Buffer {
+  return Buffer.from(
+    crypto.hkdfSync(
+      "sha256",
+      secret,
+      "samarth-portal-session",
+      "samarth_portal_sid v1e aes-256-gcm",
+      32,
+    ),
+  );
+}
+
+function sealSessionPayload(payload: object, secret: string): string {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv(
+    "aes-256-gcm",
+    sessionCookieKey(secret),
+    iv,
+    { authTagLength: 16 },
+  );
+  cipher.setAAD(Buffer.from(SESSION_COOKIE_VERSION, "utf8"));
+  const body = Buffer.concat([
+    cipher.update(JSON.stringify(payload), "utf8"),
+    cipher.final(),
+  ]);
+  return `${SESSION_COOKIE_VERSION}.${base64UrlEncode(
+    Buffer.concat([iv, body, cipher.getAuthTag()]),
+  )}`;
+}
+
 function setSessionCookie(
   res: ServerResponse,
   tokens: SessionTokensShape,
   secret: string,
 ): void {
-  const payload = `${COOKIE_VERSION}.${base64UrlEncode(JSON.stringify(tokens))}`;
-  const sig = signPayload(payload, secret);
-  const value = `${payload}.${sig}`;
+  const value = sealSessionPayload(
+    { ...tokens, iat: typeof tokens.iat === "number" ? tokens.iat : Date.now() },
+    secret,
+  );
   const parts = [
     `${SESSION_COOKIE}=${encodeURIComponent(value)}`,
     "Path=/",
