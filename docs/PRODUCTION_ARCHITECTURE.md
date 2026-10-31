@@ -1,12 +1,12 @@
 # Production Architecture — Scalable Foundation
 
 A forward-looking blueprint for scaling the Samarth Analytics platform from the
-current single-tenant-feel, signed-cookie portal into a multi-tenant,
+current single-tenant-feel, encrypted-cookie portal into a multi-tenant,
 horizontally-scalable production system — **without changing today's
 user-facing behavior**.
 
 > This document is a *design + minimal foundation*. The current deployment stays
-> exactly as-is (Vercel serverless + signed-cookie sessions, no database). The
+> exactly as-is (Vercel serverless + encrypted-cookie sessions, no database). The
 > code shipped alongside this doc is **inert scaffolding**: a portable SQL
 > schema (`infra/database/0001_init.sql`), typed domain models
 > (`apps/portal/shared/production-types.ts`), a cache-key/TTL policy
@@ -90,7 +90,7 @@ These are non-negotiable and every component below is designed around them:
 | --- | --- | --- |
 | **Frontend** | React+Vite SPA on Vercel CDN | Unchanged. Add edge caching of static assets; client reads `/api/system/capabilities` to gate UI. |
 | **API gateway** | Vercel serverless `api/**` | Unchanged shape. Becomes the only tier that holds a backend service identity (resolves `token_ref`, talks to DB/cache). |
-| **Session/token** | Signed cookie holding tokens | Cookie holds only a session id; token bytes move to a secret-manager vault keyed by `oauth_connections.token_ref`. Backwards-compatible cutover (see §3). |
+| **Session/token** | Encrypted cookie (`v1e`) holding tokens; 30 days from sign-in, not extended by refresh | Cookie holds only a session id; token bytes move to a secret-manager vault keyed by `oauth_connections.token_ref`. Backwards-compatible cutover (see §3). |
 | **Durable state** | none | Postgres: orgs, users, audit history, captures, jobs, approvals. |
 | **Cache** | none | Redis/Upstash: discovery lists (SWR) + job/run status. |
 | **Async work** | runtime worker called ad-hoc | Postgres-backed job queue (`worker_jobs`, SKIP LOCKED) → swap to SQS/QStash later with no schema change. |
@@ -167,10 +167,11 @@ signed-only `v1`, whose tokens were readable; `v1` cookies are rejected.)
 
 **Migration path (no behavior change):** the cookie format is versioned (`v1e`
 today). Introduce `v2` = session-id cookie. On read, accept both: `v1e` keeps
-working until expiry; new logins mint `v2`. The signed-cookie code stays as the
-fallback when no DB/vault is configured — `/api/system/capabilities` reports
-`sessionMode: "signed_cookie"` until `DATABASE_URL` is present, then
-`"database"`.
+working until expiry; new logins mint `v2`. The encrypted-cookie (`v1e`) code
+stays as the fallback when no DB/vault is configured — `/api/system/capabilities`
+reports `sessionMode: "signed_cookie"` until `DATABASE_URL` is present, then
+`"database"`. (`signed_cookie` is a stable identifier from before the cookie was
+encrypted; it names the stateless cookie mode, not the cookie format.)
 
 ---
 
@@ -237,7 +238,7 @@ partial index `worker_jobs_queue_idx` keeps dequeue O(1)-ish on the hot path.
 ## 5. API design
 
 All under same-origin `/api`. **Existing routes keep their exact contracts.**
-New/extended routes are marked. Auth = signed session cookie unless noted.
+New/extended routes are marked. Auth = encrypted session cookie (`v1e`) unless noted.
 
 ### Auth / session / profile
 | Method | Path | Notes |

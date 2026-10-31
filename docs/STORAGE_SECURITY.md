@@ -7,8 +7,8 @@ and a future live deployment.
 
 > **Nothing here wires a live service.** No `pg`/`drizzle`/`supabase-js`
 > dependency is added; no secret manager is contacted; no env defaults change.
-> The portal continues to run exactly as today (Vercel serverless + signed
-> cookies, no database). Every module is pure or inert-by-default and is unit
+> The portal continues to run exactly as today (Vercel serverless + an
+> encrypted, 30-day session cookie, no database). Every module is pure or inert-by-default and is unit
 > tested without credentials.
 
 ## Guardrails preserved
@@ -70,7 +70,7 @@ manager (roadmap Phase 2).
   production deployment can therefore **never silently hold real tokens in
   process memory**. Tests and local dev opt in explicitly.
 - **`detectVaultProvider(env)`** — reads env **presence** only to report the
-  intended provider; returns `"none"` today (signed-cookie deployment).
+  intended provider; returns `"none"` today (encrypted-cookie deployment).
 
 ### Recommended providers
 

@@ -399,7 +399,8 @@ you prefer to drive deploys from the workspace root, run
   cookie-format change to `v1e`) signs everyone out once.
 - There is **no shared server-side state** — anything currently using the
   in-memory `Map` in `server/gtm/oauth.ts` (the session map and CSRF
-  state map) is replaced by signed cookies in the Vercel handlers.
+  state map) is replaced by cookies in the Vercel handlers: the encrypted
+  session cookie and a short-lived signed OAuth-state cookie.
   If you add features that require a shared cache, plug a Redis / Upstash
   store into `apps/portal/server/gtm/vercel-helpers.ts`.
 - The SQLite `data.db` used by `server/storage.ts` is **not** writable on

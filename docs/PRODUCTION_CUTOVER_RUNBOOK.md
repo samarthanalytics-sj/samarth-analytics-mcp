@@ -1,7 +1,7 @@
 # Production Cutover Runbook
 
 How to take the Samarth Analytics platform from its current **foundation-only**
-state (Vercel serverless + signed-cookie sessions, no live durable services) to a
+state (Vercel serverless + encrypted-cookie sessions, no live durable services) to a
 durable, multi-tenant production deployment — **one subsystem at a time, each
 independently reversible, with no user-facing behavior change until you choose to
 flip a flag.**
@@ -150,7 +150,7 @@ psql "$DATABASE_URL" -c "SELECT now();"
 ### Rollback
 
 - Unset `DATABASE_URL`/`PORTAL_DATABASE_URL` and redeploy → probe reports
-  `unconfigured`, app stays on the stateless signed-cookie path. The schema can
+  `unconfigured`, app stays on the stateless encrypted-cookie (`v1e`) path. The schema can
   stay applied (an empty, unused DB is harmless) or the project can be deleted.
 
 ### Security checks
@@ -170,7 +170,7 @@ psql "$DATABASE_URL" -c "SELECT now();"
 
 ## Phase 2 — Token vault integration + dual-read/dual-write
 
-**What it does.** Moves OAuth token *bytes* out of the signed cookie into an
+**What it does.** Moves OAuth token *bytes* out of the encrypted `v1e` cookie into an
 external secret manager, keyed by `oauth_connections.token_ref`. Introduces a `v2`
 session-id cookie while keeping the `v1e` token-bearing cookie working until expiry.
 
@@ -632,7 +632,7 @@ curl -s "<prod-url>/api/system/capabilities" | jq '.readiness, .caveats'
 
 | Phase | One-line rollback |
 | :-: | --- |
-| 1 | Unset `DATABASE_URL`; app returns to stateless signed-cookie path. |
+| 1 | Unset `DATABASE_URL`; app returns to stateless encrypted-cookie path. |
 | 2 | Stop minting `v2`, keep `v1e` acceptance; unset vault vars. |
 | 3 | Unset cache vars; `CacheStore` no-ops, reads hit Google. |
 | 4 | No-op the `JobQueue`; synchronous path is the only path. |
