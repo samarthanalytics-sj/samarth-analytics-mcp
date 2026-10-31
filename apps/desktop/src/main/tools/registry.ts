@@ -402,6 +402,12 @@ async function buildAwctTagOnTrigger(
   if (triggerInput.kind === 'timer' && !s(triggerInput.intervalMs ?? '').trim()) {
     throw new Error('a timer trigger requires intervalMs (the firing interval in milliseconds, e.g. "30000").');
   }
+  // Same for a custom_event with no eventName: buildTrigger would emit {{_event}} equals "", which
+  // matches no dataLayer push, so the conversion tag would be created and never fire. Refused before
+  // any GTM write (built-ins, variables, trigger, tag), like create_gtm_tracking_tag does.
+  if (triggerInput.kind === 'custom_event' && !s(triggerInput.eventName ?? '').trim()) {
+    throw new Error('a custom_event trigger requires eventName (the dataLayer event it matches, e.g. "generate_lead").');
+  }
 
   // Enable exactly the built-in variables the trigger's conditions reference (e.g. {{Click Text}}).
   const builtIns = triggerBuiltInVars(triggerInput);

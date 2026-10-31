@@ -3545,6 +3545,27 @@ async function main(): Promise<void> {
     assert.ok(!fa.calls.some((c) => c.startsWith('createConversionAction')), 'the dry run failed, so no live create happened');
   });
 
+  // Regression: the batch tag builder guarded a timer with no interval but not a custom_event with no
+  // eventName, so it created {{_event}} equals "" (matches no dataLayer push) and a conversion tag on
+  // it that would never fire, while the run reported the tag as built.
+  await test('ONE-CLICK: a custom_event trigger with no eventName builds no trigger or tag (reported, nothing written to GTM)', async () => {
+    const fa = fakeAds();
+    const fd = fakeData();
+    const approve: ConfirmFn = async (p) => p.details;
+    const reg = buildToolRegistry(fd.data, approve, 'gtm', undefined, undefined, undefined, undefined, fa.ads);
+    const out = JSON.parse(await reg.execute('create_google_ads_conversion_actions_for_tags', {
+      customerId: '9876543210',
+      accountId: '1', containerId: '2', workspaceId: '3',
+      entries: [{ tagName: 'Lead Form', trigger: { name: 'CE - lead', kind: 'custom_event', eventName: '  ' } }],
+    }));
+    assert.equal(out.createdCount, 1, 'the conversion action itself is unaffected');
+    assert.equal(out.tagsCreatedCount, 0, 'no tag was built on a trigger that can never fire');
+    assert.equal(out.tagsFailed?.length, 1, JSON.stringify(out));
+    assert.match(out.tagsFailed[0].error, /custom_event trigger requires eventName/);
+    assert.equal(out.conversionLinker, undefined, 'no linker without any tag');
+    assert.ok(!fd.calls.some((c) => /^(createTrigger|createTag|createVar|enableVars)/.test(c)), `nothing may be written to GTM: ${fd.calls.join(' | ')}`);
+  });
+
   await test('a GTM create still applies directly: the new gate did not leak onto draft writes', async () => {
     let cards = 0;
     const count = async (p: { details: Record<string, unknown> }) => { cards += 1; return p.details; };
