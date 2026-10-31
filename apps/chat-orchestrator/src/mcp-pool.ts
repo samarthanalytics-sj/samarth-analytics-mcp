@@ -139,21 +139,27 @@ export class McpPool {
     return entry;
   }
 
-  /** Evicts the least recently used idle child when the pool is full. */
+  /**
+   * Evicts least recently used idle children until there is room for one more.
+   *
+   * A retired child is still a live process (see stats()) and holds its slot until its last turn
+   * releases it. Counting only `entries` let a token change or mid-turn refresh at a full pool start
+   * a replacement beside it, past MCP_POOL_MAX_SESSIONS.
+   */
   private async enforceCapacity(): Promise<void> {
     const max = this.cfg.pool.maxSessions;
-    if (this.entries.size < max) return;
+    while (this.entries.size + this.retired.size >= max) {
+      const idle = [...this.entries.entries()]
+        .filter(([, e]) => e.inUse === 0)
+        .sort((a, b) => a[1].lastUsedAt - b[1].lastUsedAt);
 
-    const idle = [...this.entries.entries()]
-      .filter(([, e]) => e.inUse === 0)
-      .sort((a, b) => a[1].lastUsedAt - b[1].lastUsedAt);
-
-    if (idle.length === 0) {
-      throw new Error(
-        `All ${max} MCP sessions are busy. Raise MCP_POOL_MAX_SESSIONS or add capacity.`,
-      );
+      if (idle.length === 0) {
+        throw new Error(
+          `All ${max} MCP sessions are busy. Raise MCP_POOL_MAX_SESSIONS or add capacity.`,
+        );
+      }
+      await this.evict(idle[0][0], 'pool at capacity');
     }
-    await this.evict(idle[0][0], 'pool at capacity');
   }
 
   private async sweep(): Promise<void> {

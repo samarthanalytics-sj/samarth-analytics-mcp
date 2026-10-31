@@ -373,7 +373,7 @@ async function withStubbedChildren(fn: (closed: McpConnection[]) => Promise<void
   }
 }
 
-function poolWithTokens(): { pool: McpPool; setToken(t: string): void } {
+function poolWithTokens(maxSessions = 5): { pool: McpPool; setToken(t: string): void } {
   let current = 'ya29.first';
   const tokens: GoogleTokenProvider = {
     getIdentity: async () => ({ accessToken: current }),
@@ -382,7 +382,7 @@ function poolWithTokens(): { pool: McpPool; setToken(t: string): void } {
       return { accessToken: current };
     },
   };
-  const cfg = { pool: { maxSessions: 5, idleTtlMs: 60_000 }, mcp: { env: {} } } as unknown as OrchestratorConfig;
+  const cfg = { pool: { maxSessions, idleTtlMs: 60_000 }, mcp: { env: {} } } as unknown as OrchestratorConfig;
   return { pool: new McpPool(cfg, tokens), setToken: (t) => (current = t) };
 }
 
@@ -466,6 +466,37 @@ await testAsync('a dead child under a running turn is closed at once, not retire
     pool.release('u', running);
     assert.deepEqual(pool.stats(), { sessions: 1, busy: 1 });
     pool.release('u', next);
+  });
+});
+
+console.log('pool: capacity counts replaced children still finishing a turn');
+
+await testAsync('a refresh at a full, busy pool is refused rather than going past the cap', async () => {
+  await withStubbedChildren(async () => {
+    const { pool } = poolWithTokens(2);
+    const a = await pool.acquire('a', 'jwt');
+    const b = await pool.acquire('b', 'jwt');
+    // A's old child is retired, still alive under its turn, so a replacement would be a third.
+    await assert.rejects(() => pool.refreshIdentity('a', 'jwt'), /All 2 MCP sessions are busy/);
+    assert.ok(pool.stats().sessions <= 2, `${pool.stats().sessions} live children against a cap of 2`);
+    pool.release('a', a);
+    pool.release('b', b);
+  });
+});
+
+await testAsync('room for a replacement comes from an idle child, not from past the cap', async () => {
+  await withStubbedChildren(async (closed) => {
+    const { pool } = poolWithTokens(2);
+    const a = await pool.acquire('a', 'jwt');
+    const b = await pool.acquire('b', 'jwt');
+    pool.release('b', b);
+    const refreshed = await pool.refreshIdentity('a', 'jwt');
+    assert.ok(closed.includes(b), 'the idle child was kept and the cap exceeded instead');
+    assert.equal(closed.includes(a), false, 'the busy child was closed under its turn');
+    assert.deepEqual(pool.stats(), { sessions: 2, busy: 2 });
+    pool.release('a', a);
+    pool.release('a', refreshed);
+    assert.deepEqual(pool.stats(), { sessions: 1, busy: 0 });
   });
 });
 
