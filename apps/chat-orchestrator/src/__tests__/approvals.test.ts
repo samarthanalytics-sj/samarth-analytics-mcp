@@ -243,6 +243,55 @@ await test('a response that simply finished is not mistaken for a client leaving
   assert.equal(await serveOnce(false), 0);
 });
 
+/**
+ * The chat route awaits a session and the attachments before it can subscribe. The client leaves
+ * during that await, so its 'close' has already been emitted (once, never again) by the time
+ * onClientGone is called. Reports how many times it fired.
+ */
+async function serveAfterClientLeft(): Promise<number> {
+  const app = express();
+  app.use(express.json());
+  let gone = 0;
+  let started!: () => void;
+  const handlerStarted = new Promise<void>((r) => (started = r));
+  let finished!: () => void;
+  const handled = new Promise<void>((r) => (finished = r));
+  app.post('/chat', async (_req, res) => {
+    started();
+    // Stands in for pool.acquire / extractAll: the client is destroyed while this is pending.
+    await new Promise((r) => setTimeout(r, 150));
+    onClientGone(res, () => gone++);
+    // Long enough for a microtask or a late 'close' to land, and to catch a second firing.
+    await new Promise((r) => setTimeout(r, 50));
+    finished();
+  });
+  const server = app.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const { port } = server.address() as AddressInfo;
+  const client = http.request({
+    host: '127.0.0.1',
+    port,
+    method: 'POST',
+    path: '/chat',
+    headers: { 'content-type': 'application/json' },
+  });
+  client.on('error', () => {});
+  client.end(JSON.stringify({ messages: [] }));
+  await handlerStarted;
+  client.destroy();
+  await handled;
+  server.closeAllConnections();
+  server.close();
+  return gone;
+}
+
+await test('a client that left before the handler subscribed is still noticed, exactly once', async () => {
+  // The chat route used to subscribe only after pool.acquire, extractAll and beginConversation. A
+  // Stop pressed during those seconds was never seen, so the turn ran to the end and applied its
+  // writes for a client that had already gone.
+  assert.equal(await serveAfterClientLeft(), 1);
+});
+
 console.log('typed confirmation for deletes');
 
 await test('a delete cannot be approved without typing the word', async () => {

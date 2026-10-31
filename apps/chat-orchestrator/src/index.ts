@@ -1830,6 +1830,14 @@ async function main(): Promise<void> {
       return sendAuthError(res, err);
     }
 
+    // Watched from here, before the awaits below, not from where the stream opens. Acquiring a
+    // session (a cold child takes seconds) and reading attachments both come first, and a Stop
+    // pressed during them used to be missed entirely: the turn then ran to the end for nobody,
+    // spending the model budget and applying its writes. Aborting this turn's signal stops its model
+    // call and declines only the approval it parked (the signal is passed to the broker in loop.ts).
+    const controller = new AbortController();
+    onClientGone(res, () => controller.abort());
+
     if (paused) {
       res.setHeader('Retry-After', '120');
       return res.status(503).json({
@@ -1949,6 +1957,19 @@ async function main(): Promise<void> {
       });
     }
 
+    /**
+     * True when the client left during one of the awaits before the stream opened. The session
+     * acquired above is released here because the turn's finally, its only other release, is never
+     * reached; and nothing is begun, billed or run for a reader who is gone.
+     */
+    const leftBeforeStart = (): boolean => {
+      if (!controller.signal.aborted) return false;
+      pool.release(user.id, userMcp);
+      console.log(`[chat] client left before the turn started for user ${userRef(user.id)}; nothing was run`);
+      return true;
+    };
+    if (leftBeforeStart()) return;
+
     // Opened before the stream so a failure here is a plain log line rather than a mid-stream error.
     // Returns null when auditing is off or unreachable, and the turn then records nothing.
     // Extracted before the stream opens, so a refusal ("that .doc is the old format") is a clean
@@ -1975,6 +1996,7 @@ async function main(): Promise<void> {
         console.warn(`[chat] ${rejected.length} attachment(s) rejected:`, rejected.map((r) => r.name).join(', '));
       }
     }
+    if (leftBeforeStart()) return;
 
     const lastUserMessage = body.messages[body.messages.length - 1]?.content ?? '';
     const conversationId = await audit.beginConversation(
@@ -1986,15 +2008,11 @@ async function main(): Promise<void> {
     audit.recordUserMessage(conversationId, user.id, lastUserMessage);
 
     const stream = new SseStream(res);
-    const controller = new AbortController();
     // Not req.on('close'): that had already fired by here, so a client that left kept its turn
     // running and spending tokens. And not per user: finishing one turn must not withdraw the cards
-    // of the same user's other conversation. Aborting this turn's signal stops its model call and
-    // declines only the approval it parked (the signal is passed to the broker in loop.ts).
-    onClientGone(res, () => {
-      controller.abort();
-      stream.close();
-    });
+    // of the same user's other conversation. The abort itself is wired at the top of the handler;
+    // this only stops writing to a stream nobody is reading.
+    onClientGone(res, () => stream.close());
 
     if (conversationId) stream.send({ type: 'conversation', conversationId });
 
