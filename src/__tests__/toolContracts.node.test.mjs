@@ -43,19 +43,23 @@ const client = { accounts: { containers: { workspaces: { tags: {}, triggers: {} 
 registerTagTools(server, () => client);
 registerTriggerTools(server, () => client);
 
-const { zodToJsonSchema } = await import('zod-to-json-schema');
+const { toJsonSchemaCompat } = await import(
+  pathToFileURL(path.resolve(__dirname, '../../node_modules/@modelcontextprotocol/sdk/dist/esm/server/zod-json-schema-compat.js')).href
+);
 
 /**
  * One field as the MODEL receives it.
  *
  * Converted to JSON Schema rather than read off the zod object, because that conversion is what
  * the MCP server actually sends. A description nested inside an array item is invisible to
- * `shape[field].description` but is exactly the text that has to reach the caller.
+ * `shape[field].description` but is exactly the text that has to reach the caller. The converter
+ * and options are the ones the SDK's tools/list handler uses.
  */
 function fieldJson(toolName, field) {
-  const shape = server._registeredTools[toolName]?.inputSchema?.shape ?? {};
-  assert.ok(field in shape, `${toolName} has no "${field}" field`);
-  return JSON.stringify(zodToJsonSchema(shape[field]));
+  const inputSchema = server._registeredTools[toolName]?.inputSchema;
+  const props = inputSchema ? toJsonSchemaCompat(inputSchema, { strictUnions: true, pipeStrategy: 'input' }).properties ?? {} : {};
+  assert.ok(field in props, `${toolName} has no "${field}" field`);
+  return JSON.stringify(props[field]);
 }
 
 /** The top-level description text for one field. */
@@ -329,6 +333,19 @@ await test('every path-id field of every registered tool refuses a smuggled valu
   }
   assert.ok(checked > 300, `only ${checked} id fields were checked`);
   assert.deepStrictEqual(open, [], `id fields that still let a path through:\n  ${open.join('\n  ')}`);
+});
+
+// tools/list converts every input schema to JSON Schema in one response, and zod 4's converter
+// throws on a type it cannot represent. One such field on one tool would fail the listing for
+// every client, so the whole surface goes through the real request here.
+await test('tools/list returns a JSON Schema for every registered tool', async () => {
+  const { tools } = await mcpClient.listTools();
+  const registered = Object.keys(allTools._registeredTools).length;
+  assert.strictEqual(tools.length, registered);
+  const bad = tools.filter((t) => t.inputSchema?.type !== 'object').map((t) => t.name);
+  assert.deepStrictEqual(bad, [], `tools without an object input schema: ${bad.join(', ')}`);
+  const triggers = tools.find((t) => t.name === 'triggers_create');
+  assert.ok(/arg0/.test(JSON.stringify(triggers.inputSchema.properties.filter)), 'nested descriptions must survive the listing');
 });
 
 await mcpClient.close();

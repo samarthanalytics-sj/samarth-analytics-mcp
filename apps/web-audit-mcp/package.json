@@ -23,7 +23,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
     "express": "^4.18.2",
-    "zod": "^3.23.8"
+    "zod": "^4.6.7"
   },
   "optionalDependencies": {
     "playwright": "^1.48.0"
