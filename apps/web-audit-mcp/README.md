@@ -152,7 +152,9 @@ misconfigured browser host is visible before the first audit. **`WEB_AUDIT_HTTP_
 is required** — without it the HTTP server refuses to start. For local
 development only, `WEB_AUDIT_HTTP_ALLOW_UNAUTHENTICATED=true` starts it without
 auth, bound to `127.0.0.1` (so it is unreachable from other machines, and from
-outside a container).
+outside a container). In that mode every request must also carry a loopback
+`Host` (and, when present, a loopback `Origin`), so a DNS-rebinding web page in
+your browser cannot drive `/mcp`; anything else gets a 403.
 
 ## Environment variables
 

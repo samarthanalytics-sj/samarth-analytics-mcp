@@ -9,8 +9,9 @@
  * local-development opt-in, and it binds 127.0.0.1 only.
  *
  * The pure helpers (isAuthorized, buildHealthBody, resolveHttpBinding,
- * bindingBanner, decidePostRoute, resolveSessionTtlMs) are exported and
- * unit-tested; the express glue is thin and follows the proven root pattern.
+ * bindingBanner, decidePostRoute, resolveSessionTtlMs, rebindingRejection) are
+ * exported and unit-tested; the express glue is thin and follows the proven
+ * root pattern.
  */
 
 import { timingSafeEqual } from 'node:crypto';
@@ -68,6 +69,47 @@ export function bindingBanner(address: string, port: number, authRequired: boole
   const shown = address === '::' || address === '0.0.0.0' ? `all interfaces (${address})` : address;
   const auth = authRequired ? 'bearer token' : 'NONE (WEB_AUDIT_HTTP_ALLOW_UNAUTHENTICATED=true)';
   return `HTTP server listening on ${shown}, port ${port} - authentication: ${auth}`;
+}
+
+/** Loopback names as the WHATWG URL parser reports a hostname (no port; IPv6 in brackets). */
+const LOOPBACK_HOSTNAMES = ['localhost', '127.0.0.1', '[::1]'];
+
+/**
+ * DNS-rebinding check for the unauthenticated opt-in, mirroring the root server
+ * (src/utils/httpBinding.ts; this package cannot import across the app boundary).
+ *
+ * Binding 127.0.0.1 stops other machines from connecting, but not a web page in the operator's own
+ * browser: a hostile site can re-point its own DNS name at 127.0.0.1, after which the browser treats
+ * requests to that name as same-origin and can drive /mcp (crawls, consent clicks, and real form
+ * submits when verify is enabled) and read the results. So the Host header must name loopback, and
+ * a browser Origin, when present, must be a loopback http(s) origin too. Returns the rejection
+ * reason, or undefined when the request may proceed. Non-browser MCP clients send no Origin.
+ */
+export function rebindingRejection(
+  hostHeader: string | undefined,
+  originHeader: string | undefined,
+): string | undefined {
+  if (!hostHeader) return 'Missing Host header';
+  let hostname: string;
+  try {
+    hostname = new URL(`http://${hostHeader}`).hostname;
+  } catch {
+    return `Invalid Host header: ${hostHeader}`;
+  }
+  if (!LOOPBACK_HOSTNAMES.includes(hostname)) return `Invalid Host: ${hostname}`;
+  if (originHeader !== undefined) {
+    let origin: URL;
+    try {
+      origin = new URL(originHeader);
+    } catch {
+      return `Invalid Origin: ${originHeader}`;
+    }
+    const webScheme = origin.protocol === 'http:' || origin.protocol === 'https:';
+    if (!webScheme || !LOOPBACK_HOSTNAMES.includes(origin.hostname)) {
+      return `Invalid Origin: ${originHeader}`;
+    }
+  }
+  return undefined;
 }
 
 /** Constant-time bearer-token check. Empty token = auth disabled, which startHttpServer only
@@ -195,6 +237,20 @@ export async function startHttpServer(createServer: () => McpServer): Promise<Ht
   const { default: express } = await import('express');
 
   const app = express();
+  // DNS-rebinding guard for the unauthenticated opt-in, which always binds loopback (see
+  // rebindingRejection). Registered before the body parser and every route, so POST, GET and
+  // DELETE /mcp and /health are all covered. A token-authenticated server is left alone: a page
+  // cannot obtain the bearer token, and a hosted proxy's Host header cannot be predicted.
+  if (!binding.authRequired) {
+    app.use((req, res, next) => {
+      const reason = rebindingRejection(req.headers.host, req.headers.origin);
+      if (reason) {
+        res.status(403).json({ jsonrpc: '2.0', error: { code: -32000, message: reason }, id: null });
+        return;
+      }
+      next();
+    });
+  }
   const bodyLimit = '8mb'; // GTM container exports can be large. Kept in step with the root server.
   app.use(express.json({ limit: bodyLimit }));
   // Body-parser failures (oversized or malformed JSON) never reach a route, so convert them here

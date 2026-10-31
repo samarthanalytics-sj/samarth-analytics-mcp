@@ -73,7 +73,9 @@ import {
   startHttpServer,
   resolveSessionTtlMs,
   DEFAULT_SESSION_TTL_MS,
+  rebindingRejection,
 } from '../http.js';
+import { request as httpRequest } from 'node:http';
 import { createWebAuditMcpServer } from '../server.js';
 import { loadConfig } from '../utils/config.js';
 import { runConsentRuntimeRules } from '../../../portal/shared/consent-audit.js';
@@ -1383,6 +1385,110 @@ await withHttpEnv({ WEB_AUDIT_HTTP_ALLOW_UNAUTHENTICATED: 'true', WEB_AUDIT_HTTP
     check('http live: unauthenticated opt-in binds 127.0.0.1', h.host === '127.0.0.1', h.host);
     const body = (await (await fetch(`http://127.0.0.1:${h.port}/health`)).json()) as { authRequired: boolean };
     check('http live: health reports authRequired=false under the opt-in', body.authRequired === false);
+  } finally {
+    await h.close();
+  }
+});
+
+// ── HTTP transport: DNS-rebinding guard ─────────────────────────────────────
+// REGRESSION: under WEB_AUDIT_HTTP_ALLOW_UNAUTHENTICATED=true (loopback bind, no token) nothing
+// checked Host or Origin, so a web page in the operator's browser that re-pointed its own DNS name
+// at 127.0.0.1 could POST same-origin to /mcp, initialize, and drive crawls / consent clicks (and
+// real form submits when verify is enabled), reading every result. The root server fixed this in
+// its own transport; this mirrors it.
+
+check('http rebind: loopback Host with a port allowed', rebindingRejection('127.0.0.1:8080', undefined) === undefined);
+check('http rebind: localhost without a port allowed', rebindingRejection('localhost', undefined) === undefined);
+check('http rebind: [::1] allowed', rebindingRejection('[::1]:8080', undefined) === undefined);
+check('http rebind: loopback Origin allowed', rebindingRejection('localhost:8080', 'http://localhost:6274') === undefined);
+check('http rebind: rebound Host rejected', typeof rebindingRejection('evil.example:8080', undefined) === 'string');
+check('http rebind: loopback-prefixed Host rejected', typeof rebindingRejection('127.0.0.1.evil.example', undefined) === 'string');
+check('http rebind: foreign Origin rejected', typeof rebindingRejection('127.0.0.1:8080', 'http://evil.example:8080') === 'string');
+check('http rebind: non-http Origin rejected', typeof rebindingRejection('127.0.0.1:8080', 'file://localhost') === 'string');
+check('http rebind: opaque "null" Origin rejected', typeof rebindingRejection('127.0.0.1:8080', 'null') === 'string');
+check('http rebind: missing Host rejected', typeof rebindingRejection(undefined, undefined) === 'string');
+
+/** Raw loopback request so the Host header can be set to anything (fetch derives it from the URL). */
+function rawRequest(
+  port: number,
+  method: string,
+  path: string,
+  headers: Record<string, string>,
+  body?: string,
+): Promise<{ status: number; headers: Record<string, string | string[] | undefined>; body: string }> {
+  return new Promise((resolve, reject) => {
+    const req = httpRequest({ host: '127.0.0.1', port, method, path, headers }, (res) => {
+      let data = '';
+      res.setEncoding('utf8');
+      res.on('data', (c: string) => { data += c; });
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body: data }));
+    });
+    req.on('error', reject);
+    req.end(body);
+  });
+}
+const rpcCode = (text: string): number | undefined => {
+  try {
+    return (JSON.parse(text) as { error?: { code?: number } }).error?.code;
+  } catch {
+    return undefined;
+  }
+};
+const OPEN_MCP_HEADERS: Record<string, string> = {
+  'content-type': 'application/json',
+  accept: 'application/json, text/event-stream',
+};
+
+await withHttpEnv({ WEB_AUDIT_HTTP_ALLOW_UNAUTHENTICATED: 'true', WEB_AUDIT_HTTP_PORT: '0' }, async () => {
+  const h = await startHttpServer(createWebAuditMcpServer);
+  const loopHost = `127.0.0.1:${h.port}`;
+  try {
+    const rebound = await rawRequest(h.port, 'POST', '/mcp', { ...OPEN_MCP_HEADERS, host: `evil.example:${h.port}`, origin: `http://evil.example:${h.port}` }, initBody(1));
+    check(
+      'http rebind live: rebound Host → 403 JSON-RPC -32000, no session minted (was: 200 + session)',
+      rebound.status === 403 && rpcCode(rebound.body) === -32000 && rebound.headers['mcp-session-id'] === undefined,
+      `${rebound.status} ${rebound.body.slice(0, 200)}`,
+    );
+    const foreignOrigin = await rawRequest(h.port, 'POST', '/mcp', { ...OPEN_MCP_HEADERS, host: loopHost, origin: 'http://evil.example' }, initBody(1));
+    check('http rebind live: loopback Host with a foreign Origin → 403 -32000', foreignOrigin.status === 403 && rpcCode(foreignOrigin.body) === -32000, String(foreignOrigin.status));
+    const reboundHealth = await rawRequest(h.port, 'GET', '/health', { host: `evil.example:${h.port}` });
+    check('http rebind live: /health is guarded too', reboundHealth.status === 403, String(reboundHealth.status));
+
+    const init = await rawRequest(h.port, 'POST', '/mcp', { ...OPEN_MCP_HEADERS, host: loopHost }, initBody(1));
+    const sid = String(init.headers['mcp-session-id'] ?? '');
+    check('http rebind live: plain loopback initialize still → 200 + session', init.status === 200 && sid !== '', `${init.status} ${init.body.slice(0, 200)}`);
+    const list = await rawRequest(
+      h.port,
+      'POST',
+      '/mcp',
+      { ...OPEN_MCP_HEADERS, host: loopHost, origin: `http://localhost:${h.port}`, 'mcp-session-id': sid, 'mcp-protocol-version': '2025-06-18' },
+      JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' }),
+    );
+    check('http rebind live: loopback tools/list (loopback Origin) still → 200', list.status === 200 && list.body.includes('site_crawl'), `${list.status}`);
+    const reboundList = await rawRequest(
+      h.port,
+      'POST',
+      '/mcp',
+      { ...OPEN_MCP_HEADERS, host: `evil.example:${h.port}`, 'mcp-session-id': sid, 'mcp-protocol-version': '2025-06-18' },
+      JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/list' }),
+    );
+    check('http rebind live: a rebound Host cannot ride an existing session', reboundList.status === 403 && rpcCode(reboundList.body) === -32000, String(reboundList.status));
+  } finally {
+    await h.close();
+  }
+});
+
+await withHttpEnv({ WEB_AUDIT_HTTP_AUTH_TOKEN: TEST_HTTP_TOKEN, WEB_AUDIT_HTTP_PORT: '0' }, async () => {
+  const h = await startHttpServer(createWebAuditMcpServer);
+  try {
+    const proxied = await rawRequest(h.port, 'POST', '/mcp', { ...MCP_HEADERS, host: 'audit.example.com', origin: 'https://app.example.com' }, initBody(1));
+    check(
+      'http rebind live: token-authenticated server ignores Host/Origin (hosted proxies unchanged)',
+      proxied.status === 200 && typeof proxied.headers['mcp-session-id'] === 'string',
+      `${proxied.status} ${proxied.body.slice(0, 200)}`,
+    );
+    const noToken = await rawRequest(h.port, 'POST', '/mcp', { ...OPEN_MCP_HEADERS, host: `127.0.0.1:${h.port}` }, initBody(1));
+    check('http rebind live: token server still demands the bearer token', noToken.status === 401, String(noToken.status));
   } finally {
     await h.close();
   }
