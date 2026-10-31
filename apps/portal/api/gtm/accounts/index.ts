@@ -32,6 +32,8 @@ interface SessionTokensShape {
   /** Sign-in time (ms epoch); bounds the session to SESSION_MAX_AGE_MS. */
   iat?: number;
   email?: string;
+  userName?: string;
+  picture?: string;
   scopes?: string[];
 }
 
@@ -288,6 +290,8 @@ function decodeSessionCookie(
     expiresAt: typeof parsed.expiresAt === "number" ? parsed.expiresAt : 0,
     iat,
     email: typeof parsed.email === "string" ? parsed.email : undefined,
+    userName: typeof parsed.userName === "string" ? parsed.userName : undefined,
+    picture: typeof parsed.picture === "string" ? parsed.picture : undefined,
     scopes: Array.isArray(parsed.scopes) ? parsed.scopes : [],
   };
 }

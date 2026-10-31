@@ -1164,6 +1164,9 @@ for (const route of SESSION_ROUTES) {
         accessToken: "expired-access-token",
         expiresAt: Date.now() - 1000,
         refreshToken: "1//refresh-token",
+        email: "user@example.com",
+        userName: "Example User",
+        picture: "https://example.com/p.png",
       },
     });
     assert.ok(sessionAccepted(route, r), `${r.status} ${JSON.stringify(r.json).slice(0, 200)}`);
@@ -1172,6 +1175,11 @@ for (const route of SESSION_ROUTES) {
     assert.equal(rotated.tokens.accessToken, "refreshed-access-token");
     assert.equal(rotated.tokens.refreshToken, "1//refresh-token");
     assert.equal(rotated.tokens.iat, iat, "refresh must not extend the session");
+    // Regression: the route decoders dropped userName/picture, so the first
+    // refresh outside /api/oauth/status erased the signed-in user's profile.
+    assert.equal(rotated.tokens.email, "user@example.com");
+    assert.equal(rotated.tokens.userName, "Example User", "refresh dropped userName");
+    assert.equal(rotated.tokens.picture, "https://example.com/p.png", "refresh dropped picture");
     assert.ok(!rotated.raw.includes("refreshed-access-token"), "rotated cookie leaks the token");
   });
 }
