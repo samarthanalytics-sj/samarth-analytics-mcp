@@ -3,7 +3,7 @@
  *  Run: tsx src/renderer/src/__tests__/audit-export.test.ts */
 import assert from 'node:assert/strict';
 import { auditToCsv, auditToMarkdown, sortFindings } from '../audit-export';
-import { gtmScopeKey, chatThreadToShow, canRunAudit } from '../state-guards';
+import { gtmScopeKey, LatestRequest, chatThreadToShow, canRunAudit } from '../state-guards';
 import type { AuditReportView, AuditFindingView, GtmContext } from '../../../shared/ipc';
 
 let passed = 0, failed = 0;
@@ -83,6 +83,26 @@ test('gtmScopeKey: a container or workspace switch is a new scope; a rename is n
   assert.notEqual(key(a), key({ ...a, workspaceId: '5' }), 'other workspace of the same container');
   assert.equal(key(a), key({ ...a, containerName: 'A (renamed)', workspaceName: 'Renamed' }), 'names are labels, not scope');
   assert.equal(gtmScopeKey(undefined), gtmScopeKey({}), 'no context is one stable scope');
+});
+
+test('gtmScopeKey: same small workspace id in two server containers is two scopes (coverage / server audit)', () => {
+  // GTM workspace + tag ids are small per-container integers, so the container id must be part of it.
+  assert.notEqual(
+    gtmScopeKey({ accountId: '1', containerId: 'A', workspaceId: '4' }),
+    gtmScopeKey({ accountId: '1', containerId: 'B', workspaceId: '4' })
+  );
+  assert.notEqual(gtmScopeKey({ accountId: '1', containerId: 'A', workspaceId: '4' }), gtmScopeKey({ accountId: '2', containerId: 'A', workspaceId: '4' }));
+});
+
+test('LatestRequest: a slower response for an earlier pick is dropped, the newest one lands', () => {
+  const gate = new LatestRequest();
+  const forX = gate.begin(); // user picks container X - its workspace list starts loading
+  const forY = gate.begin(); // ...then container Y before X's list arrives
+  assert.equal(forX(), false, "X's list must not overwrite Y's (nor clear Y's loading flag)");
+  assert.equal(forY(), true, "Y's list is the one that lands");
+  const forZ = gate.begin();
+  assert.equal(forY(), false, 'superseded once another pick starts loading');
+  assert.equal(forZ(), true);
 });
 
 test('chatThreadToShow: the view stays pinned to the asking thread while a reply streams', () => {

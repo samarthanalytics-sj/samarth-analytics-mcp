@@ -91,7 +91,7 @@ import { AdsMonitoringPanel } from './AdsMonitoringPanel';
 import { TagTypeIcon } from './TagTypeIcon';
 import { gtmTypeLabel } from '../../shared/tag-brand';
 import { auditToCsv, auditToMarkdown } from './audit-export';
-import { gtmScopeKey, chatThreadToShow, canRunAudit } from './state-guards';
+import { gtmScopeKey, LatestRequest, chatThreadToShow, canRunAudit } from './state-guards';
 
 const DEFAULT_MODEL: Record<LlmProvider, string> = {
   anthropic: 'claude-opus-4-8',
@@ -2174,6 +2174,10 @@ function GtmContextBar({
   const [workspaces, setWorkspaces] = useState<GtmWorkspaceView[]>([]);
   const [sel, setSel] = useState<GtmContext>(ctx ?? {});
   const [loading, setLoading] = useState('');
+  // Latest-request gates: a list still loading for an earlier account / container pick is dropped when
+  // it lands, so its ids can never be picked (and saved) under the parent selected now.
+  const containersReq = useRef(new LatestRequest());
+  const workspacesReq = useRef(new LatestRequest());
 
   useEffect(() => {
     if (editing && accounts.length === 0) {
@@ -2183,9 +2187,11 @@ function GtmContextBar({
 
   const loadContainers = async (accountId: string): Promise<void> => {
     if (!accountId) return;
+    const isLatest = containersReq.current.begin();
     setLoading('containers');
     try {
       const list = await window.desktop.data.listGtmContainers(accountId);
+      if (!isLatest()) return;
       setContainers(list);
       // A silent empty dropdown looks broken - tell the user WHY nothing populated, and DON'T mark the
       // account as "loaded" so re-opening the picker (or the Retry link) re-fetches instead of staying blank.
@@ -2194,22 +2200,25 @@ function GtmContextBar({
         onError('No GTM containers found for this account. This Google sign-in may not have access to its containers - check you picked the right account, use ↻ Retry, or re-connect Google in Settings.');
       }
     } catch (e) {
+      if (!isLatest()) return;
       // A failed fetch must be retryable — clear the once-per-account guard so it isn't stuck empty.
       loadedForAccount.current = '';
       onError(e instanceof Error ? e.message : String(e));
     } finally {
-      setLoading('');
+      if (isLatest()) setLoading('');
     }
   };
   const loadWorkspaces = async (accountId: string, containerId: string): Promise<void> => {
     if (!accountId || !containerId) return;
+    const isLatest = workspacesReq.current.begin();
     setLoading('workspaces');
     try {
-      setWorkspaces(await window.desktop.data.listGtmWorkspaces(accountId, containerId));
+      const list = await window.desktop.data.listGtmWorkspaces(accountId, containerId);
+      if (isLatest()) setWorkspaces(list);
     } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
+      if (isLatest()) onError(e instanceof Error ? e.message : String(e));
     } finally {
-      setLoading('');
+      if (isLatest()) setLoading('');
     }
   };
 
@@ -10164,25 +10173,53 @@ function ServerAuditSection({
   const [covRunning, setCovRunning] = useState(false);
   const [coverage, setCoverage] = useState<ServerCoverageView | null>(null);
 
+  // The selection the on-screen results belong to: the server audit report + its fix map are for
+  // (account, server container, workspace); the coverage + its per-row create state also for the web
+  // side. A coverage row's template tag id is a small per-container integer, so a result computed for
+  // one server container must never be shown, exported or acted on under another. Results are cleared
+  // when the selection changes, and an audit / compare that resolves after a change is dropped.
+  const selKey = gtmScopeKey({ accountId, containerId, workspaceId });
+  const covKey = `${selKey}|${webContainerId}/${webWorkspaceId}`;
+  const selKeyRef = useRef(selKey);
+  selKeyRef.current = selKey;
+  const covKeyRef = useRef(covKey);
+  covKeyRef.current = covKey;
+
   useEffect(() => {
     setWebWorkspaces([]); setWebWorkspaceId(''); setCoverage(null);
     if (!webContainerId) return;
+    let cancelled = false; // a slower list for a previously picked web container must not land
     window.desktop.data
       .listGtmWorkspaces(accountId, webContainerId)
       .then((ws) => {
+        if (cancelled) return;
         setWebWorkspaces(ws);
         // Prefer the GTM bar's workspace when comparing the bar's own container.
         const barWs = webCtx?.workspaceId && webContainerId === webCtx.containerId && ws.some((w) => w.workspaceId === webCtx.workspaceId) ? webCtx.workspaceId : '';
         setWebWorkspaceId(barWs || (ws.length ? ws[0].workspaceId : ''));
       })
-      .catch((e) => onError(e instanceof Error ? e.message : String(e)));
+      .catch((e) => { if (!cancelled) onError(e instanceof Error ? e.message : String(e)); });
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [webContainerId]);
 
   // One-click create for a MISSING coverage row (clone the template server tag; draft-only).
   const [rowCreate, setRowCreate] = useState<Record<number, { state: 'idle' | 'confirm' | 'creating' | 'done' | 'err'; msg?: string }>>({});
+  const [covNote, setCovNote] = useState('');
+  useEffect(() => {
+    setCoverage(null);
+    setRowCreate({});
+    setCovNote('');
+  }, [covKey]);
+  useEffect(() => {
+    setReport(null);
+    setFix({});
+  }, [selKey]);
   async function createFromRow(i: number, row: NonNullable<ServerCoverageView['rows'][number]>): Promise<void> {
-    if (!row.template || !containerId || !workspaceId) return;
+    // Only from a render whose selection is still current: the coverage on screen (and so the row's
+    // template tag id) was computed for exactly this server container + workspace.
+    const forKey = covKey;
+    if (!row.template || !coverage || !containerId || !workspaceId || covKeyRef.current !== forKey) return;
     setRowCreate((m) => ({ ...m, [i]: { state: 'creating' } }));
     try {
       const COVERAGE_PLATFORM_LABEL: Record<string, string> = {
@@ -10196,14 +10233,15 @@ function ServerAuditSection({
       };
       const platformLabel = COVERAGE_PLATFORM_LABEL[row.platform] ?? row.platform;
       const r = await window.desktop.gtm.createServerTagForEvent(accountId, containerId, workspaceId, row.template.tagId, row.event, `${platformLabel} CAPI - ${row.event}`);
+      if (covKeyRef.current !== forKey) return; // row i now indexes a different compare
       setRowCreate((m) => ({ ...m, [i]: { state: 'done', msg: `✓ Created draft "${r.name}" on trigger "${r.triggerName}"${r.triggerReused ? ' (reused)' : ''} - review its outgoing event-name field in GTM, then publish.` } }));
     } catch (e) {
+      if (covKeyRef.current !== forKey) { onError(e instanceof Error ? e.message : String(e)); return; }
       setRowCreate((m) => ({ ...m, [i]: { state: 'err', msg: e instanceof Error ? e.message : String(e) } }));
     }
   }
 
   const [covExporting, setCovExporting] = useState(false);
-  const [covNote, setCovNote] = useState('');
   async function exportCoverage(format: 'csv' | 'pdf'): Promise<void> {
     if (!coverage || covExporting) return;
     onError('');
@@ -10226,11 +10264,14 @@ function ServerAuditSection({
 
   async function runCoverage(): Promise<void> {
     if (!containerId || !workspaceId || !webContainerId || !webWorkspaceId || covRunning) return;
+    const forKey = covKey;
     onError('');
     setCovRunning(true);
     setCoverage(null);
+    setRowCreate({}); // keyed by row index: a fresh compare's rows start idle
     try {
-      setCoverage(await window.desktop.gtm.serverCoverage(accountId, webContainerId, webWorkspaceId, containerId, workspaceId));
+      const cov = await window.desktop.gtm.serverCoverage(accountId, webContainerId, webWorkspaceId, containerId, workspaceId);
+      if (covKeyRef.current === forKey) setCoverage(cov); // dropped if the selection changed meanwhile
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -10240,9 +10281,11 @@ function ServerAuditSection({
 
   useEffect(() => {
     setContainers([]); setContainerId(''); setReport(null);
+    let cancelled = false; // a slower list for a previously selected account must not land
     window.desktop.data
       .listGtmContainers(accountId)
       .then((list) => {
+        if (cancelled) return;
         setAllContainers(list);
         const servers = list.filter((c) => (c.usageContext ?? []).some((u) => /server/i.test(u)));
         setContainers(servers);
@@ -10255,32 +10298,43 @@ function ServerAuditSection({
         if (barWeb) setWebContainerId(barWeb);
         else if (webs.length === 1) setWebContainerId(webs[0].containerId);
       })
-      .catch((e) => onError(e instanceof Error ? e.message : String(e)));
+      .catch((e) => { if (!cancelled) onError(e instanceof Error ? e.message : String(e)); });
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accountId]);
 
   useEffect(() => {
     setWorkspaces([]); setWorkspaceId(''); setReport(null);
     if (!containerId) return;
+    // A slower list for a previously picked server container must not land: its first workspace id
+    // would be paired with THIS container for the audit, its fixes and the coverage creates.
+    let cancelled = false;
     window.desktop.data
       .listGtmWorkspaces(accountId, containerId)
       .then((ws) => {
+        if (cancelled) return;
         setWorkspaces(ws);
         if (ws.length) setWorkspaceId(ws[0].workspaceId);
       })
-      .catch((e) => onError(e instanceof Error ? e.message : String(e)));
+      .catch((e) => { if (!cancelled) onError(e instanceof Error ? e.message : String(e)); });
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [containerId]);
 
   async function run(): Promise<void> {
     if (!containerId || !workspaceId || running || runningRef.current) return;
+    // A re-audit awaited from an earlier render (applyFix / applyAllFixes) after the user switched
+    // server container or workspace: neither audit the old one nor wipe the new one's report.
+    const forKey = selKey;
+    if (selKeyRef.current !== forKey) return;
     runningRef.current = true;
     onError('');
     setRunning(true);
     setReport(null);
     setFix({});
     try {
-      setReport(await window.desktop.gtm.auditServer(accountId, containerId, workspaceId));
+      const r = await window.desktop.gtm.auditServer(accountId, containerId, workspaceId);
+      if (selKeyRef.current === forKey) setReport(r); // dropped if the selection changed meanwhile
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -10294,14 +10348,16 @@ function ServerAuditSection({
   // one-click apply - no delete/confirm path (delete fixes are excluded at the button below).
   async function applyFix(i: number, f: AuditFindingView): Promise<void> {
     if (!f.fix || fixRef.current[i]?.state === 'fixing') return; // never double-issue a write
+    const forKey = selKey; // row i indexes the report of this selection
     setFix((s) => ({ ...s, [i]: { state: 'fixing' } }));
     try {
       await window.desktop.gtm.applyFix(f.fix);
+      if (selKeyRef.current !== forKey) return; // switched away: the fix map is another report's now
       setFix((s) => ({ ...s, [i]: { state: 'done' } }));
       await run(); // re-audit so the fixed finding drops off (run() clears the fix map)
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      setFix((s) => ({ ...s, [i]: { state: 'err', msg } }));
+      if (selKeyRef.current === forKey) setFix((s) => ({ ...s, [i]: { state: 'err', msg } }));
       onError(msg);
     }
   }
@@ -10310,10 +10366,13 @@ function ServerAuditSection({
   // the first failure - the fixes already applied stand, and the re-audit reflects them.
   async function applyAllFixes(): Promise<void> {
     if (!report || applyingAll || running || runningRef.current) return;
+    const forKey = selKey;
     onError('');
     setApplyingAll(true);
     try {
       for (let i = 0; i < report.findings.length; i += 1) {
+        // Switched server container / workspace mid-batch: stop writing to the one no longer shown.
+        if (selKeyRef.current !== forKey) break;
         const f = report.findings[i];
         // Read the LIVE map, not the click-time snapshot: a row already applied or in flight is never
         // written a second time.
@@ -10322,10 +10381,10 @@ function ServerAuditSection({
         setFix((s) => ({ ...s, [i]: { state: 'fixing' } }));
         try {
           await window.desktop.gtm.applyFix(f.fix); // one workspace write at a time
-          setFix((s) => ({ ...s, [i]: { state: 'done' } }));
+          if (selKeyRef.current === forKey) setFix((s) => ({ ...s, [i]: { state: 'done' } }));
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
-          setFix((s) => ({ ...s, [i]: { state: 'err', msg } }));
+          if (selKeyRef.current === forKey) setFix((s) => ({ ...s, [i]: { state: 'err', msg } }));
           onError(msg);
           break;
         }

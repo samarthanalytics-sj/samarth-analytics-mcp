@@ -12,6 +12,19 @@ export function gtmScopeKey(s?: { accountId?: string; containerId?: string; work
 }
 
 /**
+ * Latest-request gate. Each begin() returns a check that stays true only until the next begin(), so a
+ * slower response for an earlier pick is dropped instead of overwriting the list (or clearing the
+ * loading flag) of the current one.
+ */
+export class LatestRequest {
+  private seq = 0;
+  begin(): () => boolean {
+    const mine = ++this.seq;
+    return () => mine === this.seq;
+  }
+}
+
+/**
  * Which stored chat thread to switch the view to, or null to stay on the shown one. A streaming reply
  * appends to the shown thread's last assistant message, so while a turn is running the view stays
  * pinned to the thread that asked; a product / container change made mid-turn is applied once the
