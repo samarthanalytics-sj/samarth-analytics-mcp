@@ -31,6 +31,7 @@ import {
   summarizeCapture,
   PlaywrightMissingError,
 } from "./capture.mjs";
+import { urlAllowed } from "./url-guard.mjs";
 
 /**
  * @typedef {Object} RuntimeCaptureJobPayload
@@ -65,6 +66,37 @@ const DEFAULT_LEASE_SECONDS = 120;
 const DEFAULT_POLL_MS = 2000;
 
 /**
+ * The same URL admission HTTP mode applies in server.mjs before any browser is
+ * launched: non-empty, at most RUNTIME_WORKER_MAX_URLS (hard cap 25), and every
+ * URL through the SSRF guard with RUNTIME_WORKER_ALLOWLIST. Read at call time so
+ * a queued job is held to the worker's current configuration.
+ *
+ * @param {unknown} rawUrls
+ * @returns {string[]} the admitted URLs
+ */
+function admitJobUrls(rawUrls) {
+  const allowlist = (process.env.RUNTIME_WORKER_ALLOWLIST ?? "")
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  const maxUrls = Math.min(Number(process.env.RUNTIME_WORKER_MAX_URLS) || 10, 25);
+  const urls = Array.isArray(rawUrls)
+    ? rawUrls.filter((u) => typeof u === "string" && u.trim())
+    : [];
+  if (urls.length === 0) {
+    throw new Error("bad_request: `urls` must be a non-empty array of http(s) URLs.");
+  }
+  if (urls.length > maxUrls) {
+    throw new Error(`too_many_urls: at most ${maxUrls} URLs per job.`);
+  }
+  for (const u of urls) {
+    const check = urlAllowed(u, allowlist);
+    if (!check.ok) throw new Error(`url_not_allowed: ${u}: ${check.reason}`);
+  }
+  return urls;
+}
+
+/**
  * Drive one runtime-capture job using the existing read-only capture core.
  * Returns a RuntimeCaptureJobResult-shaped object (see shared/jobs.ts). It never
  * returns the raw artifact — that is PII-sensitive and is persisted out-of-band
@@ -75,6 +107,8 @@ const DEFAULT_POLL_MS = 2000;
  * @param {{ wait?: number, timeout?: number }} [clamp]
  */
 export async function processCaptureJob(payload, clamp = {}) {
+  // Rejects (→ queue.fail) before any browser launches if a URL is not admitted.
+  const urls = admitJobUrls(payload?.urls);
   const wait = Math.min(Number(payload.wait) || 4000, clamp.wait ?? 8000);
   const timeout = Math.min(Number(payload.timeout) || 30000, clamp.timeout ?? 30000);
   const wantsMultiState =
@@ -82,11 +116,11 @@ export async function processCaptureJob(payload, clamp = {}) {
 
   const artifact = wantsMultiState
     ? await captureConsentStates(
-        { urls: payload.urls, consentStates: payload.consentStates, actions: payload.actions },
+        { urls, consentStates: payload.consentStates, actions: payload.actions },
         { wait, timeout },
       )
     : await capture(
-        { urls: payload.urls, consentState: payload.consentState, actions: payload.actions },
+        { urls, consentState: payload.consentState, actions: payload.actions },
         { wait, timeout },
       );
 
@@ -99,7 +133,7 @@ export async function processCaptureJob(payload, clamp = {}) {
     artifactUri: null,
     schema: artifact.schema ?? null,
     summary: {
-      urls: Array.isArray(payload.urls) ? payload.urls.length : 0,
+      urls: urls.length,
       consentStates: wantsMultiState ? payload.consentStates.length : undefined,
       trackerHits,
     },

@@ -70,6 +70,8 @@ services:
       start_period: 20s
 
   # ── Read-only runtime capture worker (headless Chromium) ─────────────────
+  # RUNTIME_WORKER_TOKEN (from .env.docker) is required: without it the worker
+  # refuses to start, so this service restart-loops until it is set.
   runtime-worker:
     build:
       context: ./apps/runtime-worker

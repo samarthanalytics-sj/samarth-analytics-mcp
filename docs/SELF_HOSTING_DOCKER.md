@@ -55,6 +55,9 @@ Fill in `.env.docker`:
   Generate one: `openssl rand -hex 32`.
 - `WEB_AUDIT_HTTP_AUTH_TOKEN` - same idea for the web-audit server. Required:
   left blank, the web-audit server refuses to start.
+- `RUNTIME_WORKER_TOKEN` - same idea for the runtime capture worker; callers
+  send it as `Authorization: Bearer <token>`. Required: left blank, the worker
+  refuses to start.
 - `WEB_AUDIT_ALLOWLIST` / `RUNTIME_WORKER_ALLOWLIST` - comma-separated host
   suffixes each browser service may visit. **Keep these tight.** An empty
   allowlist means OPEN (any host), which you do not want on a public box.
@@ -183,10 +186,11 @@ so use one or the other.
 
 ## Security checklist
 
-- [ ] `GTM_MCP_HTTP_AUTH_TOKEN` and `WEB_AUDIT_HTTP_AUTH_TOKEN` are set to strong
-      random values - without them the servers refuse to start (the
-      `*_HTTP_ALLOW_UNAUTHENTICATED=true` opt-ins are for local development
-      only and bind loopback).
+- [ ] `GTM_MCP_HTTP_AUTH_TOKEN`, `WEB_AUDIT_HTTP_AUTH_TOKEN` and
+      `RUNTIME_WORKER_TOKEN` are set to strong random values - without them the
+      servers refuse to start (the `*_HTTP_ALLOW_UNAUTHENTICATED=true` and
+      `RUNTIME_WORKER_ALLOW_UNAUTHENTICATED=true` opt-ins are for local
+      development only and bind loopback).
 - [ ] `WEB_AUDIT_ALLOWLIST` and `RUNTIME_WORKER_ALLOWLIST` are set (never left
       empty/OPEN on a reachable host).
 - [ ] Write guardrails are off unless you intend writes.

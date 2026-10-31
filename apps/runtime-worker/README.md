@@ -35,7 +35,10 @@ tags — nothing else.
 cd apps/runtime-worker
 npm install                 # installs optional playwright
 npx playwright install chromium
-npm start                   # serves on :8080
+export RUNTIME_WORKER_TOKEN=$(openssl rand -hex 32)      # callers send it as a bearer token
+npm start                   # serves on :8080; refuses to start without a token
+# or, local development only (no token, binds 127.0.0.1):
+RUNTIME_WORKER_ALLOW_UNAUTHENTICATED=true npm start
 ```
 
 Capture without the server (writes a file you can upload in the portal):
@@ -72,7 +75,7 @@ portal Audit page, or paste it into the "Import runtime capture" box.
 
 ### `GET /health`
 
-Returns `{ ok, playwrightAvailable, authRequired, allowlist }`.
+Returns `{ ok, playwrightAvailable, authRequired, allowlist, capturesInFlight, maxConcurrent }`.
 
 ## Queue consumer mode (opt-in, forward-looking)
 
@@ -112,13 +115,19 @@ backend, implement `QueueClient` against your durable store and call
 | --- | --- |
 | `RUNTIME_WORKER_MODE` | Set to `queue` to enable consumer mode. Anything else keeps HTTP-only behavior. |
 
-## Security (all opt-in via env)
+Queued jobs get the same URL admission as `POST /capture` before any browser
+launches: the SSRF guard, `RUNTIME_WORKER_ALLOWLIST` and `RUNTIME_WORKER_MAX_URLS`.
+A job that fails it is failed with the reason.
+
+## Security (env)
 
 | Env var | Effect |
 | --- | --- |
-| `RUNTIME_WORKER_TOKEN` | If set, every request must send `Authorization: Bearer <token>`. **Strongly recommended for any internet-exposed deployment.** |
+| `RUNTIME_WORKER_TOKEN` | **Required.** Every `/capture` request must send `Authorization: Bearer <token>`. Without it the server **refuses to start**. Generate one with `openssl rand -hex 32`. |
+| `RUNTIME_WORKER_ALLOW_UNAUTHENTICATED` | Local development only: exactly `true` lets the server start without a token, and it then binds `127.0.0.1` only. |
 | `RUNTIME_WORKER_ALLOWLIST` | Comma-separated host suffixes the worker may load (e.g. `example.com,shop.example`). When unset, any public http(s) URL is allowed. |
 | `RUNTIME_WORKER_MAX_URLS` | Max URLs per request (default 10, hard cap 25). |
+| `RUNTIME_WORKER_MAX_CONCURRENT` | Max `/capture` requests in flight (default 2). Each one launches its own Chromium; extra requests get `429 busy` with `Retry-After`. |
 | `RUNTIME_WORKER_MAX_WAIT` | Max per-page settle time, ms (default 8000). |
 | `RUNTIME_WORKER_TIMEOUT` | Max navigation timeout, ms (default 30000). |
 | `PORT` | Listen port (default 8080). |

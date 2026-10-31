@@ -200,9 +200,11 @@ A standalone `node:http` server exposing `POST /capture`. It drives headless
 Chromium (Playwright, lazily loaded) to load pages and emit the structured
 runtime-capture artifact the portal audits consume. It is deliberately **not**
 deployable to Vercel (needs a real browser host: Render/Fly/Railway/VPS).
-Security is opt-in via env: bearer-token auth (`RUNTIME_WORKER_TOKEN`,
-timing-safe compared), host allowlist, per-request URL cap, and navigation
-timeouts. It never writes to GTM/GA4 and never persists captures.
+Bearer-token auth (`RUNTIME_WORKER_TOKEN`, timing-safe compared) is required:
+without it the server refuses to start unless
+`RUNTIME_WORKER_ALLOW_UNAUTHENTICATED=true`, which binds 127.0.0.1 only. Also
+via env: host allowlist, per-request URL cap, a cap on captures in flight, and
+navigation timeouts. It never writes to GTM/GA4 and never persists captures.
 
 ## 5. Release / CI / deploy
 

@@ -1,10 +1,16 @@
 // Runtime worker tests. Run with: node --test url-guard.test.mjs
-// SSRF guard unit tests first, then the Docker image contents. Node built-ins
-// only: CI installs nothing for this worker.
+// SSRF guard unit tests first, then the admission rules around it (server
+// startup auth, the concurrency cap, queue-mode URL checks) and the Docker
+// image contents. Node built-ins only: CI installs nothing for this worker.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
+import { request as httpRequest } from "node:http";
+import { connect as netConnect, createServer as createNetServer } from "node:net";
+import { networkInterfaces } from "node:os";
+import { fileURLToPath } from "node:url";
 import { urlAllowed, createRequestGuard, watchLanding } from "./url-guard.mjs";
 
 test("allows ordinary public http(s) URLs", () => {
@@ -351,4 +357,223 @@ test("Dockerfile base image ships the browsers for the exact pinned playwright",
   assert.match(String(pinned), /^\d+\.\d+\.\d+$/, `playwright must be pinned exactly, got ${pinned}`);
   const tag = /^FROM\s+mcr\.microsoft\.com\/playwright:v(\d+\.\d+\.\d+)-\S+/m.exec(dockerfile)?.[1];
   assert.equal(tag, pinned, `FROM tag v${tag} must equal package.json playwright ${pinned}`);
+});
+
+// ── server.mjs: startup auth, bind address, concurrency cap ─────────────────
+
+const HERE = fileURLToPath(new URL(".", import.meta.url));
+
+async function freePort() {
+  const srv = createNetServer();
+  await new Promise((resolve) => srv.listen(0, "127.0.0.1", resolve));
+  const { port } = srv.address();
+  await new Promise((resolve) => srv.close(resolve));
+  return port;
+}
+
+/** Start server.mjs with only `env` set among the worker's variables. Resolves on the
+ *  listening banner or on exit, whichever comes first. */
+async function startWorker(env) {
+  const port = await freePort();
+  const childEnv = { ...process.env };
+  for (const k of Object.keys(childEnv)) {
+    if (k.startsWith("RUNTIME_WORKER_") || k === "PORT" || k === "NODE_TEST_CONTEXT") delete childEnv[k];
+  }
+  Object.assign(childEnv, { PORT: String(port) }, env);
+  const child = spawn(process.execPath, ["server.mjs"], { cwd: HERE, env: childEnv, stdio: ["ignore", "pipe", "pipe"] });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (c) => { stdout += c; });
+  child.stderr.on("data", (c) => { stderr += c; });
+  const exited = new Promise((resolve) => child.on("exit", (code) => resolve(code)));
+  const outcome = await new Promise((resolve) => {
+    const timer = setTimeout(() => resolve({ kind: "timeout" }), 10_000);
+    const onData = () => {
+      if (/listening on .*\n/.test(stdout)) {
+        clearTimeout(timer);
+        resolve({ kind: "listening" });
+      }
+    };
+    child.stdout.on("data", onData);
+    exited.then((code) => {
+      clearTimeout(timer);
+      resolve({ kind: "exit", code });
+    });
+  });
+  const stop = async () => {
+    if (child.exitCode === null && child.signalCode === null) child.kill();
+    await exited;
+  };
+  return { ...outcome, port, stop, get stdout() { return stdout; }, get stderr() { return stderr; } };
+}
+
+function http(port, { method = "GET", path = "/health", headers = {}, body } = {}) {
+  return new Promise((resolve, reject) => {
+    const req = httpRequest({ host: "127.0.0.1", port, method, path, headers, agent: false }, (res) => {
+      const chunks = [];
+      res.on("data", (c) => chunks.push(c));
+      res.on("end", () => {
+        let json = null;
+        try { json = JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { /* not JSON */ }
+        resolve({ status: res.statusCode, headers: res.headers, json });
+      });
+    });
+    req.on("error", reject);
+    if (body !== undefined) req.write(body);
+    req.end();
+  });
+}
+
+/** A /capture request whose body is still arriving: it holds a capture slot until ended. */
+function openCapture(port, token) {
+  const req = httpRequest({
+    host: "127.0.0.1",
+    port,
+    method: "POST",
+    path: "/capture",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    agent: false,
+  });
+  const response = new Promise((resolve, reject) => {
+    req.on("response", (res) => {
+      const chunks = [];
+      res.on("data", (c) => chunks.push(c));
+      res.on("end", () => resolve({ status: res.statusCode, json: JSON.parse(Buffer.concat(chunks).toString("utf8")) }));
+    });
+    req.on("error", reject);
+  });
+  req.write('{"urls":');
+  return { req, response };
+}
+
+async function waitFor(fn, what, ms = 5000) {
+  const until = Date.now() + ms;
+  for (;;) {
+    if (await fn()) return;
+    if (Date.now() > until) assert.fail(`timed out waiting for ${what}`);
+    await new Promise((r) => setTimeout(r, 25));
+  }
+}
+
+test("server refuses to start without RUNTIME_WORKER_TOKEN unless explicitly opted in", async () => {
+  for (const env of [
+    {},
+    { RUNTIME_WORKER_TOKEN: "   " }, // whitespace-only is no token
+    { RUNTIME_WORKER_ALLOW_UNAUTHENTICATED: "1" }, // only exactly "true" opts in
+    { RUNTIME_WORKER_ALLOW_UNAUTHENTICATED: "TRUE" },
+  ]) {
+    const w = await startWorker(env);
+    try {
+      assert.equal(w.kind, "exit", `${JSON.stringify(env)}: must not listen (${w.stdout.trim()})`);
+      assert.equal(w.code, 1, JSON.stringify(env));
+      assert.match(w.stderr, /RUNTIME_WORKER_TOKEN is not set/);
+      assert.match(w.stderr, /RUNTIME_WORKER_ALLOW_UNAUTHENTICATED=true/);
+    } finally {
+      await w.stop();
+    }
+  }
+});
+
+test("the unauthenticated opt-in binds 127.0.0.1 only", async () => {
+  const w = await startWorker({ RUNTIME_WORKER_ALLOW_UNAUTHENTICATED: "true" });
+  try {
+    assert.equal(w.kind, "listening", w.stderr);
+    assert.match(w.stdout, new RegExp(`listening on 127\\.0\\.0\\.1, port ${w.port}\\b`));
+    const health = await http(w.port);
+    assert.equal(health.status, 200);
+    assert.equal(health.json.authRequired, false);
+    // Not reachable on any other local interface. Only a completed TCP connect is a failure:
+    // a refusal or no answer at all (a filtered network) both mean nothing is listening there.
+    const external = Object.values(networkInterfaces())
+      .flat()
+      .find((i) => i && i.family === "IPv4" && !i.internal);
+    if (external) {
+      const outcome = await new Promise((resolve) => {
+        const sock = netConnect({ host: external.address, port: w.port });
+        const timer = setTimeout(() => { sock.destroy(); resolve("no answer"); }, 2000);
+        sock.on("connect", () => { clearTimeout(timer); sock.destroy(); resolve("connected"); });
+        sock.on("error", () => { clearTimeout(timer); resolve("refused"); });
+      });
+      assert.notEqual(outcome, "connected", `${external.address}:${w.port} must not accept connections`);
+    }
+  } finally {
+    await w.stop();
+  }
+});
+
+test("with a token the server listens on all interfaces and requires the bearer", async () => {
+  const w = await startWorker({ RUNTIME_WORKER_TOKEN: "s3cret-token" });
+  try {
+    assert.equal(w.kind, "listening", w.stderr);
+    assert.match(w.stdout, /listening on all interfaces/);
+    assert.equal((await http(w.port)).json.authRequired, true);
+    const body = '{"urls":["https://example.com/"]}';
+    assert.equal((await http(w.port, { method: "POST", path: "/capture", body })).status, 401);
+    const wrong = { authorization: "Bearer not-the-token" };
+    assert.equal((await http(w.port, { method: "POST", path: "/capture", headers: wrong, body })).status, 401);
+  } finally {
+    await w.stop();
+  }
+});
+
+test("captures in flight are capped: extra requests get 429 and slots are released", async () => {
+  const token = "s3cret-token";
+  const auth = { authorization: `Bearer ${token}` };
+  const w = await startWorker({ RUNTIME_WORKER_TOKEN: token, RUNTIME_WORKER_MAX_CONCURRENT: "1" });
+  const inFlight = async () => (await http(w.port)).json?.capturesInFlight;
+  try {
+    assert.equal(w.kind, "listening", w.stderr);
+    assert.equal((await http(w.port)).json.maxConcurrent, 1);
+
+    const first = openCapture(w.port, token);
+    await waitFor(async () => (await inFlight()) === 1, "the first capture to take the slot");
+    const busy = await http(w.port, { method: "POST", path: "/capture", headers: auth, body: "{}" });
+    assert.equal(busy.status, 429);
+    assert.equal(busy.json.error, "busy");
+    assert.ok(busy.headers["retry-after"]);
+    // Auth is still checked first, and a rejected request never holds a slot.
+    assert.equal((await http(w.port, { method: "POST", path: "/capture", body: "{}" })).status, 401);
+
+    first.req.end("[]}"); // {"urls":[]} -> 400, then the slot frees
+    assert.equal((await first.response).status, 400);
+    await waitFor(async () => (await inFlight()) === 0, "the slot to be released");
+    assert.equal((await http(w.port, { method: "POST", path: "/capture", headers: auth, body: "{}" })).status, 400);
+
+    // A client that hangs up mid-request does not leak its slot.
+    const aborted = openCapture(w.port, token);
+    aborted.response.catch(() => {});
+    await waitFor(async () => (await inFlight()) === 1, "the aborted capture to take the slot");
+    aborted.req.destroy();
+    await waitFor(async () => (await inFlight()) === 0, "the aborted capture's slot to be released");
+    assert.equal((await http(w.port, { method: "POST", path: "/capture", headers: auth, body: "{}" })).status, 400);
+  } finally {
+    await w.stop();
+  }
+});
+
+// ── queue-consumer.mjs: the same URL admission as HTTP mode ─────────────────
+
+test("queue jobs go through the SSRF guard, allowlist and URL cap before any capture", async () => {
+  const keys = ["RUNTIME_WORKER_ALLOWLIST", "RUNTIME_WORKER_MAX_URLS"];
+  const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+  const { processCaptureJob } = await import("./queue-consumer.mjs");
+  const job = (urls) => processCaptureJob({ kind: "runtime_capture", urls });
+  try {
+    delete process.env.RUNTIME_WORKER_MAX_URLS;
+    process.env.RUNTIME_WORKER_ALLOWLIST = "example.com";
+    await assert.rejects(job(["https://evil.test/"]), { message: /^url_not_allowed: https:\/\/evil\.test\// });
+    await assert.rejects(job(["https://example.com/", "https://notexample.com/"]), { message: /^url_not_allowed: / });
+    await assert.rejects(job(Array(11).fill("https://example.com/")), { message: /^too_many_urls: / });
+    await assert.rejects(job([]), { message: /^bad_request: / });
+    await assert.rejects(job(undefined), { message: /^bad_request: / });
+    // No allowlist: private and metadata targets are still refused.
+    process.env.RUNTIME_WORKER_ALLOWLIST = "";
+    await assert.rejects(job(["http://169.254.169.254/latest/meta-data/"]), { message: /^url_not_allowed: / });
+    await assert.rejects(job(["http://127.0.0.1:8080/"]), { message: /^url_not_allowed: / });
+  } finally {
+    for (const k of keys) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+  }
 });

@@ -87,7 +87,7 @@ cd apps/runtime-worker
 npm install
 npm run postinstall-browser # installs Chromium for Playwright
 npm run check               # node --check on server/capture/cli
-npm start                   # run the capture worker
+RUNTIME_WORKER_ALLOW_UNAUTHENTICATED=true npm start   # local run, 127.0.0.1 only (set RUNTIME_WORKER_TOKEN otherwise)
 npm run capture             # one-off capture
 ```
 
