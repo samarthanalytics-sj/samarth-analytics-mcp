@@ -13,7 +13,8 @@
 import type { AuditTag, AuditTrigger, ContainerSnapshot, ServerContainerSnapshot } from './gtm-builders';
 import { serverTagParam } from './gtm-builders';
 import { resolveGa4MeasurementIds } from './gtm-ga4-check';
-import { CAPI_PLATFORMS, capiPlatform, capiValueKeys, webPixelPlatform } from '../../../../../src/shared/capi-platforms';
+import { capiPlatform, capiValueKeys, webPixelPlatform } from '../../../../../src/shared/capi-platforms';
+import { serverPlatformOf } from './server-coverage';
 
 export type PlanCategory = 'critical' | 'high' | 'medium' | 'low' | 'info';
 export type PlanStatus = 'existing' | 'missing';
@@ -298,8 +299,10 @@ export function buildServerPlan(input: ServerPlanInput): ServerPlan {
   const srvHandled = new Map<string, Set<string>>(); // platform -> covered event names
   for (const t of tags) {
     if (t.paused || !(t.firingTriggerId ?? []).length) continue;
-    const platform = CAPI_PLATFORMS.find((p) => p.nameRe.test(t.name))?.platform;
-    if (!platform) continue;
+    // By parameter SHAPE first, then name (the same rule the coverage page uses), so a server tag the
+    // app or the chat tools created under any name (e.g. the default "X CAPI Tag") counts as coverage.
+    const platform = serverPlatformOf(t);
+    if (!platform || platform === 'ga4') continue;
     const set = srvHandled.get(platform) ?? new Set<string>();
     for (const id of t.firingTriggerId ?? []) {
       const ev = eventOfTrigger(triggers.find((x) => x.triggerId === id));

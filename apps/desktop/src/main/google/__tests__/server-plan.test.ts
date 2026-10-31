@@ -136,6 +136,28 @@ test('a covered CAPI event reads existing; an uncovered one stays missing', () =
   assert.equal(plan.items.find((i) => i.id === 'tiktok_capi:generate_lead')!.status, 'missing');
 });
 
+test('an X server tag under the tools\' default name "X CAPI Tag" covers its event (no duplicate offered)', () => {
+  const xWeb: ContainerSnapshot = {
+    tags: [tag({ tagId: 'w1', name: 'X pixel - Purchase', type: 'html', firingTriggerId: ['11'], parameter: [{ type: 'template', key: 'html', value: "twq('event','tw-o1abc-xyz')" }] })],
+    triggers: [evTrigger('11', 'purchase')],
+    variables: [],
+  };
+  const xServer = (name: string, keys: string[]): ServerContainerSnapshot => ({
+    taggingServerUrls: [],
+    clients: [{ clientId: 'c1', name: 'GA4', type: 'gaaw_client' }],
+    tags: [tag({ tagId: 's1', name, type: 'cvt_TW1', firingTriggerId: ['91'], parameter: keys.map((key) => ({ type: 'template', key, value: 'v' })) })],
+    triggers: [evTrigger('91', 'purchase')],
+    variables: [],
+    transformations: [],
+  });
+  const status = (server: ServerContainerSnapshot) =>
+    buildServerPlan(emptyInput({ web: xWeb, server })).items.find((i) => i.id === 'x_capi:purchase')?.status;
+  assert.equal(status(xServer('X CAPI Tag', ['pixelId', 'pixelAccessToken', 'eventId'])), 'existing', 'the default name with the X template shape');
+  assert.equal(status(xServer('Server conversions', ['pixelId', 'pixelAccessToken', 'eventId'])), 'existing', 'recognised by shape under any name');
+  assert.equal(status(xServer('X CAPI Tag', [])), 'existing', 'the default name alone is recognised');
+  assert.equal(status(xServer('Unrelated', [])), 'missing');
+});
+
 test('planReadiness: missing values and unchecked dependencies surface; satisfied ones do not', () => {
   const plan = buildServerPlan(emptyInput({ derivedMeasurementId: null }));
   const items = plan.items;
