@@ -9,8 +9,8 @@
  * local-development opt-in, and it binds 127.0.0.1 only.
  *
  * The pure helpers (isAuthorized, buildHealthBody, resolveHttpBinding,
- * bindingBanner, decidePostRoute, resolveSessionTtlMs, rebindingRejection) are
- * exported and unit-tested; the express glue is thin and follows the proven
+ * bindingBanner, decidePostRoute, resolveSessionTtlMs, rebindingRejection,
+ * redactSessionId) are exported and unit-tested; the express glue is thin and follows the proven
  * root pattern.
  */
 
@@ -194,6 +194,15 @@ export function decidePostRoute(
   return { kind: 'unknown-session' };
 }
 
+/**
+ * A session id shortened for logs: enough to correlate lines, not enough to address the session.
+ * Same shape as the root server's redactSessionId (src/utils/mcpSession.ts), which this package
+ * cannot import. A full id in a log line is a bearer for that session to anyone who can read logs.
+ */
+export function redactSessionId(sid: string): string {
+  return sid.length >= 16 ? `${sid.slice(0, 8)}...` : '[redacted]';
+}
+
 /** Message returned with the 404 for {@link PostRoute} `unknown-session`. */
 export const UNKNOWN_SESSION_MESSAGE =
   'Unknown or expired mcp-session-id. Start a new session with an initialize request.';
@@ -327,7 +336,7 @@ export async function startHttpServer(createServer: () => McpServer): Promise<Ht
             // Drop the entry first: transport.close() fires onclose, whose delete then finds nothing,
             // and if the transport was already closed the entry still goes away.
             sessions.delete(sid);
-            console.error(`[${SERVER_NAME}] closing idle HTTP session: ${sid} (active: ${sessions.size})`);
+            console.error(`[${SERVER_NAME}] closing idle HTTP session: ${redactSessionId(sid)} (active: ${sessions.size})`);
             void Promise.resolve(entry.transport.close()).catch(() => undefined);
             void entry.server.close().catch(() => undefined);
           }
@@ -384,14 +393,14 @@ export async function startHttpServer(createServer: () => McpServer): Promise<Ht
           sessionIdGenerator: () => newSessionId,
           onsessioninitialized: (sid) => {
             sessions.set(sid, { transport, server: sessionServer, lastActivity: Date.now(), inFlight: 0 });
-            console.error(`[${SERVER_NAME}] new HTTP session: ${sid}`);
+            console.error(`[${SERVER_NAME}] new HTTP session: ${redactSessionId(sid)}`);
           },
         });
         transport.onclose = () => {
           const sid = transport.sessionId;
           if (sid) {
             sessions.delete(sid);
-            console.error(`[${SERVER_NAME}] HTTP session closed: ${sid}`);
+            console.error(`[${SERVER_NAME}] HTTP session closed: ${redactSessionId(sid)}`);
           }
           void sessionServer.close().catch(() => undefined); // release this session's server
         };

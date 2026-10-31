@@ -91,6 +91,7 @@ import {
   resolveSessionTtlMs,
   DEFAULT_SESSION_TTL_MS,
   rebindingRejection,
+  redactSessionId,
 } from '../http.js';
 import { request as httpRequest } from 'node:http';
 import { createWebAuditMcpServer, MAX_TOOL_INPUT_ELEMENTS } from '../server.js';
@@ -1842,6 +1843,21 @@ check(
   /setInterval\(/.test(webAuditHttpSrc) && /sweep\?\.unref\(\)/.test(webAuditHttpSrc) && /clearInterval\(sweep\)/.test(webAuditHttpSrc),
 );
 
+// REGRESSION: the new / closed / idle-sweep lines printed the full MCP session id, which addresses
+// the session to anyone who can read the logs. The root server prints redactSessionId(sid); so does this.
+{
+  const sid = 'f849818d-d6cb-4931-b69a-fe6e0ede948f';
+  const shown = redactSessionId(sid);
+  check('http log: a session id is redacted, never printed whole', !shown.includes(sid) && shown.startsWith('f849818d') && shown.length < 16, shown);
+  check('http log: a short session id is not printed either', !redactSessionId('short-id').includes('short-id'));
+  const sessionLogs = webAuditHttpSrc.match(/console\.error\([^;]*HTTP session[^;]*;/g) ?? [];
+  check(
+    'http log: the new / closed / idle-sweep session lines all print redactSessionId(sid)',
+    sessionLogs.length >= 3 && sessionLogs.every((l) => !/\$\{sid\}/.test(l) && /redactSessionId\(sid\)/.test(l)),
+    sessionLogs.join(' | '),
+  );
+}
+
 /** Poll until `cond` holds or `timeoutMs` passes; returns whether it held. */
 async function waitUntil(cond: () => Promise<boolean>, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
@@ -1874,7 +1890,8 @@ await withHttpEnv(
       const resumed = await post(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' }), sessionHeaders(sidA));
       const resumedBody = await readRpcError(resumed);
       check('http sweep: a swept session id → 404 JSON-RPC -32001', resumed.status === 404 && resumedBody.error?.code === -32001, String(resumed.status));
-      check('http sweep: the sweep logs the closed session to stderr', httpLogs.some((l) => l.includes(`closing idle HTTP session: ${sidA}`)));
+      check('http sweep: the sweep logs the closed session to stderr', httpLogs.some((l) => l.includes(`closing idle HTTP session: ${redactSessionId(sidA)}`)));
+      check('http sweep: no log line carries the full session id', !httpLogs.some((l) => l.includes(sidA)), httpLogs.filter((l) => l.includes(sidA)).join(' | '));
 
       // A session with a request in flight (a held-open GET event stream) is never swept, however
       // long it outlives the TTL; once the stream closes it becomes idle and is reclaimed.
