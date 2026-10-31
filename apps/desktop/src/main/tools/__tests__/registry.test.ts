@@ -1891,6 +1891,22 @@ async function main(): Promise<void> {
     );
   });
 
+  await test('create_tracking_tag (custom_event) with no trigger.eventName fails loudly before any write', async () => {
+    // The tag's eventName is set, the trigger's is not: buildTrigger would emit {{_event}} equals "",
+    // a trigger that matches no dataLayer push, and the tag would be created dead.
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data, approveAsIs);
+    await assert.rejects(
+      () => reg.execute('create_gtm_tracking_tag', {
+        accountId: '1', containerId: '2', workspaceId: '3',
+        platform: 'ga4_event', tagName: 'GA4 - generate_lead', measurementId: 'G-XYZ', eventName: 'generate_lead',
+        trigger: { name: 'CE - generate_lead', kind: 'custom_event' },
+      }),
+      /custom_event" requires trigger\.eventName/,
+    );
+    assert.ok(!fd.calls.some((c) => /^(createTrigger|createTag|createVar|enable)/.test(c)), `nothing may be written: ${fd.calls.join(' | ')}`);
+  });
+
   await test('create_gtm_variable_typed: lookup_table + regex_table kinds build smm/remm from input+rows', async () => {
     const fd = fakeData();
     const reg = buildToolRegistry(fd.data, approveAsIs);

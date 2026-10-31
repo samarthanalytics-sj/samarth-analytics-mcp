@@ -3852,6 +3852,13 @@ export function buildToolRegistry(
         if (triggerInput.kind === 'timer' && !s(triggerInput.intervalMs ?? '').trim()) {
           throw new Error('trigger.kind "timer" requires trigger.intervalMs (the firing interval in milliseconds, e.g. "30000").');
         }
+        // Same for a custom_event with no trigger.eventName: buildTrigger would emit {{_event}} equals "",
+        // which matches no dataLayer push, so the tag is created and never fires. Refuse it here, before
+        // built-ins are enabled and variables created below. The tag's eventName is deliberately NOT
+        // reused: the dataLayer event and the GA4 event name are often different.
+        if (triggerInput.kind === 'custom_event' && !s(triggerInput.eventName ?? '').trim()) {
+          throw new Error('trigger.kind "custom_event" requires trigger.eventName (the dataLayer event it matches, e.g. "generate_lead"); it is separate from the tag\'s eventName.');
+        }
 
         // Companion Lookup Table variables an event parameter references (e.g. a per-page form_name):
         // normalize now so their INPUT built-in ({{Page Path}}) is enabled and the smm var provisioned.
