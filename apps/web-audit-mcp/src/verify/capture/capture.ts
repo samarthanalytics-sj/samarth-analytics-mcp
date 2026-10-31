@@ -243,8 +243,30 @@ export async function runCapture(
     // (never reset): no interaction (a REAL submit included) and no page reads, allowlist or not.
     // Fixture mode serves everything from memory and never consults the guard.
     const landing = opts.fixtures ? null : watchLanding(page, requestGuard);
-    const ssrfRefusal = async (resp?: PwResponse | null): Promise<string | null> =>
-      landing ? landing.blockedLanding(resp) : null;
+    // Where every record stood at the last check that found the page on a permitted address. A
+    // refusal truncates them back to it (as openInstrumentedPage does at its navigation mark), so the
+    // GA4 hits, tracker and linker requests and errors the refused page produced between a
+    // mid-journey redirect and this check (a dl/dt of the internal page among them) are dropped.
+    let safeMark = { ga4Hits: 0, trackers: 0, linkerRequests: 0, consoleErrors: 0, pageErrors: 0 };
+    const ssrfRefusal = async (resp?: PwResponse | null): Promise<string | null> => {
+      const note = landing ? await landing.blockedLanding(resp) : null;
+      if (note) {
+        state.ga4Hits.length = Math.min(state.ga4Hits.length, safeMark.ga4Hits);
+        state.trackers.length = Math.min(state.trackers.length, safeMark.trackers);
+        state.linkerRequests.length = Math.min(state.linkerRequests.length, safeMark.linkerRequests);
+        state.consoleErrors.length = Math.min(state.consoleErrors.length, safeMark.consoleErrors);
+        state.pageErrors.length = Math.min(state.pageErrors.length, safeMark.pageErrors);
+      } else {
+        safeMark = {
+          ga4Hits: state.ga4Hits.length,
+          trackers: state.trackers.length,
+          linkerRequests: state.linkerRequests.length,
+          consoleErrors: state.consoleErrors.length,
+          pageErrors: state.pageErrors.length,
+        };
+      }
+      return note;
+    };
 
     const pageOn = page as unknown as PwPageOnEx;
     pageOn.on('request', (req: PwRequestEx) => {

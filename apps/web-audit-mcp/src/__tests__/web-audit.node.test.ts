@@ -255,18 +255,26 @@ async function decide(
  * A fake browser for runCapture: records goto() calls and routes them through the handler.
  * `redirects` maps a URL to where a server redirect lands; like real Playwright, only the first URL
  * reaches the route handler. `elements` makes every selector resolve, and `interactions` records
- * each click and in-page submit/href script that actually ran.
+ * each click and in-page submit/href script that actually ran. `beacons` maps a URL to the requests
+ * (GA4 collect, tracker, linker) the page fires once a goto lands there.
  */
-function fakeVerifyBrowser(fake: { redirects?: Record<string, string>; elements?: boolean } = {}) {
+function fakeVerifyBrowser(
+  fake: { redirects?: Record<string, string>; elements?: boolean; beacons?: Record<string, string[]> } = {},
+) {
   const box: { handler?: (route: never) => unknown } = {};
   const gotos: string[] = [];
   const interactions: string[] = [];
+  const listeners: Record<string, ((arg: unknown) => void)[]> = {};
   let current = 'about:blank';
   const page = {
     goto: async (url: string) => {
       gotos.push(url);
       if ((await decide(box.handler, { url, nav: true })) === 'abort') throw new Error(`net::ERR_FAILED at ${url}`);
       current = fake.redirects?.[url] ?? url;
+      for (const beacon of fake.beacons?.[current] ?? []) {
+        const req = { url: () => beacon, method: () => 'GET', postData: () => null, resourceType: () => 'image', redirectedFrom: () => null };
+        for (const cb of listeners.request ?? []) cb(req);
+      }
       return { status: () => 200, headers: () => ({}) };
     },
     evaluate: async (_fn: unknown, arg?: unknown) => {
@@ -275,7 +283,9 @@ function fakeVerifyBrowser(fake: { redirects?: Record<string, string>; elements?
       return undefined;
     },
     addInitScript: async () => {},
-    on: () => {},
+    on: (event: string, cb: (arg: unknown) => void) => {
+      (listeners[event] ??= []).push(cb);
+    },
     frames: () => [],
     $: async (sel: string) =>
       fake.elements
@@ -758,6 +768,48 @@ const INTERNAL = 'http://10.0.0.5:8080/admin';
     'verify ssrf redirect: the journey refusal is noted and the final URL withheld',
     cap.finalUrl === null && cap.notes.some((n) => /^journey blocked: redirected to 169\.254\.169\.254/.test(n)),
     JSON.stringify({ finalUrl: cap.finalUrl, notes: cap.notes }),
+  );
+}
+{
+  // Mid-journey: what the refused page fired between the redirect landing and the next check (a GA4 hit
+  // carrying its dl/dt, a tracker beacon) is dropped back to the last safe check; the start page's stays.
+  const META = 'http://169.254.169.254/latest/meta-data/';
+  const spec = {
+    url: 'https://shop.example.com/',
+    checks: [
+      { id: 'nav', type: 'event_on_interaction', event: 'pv', action: { navigate: 'https://shop.example.com/next' } },
+      { id: 'sub', type: 'event_on_interaction', event: 'generate_lead', action: { submit: '#lead' } },
+    ],
+  } as never;
+  const fb = fakeVerifyBrowser({
+    redirects: { 'https://shop.example.com/next': META },
+    elements: true,
+    beacons: {
+      'https://shop.example.com/': [
+        'https://region1.google-analytics.com/g/collect?v=2&tid=G-TEST01&en=page_view&dl=https%3A%2F%2Fshop.example.com%2F&dt=Shop',
+        'https://www.facebook.com/tr?id=100&ev=PageView&dl=https%3A%2F%2Fshop.example.com%2F',
+      ],
+      [META]: [
+        `https://region1.google-analytics.com/g/collect?v=2&tid=G-TEST01&en=page_view&dl=${encodeURIComponent(META)}&dt=Internal%20console`,
+        `https://www.facebook.com/tr?id=100&ev=PageView&dl=${encodeURIComponent(META)}`,
+      ],
+    },
+  });
+  const cap = await runCapture(fb.browser, spec, verifyOpts({ requestGuard: createRequestGuard(fakeLookup(dnsTable).lookup) }));
+  check(
+    'verify ssrf redirect: the start page GA4 hit survives a mid-journey refusal',
+    cap.ga4Hits.length === 1 && cap.ga4Hits[0].dl === 'https://shop.example.com/',
+    JSON.stringify(cap.ga4Hits.map((h) => h.dl)),
+  );
+  check(
+    'verify ssrf redirect: no GA4 hit or tracker beacon from the refused page is kept',
+    !cap.ga4Hits.some((h) => /169\.254/.test(h.dl ?? '')) && !cap.trackers.some((t) => /169\.254/.test(decodeURIComponent(t.url))),
+    JSON.stringify({ hits: cap.ga4Hits.map((h) => h.dl), trackers: cap.trackers.map((t) => t.url) }),
+  );
+  check(
+    'verify ssrf redirect: the start page tracker beacons are kept',
+    cap.trackers.length === 2 && cap.trackers.some((t) => t.vendor === 'meta_pixel') && cap.trackers.every((t) => /shop\.example\.com/.test(decodeURIComponent(t.url))),
+    JSON.stringify(cap.trackers.map((t) => t.url)),
   );
 }
 
