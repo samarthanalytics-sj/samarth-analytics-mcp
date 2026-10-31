@@ -23,6 +23,9 @@ check('FIRST-PARTY sGTM /g/collect (the fix)', isAnalyticsHit('https://sgtm.sama
 check('first-party sGTM /g/collect no query still caught (POST-batch)', isAnalyticsHit('https://sgtm.example.com/g/collect'));
 check('Meta pixel facebook.com/tr', isAnalyticsHit('https://www.facebook.com/tr?id=1&ev=Lead'));
 check('generic /collect with tid', isAnalyticsHit('https://collect.example.com/collect?tid=G-1&en=x'));
+// The X pixel's twin beacon: analytics.twitter.com was aborted but t.co delivered the test conversion.
+check('X pixel t.co/1/i/adsct twin beacon', isAnalyticsHit('https://t.co/1/i/adsct?txn_id=o1&events=%5B%5B%22lead%22%5D%5D'));
+check('X pixel analytics.twitter.com beacon', isAnalyticsHit('https://analytics.twitter.com/1/i/adsct?txn_id=o1'));
 
 // ── DELIVER (a real form POST / normal request — must NOT be aborted) ─────────────────────────────
 check('CF7 REST feedback endpoint NOT analytics', !isAnalyticsHit('https://site.com/wp-json/contact-form-7/v1/contact-forms/12/feedback'));
