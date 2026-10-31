@@ -8,9 +8,11 @@
  * Run after `npm run build`.
  */
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const distRoot = resolve(here, '../../dist');
@@ -86,6 +88,51 @@ test('relative imports carry a .js extension', () => {
     }
   }
   assert.deepEqual(offenders, [], 'extensionless relative imports will fail at runtime under Node');
+});
+
+test('the PDF worker is emitted beside attachments.js and extracts text under plain node', () => {
+  // attachments.ts picks ./pdf-worker.ts under tsx and ./pdf-worker.js once compiled, so only a run
+  // of the compiled file proves the entry the container starts resolves at all.
+  const attachments = join(distRoot, 'chat-orchestrator/src/attachments.js');
+  assert.ok(existsSync(join(distRoot, 'chat-orchestrator/src/pdf-worker.js')), 'pdf-worker.js did not emit');
+  const stream = 'BT /F1 12 Tf 72 700 Td (Compiled worker text) Tj ET';
+  const objs = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>',
+    `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`,
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  ];
+  let pdf = '%PDF-1.4\n';
+  const offsets = objs.map((body, i) => {
+    const at = pdf.length;
+    pdf += `${i + 1} 0 obj\n${body}\nendobj\n`;
+    return at;
+  });
+  const rows = offsets.map((o) => `${String(o).padStart(10, '0')} 00000 n \n`).join('');
+  pdf += `xref\n0 6\n0000000000 65535 f \n${rows}trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${pdf.length}\n%%EOF\n`;
+
+  // A clean `node file.mjs`, as the container runs it: not this tsx process, whose loader flags a
+  // worker would inherit, and not `node -e`, whose eval flags it would inherit too.
+  const dir = mkdtempSync(join(tmpdir(), 'orchestrator-build-'));
+  try {
+    const runner = join(dir, 'run.mjs');
+    writeFileSync(
+      runner,
+      `const { extractAttachment } = await import(process.argv[2]);\n` +
+        `const out = await extractAttachment({ name: 'built.pdf', dataBase64: process.argv[3] });\n` +
+        `process.stdout.write(out.text);\n`,
+    );
+    const run = spawnSync(
+      process.execPath,
+      [runner, pathToFileURL(attachments).href, Buffer.from(pdf, 'latin1').toString('base64')],
+      { encoding: 'utf8', timeout: 60_000, env: { PATH: process.env.PATH ?? '' } },
+    );
+    assert.equal(run.status, 0, `compiled PDF extraction failed: ${run.stderr}`);
+    assert.match(run.stdout, /Compiled worker text/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 console.log(`\n${passed} assertions passed`);

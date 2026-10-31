@@ -16,6 +16,7 @@
  * hand a PDF to Claude or Gemini natively and this deliberately cannot.
  */
 import { extname } from 'node:path';
+import { Worker } from 'node:worker_threads';
 
 export interface AttachmentInput {
   name: string;
@@ -85,6 +86,14 @@ const TEXT_EXTS = new Set([
 
 const fmt = (n: number): string => n.toLocaleString('en-US');
 
+/** The refusal for a file whose contents expand past what this chat will spend reading it. It
+ *  starts with the name, so extractAttachment passes it to the user as written. */
+const tooBigToRead = (name: string, detail: string): Error =>
+  new Error(
+    `${name} ${detail}, which is more than this chat can read. ` +
+      `Attach a smaller file, or export just the part you need as CSV or text.`,
+  );
+
 /** Strips tags but keeps table structure as pipe rows, so a table still reads as a table. */
 export function htmlTablesToText(html: string): string {
   return html
@@ -153,19 +162,140 @@ async function refuseOversizedZip(name: string, buf: Buffer): Promise<void> {
         .resume();
     });
     if (!within) {
-      throw new Error(
-        `${name} expands to more than ${fmt(MAX_INFLATED_BYTES / 1024 / 1024)} MB when unzipped, which is ` +
-          `more than this chat can read. Attach a smaller file, or export just the part you need as CSV or text.`,
-      );
+      throw tooBigToRead(name, `expands to more than ${fmt(MAX_INFLATED_BYTES / 1024 / 1024)} MB when unzipped`);
     }
   }
 }
 
-async function extractPdf(buf: Buffer): Promise<string> {
-  const mod: any = await import('pdf-parse');
-  const parse = mod.default ?? mod;
-  const out = await parse(buf);
-  return String(out?.text ?? '');
+/**
+ * What one PDF's text extraction may use before it is refused.
+ *
+ * pdf.js inflates each stream whole into a typed array and has no size cap of its own, so a ~1 MB
+ * upload whose content stream is a flate bomb decodes to gigabytes. It therefore runs in a worker
+ * thread, and the limits are of two kinds because V8's heap limits do NOT count ArrayBuffer memory,
+ * which is exactly where pdf.js keeps decoded streams: a worker capped at a 256 MB heap was measured
+ * decoding such a file to 1.7 GB of process memory before it finished. The heap limits catch parsed
+ * objects and text; the memory watch below catches the buffers; the timeout catches everything else.
+ */
+export interface PdfLimits {
+  /** Wall clock for the whole extraction, worker start-up included. The worker is terminated at it. */
+  timeoutMs: number;
+  /** The worker's V8 heap: pdf.js objects and the extracted text. Past it the worker is killed. */
+  maxOldGenerationSizeMb: number;
+  maxYoungGenerationSizeMb: number;
+  stackSizeMb: number;
+  /** Heap plus ArrayBuffers the worker may hold, as watched from this thread. See workerMemory. */
+  maxMemoryBytes: number;
+}
+
+export const PDF_LIMITS: Readonly<PdfLimits> = {
+  timeoutMs: 20_000,
+  maxOldGenerationSizeMb: 256,
+  maxYoungGenerationSizeMb: 32,
+  stackSizeMb: 4,
+  maxMemoryBytes: 256 * 1024 * 1024,
+};
+
+/** How often the worker's memory is sampled. pdf.js decodes at ~100 MB/s, so 50 ms is ~5 MB. */
+const PDF_MEMORY_POLL_MS = 50;
+
+/**
+ * The worker entry. tsx runs this module as src/attachments.ts (dev, tests), the build emits
+ * dist/chat-orchestrator/src/attachments.js, and pdf-worker sits beside it in both layouts.
+ */
+const PDF_WORKER_URL = new URL(
+  import.meta.url.endsWith('.ts') ? './pdf-worker.ts' : './pdf-worker.js',
+  import.meta.url,
+);
+
+/**
+ * Bytes the worker holds, or null while that cannot be told yet.
+ *
+ * Node 22.16+ reports a worker's own heap and external (ArrayBuffer) memory, read through an
+ * interrupt, so it answers while pdf.js is busy. Older Node, which the Docker image runs, has no
+ * per-worker figure; there the process's growth since the worker finished loading pdf.js stands in
+ * (`baselineRss`, null until then, because loading it is a fixed cost and not the file's). That
+ * overstates, since anything else growing at the same time counts too, which errs on refusing.
+ */
+async function workerMemory(worker: Worker, baselineRss: number | null): Promise<number | null> {
+  const stats = (worker as unknown as {
+    getHeapStatistics?: () => Promise<{ used_heap_size: number; external_memory: number }>;
+  }).getHeapStatistics;
+  if (typeof stats === 'function') {
+    const s = await stats.call(worker);
+    return s.used_heap_size + s.external_memory;
+  }
+  return baselineRss === null ? null : process.memoryUsage.rss() - baselineRss;
+}
+
+/**
+ * Extracts a PDF's text in a worker thread under PDF_LIMITS.
+ *
+ * Returns at most MAX_ATTACHMENT_CHARS of text plus the true length, so the caller can still say
+ * how much was cut without the whole text crossing threads. A limit or the deadline is refused with
+ * a message that starts with the name; a parser failure is rejected with pdf.js's own message.
+ */
+export async function extractPdf(
+  name: string,
+  buf: Buffer,
+  limits: PdfLimits = PDF_LIMITS,
+): Promise<{ text: string; chars: number }> {
+  const tooBig = (): Error =>
+    tooBigToRead(name, `expands to more than ${fmt(limits.maxMemoryBytes / 1024 / 1024)} MB when decoded`);
+  // A copy the worker can own: transferring buf's own memory could detach a pooled Node buffer.
+  const data = new Uint8Array(buf).buffer;
+  let baselineRss: number | null = null;
+  const worker = new Worker(PDF_WORKER_URL, {
+    workerData: { data, maxChars: MAX_ATTACHMENT_CHARS },
+    transferList: [data],
+    resourceLimits: {
+      maxOldGenerationSizeMb: limits.maxOldGenerationSizeMb,
+      maxYoungGenerationSizeMb: limits.maxYoungGenerationSizeMb,
+      stackSizeMb: limits.stackSizeMb,
+    },
+  });
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let sampling = false;
+    const finish = (err: Error | null, value?: { text: string; chars: number }): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      clearInterval(watch);
+      // Also on success: nothing it does after answering is wanted.
+      worker.terminate().catch(() => undefined);
+      if (err) reject(err);
+      else resolve(value!);
+    };
+    const timer = setTimeout(
+      () => finish(tooBigToRead(name, `took more than ${fmt(limits.timeoutMs / 1000)} seconds to read`)),
+      limits.timeoutMs,
+    );
+    const watch = setInterval(() => {
+      if (sampling || settled) return;
+      sampling = true;
+      workerMemory(worker, baselineRss)
+        .then((used) => {
+          if (used !== null && used > limits.maxMemoryBytes) finish(tooBig());
+        })
+        // The worker exited between samples; its own exit or message settles this.
+        .catch(() => undefined)
+        .finally(() => {
+          sampling = false;
+        });
+    }, PDF_MEMORY_POLL_MS);
+
+    worker.on('message', (m: { ready?: boolean; ok?: boolean; text?: string; chars?: number; message?: string }) => {
+      if (m.ready) baselineRss = process.memoryUsage.rss();
+      else if (m.ok) finish(null, { text: String(m.text ?? ''), chars: Number(m.chars ?? 0) });
+      else finish(new Error(String(m.message ?? 'unreadable PDF')));
+    });
+    worker.on('error', (err: Error & { code?: string }) => {
+      finish(err.code === 'ERR_WORKER_OUT_OF_MEMORY' ? tooBig() : err);
+    });
+    worker.on('exit', (code) => finish(new Error(`the PDF reader stopped (exit code ${code})`)));
+  });
 }
 
 async function extractXlsx(buf: Buffer): Promise<string> {
@@ -249,10 +379,13 @@ export async function extractAttachment(input: AttachmentInput): Promise<Extract
   }
 
   let raw = '';
+  // Set when the extractor already cut the text and reports the true length on its own.
+  let rawChars: number | null = null;
   try {
     if (ext === '.pdf') {
-      raw = await extractPdf(buf);
+      ({ text: raw, chars: rawChars } = await extractPdf(name, buf));
       if (!raw.trim()) {
+        rawChars = null;
         // Said plainly instead of silently attaching nothing: a scanned PDF has no text layer, and
         // the model must not be left to infer that the document was blank.
         raw = `[No text could be extracted from ${name}. It is most likely a scan or image-only PDF; the hosted chat cannot read those. The desktop app can, because it sends PDFs to a vision model directly.]`;
@@ -284,7 +417,7 @@ export async function extractAttachment(input: AttachmentInput): Promise<Extract
     throw new Error(`${name} could not be read (${msg.slice(0, 120)}).`);
   }
 
-  const chars = raw.length;
+  const chars = rawChars ?? raw.length;
   const truncated = chars > MAX_ATTACHMENT_CHARS;
   const text = truncated
     ? `${raw.slice(0, MAX_ATTACHMENT_CHARS)}\n\n[Attachment truncated: showing the first ${fmt(MAX_ATTACHMENT_CHARS)} of ${fmt(chars)} characters.]`
