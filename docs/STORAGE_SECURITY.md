@@ -104,9 +104,13 @@ Pure authorization over the `memberships` `(user, org, role)` tuple.
   on org B is `cross_tenant` regardless of role (callers should map this to 404
   to avoid leaking existence). `can()` / `assertCan()` wrap it for boolean and
   throwing call sites.
-- **`canAssignRole(actor, target)`** — escalation guard: an admin may assign only
-  roles strictly below admin (cannot mint admins/owners); an owner may assign any
-  role (incl. ownership transfer).
+- **`canAssignRole(actor, current, next)`** — escalation guard: an admin may
+  change only a membership strictly below admin, and only to a role strictly
+  below admin (cannot mint admins/owners, nor demote the owner or another
+  admin); an owner may assign any role (incl. ownership transfer).
+- **`canRemoveMember(actor, target)`** — the same "strictly below" rule for
+  `member:remove`: an admin cannot remove the owner or another admin. Callers
+  must still refuse to demote or remove an org's last owner.
 
 | | viewer | member | admin | owner |
 | --- | :-: | :-: | :-: | :-: |

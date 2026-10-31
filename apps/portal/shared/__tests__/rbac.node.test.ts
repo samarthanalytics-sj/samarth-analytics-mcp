@@ -23,6 +23,7 @@ import {
   roleAtLeast,
   compareRoles,
   canAssignRole,
+  canRemoveMember,
   AuthorizationError,
   type Permission,
   type Principal,
@@ -198,19 +199,53 @@ test("G02 roleAtLeast is inclusive", () => {
 // ── H. role-assignment escalation guard ──────────────────────────────────────
 
 test("H01 viewer/member cannot assign roles at all", () => {
-  assert.ok(!canAssignRole("viewer", "viewer"));
-  assert.ok(!canAssignRole("member", "viewer"));
+  assert.ok(!canAssignRole("viewer", "viewer", "viewer"));
+  assert.ok(!canAssignRole("member", "viewer", "viewer"));
 });
-test("H02 admin can assign roles strictly below admin", () => {
-  assert.ok(canAssignRole("admin", "member"));
-  assert.ok(canAssignRole("admin", "viewer"));
+test("H02 admin can move a below-admin membership between roles below admin", () => {
+  assert.ok(canAssignRole("admin", "viewer", "member"));
+  assert.ok(canAssignRole("admin", "member", "viewer"));
 });
 test("H03 admin CANNOT assign admin or owner (no self/up escalation)", () => {
-  assert.ok(!canAssignRole("admin", "admin"));
-  assert.ok(!canAssignRole("admin", "owner"));
+  assert.ok(!canAssignRole("admin", "member", "admin"));
+  assert.ok(!canAssignRole("admin", "member", "owner"));
 });
 test("H04 owner can assign any role (incl. ownership transfer)", () => {
-  for (const r of ROLES) assert.ok(canAssignRole("owner", r), `owner→${r}`);
+  for (const cur of ROLES) {
+    for (const r of ROLES) assert.ok(canAssignRole("owner", cur, r), `owner: ${cur}→${r}`);
+  }
+});
+test("H05 admin CANNOT demote the owner (lateral takeover)", () => {
+  // Regression: the guard only looked at the new role, so canAssignRole
+  // ("admin", "viewer") let an admin demote the owner and become top dog.
+  assert.ok(!canAssignRole("admin", "owner", "viewer"));
+  assert.ok(!canAssignRole("admin", "owner", "member"));
+});
+test("H06 admin CANNOT demote a fellow admin", () => {
+  assert.ok(!canAssignRole("admin", "admin", "member"));
+  assert.ok(!canAssignRole("admin", "admin", "viewer"));
+});
+
+// ── I. member-removal guard ──────────────────────────────────────────────────
+
+test("I01 viewer/member cannot remove anyone", () => {
+  for (const t of ROLES) {
+    assert.ok(!canRemoveMember("viewer", t), `viewer removes ${t}`);
+    assert.ok(!canRemoveMember("member", t), `member removes ${t}`);
+  }
+});
+test("I02 admin can remove memberships strictly below admin", () => {
+  assert.ok(canRemoveMember("admin", "member"));
+  assert.ok(canRemoveMember("admin", "viewer"));
+});
+test("I03 admin CANNOT remove the owner or a fellow admin", () => {
+  // Regression: member:remove was a plain matrix grant, so any admin could
+  // remove the owner.
+  assert.ok(!canRemoveMember("admin", "owner"));
+  assert.ok(!canRemoveMember("admin", "admin"));
+});
+test("I04 owner can remove any membership", () => {
+  for (const t of ROLES) assert.ok(canRemoveMember("owner", t), `owner removes ${t}`);
 });
 
 // ── run summary ──────────────────────────────────────────────────────────--
