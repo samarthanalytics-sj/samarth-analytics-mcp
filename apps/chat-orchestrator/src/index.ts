@@ -285,8 +285,26 @@ async function main(): Promise<void> {
   // A catalog probe at boot: it proves the MCP binary is reachable and gives the tool inventory,
   // which is identical across user sessions. Deliberately built with no Google token.
   console.log('[orchestrator] probing MCP server...');
-  const probe = new McpConnection(cfg, cfg.googleIdentity.mode === 'inherit' ? undefined : 'probe');
+  const probeToken = cfg.googleIdentity.mode === 'inherit' ? undefined : 'probe';
+  let probe = new McpConnection(cfg, probeToken);
   await probe.connect();
+  /**
+   * The probe, respawned if its child has exited since boot. Kept as it was, every slash command
+   * would answer unknown_command until a restart. Concurrent callers share one respawn.
+   */
+  let probeRespawn: Promise<McpConnection> | null = null;
+  const liveProbe = (): Promise<McpConnection> => {
+    if (!probe.isDead()) return Promise.resolve(probe);
+    probeRespawn ??= (async () => {
+      const next = new McpConnection(cfg, probeToken);
+      await next.connect();
+      probe = next;
+      return next;
+    })().finally(() => {
+      probeRespawn = null;
+    });
+    return probeRespawn;
+  };
 
   const all = probe.listTools();
   const reads = all.filter((t) => !t.isWrite).length;
@@ -990,7 +1008,7 @@ async function main(): Promise<void> {
     try {
       // Prompt templates are static text, identical for every user, so the probe connection serves
       // them without needing a per-user session.
-      const text = await probe.getPromptText(req.params.name, args);
+      const text = await (await liveProbe()).getPromptText(req.params.name, args);
       res.json({ text });
     } catch (err) {
       res.status(400).json({

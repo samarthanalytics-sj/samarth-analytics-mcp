@@ -192,6 +192,16 @@ export class McpConnection {
     return this.client;
   }
 
+  /**
+   * True once a connected client has lost its transport: the child exited, crashed or was killed.
+   * The SDK drops the transport on close and fails every later request with "Not connected", which
+   * is not an auth failure, so nothing retries it. Whatever caches this connection (the pool, the
+   * scanner, the boot probe) must replace it rather than hand it out again.
+   */
+  isDead(): boolean {
+    return this.client !== null && this.client.transport === undefined;
+  }
+
   listTools(): ToolDef[] {
     return this.tools;
   }

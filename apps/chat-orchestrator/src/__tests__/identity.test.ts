@@ -430,4 +430,43 @@ await testAsync('an identity refresh in one turn leaves the other turn its child
   });
 });
 
+console.log('pool: a child that has exited');
+
+/** What the SDK leaves behind once the child process exits: a client with no transport. */
+function markExited(connection: McpConnection): void {
+  Object.assign(connection as unknown as Record<string, unknown>, { client: { transport: undefined } });
+}
+
+await testAsync('an idle child that exited is replaced, not handed out again', async () => {
+  await withStubbedChildren(async (closed) => {
+    const { pool } = poolWithTokens();
+    const first = await pool.acquire('u', 'jwt');
+    pool.release('u', first);
+    markExited(first);
+
+    // Same user, same token: before, the entry was reused and every call failed "Not connected".
+    const second = await pool.acquire('u', 'jwt');
+    assert.notEqual(second, first, 'the dead child was handed out again');
+    assert.ok(closed.includes(first), 'the dead child was not cleaned up');
+    assert.deepEqual(pool.stats(), { sessions: 1, busy: 1 });
+    pool.release('u', second);
+  });
+});
+
+await testAsync('a dead child under a running turn is closed at once, not retired', async () => {
+  await withStubbedChildren(async (closed) => {
+    const { pool } = poolWithTokens();
+    const running = await pool.acquire('u', 'jwt');
+    markExited(running);
+
+    const next = await pool.acquire('u', 'jwt');
+    assert.notEqual(next, running);
+    // Retired, it would count as a live, busy session until the turn on it gave up.
+    assert.ok(closed.includes(running), 'a dead child was kept as if it were still serving');
+    pool.release('u', running);
+    assert.deepEqual(pool.stats(), { sessions: 1, busy: 1 });
+    pool.release('u', next);
+  });
+});
+
 console.log(`\n${passed} assertions passed`);

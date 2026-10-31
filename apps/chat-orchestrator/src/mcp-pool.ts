@@ -112,8 +112,11 @@ export class McpPool {
   private async entryFor(userId: string, accessToken: string): Promise<PoolEntry> {
     const existing = this.entries.get(userId);
     if (existing) {
-      if (existing.accessToken === accessToken) return existing;
-      await this.evict(userId, 'token changed');
+      // A dead child is replaced even with the same token: reusing it fails every call "Not
+      // connected", and each failed retry refreshed lastUsedAt so the idle sweep never removed it.
+      const dead = existing.connection.isDead();
+      if (existing.accessToken === accessToken && !dead) return existing;
+      await this.evict(userId, dead ? 'child exited' : 'token changed');
     }
 
     // Collapse concurrent first requests from the same user onto one spawn.
@@ -166,7 +169,9 @@ export class McpPool {
     const entry = this.entries.get(userId);
     if (!entry) return;
     this.entries.delete(userId);
-    if (entry.inUse > 0) {
+    // A child that has exited serves nothing, so it is closed now rather than retired until its turn
+    // ends: the turn on it already fails "Not connected" either way.
+    if (entry.inUse > 0 && !entry.connection.isDead()) {
       // Closing it now would fail every later tool call of the turn still running on it with "MCP
       // client is not connected", which is not an auth failure, so nothing would retry it.
       this.retired.set(entry.connection, { userId, entry });

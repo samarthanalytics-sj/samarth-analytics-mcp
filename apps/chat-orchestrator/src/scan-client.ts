@@ -183,7 +183,13 @@ export class SiteScanner {
    * of which a user fixes and retries, and caching the failure would make the retry lie.
    */
   private async connect(): Promise<McpConnection> {
-    if (this.connection) return this.connection;
+    if (this.connection && !this.connection.isDead()) return this.connection;
+    if (this.connection) {
+      // The child exited (a crash, or the OS killing a browser-heavy process). Kept, it would fail
+      // every scan for every user "Not connected" until the orchestrator restarted.
+      void this.connection.close().catch(() => undefined);
+      this.connection = null;
+    }
     if (this.connecting) return this.connecting;
 
     const command = process.env.WEB_AUDIT_MCP_COMMAND?.trim() || process.execPath;

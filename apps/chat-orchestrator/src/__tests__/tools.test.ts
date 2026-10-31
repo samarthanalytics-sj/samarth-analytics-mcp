@@ -431,11 +431,11 @@ await testAsync('the connection itself refuses a name its server never listed', 
   assert.deepEqual(sent, ['tags_list'], 'only the listed tool may reach the server');
 });
 
-console.log('MCP request timeouts');
+console.log('MCP request timeouts and child exits');
 
 /**
  * A real stdio MCP child, so the SDK's own request timer is what is under test rather than a fake
- * of it. `slow` answers after 400 ms.
+ * of it. `slow` answers after 400 ms; `exit` answers and then the process exits, like a crash.
  */
 function stubChildConfig(): OrchestratorConfig {
   const require = createRequire(import.meta.url);
@@ -448,6 +448,10 @@ function stubChildConfig(): OrchestratorConfig {
     server.registerTool('slow', { description: 'answers after 400 ms' }, async () => {
       await new Promise((r) => setTimeout(r, 400));
       return { content: [{ type: 'text', text: 'done' }] };
+    });
+    server.registerTool('exit', { description: 'answers, then the process exits' }, async () => {
+      setTimeout(() => process.exit(1), 20);
+      return { content: [{ type: 'text', text: 'bye' }] };
     });
     server.connect(new StdioServerTransport());
   `;
@@ -466,6 +470,23 @@ await testAsync("a tool call runs to the caller's timeout, not the SDK's fixed o
     assert.equal(cut.ok, false, 'a 100 ms limit was ignored');
     assert.match(cut.text, /Request timed out/);
     assert.deepEqual(await conn.callTool('slow', {}, { timeoutMs: 5_000 }), { ok: true, text: 'done' });
+  } finally {
+    await conn.close();
+  }
+});
+
+await testAsync('a child that exits is reported dead, so its holder can replace it', async () => {
+  // Nothing else noticed: the SDK fails every later call "Not connected", which is not an auth
+  // failure, so the pool and the scanner kept handing the dead connection out.
+  const conn = new McpConnection(stubChildConfig());
+  await conn.connect();
+  try {
+    assert.equal(conn.isDead(), false, 'a running child reported dead');
+    await conn.callTool('exit', {});
+    const until = Date.now() + 5_000;
+    while (!conn.isDead() && Date.now() < until) await new Promise((r) => setTimeout(r, 20));
+    assert.equal(conn.isDead(), true, 'a child that exited still looked alive');
+    assert.match((await conn.callTool('slow', {})).text, /Not connected/);
   } finally {
     await conn.close();
   }

@@ -17,7 +17,7 @@ import {
   SiteScanner,
   type ScanResult,
 } from '../scan-client.js';
-import type { McpConnection } from '../mcp-client.js';
+import { McpConnection } from '../mcp-client.js';
 import type { OrchestratorConfig } from '../config.js';
 import {
   CHAT_DEFAULT_PAGES,
@@ -424,6 +424,7 @@ test('a scan or discovery lets the MCP request outlast its own deadline', async 
   // pages died with a raw "Request timed out" and the deadline's own advice never fired.
   const asked: (number | undefined)[] = [];
   const scanner = scannerOn({
+    isDead: () => false,
     async callTool(_name: string, _args: Record<string, unknown>, opts?: { timeoutMs?: number }) {
       asked.push(opts?.timeoutMs);
       return { ok: true, text: '{}' };
@@ -438,4 +439,30 @@ test('a scan or discovery lets the MCP request outlast its own deadline', async 
   assert.ok(chatScan > 170_000, `a chat scan asked for ${chatScan} ms`);
   assert.ok(discover > DISCOVER_TIMEOUT_MS, `a discovery asked for ${discover} ms`);
   assert.ok(chatDiscover > 30_000, `a chat discovery asked for ${chatDiscover} ms`);
+});
+
+test('a scanner whose child exited starts a new one instead of failing every scan', async () => {
+  // One shared child serves every user, so a dead one used to fail all scans until a restart.
+  const proto = McpConnection.prototype as unknown as { connect(): Promise<void> };
+  const realConnect = proto.connect;
+  const realEntry = process.env.WEB_AUDIT_MCP_ENTRY;
+  proto.connect = async () => {};
+  process.env.WEB_AUDIT_MCP_ENTRY = '/never/spawned/index.js';
+  try {
+    let deadClosed = false;
+    const scanner = scannerOn({
+      isDead: () => true,
+      close: async () => {
+        deadClosed = true;
+      },
+      callTool: async () => ({ ok: false, text: 'Tool call failed: Not connected' }),
+    });
+    const conn = await (scanner as unknown as { connect(): Promise<McpConnection> }).connect();
+    assert.ok(conn instanceof McpConnection, 'the dead child was handed out again');
+    assert.ok(deadClosed, 'the dead child was not cleaned up');
+  } finally {
+    proto.connect = realConnect;
+    if (realEntry === undefined) delete process.env.WEB_AUDIT_MCP_ENTRY;
+    else process.env.WEB_AUDIT_MCP_ENTRY = realEntry;
+  }
 });
