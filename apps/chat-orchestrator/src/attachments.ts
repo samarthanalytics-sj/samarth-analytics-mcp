@@ -186,6 +186,8 @@ export interface PdfLimits {
   stackSizeMb: number;
   /** Heap plus ArrayBuffers the worker may hold, as watched from this thread. See workerMemory. */
   maxMemoryBytes: number;
+  /** PDFs read at once across all users. Others wait for a slot; the deadline starts with the read. */
+  maxConcurrent: number;
 }
 
 export const PDF_LIMITS: Readonly<PdfLimits> = {
@@ -194,19 +196,62 @@ export const PDF_LIMITS: Readonly<PdfLimits> = {
   maxYoungGenerationSizeMb: 32,
   stackSizeMb: 4,
   maxMemoryBytes: 256 * 1024 * 1024,
+  maxConcurrent: 2,
 };
 
 /** How often the worker's memory is sampled. pdf.js decodes at ~100 MB/s, so 50 ms is ~5 MB. */
 const PDF_MEMORY_POLL_MS = 50;
 
 /**
- * The worker entry. tsx runs this module as src/attachments.ts (dev, tests), the build emits
- * dist/chat-orchestrator/src/attachments.js, and pdf-worker sits beside it in both layouts.
+ * The worker's code, run as an eval'd script rather than from a file of its own. A .ts worker entry
+ * only loads where the worker inherits tsx's loader, which Node 20 workers do not ("Unknown file
+ * extension .ts"), and a .js one only exists after a build. Plain JS in a string runs the same under
+ * tsx and from dist on every Node this package supports. An eval'd script has no location to
+ * resolve 'pdf-parse' from, so the caller resolves it and passes the URL in.
  */
-const PDF_WORKER_URL = new URL(
-  import.meta.url.endsWith('.ts') ? './pdf-worker.ts' : './pdf-worker.js',
-  import.meta.url,
-);
+const PDF_WORKER_SOURCE = `
+const { parentPort, workerData: job } = require('node:worker_threads');
+(async () => {
+  const { PDFParse } = await import(job.pdfParseUrl);
+  // Loading pdf.js is a fixed cost, not the file's. Said here so the caller measures from now on.
+  parentPort.postMessage({ ready: true });
+  const parser = new PDFParse({ data: new Uint8Array(job.data) });
+  try {
+    const out = await parser.getText();
+    // pdf-parse writes a "-- 1 of 3 --" marker per page even when a page has no text, so a scan
+    // would come back as markers alone. Empty means no page had text, which the caller narrates.
+    const text = out.pages.some((p) => p.text.trim()) ? String(out.text ?? '') : '';
+    // The true length travels separately, so truncation stays honest.
+    parentPort.postMessage({ ok: true, text: text.slice(0, job.maxChars), chars: text.length });
+  } finally {
+    await parser.destroy().catch(() => undefined);
+  }
+})().catch((err) => {
+  parentPort.postMessage({ ok: false, message: err instanceof Error ? err.message : String(err) });
+});
+`;
+
+const PDF_PARSE_URL = import.meta.resolve('pdf-parse');
+
+/**
+ * PDFs being read right now, and the reads waiting for a slot. Each read may hold up to
+ * maxMemoryBytes (briefly more before it is stopped), so without a cap a burst of bomb uploads
+ * from different users would add up to more memory than the container has.
+ */
+let pdfReadsRunning = 0;
+const pdfReadWaiters: (() => void)[] = [];
+
+async function takePdfSlot(max: number): Promise<() => void> {
+  while (pdfReadsRunning >= Math.max(1, max)) await new Promise<void>((wake) => pdfReadWaiters.push(wake));
+  pdfReadsRunning++;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    pdfReadsRunning--;
+    pdfReadWaiters.shift()?.();
+  };
+}
 
 /**
  * Bytes the worker holds, or null while that cannot be told yet.
@@ -242,18 +287,26 @@ export async function extractPdf(
 ): Promise<{ text: string; chars: number }> {
   const tooBig = (): Error =>
     tooBigToRead(name, `expands to more than ${fmt(limits.maxMemoryBytes / 1024 / 1024)} MB when decoded`);
+  const release = await takePdfSlot(limits.maxConcurrent);
   // A copy the worker can own: transferring buf's own memory could detach a pooled Node buffer.
   const data = new Uint8Array(buf).buffer;
   let baselineRss: number | null = null;
-  const worker = new Worker(PDF_WORKER_URL, {
-    workerData: { data, maxChars: MAX_ATTACHMENT_CHARS },
-    transferList: [data],
-    resourceLimits: {
-      maxOldGenerationSizeMb: limits.maxOldGenerationSizeMb,
-      maxYoungGenerationSizeMb: limits.maxYoungGenerationSizeMb,
-      stackSizeMb: limits.stackSizeMb,
-    },
-  });
+  let worker: Worker;
+  try {
+    worker = new Worker(PDF_WORKER_SOURCE, {
+      eval: true,
+      workerData: { data, maxChars: MAX_ATTACHMENT_CHARS, pdfParseUrl: PDF_PARSE_URL },
+      transferList: [data],
+      resourceLimits: {
+        maxOldGenerationSizeMb: limits.maxOldGenerationSizeMb,
+        maxYoungGenerationSizeMb: limits.maxYoungGenerationSizeMb,
+        stackSizeMb: limits.stackSizeMb,
+      },
+    });
+  } catch (err) {
+    release();
+    throw err;
+  }
 
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -263,8 +316,9 @@ export async function extractPdf(
       settled = true;
       clearTimeout(timer);
       clearInterval(watch);
-      // Also on success: nothing it does after answering is wanted.
-      worker.terminate().catch(() => undefined);
+      // Also on success: nothing it does after answering is wanted. The slot is free once the
+      // worker is gone, so a stopped bomb's memory is not counted against the next read.
+      worker.terminate().catch(() => undefined).finally(release);
       if (err) reject(err);
       else resolve(value!);
     };

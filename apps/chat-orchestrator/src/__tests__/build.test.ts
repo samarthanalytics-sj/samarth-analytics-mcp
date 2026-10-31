@@ -90,11 +90,11 @@ test('relative imports carry a .js extension', () => {
   assert.deepEqual(offenders, [], 'extensionless relative imports will fail at runtime under Node');
 });
 
-test('the PDF worker is emitted beside attachments.js and extracts text under plain node', () => {
-  // attachments.ts picks ./pdf-worker.ts under tsx and ./pdf-worker.js once compiled, so only a run
-  // of the compiled file proves the entry the container starts resolves at all.
+test('the compiled attachments.js extracts PDF text in its worker under plain node', () => {
+  // The worker resolves pdf-parse from attachments.js's own location, so only a run of the compiled
+  // file proves that resolution works where the container starts it.
   const attachments = join(distRoot, 'chat-orchestrator/src/attachments.js');
-  assert.ok(existsSync(join(distRoot, 'chat-orchestrator/src/pdf-worker.js')), 'pdf-worker.js did not emit');
+  assert.ok(existsSync(attachments), 'attachments.js did not emit');
   const stream = 'BT /F1 12 Tf 72 700 Td (Compiled worker text) Tj ET';
   const objs = [
     '<< /Type /Catalog /Pages 2 0 R >>',

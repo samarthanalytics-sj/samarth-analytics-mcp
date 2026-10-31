@@ -273,6 +273,24 @@ test('a PDF that exhausts the worker heap is refused like a bomb, not reported a
   );
 });
 
+test('PDF reads beyond maxConcurrent wait for a slot, and their deadline starts with the read', async () => {
+  // Each read may hold up to maxMemoryBytes, so a burst of bombs from different users must not
+  // all decode at once. With one slot, an ordinary PDF queued behind a bomb finishes after it.
+  const one = { ...PDF_LIMITS, maxConcurrent: 1 };
+  const order: string[] = [];
+  const bomb = extractPdf('queued-bomb.pdf', pdfWith(zeroFlateBomb(1024), 'FlateDecode'), one).then(
+    () => order.push('bomb read'),
+    () => order.push('bomb refused'),
+  );
+  const ordinary = extractPdf('queued.pdf', ordinaryPdf, { ...one, timeoutMs: 5_000 }).then((out) => {
+    order.push('ordinary read');
+    return out;
+  });
+  const [, out] = await Promise.all([bomb, ordinary]);
+  assert.deepEqual(order, ['bomb refused', 'ordinary read']);
+  assert.ok(out.text.includes('Quarterly tag inventory'));
+});
+
 test('a long PDF is cut in the worker but still reports its true length', async () => {
   const line = 'tag inventory row '.repeat(25);
   const ops = Array.from({ length: 300 }, () => `(${line}) Tj T*`).join('\n');
