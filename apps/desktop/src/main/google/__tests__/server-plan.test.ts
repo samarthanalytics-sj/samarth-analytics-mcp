@@ -371,5 +371,72 @@ test('CAPI items: a per-conversion id is required PER EVENT, so two X / LinkedIn
   assert.deepEqual(r.map((x) => [x.id, x.missingValues]), [['x_capi:generate_lead', ['x.eventId@generate_lead']]]);
 });
 
-console.log(`\n${passed} passed, ${failed} failed`);
-if (failed > 0) process.exit(1);
+// ── applyServerPlan wiring: CAPI match-quality variable provisioning ─────────────────────────────
+// Regression: a failure creating the Meta/TikTok `ed - ...` variables was swallowed (.catch(() => null))
+// and the platform marked provisioned, so the tag was built on dangling references, the error named
+// the reference instead of the cause, and later events never retried. GTM is answered by a fake auth
+// client (googleapis sends every request through auth.request); nothing leaves the machine.
+async function applyWiring(): Promise<void> {
+  const { GoogleDataService } = await import('../data-service');
+  type Ctor = ConstructorParameters<typeof GoogleDataService>;
+  const gtmCalls: string[] = [];
+  let triggerSeq = 0;
+  const fakeAuth = {
+    request: async (opts: { url?: unknown; method?: unknown }) => {
+      gtmCalls.push(`${String(opts.method ?? 'GET')} ${String(opts.url)}`);
+      triggerSeq += 1;
+      return { data: { triggerId: `T${triggerSeq}` }, status: 200, headers: {}, config: opts };
+    },
+  };
+  const svc = new GoogleDataService(
+    { getActiveView: () => ({ id: 'acct', email: 'a@x.com', hasGoogleToken: true }) } as unknown as Ctor[0],
+    { getClient: () => fakeAuth } as unknown as Ctor[1],
+  );
+  const stub = svc as unknown as Record<string, unknown>;
+  const varCreates: string[] = [];
+  let varListings = 0;
+  let failNextVariable = true;
+  const tagCreates: string[] = [];
+  stub.findServerContainerByName = async () => ({ containerId: '99', publicId: 'GTM-SRV', name: 'Server' });
+  stub.defaultWorkspaceId = async () => '5';
+  stub.listGtmClients = async () => [];
+  stub.listGtmTriggers = async () => [];
+  stub.listGtmTags = async () => [];
+  stub.listGtmEnabledBuiltInVariables = async () => [];
+  stub.listGtmVariables = async () => { varListings += 1; return []; };
+  stub.importGalleryTemplate = async () => ({ type: 'cvt_capi' });
+  stub.createGtmVariable = async (_a: string, _c: string, _w: string, v: { name?: string }) => {
+    if (failNextVariable) { failNextVariable = false; throw new Error(`Found entity with the same name: ${v.name}`); }
+    varCreates.push(String(v.name));
+    return { variableId: String(varCreates.length), name: String(v.name), type: 'ed' };
+  };
+  stub.createGtmTag = async (_a: string, _c: string, _w: string, t: { name?: string }) => {
+    tagCreates.push(String(t.name));
+    return { tagId: String(tagCreates.length), name: String(t.name), type: 'cvt_capi' };
+  };
+  const out = await svc.applyServerPlan('1', '10', { newName: 'Server' },
+    ['meta_capi:purchase', 'meta_capi:generate_lead', 'snapchat_capi:purchase'],
+    { capi: { 'meta.pixelId': 'P1', 'meta.accessToken': 'test-token', 'snapchat.pixelId': 'S1', 'snapchat.accessToken': 'test-token' } });
+
+  test('apply: a failed ed - variable provisioning FAILS that CAPI item with the real cause', () => {
+    assert.ok(!out.applied.includes('meta_capi:purchase'), 'never reported as applied');
+    const f = out.failed.find((x) => x.id === 'meta_capi:purchase');
+    assert.ok(f, 'reported as failed');
+    assert.match(f!.error, /match-quality variables/);
+    assert.match(f!.error, /Found entity with the same name/, 'the variable error, not a dangling-reference one');
+    assert.ok(!tagCreates.includes('Meta CAPI - purchase'), 'no tag is built on dangling {{ed - ...}} references');
+    assert.equal(gtmCalls.filter((c) => /triggers/.test(c)).length, 2, 'the failed item leaves no stray trigger (only the 2 applied items create one)');
+  });
+  test('apply: the next event retries the provisioning, and Meta + Snapchat share the one variable set', () => {
+    assert.deepEqual(out.applied, ['meta_capi:generate_lead', 'snapchat_capi:purchase']);
+    assert.deepEqual(tagCreates, ['Meta CAPI - generate_lead', 'Snapchat CAPI - purchase']);
+    // 1 plan-wide listing + the failing item's provisioning + ONE retry; Snapchat reuses the 'meta' set.
+    assert.equal(varListings, 3, 'provisioned on the failing item, retried once on the next, then never again');
+    assert.ok(varCreates.length > 0);
+  });
+}
+
+void applyWiring().catch((e) => { failed++; console.error(`  ✗ applyServerPlan wiring: ${(e as Error).message}`); }).then(() => {
+  console.log(`\n${passed} passed, ${failed} failed`);
+  if (failed > 0) process.exit(1);
+});

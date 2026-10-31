@@ -2166,10 +2166,19 @@ export class GoogleDataService {
           templateType[platform] = (await this.q(() => this.importGalleryTemplate(accountId, cid, workspaceId, spec.gallery[0], spec.gallery[1]))).type;
         }
         const type = templateType[platform];
-        if (spec.emqVariables && !varsDone.has(platform)) {
-          if (spec.emqVariables === 'meta') await this.q(() => this.createMetaEmqVariables(accountId, cid, workspaceId)).catch(() => null);
-          if (spec.emqVariables === 'tiktok') await this.q(() => this.createTikTokEmqVariables(accountId, cid, workspaceId)).catch(() => null);
-          varsDone.add(platform);
+        // The tag references these `ed - ...` variables, so a provisioning failure fails THIS item with
+        // its real cause (it used to be swallowed and the tag create then failed on a dangling
+        // reference, or the set was marked done and never retried). Only a successful run marks the
+        // set done, keyed by the set (Meta and Snapchat share 'meta'), so the next item retries it.
+        const set = spec.emqVariables;
+        if (set && !varsDone.has(set)) {
+          try {
+            if (set === 'meta') await this.q(() => this.createMetaEmqVariables(accountId, cid, workspaceId));
+            else await this.q(() => this.createTikTokEmqVariables(accountId, cid, workspaceId));
+          } catch (e) {
+            throw new Error(`Could not create the ${set === 'meta' ? 'Meta' : 'TikTok'} match-quality variables (ed - ...) this tag references: ${msg(e)}`);
+          }
+          varsDone.add(set);
         }
         const triggerId = await ensureEventTrigger(event);
         // The spec adapts the declared credentials onto this vendor's own argument order.
