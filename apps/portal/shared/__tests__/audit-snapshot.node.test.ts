@@ -686,6 +686,75 @@ test("S-builtin: the Express auditor exempts built-in ids but still flags dangli
   );
 });
 
+// ── Google tag IDs that are not GA4 measurement IDs (AW-/DC-/GT-) ───────────
+
+const MID_SHAPE = "GA4 tag has a measurement ID that does not look like G-XXXXXXX or GT-XXXXXXX";
+const MID_MISMATCH =
+  "GTM references GA4 measurement ID(s) that do not match any data stream on the selected GA4 property";
+
+function googleTag(tagId: string, id: string, name: string) {
+  return {
+    tagId,
+    name,
+    type: "googtag",
+    firingTriggerId: ["2147479553"],
+    parameter: [{ type: "template", key: "tagId", value: id }],
+  };
+}
+
+const streamRoutes = (url: URL): StubResponse | undefined => {
+  if (url.hostname !== "analyticsadmin.googleapis.com") return undefined;
+  const p = url.pathname;
+  if (p.endsWith("/dataStreams")) {
+    return {
+      status: 200,
+      body: { dataStreams: [{ name: "properties/123456/dataStreams/1", webStreamData: { measurementId: "G-ABC1234" } }] },
+    };
+  }
+  if (p.endsWith("/customDimensions")) return { status: 200, body: { customDimensions: [] } };
+  if (p.endsWith("/customMetrics")) return { status: 200, body: { customMetrics: [] } };
+  if (p.endsWith("/dataRetentionSettings")) return { status: 200, body: {} };
+  if (p.endsWith("/googleAdsLinks")) return { status: 200, body: { googleAdsLinks: [] } };
+  if (p.endsWith("/enhancedMeasurementSettings")) return { status: 200, body: { streamEnabled: false } };
+  return undefined;
+};
+
+testAsync("R-googtag: a GA4 Google tag plus a Google Ads (AW-) Google tag is not a bad GA4 id or a duplicate", async () => {
+  // Regression: AW- on a googtag got a HIGH "does not look like G-" finding and
+  // counted as a second GA4 config tag.
+  const out = await auditFindings(
+    webFixture([googleTag("1", "G-ABC1234", "GA4 Google tag"), googleTag("2", "AW-123456789", "Google Ads tag")]),
+  );
+  assert.ok(!out.findings.some((f) => f.finding === MID_SHAPE), "AW- Google tag shape-checked as GA4");
+  assert.ok(!out.findings.some((f) => /Google tag \/ GA4 Configuration tags \(one expected\)/.test(f.finding ?? "")));
+});
+
+testAsync("R-googtag: a GT- Google tag is not reported as a measurement ID missing from the data streams", async () => {
+  // Regression: GT- ids were compared with stream measurementIds (always G-) and
+  // always produced a HIGH CONFIG+GA4_ADMIN mismatch.
+  const out = await auditFindings(
+    webFixture([googleTag("1", "G-ABC1234", "GA4 Google tag"), googleTag("2", "GT-ABCDEFG", "Google tag (GT)")]),
+    [streamRoutes],
+    { ga4PropertyId: "123456" },
+  );
+  assert.ok(!out.findings.some((f) => f.finding === MID_MISMATCH), "GT- id reported as a stream mismatch");
+  assert.deepEqual(out.gtmMeasurementIds, ["G-ABC1234"]);
+});
+
+testAsync("R-googtag control: two G- Google tags still trip the config-count finding", async () => {
+  const out = await auditFindings(
+    webFixture([googleTag("1", "G-ABC1234", "GA4 tag A"), googleTag("2", "G-XYZ9876", "GA4 tag B")]),
+  );
+  assert.ok(out.findings.some((f) => /Container has 2 Google tag \/ GA4 Configuration tags/.test(f.finding ?? "")));
+});
+
+testAsync("R-googtag control: a G- id that is not on the property is still a stream mismatch", async () => {
+  const out = await auditFindings(webFixture([googleTag("1", "G-OTHER99", "Wrong GA4 tag")]), [streamRoutes], {
+    ga4PropertyId: "123456",
+  });
+  assert.ok(out.findings.some((f) => f.finding === MID_MISMATCH));
+});
+
 for (const [name, fn] of asyncTests) {
   try {
     await fn();

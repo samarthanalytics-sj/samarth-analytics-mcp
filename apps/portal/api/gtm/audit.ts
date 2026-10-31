@@ -639,6 +639,19 @@ function isGA4Config(tag: GtmTag): boolean {
 function isGA4Event(tag: GtmTag): boolean {
   return tag.type === "gaawe";
 }
+/** The ID a Google tag (googtag) points at: tagId, or measurementId on older exports. */
+function googtagId(tag: GtmTag): string {
+  return tagParam(tag, "tagId") ?? tagParam(tag, "measurementId") ?? "";
+}
+/**
+ * A Google tag (googtag) is a GA4 tag only when its ID is a G- measurement ID
+ * (or a variable). AW- (Google Ads), DC- (Floodlight) and GT- (generic Google
+ * tag) IDs are Google tag IDs, not GA4 measurement IDs, so they must not be
+ * shape-checked, counted, or reconciled as GA4. Mirrors src/tools/audit.ts.
+ */
+function isNonGa4GoogleTag(tag: GtmTag): boolean {
+  return tag.type === "googtag" && /^(AW|DC|GT)-/i.test(googtagId(tag));
+}
 function isMarketingOrAnalyticsTag(tag: GtmTag): boolean {
   const t = (tag.type ?? "").toLowerCase();
   if (!t) return false;
@@ -862,8 +875,8 @@ function ruleBrokenReferences(ctx: Ctx, out: AuditFinding[]) {
 
 // B. GA4 integrity
 function ruleGA4ConfigCount(ctx: Ctx, out: AuditFinding[]) {
-  const configTags = ctx.tags.filter(isGA4Config);
-  if (configTags.length === 0) {
+  const googleTags = ctx.tags.filter(isGA4Config);
+  if (googleTags.length === 0) {
     // Only emit if any GA4 event tag exists — otherwise this is not a GA4
     // container and the finding would be a false positive.
     if (ctx.tags.some(isGA4Event)) {
@@ -885,6 +898,9 @@ function ruleGA4ConfigCount(ctx: Ctx, out: AuditFinding[]) {
     }
     return;
   }
+  // An AW-/DC-/GT- Google tag is not a GA4 config tag: the common GA4 + Google
+  // Ads pairing is two Google tags but only one GA4 base tag.
+  const configTags = googleTags.filter((t) => !isNonGa4GoogleTag(t));
   if (configTags.length > 1) {
     pushFinding(out, {
       id: fid(`ga4-config-count:${configTags.length}`),
@@ -909,6 +925,8 @@ function ruleGA4MeasurementIdsConsistent(ctx: Ctx, out: AuditFinding[]) {
   const offenders: string[] = [];
   for (const tag of ctx.tags) {
     if (!isGA4Config(tag) && !isGA4Event(tag)) continue;
+    // AW-/DC-/GT- Google tags are not GA4 tags: never shape-check them.
+    if (isNonGa4GoogleTag(tag)) continue;
     const id =
       tagParam(tag, "tagId") ??
       tagParam(tag, "measurementId") ??
@@ -1456,7 +1474,12 @@ function ruleConversionLinker(ctx: Ctx, out: AuditFinding[]) {
 // No runtime claims are made — this reconciles configuration intent against
 // the GA4 property's registered settings.
 
-/** Collect distinct GA4 measurement IDs (G-/GT-) referenced in GTM config. */
+/**
+ * Collect distinct GA4 measurement IDs (G- only) referenced in GTM config. GT-
+ * (and AW-/DC-) IDs are Google tag IDs, not measurement IDs: they can never
+ * equal a data stream's G- measurementId, so reconciling them would always
+ * report a false mismatch.
+ */
 function gtmGa4MeasurementIds(ctx: Ctx): Set<string> {
   const ids = new Set<string>();
   for (const tag of ctx.tags) {
@@ -1466,7 +1489,7 @@ function gtmGa4MeasurementIds(ctx: Ctx): Set<string> {
       tagParam(tag, "measurementId") ??
       tagParam(tag, "measurementIdOverride");
     if (!id) continue;
-    if (/^G-/i.test(id) || /^GT-/i.test(id)) ids.add(id.toUpperCase());
+    if (/^G-/i.test(id)) ids.add(id.toUpperCase());
   }
   return ids;
 }
