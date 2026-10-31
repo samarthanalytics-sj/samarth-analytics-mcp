@@ -428,7 +428,7 @@ check('rank: high-confidence non-EM first (form/email before download)', ranked[
 
 // ── review-fix regressions ───────────────────────────────────────────────────
 check('provider: Pardot via form action (handler endpoint)', detectFormProvider(sig({}), 'https://go.pardot.com/l/1/2/form-handler').vendor === 'pardot');
-// Marketo without the #mktoForm_<n> id (the get.chewbox.example shape): class .mktoForm or the forms2 script.
+// Marketo without the #mktoForm_<n> id (the get.example-client.example shape): class .mktoForm or the forms2 script.
 check('provider: Marketo via class .mktoForm (no #mktoForm_<n> id)', detectFormProvider(sig({ classNames: ['mktoForm', 'tal'] })).vendor === 'marketo');
 check('provider: Marketo via the forms2 loader script', detectFormProvider(sig({ scriptSrcs: ['https://app-ab12.marketo.com/js/forms2/js/forms2.min.js'] })).vendor === 'marketo');
 check('provider: munchkin.js (tracking-only, loads site-wide without a form) does NOT flip forms to marketo', detectFormProvider(sig({ scriptSrcs: ['https://munchkin.marketo.net/munchkin.js'] })).vendor !== 'marketo');
@@ -728,8 +728,8 @@ check('scroll: no Meta counterpart is derived (GA4-only engagement signal)',
 // Element}} CSS selector on top (corpus: "Click Text ENDS_WITH ? AND Click Classes CONTAINS <cls>");
 // single-page FAQs ALSO get an ANDed {{Page Path}} condition. Per-question tags never emitted alongside.
 const faqEls = [
-  { page: '/faq', kind: 'cta' as const, text: 'Does ChewBox charge commissions?', intent: 'generic' as const, className: 'faq-question flex items-center' },
-  { page: '/faq', kind: 'cta' as const, text: 'Does ChewBox integrate with my POS?', intent: 'generic' as const, className: 'faq-question flex items-center' },
+  { page: '/faq', kind: 'cta' as const, text: 'Does ExampleCo charge commissions?', intent: 'generic' as const, className: 'faq-question flex items-center' },
+  { page: '/faq', kind: 'cta' as const, text: 'Does ExampleCo integrate with my POS?', intent: 'generic' as const, className: 'faq-question flex items-center' },
   { page: '/faq', kind: 'cta' as const, text: 'What happens to my customer data?', intent: 'generic' as const, className: 'faq-question flex items-center' },
 ];
 const faq = buildSuggestions({ siteHost: 'a.com', forms: [], elements: faqEls });
@@ -741,9 +741,9 @@ check('faq: the grouped question rows are NOT also emitted as their own per-ques
 const loneQ = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [{ page: '/x', kind: 'cta', text: 'Need help?', intent: 'generic', className: 'faq-question' }] });
 check('faq: a single question row is NOT grouped (no faq tag; stays an individual CTA)', !loneQ.some((s) => s.eventName === 'faq_click') && loneQ.some((s) => s.trigger.clickTextValue === 'Need help?'));
 // A STATE class (Bootstrap-style "collapsed", toggled as the accordion opens) must never scope the
-// trigger — the stable structural class ("acc-tog", the ChewBox shape) is picked instead.
+// trigger — the stable structural class ("acc-tog", the ExampleCo shape) is picked instead.
 const stateCls = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [
-  { page: '/', kind: 'cta', text: 'Does ChewBox charge commissions?', intent: 'generic', className: 'collapsed acc-tog' },
+  { page: '/', kind: 'cta', text: 'Does ExampleCo charge commissions?', intent: 'generic', className: 'collapsed acc-tog' },
   { page: '/', kind: 'cta', text: 'What happens to my customer data?', intent: 'generic', className: 'collapsed acc-tog' },
 ] }).find((s) => s.eventName === 'faq_click');
 check('faq: a toggling state class (.collapsed) is rejected — the stable class (.acc-tog) scopes the selector; root page uses equals',
