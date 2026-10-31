@@ -748,41 +748,50 @@ export function buildMetaCapiServerTag(
   };
 }
 
-/** Build the Meta EMQ Event Data variables (`ed - <key>`, type `ed`, keyPath `<key>`). email/phone
- *  get a NESTED fallback: GA4 enhanced user data usually arrives nested (user_data.email_address),
- *  where a flat keyPath resolves undefined — so `ed - email_address` reads the flat key with
- *  defaultValue {{ed - user_data.email_address}} (a companion variable reading the nested path).
- *  Either shape then resolves, and the CAPI tag's explicit em/ph rows never blank a value the
- *  template would have found. PURE. */
-export function buildMetaEmqVariables(): GtmVariableResource[] {
-  const NESTED_FALLBACK = new Set(['email_address', 'phone_number']);
-  // external_id (Meta's stable-user-id field) falls back to the GA4 user_id, so it resolves whether the
-  // event carries `external_id` or `user_id`. (A missing referenced variable is a harmless empty string.)
-  const SIBLING_FALLBACK: Record<string, string> = { external_id: 'user_id' };
-  // Keys whose ed variable falls back to a REQUEST HEADER when the event omits them: `ed - user_agent`
-  // defaults to `{{rh - user-agent}}` (the request User-Agent) and `ed - ip_override` to
-  // `{{rh - x-forwarded-for}}` (the client IP the tagging host forwards). We also emit each `rh - <header>`
-  // request_header variable so the reference isn't dangling. This gives the auto-mapped client_ip_address
-  // / client_user_agent rows a real server-side source even when the incoming event carries neither, and
-  // means the row only ever resolves empty when there is genuinely no IP/UA anywhere (so it can never
-  // downgrade a value the template would otherwise have had).
-  const HEADER_FALLBACK: Record<string, string> = { user_agent: 'user-agent', ip_override: 'x-forwarded-for' };
-  const out: GtmVariableResource[] = [];
-  for (const k of META_EMQ_EVENT_DATA_KEYS) {
-    if (NESTED_FALLBACK.has(k)) {
-      out.push(buildVariable({ name: `ed - user_data.${k}`, kind: 'event_data', keyPath: `user_data.${k}` }));
-      out.push(buildVariable({ name: `ed - ${k}`, kind: 'event_data', keyPath: k, defaultValue: `{{ed - user_data.${k}}}` }));
-    } else if (SIBLING_FALLBACK[k]) {
-      out.push(buildVariable({ name: `ed - ${k}`, kind: 'event_data', keyPath: k, defaultValue: `{{ed - ${SIBLING_FALLBACK[k]}}}` }));
-    } else if (HEADER_FALLBACK[k]) {
-      const header = HEADER_FALLBACK[k];
-      out.push(buildVariable({ name: `rh - ${header}`, kind: 'request_header', headerName: header }));
-      out.push(buildVariable({ name: `ed - ${k}`, kind: 'event_data', keyPath: k, defaultValue: `{{rh - ${header}}}` }));
-    } else {
-      out.push(buildVariable({ name: `ed - ${k}`, kind: 'event_data', keyPath: k }));
-    }
+/** The `ed - <key>` (and companion) variable definitions for ONE Event Data key. Every CAPI builder that
+ *  reads a key gets it from here, because the names are SHARED across platforms in one server workspace
+ *  and provisioning skips a name that already exists: two definitions of one name would make whichever
+ *  platform was provisioned first decide it for all the others. PURE.
+ *  - email/phone get a NESTED fallback: GA4 enhanced user data usually arrives nested
+ *    (user_data.email_address), where a flat keyPath resolves undefined — so `ed - email_address` reads
+ *    the flat key with defaultValue {{ed - user_data.email_address}} (a companion variable reading the
+ *    nested path). Either shape then resolves, and the CAPI tag's explicit em/ph rows never blank a value
+ *    the template would have found.
+ *  - external_id (the stable-user-id field) falls back to the GA4 user_id, so it resolves whether the
+ *    event carries `external_id` or `user_id`. (A missing referenced variable is a harmless empty string;
+ *    the builders list `user_id` as a key so `ed - user_id` exists.)
+ *  - user_agent / ip_override fall back to a REQUEST HEADER when the event omits them: `ed - user_agent`
+ *    defaults to `{{rh - user-agent}}` (the request User-Agent) and `ed - ip_override` to
+ *    `{{rh - x-forwarded-for}}` (the client IP the tagging host forwards), and each `rh - <header>`
+ *    request_header variable is emitted too so the reference isn't dangling. This gives the auto-mapped
+ *    client IP / user agent rows a real server-side source even when the incoming event carries neither,
+ *    and means the row only ever resolves empty when there is genuinely no IP/UA anywhere (so it can never
+ *    downgrade a value the template would otherwise have had). */
+const EMQ_NESTED_FALLBACK = new Set(['email_address', 'phone_number']);
+const EMQ_SIBLING_FALLBACK: Record<string, string> = { external_id: 'user_id' };
+const EMQ_HEADER_FALLBACK: Record<string, string> = { user_agent: 'user-agent', ip_override: 'x-forwarded-for' };
+function emqEventDataVariables(k: string): GtmVariableResource[] {
+  if (EMQ_NESTED_FALLBACK.has(k)) {
+    return [
+      buildVariable({ name: `ed - user_data.${k}`, kind: 'event_data', keyPath: `user_data.${k}` }),
+      buildVariable({ name: `ed - ${k}`, kind: 'event_data', keyPath: k, defaultValue: `{{ed - user_data.${k}}}` }),
+    ];
   }
-  return out;
+  if (EMQ_SIBLING_FALLBACK[k]) return [buildVariable({ name: `ed - ${k}`, kind: 'event_data', keyPath: k, defaultValue: `{{ed - ${EMQ_SIBLING_FALLBACK[k]}}}` })];
+  if (EMQ_HEADER_FALLBACK[k]) {
+    const header = EMQ_HEADER_FALLBACK[k];
+    return [
+      buildVariable({ name: `rh - ${header}`, kind: 'request_header', headerName: header }),
+      buildVariable({ name: `ed - ${k}`, kind: 'event_data', keyPath: k, defaultValue: `{{rh - ${header}}}` }),
+    ];
+  }
+  return [buildVariable({ name: `ed - ${k}`, kind: 'event_data', keyPath: k })];
+}
+
+/** Build the Meta EMQ Event Data variables (`ed - <key>`, type `ed`, keyPath `<key>`), each with the
+ *  shared fallbacks of emqEventDataVariables. PURE. */
+export function buildMetaEmqVariables(): GtmVariableResource[] {
+  return META_EMQ_EVENT_DATA_KEYS.flatMap(emqEventDataVariables);
 }
 
 
@@ -922,7 +931,8 @@ export function buildStapeDataClient(type: string, name: string): GtmClientResou
  *  email/phone get a nested `user_data.*` fallback (GA4 enhanced data arrives nested). Created by
  *  create_tiktok_emq_variables so the auto-mapped rows resolve instead of dangling. */
 export const TIKTOK_EMQ_EVENT_DATA_KEYS: string[] = [
-  'email_address', 'phone_number', 'external_id', 'event_id',
+  // user_id: the shared `ed - external_id` falls back to {{ed - user_id}} (see emqEventDataVariables).
+  'email_address', 'phone_number', 'external_id', 'user_id', 'event_id',
   'value', 'currency', 'contents', 'content_ids', 'content_type',
   'num_items', 'transaction_id', 'search_string', 'description',
   'ip_override', 'user_agent',
@@ -942,26 +952,9 @@ const TIKTOK_ADDRESS_MATCH: Array<[tiktokKey: string, edSuffix: string, keyPath:
   ['zip_code', 'address.postal_code', 'user_data.address.postal_code'],
 ];
 export function buildTikTokEmqVariables(): GtmVariableResource[] {
-  const NESTED_FALLBACK = new Set(['email_address', 'phone_number']);
-  // user_agent + ip_override fall back to request headers (same erase-safe superset pattern as Meta):
-  // `ed - user_agent` defaults to `{{rh - user-agent}}` and `ed - ip_override` to `{{rh - x-forwarded-for}}`,
-  // and we emit each `rh - <header>` variable so the reference resolves — so ip/user_agent are populated
-  // from the request even when the incoming event omits them. These variable names are IDENTICAL to Meta's
-  // (created idempotently and shared) — intentional.
-  const HEADER_FALLBACK: Record<string, string> = { user_agent: 'user-agent', ip_override: 'x-forwarded-for' };
-  const out: GtmVariableResource[] = [];
-  for (const k of TIKTOK_EMQ_EVENT_DATA_KEYS) {
-    if (NESTED_FALLBACK.has(k)) {
-      out.push(buildVariable({ name: `ed - user_data.${k}`, kind: 'event_data', keyPath: `user_data.${k}` }));
-      out.push(buildVariable({ name: `ed - ${k}`, kind: 'event_data', keyPath: k, defaultValue: `{{ed - user_data.${k}}}` }));
-    } else if (HEADER_FALLBACK[k]) {
-      const header = HEADER_FALLBACK[k];
-      out.push(buildVariable({ name: `rh - ${header}`, kind: 'request_header', headerName: header }));
-      out.push(buildVariable({ name: `ed - ${k}`, kind: 'event_data', keyPath: k, defaultValue: `{{rh - ${header}}}` }));
-    } else {
-      out.push(buildVariable({ name: `ed - ${k}`, kind: 'event_data', keyPath: k }));
-    }
-  }
+  // Same per-key definitions as Meta (emqEventDataVariables): the names are shared in one server
+  // workspace and created idempotently, so they must be defined identically whichever tag comes first.
+  const out: GtmVariableResource[] = TIKTOK_EMQ_EVENT_DATA_KEYS.flatMap(emqEventDataVariables);
   // OPT-IN address advanced-matching variables — always created so they're available; the tag only
   // references them when matchAddress=true.
   for (const [, edSuffix, keyPath] of TIKTOK_ADDRESS_MATCH) {

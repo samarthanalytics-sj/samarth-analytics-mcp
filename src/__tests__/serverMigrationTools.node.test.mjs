@@ -320,6 +320,21 @@ await test('Meta / TikTok / Snapchat CAPI tools create the ed - variables their 
   }
 });
 
+await test('the shared ed - external_id is defined the same whichever CAPI tool runs first (user_id fallback kept)', async () => {
+  // TikTok first, then Meta, in ONE workspace: Meta skips the names TikTok already created, so TikTok's
+  // definition is what the Meta tag reads.
+  const client = stubClient({ templates: [INSTALLED('stape-io', 'tiktok-tag', 'TT1'), INSTALLED('stape-io', 'facebook-tag', 'FB1')] });
+  const s = serverWith(client);
+  await callValidated(s, 'create_tiktok_capi_server_tag', { ...WS, pixelId: 'C1', accessToken: '{{T}}', event: 'purchase', confirm: true });
+  const meta = json(await callValidated(s, 'create_meta_capi_server_tag', { ...WS, pixelId: '1', accessToken: '{{T}}', event: 'Purchase', confirm: true }));
+  assert.ok(meta.variables.skipped.includes('ed - external_id'), 'Meta reuses the existing variable');
+  const created = client.calls.filter((c) => c.kind === 'variable').map((c) => c.body);
+  const ext = created.filter((v) => v.name === 'ed - external_id');
+  assert.equal(ext.length, 1, 'created once');
+  assert.equal(paramVal(ext[0], 'defaultValue'), '{{ed - user_id}}', 'external_id falls back to the GA4 user_id even when TikTok created it');
+  assert.ok(created.some((v) => v.name === 'ed - user_id'), 'the fallback variable exists');
+});
+
 await test('create_meta_capi_server_tag: a GA4 event name is mapped to the Meta standard event (dedups with the Pixel)', async () => {
   const client = stubClient({ templates: [INSTALLED('stape-io', 'facebook-tag', 'FB1')] });
   await callValidated(serverWith(client), 'create_meta_capi_server_tag', { ...WS, pixelId: '1', accessToken: '{{T}}', event: 'generate_lead', confirm: true });
