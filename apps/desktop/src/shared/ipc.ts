@@ -1465,7 +1465,8 @@ export interface TagWatchTargetView {
 export interface TagWatchConfigView {
   enabled: boolean;
   intervalHours: number;
-  slackWebhook?: string;
+  /** Whether a Slack webhook is connected. The URL itself stays encrypted in the main process. */
+  hasSlackWebhook: boolean;
   targets: TagWatchTargetView[];
 }
 

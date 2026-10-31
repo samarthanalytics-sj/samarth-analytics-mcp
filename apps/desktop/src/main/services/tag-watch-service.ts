@@ -9,38 +9,67 @@ import { MAX_INTERVAL_HOURS, assertTimerMs } from './timer-limits';
 import { parseGtagSnapshot } from '../google/gtag-spy';
 import { applyScan, shouldAlert, type TagWatchTarget, type TagWatchEvent, type ScanOutcome } from '../google/tag-watch-core';
 import { sendSlackWebhook, isValidSlackWebhook, type SlackPayload } from './slack-notify';
+import { log } from '../logger';
 
+/** The persisted config (tag-watch-config.json). The Slack webhook is NOT in it: the URL is a bearer
+ *  secret, so it lives encrypted in the OS keychain (secret store) like the GA4 and Ads monitors'. */
 export interface TagWatchConfig {
   enabled: boolean;
   /** Scan cadence in hours (min 1, default 24). */
   intervalHours: number;
-  /** Optional Slack Incoming Webhook for change alerts. */
-  slackWebhook?: string;
   targets: TagWatchTarget[];
 }
+
+/** What leaves the service for the renderer: the config plus whether a Slack webhook is connected.
+ *  Never the URL itself. */
+export interface TagWatchState extends TagWatchConfig {
+  hasSlackWebhook: boolean;
+}
+
+/** Secret-store ref of the (single, app-level) Tag Watch Slack webhook. */
+export const TAG_WATCH_WEBHOOK_REF = 'tagwatch-slack-webhook';
 
 const DEFAULT_CONFIG: TagWatchConfig = { enabled: false, intervalHours: 24, targets: [] };
 const MIN_INTERVAL_HOURS = 1;
 const MAX_TARGETS = 25;
 
+interface SecretsLike {
+  get(ref: string): string | null;
+  has(ref: string): boolean;
+  set(ref: string, value: string): void;
+  delete(ref: string): void;
+  available(): boolean;
+}
+
 export interface TagWatchDeps {
   fetchGtagJs: (measurementId: string) => Promise<string>;
+  /** Encrypted store for the Slack webhook (the OS keychain in the app). */
+  secrets: SecretsLike;
   configPath?: string;
   /** Broadcast a config/state update to the renderer after a sweep or mutation. */
-  emit?: (config: TagWatchConfig) => void;
+  emit?: (state: TagWatchState) => void;
   now?: () => number;
   /** Injectable Slack sender (tests). */
   sendSlack?: (webhook: string, payload: SlackPayload) => Promise<{ ok: boolean; error?: string }>;
 }
 
+/** Slack mrkdwn treats &, < and > as control characters (<!channel>, <url|text> links). The changed
+ *  values come from a watched property's own public gtag.js - possibly a competitor's - so they are
+ *  escaped (and clipped) before they reach the operator's channel. */
+const SLACK_VALUE_MAX = 300;
+const slackText = (s: string, max = SLACK_VALUE_MAX): string => {
+  const clipped = s.length > max ? `${s.slice(0, max - 1)}…` : s;
+  return clipped.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+};
+
 /** Slack message for a tag-watch alert (kept here - it's tag-watch-specific, not a GA4 monitor run). */
 export function buildTagWatchSlack(target: TagWatchTarget, event: TagWatchEvent): SlackPayload {
-  const name = target.label ? `${target.label} (${target.measurementId})` : target.measurementId;
+  const name = slackText(target.label ? `${target.label} (${target.measurementId})` : target.measurementId);
   if (event.kind === 'unparsed_now') {
     const t = `:warning: Tag watch: ${name} - the gtag config stopped parsing (Google may have changed the format). Comparison paused until it parses again.`;
     return { text: t, blocks: [{ type: 'section', text: { type: 'mrkdwn', text: t } }] };
   }
-  const lines = event.changes.map((c) => `• *${c.field}*: ${c.before} → ${c.after}`).join('\n');
+  const lines = event.changes.map((c) => `• *${slackText(c.field)}*: ${slackText(c.before)} → ${slackText(c.after)}`).join('\n');
   return {
     text: `:mag: Tag watch: ${event.changes.length} change(s) on ${name}`,
     blocks: [
@@ -57,8 +86,37 @@ export class TagWatchService {
   private inFlight = false;
 
   constructor(private readonly deps: TagWatchDeps) {
-    this.config = this.normalize(deps.configPath ? readJsonFile<TagWatchConfig>(deps.configPath, DEFAULT_CONFIG) : DEFAULT_CONFIG);
+    const loaded = deps.configPath ? readJsonFile<TagWatchConfig & { slackWebhook?: unknown }>(deps.configPath, DEFAULT_CONFIG) : DEFAULT_CONFIG;
+    this.config = this.normalize(loaded);
+    this.migrateLegacyWebhook(loaded);
     if (this.config.enabled && this.config.targets.length) this.start();
+  }
+
+  /** Configs written before the webhook moved to the secret store held the URL in PLAINTEXT in this
+   *  file. Move it into the encrypted store, then rewrite the file without it. Without OS encryption it
+   *  cannot be kept securely, so it is dropped (fail closed, the same rule the GA4 and Ads monitors
+   *  apply) and has to be re-entered once encryption works. */
+  private migrateLegacyWebhook(loaded: Partial<TagWatchConfig> & { slackWebhook?: unknown }): void {
+    if (!loaded || !Object.prototype.hasOwnProperty.call(loaded, 'slackWebhook')) return;
+    const legacy = typeof loaded.slackWebhook === 'string' ? loaded.slackWebhook.trim() : '';
+    if (legacy && isValidSlackWebhook(legacy) && !this.deps.secrets.has(TAG_WATCH_WEBHOOK_REF)) {
+      try {
+        if (!this.deps.secrets.available()) throw new Error('OS secret encryption is unavailable');
+        this.deps.secrets.set(TAG_WATCH_WEBHOOK_REF, legacy);
+      } catch (e) {
+        log.warn('Tag watch: the saved Slack webhook could not be moved to encrypted storage and was removed', e instanceof Error ? e.message : String(e), 'Re-enter it in the Tag watch panel once OS encryption is available.');
+      }
+    }
+    if (this.deps.configPath) writeJsonFileAtomic(this.deps.configPath, this.config);
+  }
+
+  /** The webhook, decrypted only here in the main process at send time. */
+  private slackWebhook(): string | null {
+    try {
+      return this.deps.secrets.has(TAG_WATCH_WEBHOOK_REF) ? this.deps.secrets.get(TAG_WATCH_WEBHOOK_REF) : null;
+    } catch {
+      return null; // OS encryption unavailable right now: skip the alert rather than fail the scan
+    }
   }
 
   private now(): number {
@@ -74,7 +132,7 @@ export class TagWatchService {
     const seen = new Set<string>();
     const deduped = targets.filter((t) => (seen.has(t.measurementId) ? false : (seen.add(t.measurementId), true)));
     // Ceiling too: an interval past setInterval's limit (or Infinity) would fire every 1 ms.
-    return { enabled: Boolean(c?.enabled), intervalHours: Math.min(MAX_INTERVAL_HOURS, Math.max(MIN_INTERVAL_HOURS, Number(c?.intervalHours) || 24)), slackWebhook: c?.slackWebhook, targets: deduped };
+    return { enabled: Boolean(c?.enabled), intervalHours: Math.min(MAX_INTERVAL_HOURS, Math.max(MIN_INTERVAL_HOURS, Number(c?.intervalHours) || 24)), targets: deduped };
   }
 
   private persist(): void {
@@ -93,12 +151,12 @@ export class TagWatchService {
     this.timer = null;
   }
 
-  getConfig(): TagWatchConfig {
-    return JSON.parse(JSON.stringify(this.config)) as TagWatchConfig;
+  getConfig(): TagWatchState {
+    return { ...(JSON.parse(JSON.stringify(this.config)) as TagWatchConfig), hasSlackWebhook: this.deps.secrets.has(TAG_WATCH_WEBHOOK_REF) };
   }
 
   /** Add a target (idempotent by measurement id) + optionally scan it immediately. */
-  async addTarget(measurementId: string, label?: string): Promise<TagWatchConfig> {
+  async addTarget(measurementId: string, label?: string): Promise<TagWatchState> {
     const id = measurementId.trim().toUpperCase();
     if (!/^(G|GT|AW|DC)-[A-Z0-9]+$/.test(id)) throw new Error(`"${measurementId}" is not a measurement/tag id (expected e.g. G-ABC123).`);
     if (this.config.targets.length >= MAX_TARGETS) throw new Error(`Tag watch is limited to ${MAX_TARGETS} targets.`);
@@ -113,14 +171,14 @@ export class TagWatchService {
     return this.getConfig();
   }
 
-  removeTarget(measurementId: string): TagWatchConfig {
+  removeTarget(measurementId: string): TagWatchState {
     this.config.targets = this.config.targets.filter((t) => t.measurementId !== measurementId.toUpperCase());
     if (!this.config.targets.length) this.stop();
     this.persist();
     return this.getConfig();
   }
 
-  setEnabled(enabled: boolean): TagWatchConfig {
+  setEnabled(enabled: boolean): TagWatchState {
     this.config.enabled = enabled;
     if (enabled && this.config.targets.length) this.start();
     else this.stop();
@@ -128,7 +186,7 @@ export class TagWatchService {
     return this.getConfig();
   }
 
-  setInterval(intervalHours: number): TagWatchConfig {
+  setInterval(intervalHours: number): TagWatchState {
     const n = Math.round(intervalHours);
     this.config.intervalHours = Number.isFinite(n) ? Math.min(MAX_INTERVAL_HOURS, Math.max(MIN_INTERVAL_HOURS, n)) : 24;
     if (this.timer) this.start(); // restart with the new cadence
@@ -136,10 +194,17 @@ export class TagWatchService {
     return this.getConfig();
   }
 
-  setSlackWebhook(webhook: string): TagWatchConfig {
+  /** Store (or, with an empty value, remove) the Slack webhook - encrypted in the secret store, never in
+   *  the config file and never echoed back to the renderer. */
+  setSlackWebhook(webhook: string): TagWatchState {
     const w = webhook.trim();
-    if (w && !isValidSlackWebhook(w)) throw new Error('Not a valid Slack Incoming Webhook URL.');
-    this.config.slackWebhook = w || undefined;
+    if (!w) {
+      this.deps.secrets.delete(TAG_WATCH_WEBHOOK_REF);
+    } else {
+      if (!isValidSlackWebhook(w)) throw new Error('Not a valid Slack Incoming Webhook URL.');
+      if (!this.deps.secrets.available()) throw new Error('OS secret encryption is unavailable, so the webhook cannot be stored securely.');
+      this.deps.secrets.set(TAG_WATCH_WEBHOOK_REF, w);
+    }
     this.persist();
     return this.getConfig();
   }
@@ -161,15 +226,16 @@ export class TagWatchService {
     const { target, event } = applyScan(this.config.targets[idx], outcome, this.now());
     this.config.targets[idx] = target;
     this.persist();
-    if (shouldAlert(event) && this.config.slackWebhook) {
+    const webhook = shouldAlert(event) ? this.slackWebhook() : null;
+    if (webhook) {
       const send = this.deps.sendSlack ?? ((w: string, p: SlackPayload) => sendSlackWebhook(w, p));
-      await send(this.config.slackWebhook, buildTagWatchSlack(target, event)).catch(() => undefined);
+      await send(webhook, buildTagWatchSlack(target, event)).catch(() => undefined);
     }
     return event;
   }
 
   /** A full sweep of every target (the scheduled path + manual "scan all"). Serial to be gentle. */
-  async runOnce(): Promise<TagWatchConfig> {
+  async runOnce(): Promise<TagWatchState> {
     if (this.inFlight) return this.getConfig();
     this.inFlight = true;
     try {

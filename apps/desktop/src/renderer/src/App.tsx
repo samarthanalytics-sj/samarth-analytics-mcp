@@ -3685,7 +3685,7 @@ function TagWatchPanel({ onError }: { onError: (m: string) => void }): JSX.Eleme
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
   useEffect(() => {
-    void window.desktop.tagWatch.get().then((c) => { setCfg(c); setSlack(c.slackWebhook ?? ''); }).catch((e) => onError(e instanceof Error ? e.message : String(e)));
+    void window.desktop.tagWatch.get().then(setCfg).catch((e) => onError(e instanceof Error ? e.message : String(e)));
     return window.desktop.tagWatch.onChange(setCfg);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -3743,9 +3743,10 @@ function TagWatchPanel({ onError }: { onError: (m: string) => void }): JSX.Eleme
           <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
             <label style={{ display: 'flex', flexDirection: 'column', gap: 3, flex: 1, minWidth: 240 }}>
               <span style={styles.ctxFieldLabel}>Slack webhook for change alerts (optional)</span>
-              <input style={styles.promptSearch} type="password" placeholder={cfg.slackWebhook ? 'saved (enter to replace)' : 'https://hooks.slack.com/services/…'} value={slack} onChange={(e) => setSlack(e.target.value)} />
+              <input style={styles.promptSearch} type="password" placeholder={cfg.hasSlackWebhook ? 'Connected (stored encrypted) - paste a new URL to replace' : 'https://hooks.slack.com/services/…'} value={slack} onChange={(e) => setSlack(e.target.value)} />
             </label>
-            <button style={styles.ghostBtn} disabled={busy} onClick={() => void run(() => window.desktop.tagWatch.setSlack(slack.trim()))}>Save webhook</button>
+            <button style={styles.ghostBtn} disabled={busy || !slack.trim()} onClick={() => void run(async () => { const c = await window.desktop.tagWatch.setSlack(slack.trim()); setSlack(''); return c; })}>Save webhook</button>
+            {cfg.hasSlackWebhook && <button style={styles.acctRowBtnDanger} disabled={busy} onClick={() => void run(() => window.desktop.tagWatch.setSlack(''))}>Remove webhook</button>}
           </div>
 
           {cfg.targets.length === 0 ? (

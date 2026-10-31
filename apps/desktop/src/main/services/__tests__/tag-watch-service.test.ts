@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { TagWatchService, buildTagWatchSlack } from '../tag-watch-service';
+import { TagWatchService, buildTagWatchSlack, TAG_WATCH_WEBHOOK_REF, type TagWatchState } from '../tag-watch-service';
 import { MAX_TIMER_MS, MAX_INTERVAL_HOURS } from '../timer-limits';
+import { SecretStore, type Cryptor } from '../../storage/secret-store';
 import type { TagWatchTarget } from '../../google/tag-watch-core';
 
 let passed = 0;
@@ -24,10 +25,28 @@ function gtagJs(keyEvents: string[]): string {
   return `//\n(function(){\nvar data = ${JSON.stringify(data)};\n})()`;
 }
 
+// Reversible, NON-secure stand-in for safeStorage, so a REAL SecretStore runs in plain Node and the
+// on-disk secrets file can be checked for plaintext.
+class FakeCryptor implements Cryptor {
+  constructor(public available = true) {}
+  isAvailable(): boolean { return this.available; }
+  encrypt(plaintext: string): Buffer { return Buffer.from(`enc::${plaintext}`, 'utf8'); }
+  decrypt(ciphertext: Buffer): string {
+    const s = ciphertext.toString('utf8');
+    if (!s.startsWith('enc::')) throw new Error('bad ciphertext');
+    return s.slice(5);
+  }
+}
+/** An in-memory secret store for tests that never look at the disk. */
+const memSecrets = () => {
+  const map = new Map<string, string>();
+  return { get: (r: string) => map.get(r) ?? null, has: (r: string) => map.has(r), set: (r: string, v: string) => { map.set(r, v); }, delete: (r: string) => { map.delete(r); }, available: () => true };
+};
+
 console.log('\ntag-watch-service:');
 
 test('add captures a baseline immediately and validates the id shape', async () => {
-  const svc = new TagWatchService({ fetchGtagJs: async () => gtagJs(['purchase']), now: () => 1 });
+  const svc = new TagWatchService({ secrets: memSecrets(), fetchGtagJs: async () => gtagJs(['purchase']), now: () => 1 });
   await assert.rejects(() => svc.addTarget('not-an-id'), /not a measurement/);
   const cfg = await svc.addTarget('g-svc', 'My site');
   assert.equal(cfg.targets.length, 1);
@@ -42,6 +61,7 @@ test('a scheduled sweep detects a change and posts Slack exactly once with befor
   let js = gtagJs(['purchase']);
   const sent: Array<{ webhook: string; text: string }> = [];
   const svc = new TagWatchService({
+    secrets: memSecrets(),
     fetchGtagJs: async () => js,
     now: () => Date.now(),
     sendSlack: async (webhook, payload) => { sent.push({ webhook, text: payload.text }); return { ok: true }; },
@@ -51,6 +71,7 @@ test('a scheduled sweep detects a change and posts Slack exactly once with befor
   js = gtagJs(['purchase', 'form_start']); // a real change
   await svc.runOnce();
   assert.equal(sent.length, 1, 'one alert for one change');
+  assert.equal(sent[0].webhook, 'https://hooks.slack.com/services/T/B/xyz', 'sent to the stored webhook');
   assert.ok(sent[0].text.includes('1 change'), sent[0].text);
   // No further change -> no further alert.
   await svc.runOnce();
@@ -59,7 +80,7 @@ test('a scheduled sweep detects a change and posts Slack exactly once with befor
 
 test('no Slack webhook -> no send, but the change is still recorded on the timeline', async () => {
   let js = gtagJs(['purchase']);
-  const svc = new TagWatchService({ fetchGtagJs: async () => js, now: () => Date.now() });
+  const svc = new TagWatchService({ secrets: memSecrets(), fetchGtagJs: async () => js, now: () => Date.now() });
   await svc.addTarget('G-SVC');
   js = gtagJs([]);
   const cfg = await svc.runOnce();
@@ -68,7 +89,7 @@ test('no Slack webhook -> no send, but the change is still recorded on the timel
 });
 
 test('a fetch failure records a scan_error and never crashes the sweep', async () => {
-  const svc = new TagWatchService({ fetchGtagJs: async () => { throw new Error('ENOTFOUND'); }, now: () => 1 });
+  const svc = new TagWatchService({ secrets: memSecrets(), fetchGtagJs: async () => { throw new Error('ENOTFOUND'); }, now: () => 1 });
   // add cannot capture a baseline (fetch throws) but must not reject
   const cfg = await svc.addTarget('G-SVC');
   const t = cfg.targets[0];
@@ -78,7 +99,7 @@ test('a fetch failure records a scan_error and never crashes the sweep', async (
 });
 
 test('remove + enable/interval mutate config; dedupe by id', async () => {
-  const svc = new TagWatchService({ fetchGtagJs: async () => gtagJs(['purchase']), now: () => 1 });
+  const svc = new TagWatchService({ secrets: memSecrets(), fetchGtagJs: async () => gtagJs(['purchase']), now: () => 1 });
   await svc.addTarget('G-SVC');
   await svc.addTarget('g-svc'); // dup
   assert.equal(svc.getConfig().targets.length, 1, 'deduped by id');
@@ -101,7 +122,7 @@ test('a persisted interval past the timer limit loads clamped, and the armed del
   globalThis.setInterval = ((fn: () => void, ms?: number) => { delays.push(Number(ms)); return realSetInterval(fn, 3_600_000); }) as typeof setInterval;
   let svc: TagWatchService | null = null;
   try {
-    svc = new TagWatchService({ fetchGtagJs: async () => gtagJs(['purchase']), configPath: file, now: () => 1 });
+    svc = new TagWatchService({ secrets: memSecrets(), fetchGtagJs: async () => gtagJs(['purchase']), configPath: file, now: () => 1 });
     assert.equal(svc.getConfig().intervalHours, MAX_INTERVAL_HOURS, 'loaded interval clamped to the ceiling');
     assert.equal(delays.length, 1, 'enabled + a target arms the timer on load');
     assert.ok(delays[0] >= 1 && delays[0] <= MAX_TIMER_MS, `armed delay ${delays[0]} must fit in a 32-bit timer`);
@@ -120,7 +141,7 @@ test('enabling with no targets, then adding one, arms the schedule (and re-arms 
   const armed: number[] = [];
   const realSetInterval = globalThis.setInterval;
   globalThis.setInterval = ((fn: () => void, ms?: number) => { if (Number(ms) === DAY_MS) armed.push(Number(ms)); return realSetInterval(fn, ms); }) as typeof setInterval;
-  const svc = new TagWatchService({ fetchGtagJs: async () => gtagJs(['purchase']), now: () => 1 });
+  const svc = new TagWatchService({ secrets: memSecrets(), fetchGtagJs: async () => gtagJs(['purchase']), now: () => 1 });
   try {
     svc.setEnabled(true);
     assert.equal(armed.length, 0, 'nothing to scan yet, so nothing armed');
@@ -155,6 +176,7 @@ test('a target removed while a sweep fetches is never folded into another, and t
   };
   const sent: string[] = [];
   const svc = new TagWatchService({
+    secrets: memSecrets(),
     fetchGtagJs: async (id) => {
       const g = gate;
       if (g && g.id === id) { gate = null; g.reached(); await g.release; }
@@ -189,6 +211,79 @@ test('a target removed while a sweep fetches is never folded into another, and t
   const cfg = await sweep2;
   assert.deepEqual(cfg.targets.map((t) => t.measurementId), ['G-AAA'], 'the removed target stays removed');
   assert.equal(sent.length, 0, 'still no alert');
+});
+
+// Regression: the Slack webhook (a bearer secret) was written in plaintext to tag-watch-config.json and
+// sent in full to the renderer on every get + tagwatch:changed broadcast. It now lives encrypted in the
+// secret store; the file, getConfig() and every broadcast only carry hasSlackWebhook.
+test('the Slack webhook is stored encrypted: never in the config file, getConfig() or a broadcast', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'samarth-tagwatch-'));
+  const file = join(dir, 'tag-watch.json');
+  const secretsFile = join(dir, 'secrets.json');
+  const url = 'https://hooks.slack.com/services/T0/B0/secretpart';
+  const emitted: TagWatchState[] = [];
+  const sentTo: string[] = [];
+  let js = gtagJs(['purchase']);
+  try {
+    const svc = new TagWatchService({
+      secrets: new SecretStore(secretsFile, new FakeCryptor()),
+      fetchGtagJs: async () => js,
+      configPath: file,
+      emit: (s) => emitted.push(s),
+      now: () => 1,
+      sendSlack: async (w) => { sentTo.push(w); return { ok: true }; },
+    });
+    await svc.addTarget('G-SVC');
+    const st = svc.setSlackWebhook(url);
+    assert.equal(st.hasSlackWebhook, true, 'the renderer only learns a webhook is connected');
+    js = gtagJs(['purchase', 'form_start']);
+    await svc.runOnce();
+    assert.deepEqual(sentTo, [url], 'the alert still goes to the stored webhook');
+    assert.ok(!readFileSync(file, 'utf8').includes('hooks.slack.com'), 'no webhook in the config file');
+    assert.ok(!readFileSync(secretsFile, 'utf8').includes('hooks.slack.com'), 'secret store holds ciphertext only');
+    assert.ok(!JSON.stringify(svc.getConfig()).includes('hooks.slack.com'), 'getConfig() never carries the URL');
+    assert.ok(emitted.length > 0 && !JSON.stringify(emitted).includes('hooks.slack.com'), 'no broadcast carries the URL');
+    // Clearing removes the secret.
+    assert.equal(svc.setSlackWebhook('').hasSlackWebhook, false, 'an empty value removes the webhook');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a legacy plaintext webhook in the config file migrates into the secret store and leaves the file', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'samarth-tagwatch-'));
+  const file = join(dir, 'tag-watch.json');
+  const url = 'https://hooks.slack.com/services/T0/B0/legacy';
+  const target = { measurementId: 'G-SVC', lastSnapshot: null, timeline: [], lastScanAt: null, lastParsed: false };
+  try {
+    writeFileSync(file, JSON.stringify({ enabled: false, intervalHours: 24, slackWebhook: url, targets: [target] }));
+    const secrets = new SecretStore(join(dir, 'secrets.json'), new FakeCryptor());
+    const svc = new TagWatchService({ secrets, fetchGtagJs: async () => gtagJs(['purchase']), configPath: file, now: () => 1 });
+    assert.equal(secrets.get(TAG_WATCH_WEBHOOK_REF), url, 'moved into the encrypted store');
+    assert.ok(!readFileSync(file, 'utf8').includes('hooks.slack.com'), 'and removed from the config file at once');
+    assert.equal(svc.getConfig().hasSlackWebhook, true);
+    assert.equal(svc.getConfig().targets.length, 1, 'the rest of the config is kept');
+
+    // Without OS encryption it cannot be kept securely: dropped from the file, never used or exposed.
+    writeFileSync(file, JSON.stringify({ enabled: false, intervalHours: 24, slackWebhook: url, targets: [target] }));
+    const locked = new SecretStore(join(dir, 'secrets-locked.json'), new FakeCryptor(false));
+    const svc2 = new TagWatchService({ secrets: locked, fetchGtagJs: async () => gtagJs(['purchase']), configPath: file, now: () => 1 });
+    assert.ok(!readFileSync(file, 'utf8').includes('hooks.slack.com'), 'plaintext removed even when it cannot be migrated');
+    assert.equal(svc2.getConfig().hasSlackWebhook, false);
+    assert.throws(() => svc2.setSlackWebhook(url), /cannot be stored securely/, 'and a new one is refused rather than kept in plaintext');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('buildTagWatchSlack escapes Slack mrkdwn in third-party values and clips long ones', async () => {
+  const target = { measurementId: 'G-SVC', label: 'A & <B>' } as TagWatchTarget;
+  const p = buildTagWatchSlack(target, { at: 1, kind: 'changed', changes: [{ field: 'site search params', before: 'q', after: '<!channel> <https://evil.example|reset password>' }, { field: 'sGTM URL', before: '(not set)', after: 'x'.repeat(1000) }], summary: '' });
+  const wire = JSON.stringify(p);
+  assert.ok(!wire.includes('<!channel>') && !wire.includes('<https://evil'), 'no live mention or link reaches Slack');
+  assert.ok(wire.includes('&lt;!channel&gt;'), 'the value is shown, escaped');
+  assert.ok(wire.includes('A &amp; &lt;B&gt; (G-SVC)'), 'the label is escaped too');
+  assert.ok(!wire.includes('x'.repeat(301)), 'long values are clipped');
 });
 
 test('buildTagWatchSlack: change list with field arrows; unparsed is a warning', async () => {

@@ -396,6 +396,8 @@ app.whenReady().then(() => {
 
   const tagWatch = new TagWatchService({
     fetchGtagJs: (id) => dataService.fetchGtagJs(id),
+    // The Slack webhook is a bearer secret: kept encrypted here, never in the config file or renderer.
+    secrets,
     configPath: join(dataDir, 'tag-watch-config.json'),
     emit: (config) => {
       for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('tagwatch:changed', config);
