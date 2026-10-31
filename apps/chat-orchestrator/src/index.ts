@@ -21,7 +21,7 @@ import { AuditRecorder } from './audit.js';
 import { UsageMeter, quotaMessage } from './usage.js';
 import { planFix, FIXABLE_CATEGORIES, type AuditFinding } from './audit-fix.js';
 import { onClientGone, SseStream } from './sse.js';
-import { deadline, DeadlineError } from './deadline.js';
+import { deadline, deadlineHolding, DeadlineError } from './deadline.js';
 import { installTimestampedLogging } from './log-time.js';
 import { scopeTools } from './tools.js';
 import { checkAllowlistAgainstServer } from './integrations.js';
@@ -1145,12 +1145,15 @@ async function main(): Promise<void> {
 
     try {
       res.json(
-        await deadline(
-          Promise.resolve(fn(mcp, user)),
+        // Released when fn settles, not here: after a 504 the work carries on on this child, and
+        // releasing it at the deadline let the pool close it under a still-running batch of writes.
+        await deadlineHolding(
+          () => fn(mcp, user),
           cfg.limits.resourceDeadlineMs,
           opts?.mutates
             ? 'This is taking longer than expected. The changes were not cancelled and may still be finishing, so check the workspace before running it again.'
             : 'That lookup took too long and was stopped.',
+          () => pool.release(user.id, mcp),
         ),
       );
     } catch (err) {
@@ -1169,8 +1172,6 @@ async function main(): Promise<void> {
         code,
         message: err instanceof Error ? err.message : 'Could not complete that request.',
       });
-    } finally {
-      pool.release(user.id, mcp);
     }
   }
 

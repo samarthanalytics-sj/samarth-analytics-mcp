@@ -8,6 +8,7 @@
 import assert from 'node:assert/strict';
 import { McpConnection } from '../mcp-client.js';
 import { McpPool } from '../mcp-pool.js';
+import { deadlineHolding, DeadlineError } from '../deadline.js';
 import {
   GoogleIdentityError,
   isGoogleAuthFailure,
@@ -496,6 +497,41 @@ await testAsync('room for a replacement comes from an idle child, not from past 
     assert.deepEqual(pool.stats(), { sessions: 2, busy: 2 });
     pool.release('a', a);
     pool.release('a', refreshed);
+    assert.deepEqual(pool.stats(), { sessions: 1, busy: 0 });
+  });
+});
+
+await testAsync('a resource request past its deadline keeps its child until the work finishes', async () => {
+  // withUserMcp's path: a 25-tag create overruns the deadline and the client gets a 504, but the
+  // creates keep running on this child. It used to be released at the deadline, so a token change
+  // on the user's next request closed it under the batch.
+  await withStubbedChildren(async (closed) => {
+    const { pool, setToken } = poolWithTokens();
+    const child = await pool.acquire('u', 'jwt');
+    let finishBatch!: () => void;
+    const batch = new Promise<void>((r) => (finishBatch = r));
+    // The deadline's timer is unref'd, so with only a pending promise the script would exit first.
+    const keepAlive = setTimeout(() => {}, 500);
+    try {
+      await assert.rejects(
+        deadlineHolding(() => batch, 5, 'too slow', () => pool.release('u', child)),
+        DeadlineError,
+      );
+    } finally {
+      clearTimeout(keepAlive);
+    }
+
+    setToken('ya29.second');
+    const next = await pool.acquire('u', 'jwt');
+    assert.notEqual(next, child);
+    assert.equal(closed.includes(child), false, 'the child was closed while its writes were still running');
+    assert.deepEqual(pool.stats(), { sessions: 2, busy: 2 }, 'the overrunning work must still count as busy');
+
+    finishBatch();
+    await batch;
+    await new Promise((r) => setTimeout(r, 5));
+    assert.ok(closed.includes(child), 'closed once the work that held it has settled');
+    pool.release('u', next);
     assert.deepEqual(pool.stats(), { sessions: 1, busy: 0 });
   });
 });

@@ -8,7 +8,7 @@
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { deadline, DeadlineError } from '../deadline.js';
+import { deadline, deadlineHolding, DeadlineError } from '../deadline.js';
 
 const after = <T>(ms: number, value: T): Promise<T> =>
   new Promise((resolve) => setTimeout(() => resolve(value), ms));
@@ -72,4 +72,43 @@ void test('a late SUCCESS after the deadline is dropped quietly', async () => {
   await after(50, null);
   // Nothing to assert beyond not crashing: the point is that the resolved value goes nowhere,
   // because the response was already sent.
+});
+
+void test('work that overruns keeps its hold until it settles, then releases exactly once', async () => {
+  // A 504 ends the waiting, not the work. Releasing the pooled child at the deadline let the pool
+  // close it under a batch of tag creates that was still running on it.
+  let releases = 0;
+  let finish!: (v: string) => void;
+  const p = deadlineHolding(
+    () => new Promise<string>((r) => (finish = r)),
+    5,
+    'too slow',
+    () => releases++,
+  );
+  await assert.rejects(() => p, DeadlineError);
+  assert.equal(releases, 0, 'released at the deadline while the work was still running');
+  finish('late');
+  await after(5, null);
+  assert.equal(releases, 1);
+});
+
+void test('work that settles in time, fails, or throws is released exactly once each', async () => {
+  let releases = 0;
+  const release = () => releases++;
+  assert.equal(await deadlineHolding(() => after(1, 'ok'), 1000, 'x', release), 'ok');
+  await assert.rejects(() => deadlineHolding(() => rejectsAfter(1, new Error('no')), 1000, 'x', release), /no/);
+  await assert.rejects(
+    () =>
+      deadlineHolding(
+        () => {
+          throw new Error('sync');
+        },
+        1000,
+        'x',
+        release,
+      ),
+    /sync/,
+  );
+  await after(5, null);
+  assert.equal(releases, 3);
 });
