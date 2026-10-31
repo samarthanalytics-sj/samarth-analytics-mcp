@@ -6,6 +6,7 @@ import { TagWatchService, buildTagWatchSlack, TAG_WATCH_WEBHOOK_REF, type TagWat
 import { MAX_TIMER_MS, MAX_INTERVAL_HOURS } from '../timer-limits';
 import { SecretStore, type Cryptor } from '../../storage/secret-store';
 import type { TagWatchTarget } from '../../google/tag-watch-core';
+import { log } from '../../logger';
 
 let passed = 0;
 let failed = 0;
@@ -159,6 +160,49 @@ test('enabling with no targets, then adding one, arms the schedule (and re-arms 
   } finally {
     svc.stop();
     globalThis.setInterval = realSetInterval;
+  }
+});
+
+// Regression: the scheduled sweep ran as runOnce().catch(() => undefined), so a sweep that failed (a
+// disk write, a broadcast) left no trace and a schedule that stopped working could not be diagnosed.
+test('a failed scheduled sweep is logged with its message only (no webhook), not swallowed', async () => {
+  const CADENCE_MS = 7 * 3_600_000; // a cadence no other test here arms
+  let failBroadcast = false;
+  const svc = new TagWatchService({
+    secrets: memSecrets(),
+    fetchGtagJs: async () => gtagJs(['purchase']),
+    now: () => 1,
+    emit: () => { if (failBroadcast) throw new Error('state write failed while posting to https://hooks.slack.com/services/T0/B0/not-a-real-secret'); },
+  });
+  await svc.addTarget('G-SVC');
+  svc.setInterval(7);
+  // Capture the scheduled callback. The stub is installed and removed synchronously (no await between),
+  // so it can never interleave with another test's setInterval stub.
+  let tick: (() => void) | null = null;
+  const realSetInterval = globalThis.setInterval;
+  globalThis.setInterval = ((fn: () => void, ms?: number) => { if (Number(ms) === CADENCE_MS) tick = fn; return realSetInterval(fn, ms); }) as typeof setInterval;
+  try {
+    svc.setEnabled(true);
+  } finally {
+    globalThis.setInterval = realSetInterval;
+  }
+  const warned: string[] = [];
+  const realWarn = log.warn;
+  log.warn = (message: string, ...details: string[]): void => {
+    if (message.startsWith('Tag watch: a scheduled scan failed')) warned.push([message, ...details].join(' | '));
+    else realWarn.call(log, message, ...details);
+  };
+  try {
+    assert.ok(tick, 'the scheduled scan was armed');
+    failBroadcast = true;
+    (tick as unknown as () => void)();
+    for (let i = 0; i < 50 && warned.length === 0; i++) await new Promise((r) => setTimeout(r, 10));
+    assert.equal(warned.length, 1, 'the failed sweep was logged');
+    assert.match(warned[0], /state write failed/, warned[0]);
+    assert.ok(!warned[0].includes('not-a-real-secret'), `the webhook path never reaches the log: ${warned[0]}`);
+  } finally {
+    log.warn = realWarn;
+    svc.stop();
   }
 });
 

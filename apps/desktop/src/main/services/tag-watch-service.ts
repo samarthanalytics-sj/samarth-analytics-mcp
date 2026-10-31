@@ -10,6 +10,7 @@ import { parseGtagSnapshot } from '../google/gtag-spy';
 import { applyScan, shouldAlert, type TagWatchTarget, type TagWatchEvent, type ScanOutcome } from '../google/tag-watch-core';
 import { sendSlackWebhook, isValidSlackWebhook, type SlackPayload } from './slack-notify';
 import { log } from '../logger';
+import { redactString } from '../../shared/devlog';
 
 /** The persisted config (tag-watch-config.json). The Slack webhook is NOT in it: the URL is a bearer
  *  secret, so it lives encrypted in the OS keychain (secret store) like the GA4 and Ads monitors'. */
@@ -61,6 +62,14 @@ const slackText = (s: string, max = SLACK_VALUE_MAX): string => {
   const clipped = s.length > max ? `${s.slice(0, max - 1)}…` : s;
   return clipped.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 };
+
+/** A failed sweep's log detail: the error message only (never the config or a stack), with any
+ *  credential-shaped text and Slack webhook path scrubbed, and clipped. */
+function sweepFailure(e: unknown): string {
+  const msg = e instanceof Error ? e.message : String(e);
+  const scrubbed = redactString(msg).replace(/https?:\/\/hooks\.slack(?:-gov)?\.com\/[^\s"'<>]*/gi, 'https://hooks.slack.com/[redacted]');
+  return scrubbed.length > 300 ? `${scrubbed.slice(0, 299)}…` : scrubbed;
+}
 
 /** Slack message for a tag-watch alert (kept here - it's tag-watch-specific, not a GA4 monitor run). */
 export function buildTagWatchSlack(target: TagWatchTarget, event: TagWatchEvent): SlackPayload {
@@ -142,8 +151,11 @@ export class TagWatchService {
 
   private start(): void {
     this.stop();
-    // A failed sweep (e.g. a disk write) must not become an unhandled rejection from the timer.
-    this.timer = setInterval(() => { this.runOnce().catch(() => undefined); }, assertTimerMs(Math.max(MIN_INTERVAL_HOURS, this.config.intervalHours) * 3600_000));
+    // A failed sweep (e.g. a disk write) must not become an unhandled rejection from the timer, and
+    // must not vanish either: it is logged, so a schedule that silently stopped working can be found.
+    this.timer = setInterval(() => {
+      this.runOnce().catch((e) => log.warn('Tag watch: a scheduled scan failed', sweepFailure(e)));
+    }, assertTimerMs(Math.max(MIN_INTERVAL_HOURS, this.config.intervalHours) * 3600_000));
     if (this.timer.unref) this.timer.unref();
   }
   stop(): void {
