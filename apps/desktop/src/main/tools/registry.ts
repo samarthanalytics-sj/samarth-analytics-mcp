@@ -198,13 +198,25 @@ const EMPTY_SCHEMA = { type: 'object', properties: {}, additionalProperties: fal
 const s = (v: unknown): string => String(v ?? '');
 
 /** Human-readable one-line description of a suggested tag's trigger condition, for suggest_tags_from_url. */
-function describeTriggerCondition(t: Record<string, unknown> | undefined): string {
+export function describeTriggerCondition(t: Record<string, unknown> | undefined): string {
   const g = (k: string): string | undefined => (t && typeof t[k] === 'string' ? (t[k] as string) : undefined);
   const kind = g('kind') ?? '';
-  // Must mirror buildTrigger's per-field defaults, or the approval card states an operator GTM will
-  // not actually use. Both CLASS fields default to `contains` there, because {{Click Classes}} /
-  // {{Form Classes}} hold the whole class attribute and an `equals` on one class never matches.
-  const OP_DEFAULT: Record<string, string> = { clickClassesOperator: 'contains', formClassesOperator: 'contains' };
+  // Must mirror buildTrigger's per-field defaults (src/shared/gtm-builders.ts), or the description
+  // states an operator GTM will not actually use: an "equals" read for a trigger that really
+  // `contains` hides that it also fires on "Book A Demo Now". Both CLASS fields default to `contains`
+  // because {{Click Classes}} / {{Form Classes}} hold the whole class attribute. Page Path is the one
+  // per-kind default: `equals` on a form submit, `contains` everywhere else. Form ID, Click ID and
+  // Page Hostname default to `equals`.
+  const OP_DEFAULT: Record<string, string> = {
+    clickTextOperator: 'contains',
+    clickUrlOperator: 'contains',
+    clickClassesOperator: 'contains',
+    formClassesOperator: 'contains',
+    pageUrlOperator: 'contains',
+    pagePathOperator: kind === 'form_submit' ? 'equals' : 'contains',
+    queryStringOperator: 'contains',
+    referrerOperator: 'contains',
+  };
   const op = (k: string): string => g(k) ?? OP_DEFAULT[k] ?? 'equals';
   if (kind === 'form_submit') {
     if (g('formIdValue')) return `form submit where Form ID ${op('formIdOperator')} "${g('formIdValue')}"`;

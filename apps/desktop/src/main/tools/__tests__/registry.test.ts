@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildToolRegistry, type GtmContextControl, type ConfirmFn } from '../registry';
+import { buildToolRegistry, describeTriggerCondition, type GtmContextControl, type ConfirmFn } from '../registry';
+import { buildTrigger, type TriggerInput } from '../../google/gtm-builders';
 import { buildGa4WriteTools } from '../ga4-write-tools';
 import { AuditHistoryStore } from '../../storage/audit-history';
 import { ManifestStore } from '../../storage/manifest-store';
@@ -1964,6 +1965,36 @@ async function main(): Promise<void> {
       /custom_event" requires trigger\.eventName/,
     );
     assert.ok(!fd.calls.some((c) => /^(createTrigger|createTag|createVar|enable)/.test(c)), `nothing may be written: ${fd.calls.join(' | ')}`);
+  });
+
+  // Regression: suggest_tags_from_url described an operator-less Click Text / Click URL / Page URL /
+  // Page Path / Query String / Referrer condition as "equals", while buildTrigger emits `contains` for
+  // each. The user read an exact match ("Book A Demo") for a trigger that also fires on "Book A Demo Now".
+  await test('describeTriggerCondition states the operator buildTrigger really emits when none is given', async () => {
+    const cases: Array<{ trigger: Record<string, string>; variable: string; label: string }> = [
+      { trigger: { kind: 'link_click', clickTextValue: 'Book A Demo' }, variable: '{{Click Text}}', label: 'Click Text' },
+      { trigger: { kind: 'all_clicks', clickUrlValue: '/pricing' }, variable: '{{Click URL}}', label: 'Click URL' },
+      { trigger: { kind: 'link_click', clickClassesValue: 'cta' }, variable: '{{Click Classes}}', label: 'Click Classes' },
+      { trigger: { kind: 'link_click', clickIdValue: 'buy' }, variable: '{{Click ID}}', label: 'Click ID' },
+      { trigger: { kind: 'link_click', queryStringValue: 'utm_source' }, variable: '{{Query String}}', label: 'Query String' },
+      { trigger: { kind: 'link_click', referrerValue: 'partner' }, variable: '{{Referrer}}', label: 'Referrer' },
+      { trigger: { kind: 'link_click', pageHostnameValue: 'www.example.com' }, variable: '{{Page Hostname}}', label: 'Page Hostname' },
+      { trigger: { kind: 'pageview', pageUrlValue: '/thank-you' }, variable: '{{Page URL}}', label: 'Page URL' },
+      { trigger: { kind: 'form_submit', formIdValue: 'contact' }, variable: '{{Form ID}}', label: 'Form ID' },
+      { trigger: { kind: 'form_submit', formClassesValue: 'hs-form' }, variable: '{{Form Classes}}', label: 'Form Classes' },
+      { trigger: { kind: 'form_submit', pagePathValue: '/contact' }, variable: '{{Page Path}}', label: 'Page Path' },
+    ];
+    for (const c of cases) {
+      const built = buildTrigger({ name: 'T', ...c.trigger } as unknown as TriggerInput);
+      const cond = (built.filter ?? []).find((p) => JSON.stringify(p).includes(c.variable));
+      assert.ok(cond, `${c.label}: buildTrigger emitted a ${c.variable} condition`);
+      const emitted = String((cond as { type?: string }).type);
+      const value = Object.entries(c.trigger).find(([k]) => k.endsWith('Value'))![1];
+      const text = describeTriggerCondition(c.trigger);
+      assert.ok(text.includes(`${c.label} ${emitted} "${value}"`), `${c.trigger.kind} ${c.label}: built "${emitted}", described as: ${text}`);
+    }
+    // An explicit operator is still described as given.
+    assert.match(describeTriggerCondition({ kind: 'link_click', clickTextValue: 'Apply', clickTextOperator: 'equals' }), /Click Text equals "Apply"/);
   });
 
   await test('create_gtm_variable_typed: lookup_table + regex_table kinds build smm/remm from input+rows', async () => {
