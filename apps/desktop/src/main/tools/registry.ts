@@ -2131,7 +2131,8 @@ function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean, data
       name: 'create_google_ads_user_list',
       description:
         'Create a CRM-based Customer Match user list (CONTACT_INFO: emails/phones) - the missing target when ' +
-        'upload_google_ads_customer_match has no list to add members to. LIVE account write. membershipLifeSpanDays ' +
+        'upload_google_ads_customer_match has no list to add members to. LIVE account write: it shows a SINGLE ' +
+        'one-click approval card (no typed word, NOT a two-step delete). membershipLifeSpanDays ' +
         'default 180 (max 540; 0 = unlimited is not offered). The new list starts EMPTY - follow with the upload tool.',
       inputSchema: {
         type: 'object',
@@ -2145,9 +2146,12 @@ function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean, data
         additionalProperties: false,
       },
       write: true,
-      // A create, so one click - see create_google_ads_conversion_action. An audience list is
-      // additive and spends nothing.
-      summarize: (a) => `Create Customer Match user list "${s(a.name)}" in LIVE Google Ads account ${s(a.customerId)}`,
+      // ONE approval card, no typed word - the same rung as create_google_ads_conversion_action. An
+      // audience list is additive and spends nothing, so the delete wording would be theatre, but it is
+      // LIVE in the advertiser's account the moment it applies and this app cannot remove it, so it
+      // does not belong in the auto-apply bucket (Tool.approval).
+      approval: true,
+      summarize: (a) => `Create Customer Match user list "${s(a.name)}" in LIVE Google Ads account ${s(a.customerId)}. This is not a draft: it exists in Google Ads the moment it is created`,
       precheck: () => adsNotReady(ads),
       handler: (a) =>
         run(async () => {
@@ -7006,8 +7010,8 @@ export function buildToolRegistry(
       // than pasted ones. The CREATE, because the whole point of that flow is "there is no action
       // for this form yet" - scoping it out (as this briefly did) left the chat able to read a
       // label but not mint one, so a user asking for a conversion tag on a new form had to switch
-      // to the Ads tab, create it, and come back. It is additive, spends nothing, and applies in
-      // one click like every other create.
+      // to the Ads tab, create it, and come back. It is additive and spends nothing, but it is LIVE,
+      // so it shows its own one-click approval card (Tool.approval), never the two-step delete card.
       //
       // Still excluded: everything that MOVES MONEY OR DATA (campaign status, budgets, negative
       // keywords, the three uploads, and edits to an existing action). All the guidance about

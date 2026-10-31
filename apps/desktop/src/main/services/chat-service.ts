@@ -139,15 +139,17 @@ export const GOOGLE_ADS_CAPABILITIES =
   'audit_google_ads_ga4_link. ' +
   'WRITES all land on a LIVE advertising account: there is no draft stage and nothing here can undo ' +
   'them. TWO different gates apply, and naming the wrong one is worse than saying nothing. ' +
-  'CREATES APPLY IN ONE CLICK, with no approval card: create_google_ads_conversion_action and ' +
-  'create_google_ads_user_list. They are additive - they spend nothing and remove nothing - so they ' +
-  'follow the same rule as creating a GTM tag. Because they are live and immediate, state the ACCOUNT ' +
-  'and exactly what you are creating BEFORE calling the tool, and report what was created after. ' +
+  'LIVE CREATES SHOW ONE APPROVAL CARD, a single click with no typed word: ' +
+  'create_google_ads_conversion_action and create_google_ads_user_list. They are additive - they ' +
+  'spend nothing and remove nothing - so they never get the two-step card, but they are live and ' +
+  'immediate and this app cannot remove them, so the user approves each one. State the ACCOUNT and ' +
+  'exactly what you are creating BEFORE calling the tool, say a one-click card will appear, and ' +
+  'report what was created after. ' +
   'ANYTHING THAT MOVES MONEY OR DATA SHOWS A TWO-STEP CARD asking the user to type a word: ' +
   'set_google_ads_campaign_status (stops or starts spend), update_google_ads_campaign_budget ' +
   '(changes it), add_google_ads_negative_keywords (changes delivery), ' +
   'update_google_ads_conversion_action, and the uploads (offline conversions, conversion ' +
-  'adjustments, customer match). Say a card will appear for those, and never promise one for a create. ' +
+  'adjustments, customer match). Say a card will appear for those too. ' +
   'MONEY: pausing a campaign stops its spend and changing a budget changes it. State the exact ' +
   'before-and-after and which account BEFORE calling the tool, and report what actually changed after. ' +
   'WHAT YOU DO NOT HAVE: no keyword, ad-group, ad-copy or search-term reads; no Merchant Center; no ' +
@@ -644,9 +646,10 @@ export class ChatService {
           'DELETE tools show an approval card (a two-step confirmation) - never promise an approval prompt ' +
           'for a create. ' +
           (adsConnected
-            ? 'That holds for the Google Ads tools this chat can also reach: ' +
-              'create_google_ads_conversion_action applies in ONE CLICK like any other create. It is LIVE ' +
-              'rather than a draft though, so name the Ads account and the exact action before calling it. ' +
+            ? 'The Google Ads tools this chat can also reach differ: ' +
+              'create_google_ads_conversion_action shows its own ONE-CLICK approval card (no typed word) ' +
+              'because it is LIVE in the Ads account rather than a draft, so name the Ads account and the ' +
+              'exact action before calling it and say that card will appear. ' +
               'update_google_ads_conversion_action is an EDIT to a live account and DOES show the card. '
             : 'This chat has NO Google Ads tools: to build a Google Ads conversion tag with a real Conversion ' +
               'ID and Label fetched for the user, tell them to turn on the Google Ads integration chip above ' +

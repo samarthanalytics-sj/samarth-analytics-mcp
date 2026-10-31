@@ -515,6 +515,11 @@ function fakeAds(
         conversionId: 'AW-11122233344', conversionLabel: 'NEWLABEL123', taggable: true,
       };
     },
+    createUserList: async (customerId: string, name: string, _days?: number, loginCustomerId?: string) => {
+      calls.push(`createUserList:${customerId}:${name}:${loginCustomerId ?? ''}`);
+      boom();
+      return { resourceName: `customers/${customerId}/userLists/444`, id: '444' };
+    },
   } as unknown as GoogleAdsService;
   return { ads, calls };
 }
@@ -2876,7 +2881,7 @@ async function main(): Promise<void> {
     assert.ok(fa.calls.includes('listConversionActions:9876543210:'), 'a blank manager id is dropped, not sent');
   });
 
-  await test('create_google_ads_conversion_action is a LIVE write: hidden without confirm, applied in ONE CLICK', async () => {
+  await test('create_google_ads_conversion_action is a LIVE write: hidden without confirm, ONE one-click approval card', async () => {
     // No confirm fn → not registered at all, and calling it cannot reach Google Ads.
     const ro = fakeAds();
     await assert.rejects(
@@ -2885,16 +2890,18 @@ async function main(): Promise<void> {
     );
     assert.equal(ro.calls.length, 0, 'nothing reached Google Ads');
 
-    // CHANGED DELIBERATELY (owner's rule, 2026-07-23): approval is for DELETES. A create applies in
-    // one click, here as in GTM, because it is additive - it spends nothing and removes nothing.
-    // What is NOT relaxed: the tool is still write-gated, so with no confirm fn it is not even
-    // registered (asserted above). The trade accepted is that this create is LIVE with no draft
-    // stage, which is why the prompt requires the account and the exact action to be stated first.
+    // A create is additive - it spends nothing and removes nothing - so it never gets the two-step
+    // "type delete" card. But unlike a GTM create it is LIVE in the advertiser's account with no draft
+    // stage and this app cannot revert it, so it takes exactly ONE plain approval card (Tool.approval).
+    // The tool is also write-gated: with no confirm fn it is not even registered (asserted above).
     const twice = seqConfirm(true, true);
     const fa2 = fakeAds();
     const created = rec(JSON.parse(
       await adsChat(fa2.ads, twice.fn).execute('create_google_ads_conversion_action', { customerId: '9876543210', name: 'Contact form', category: 'SUBMIT_LEAD_FORM' })
     ));
+    assert.equal(twice.calls.length, 1, 'exactly one approval card');
+    assert.ok(!twice.calls[0].destructive, 'a plain card, not the two-step delete card');
+    assert.equal(twice.calls[0].platform, 'ads');
     assert.equal(created.created, true);
     assert.equal(rec(created.action).conversionLabel, 'NEWLABEL123');
     assert.ok(
@@ -2910,6 +2917,28 @@ async function main(): Promise<void> {
     assert.equal(refused.created, false);
     assert.match(String(refused.error), /already exists/);
     assert.equal(dup.calls.some((c) => c.startsWith('createConversionAction')), false, 'a refused dry run writes nothing');
+  });
+
+  await test('create_google_ads_user_list is a LIVE write: ONE one-click approval card, and a decline creates nothing', async () => {
+    // Regression: it had neither `approval` nor `destructive`, so it took the auto-apply branch and a
+    // Customer Match list was created in the live Ads account with no card at all, unlike its sibling
+    // live create (create_google_ads_conversion_action).
+    const args = { customerId: '9876543210', name: 'CRM - buyers' };
+    const yes = seqConfirm(true);
+    const fa = fakeAds();
+    const out = rec(JSON.parse(await adsChat(fa.ads, yes.fn).execute('create_google_ads_user_list', args)));
+    assert.equal(yes.calls.length, 1, 'exactly one approval card');
+    assert.ok(!yes.calls[0].destructive, 'a plain card, not the two-step delete card');
+    assert.equal(yes.calls[0].platform, 'ads');
+    assert.equal(out.userListId, '444');
+    assert.ok(fa.calls.includes('createUserList:9876543210:CRM - buyers:'), 'created after approval');
+
+    const no = seqConfirm(false);
+    const fb = fakeAds();
+    const declined = rec(JSON.parse(await adsChat(fb.ads, no.fn).execute('create_google_ads_user_list', args)));
+    assert.equal(no.calls.length, 1);
+    assert.equal(declined.declined, true);
+    assert.equal(fb.calls.some((c) => c.startsWith('createUserList')), false, 'a declined card never reaches Google Ads');
   });
 
   await test('an Ads service that is not ready answers with the fix, not a raw 403', async () => {
