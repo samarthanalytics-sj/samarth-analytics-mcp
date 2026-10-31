@@ -236,6 +236,13 @@ check('entryNavUrl: null normalised start → unchanged', entryNavUrl(START, nul
   check('worker: the landing is re-checked after the reads, before the screenshot or scan is kept',
     landedLast > landedFirst && landedLast > shot && landedLast > clicks && landedLast < imageKept && landedLast < scanKept,
     `landing@${landedLast} shot@${shot} image@${imageKept} scan@${scanKept}`);
+  // A script-driven redirect during the settle must be refused BEFORE the opt-in reveal clicks run on
+  // the page (and before it is pictured), not only by the late check that comes after them.
+  const settle = src.indexOf('waitForTimeout(settleMs)');
+  const landedSettled = src.indexOf('blockedLanding(', settle);
+  check('worker: the landing is re-checked after the settle, before the screenshot and before any interactive click',
+    settle > landedFirst && landedSettled > settle && landedSettled < shot && landedSettled < clicks && landedSettled < landedLast,
+    `settle@${settle} landing@${landedSettled} shot@${shot} discover@${clicks}`);
 }
 
 console.log(`\nTag-scan: ${passed} passed, ${failed} failed`);

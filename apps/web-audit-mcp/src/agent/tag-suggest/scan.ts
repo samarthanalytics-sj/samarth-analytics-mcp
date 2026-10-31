@@ -648,6 +648,14 @@ export async function scanSiteForTagSuggestions(
             await page.waitForTimeout(settleMs);
             const raw = await collectPageRaw(page);
             const forms = await scanForms(page, page.url());
+            // Once more after the settle, before the screenshot and before any interactive click: a
+            // script-driven redirect into a refused address during the settle must stop the page here,
+            // not after discoverInteractiveForms has already clicked on it.
+            const blockedSettled = await inst.blockedLanding(null);
+            if (blockedSettled) {
+              collectFailures.push({ url: target.url, reason: blockedSettled });
+              continue;
+            }
             let image: PageImage | null = null;
             if (options.captureImages && totalImageBytes < MAX_TOTAL_IMAGE_BYTES) {
               // After the collect, never before: the screenshot must show the page the suggestions
