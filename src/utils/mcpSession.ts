@@ -81,6 +81,93 @@ export function sessionOwnedBy(owner: string | undefined, principal: string): bo
   return owner !== undefined && owner === principal;
 }
 
+/** Default cap on live HTTP sessions, process-wide. Every session holds its own McpServer (~2 MB with
+ *  every tool registered) for up to the idle TTL, so this keeps a 512 MB instance clear of OOM. */
+export const DEFAULT_MAX_SESSIONS = 100;
+/** Default per-principal cap in multi-user mode: room for one user's several clients plus reconnects. */
+export const DEFAULT_MAX_SESSIONS_PER_PRINCIPAL = 10;
+
+export interface SessionLimits {
+  maxTotal: number;
+  maxPerPrincipal: number;
+}
+
+/**
+ * Session caps from GTM_MCP_HTTP_MAX_SESSIONS / GTM_MCP_HTTP_MAX_SESSIONS_PER_PRINCIPAL (positive
+ * integers; anything else falls back to the default). Single-identity modes have ONE principal (every
+ * holder of the static token), where a separate per-principal cap would only be a smaller global cap,
+ * so there it defaults to the global one. It never exceeds the global cap.
+ */
+export function resolveSessionLimits(env: NodeJS.ProcessEnv, multiUser: boolean): SessionLimits {
+  const positive = (name: string): number | undefined => {
+    const raw = (env[name] ?? '').trim();
+    return /^\d+$/.test(raw) && Number(raw) > 0 ? Number(raw) : undefined;
+  };
+  const maxTotal = positive('GTM_MCP_HTTP_MAX_SESSIONS') ?? DEFAULT_MAX_SESSIONS;
+  const perPrincipal =
+    positive('GTM_MCP_HTTP_MAX_SESSIONS_PER_PRINCIPAL') ??
+    (multiUser ? DEFAULT_MAX_SESSIONS_PER_PRINCIPAL : maxTotal);
+  return { maxTotal, maxPerPrincipal: Math.min(perPrincipal, maxTotal) };
+}
+
+export type SessionAdmission =
+  | { kind: 'admit' }
+  /** Close this (the principal's own least-recently-active idle) session, then admit. */
+  | { kind: 'evict'; sessionId: string }
+  | { kind: 'reject'; scope: 'principal' | 'global' };
+
+/**
+ * May `principal` open another session? Nothing used to bound how many sessions existed: the idle
+ * sweep only limits how long one lives, so any authenticated caller looping initialize could mint
+ * thousands of ~2 MB servers inside one TTL and take the process (and every user's sessions) down.
+ *
+ * At the per-principal cap the principal's own least-recently-active session with nothing in flight
+ * is replaced (a client that crashed or reconnected left it behind); if all of them are busy the
+ * request is refused. At the global cap the request is refused: one caller never evicts another's
+ * session. `pending` counts initializes already admitted but not yet in the map, so a concurrent
+ * burst cannot overshoot either cap.
+ */
+export function decideSessionAdmission(
+  sessions: Iterable<[string, { principal: string; lastActivity: number; inFlight: number }]>,
+  principal: string,
+  limits: SessionLimits,
+  pending: { total: number; forPrincipal: number } = { total: 0, forPrincipal: 0 }
+): SessionAdmission {
+  let total = pending.total;
+  let own = pending.forPrincipal;
+  let oldestIdle: { sessionId: string; lastActivity: number } | undefined;
+  for (const [sessionId, s] of sessions) {
+    total += 1;
+    if (s.principal !== principal) continue;
+    own += 1;
+    if (s.inFlight === 0 && (!oldestIdle || s.lastActivity < oldestIdle.lastActivity)) {
+      oldestIdle = { sessionId, lastActivity: s.lastActivity };
+    }
+  }
+  if (own >= limits.maxPerPrincipal) {
+    // Replacing one of the principal's own sessions leaves the total unchanged.
+    return oldestIdle ? { kind: 'evict', sessionId: oldestIdle.sessionId } : { kind: 'reject', scope: 'principal' };
+  }
+  if (total >= limits.maxTotal) return { kind: 'reject', scope: 'global' };
+  return { kind: 'admit' };
+}
+
+/** Status + JSON-RPC error body for an initialize refused by {@link decideSessionAdmission}. */
+export function sessionLimitResponse(
+  scope: 'principal' | 'global',
+  limits: SessionLimits
+): { status: number; body: { jsonrpc: '2.0'; error: { code: number; message: string }; id: null } } {
+  const message =
+    scope === 'principal'
+      ? `Too many open MCP sessions for this caller (limit ${limits.maxPerPrincipal}) and none is idle ` +
+        'to replace. Close a session (DELETE /mcp) or retry later.'
+      : `This server is at its MCP session limit (${limits.maxTotal}). Retry later.`;
+  return {
+    status: scope === 'principal' ? 429 : 503,
+    body: { jsonrpc: '2.0', error: { code: -32000, message }, id: null },
+  };
+}
+
 /** A session id shortened for logs: enough to correlate lines, not enough to address the session. */
 export function redactSessionId(sid: string): string {
   return sid.length >= 16 ? `${sid.slice(0, 8)}...` : '[redacted]';

@@ -34,6 +34,11 @@ if (!existsSync(distPath)) {
 const {
   decidePostRoute,
   decideSessionAccess,
+  decideSessionAdmission,
+  resolveSessionLimits,
+  sessionLimitResponse,
+  DEFAULT_MAX_SESSIONS,
+  DEFAULT_MAX_SESSIONS_PER_PRINCIPAL,
   sessionErrorResponse,
   sessionOwnedBy,
   redactSessionId,
@@ -200,6 +205,103 @@ test('REGRESSION: session ids are redacted for logs, never printed whole', () =>
   assert.ok(!redactSessionId('short-id').includes('short-id'), 'a short id is not printed either');
 });
 
+console.log('\nmcpSession: how many sessions may exist (admission caps)');
+
+// Nothing bounded the number of live sessions: the idle sweep only limits how long one lives, so an
+// authenticated caller looping initialize could mint thousands of ~2 MB servers inside one TTL.
+const LIMITS = { maxTotal: 5, maxPerPrincipal: 2 };
+const sess = (principal, lastActivity, inFlight = 0) => ({ principal, lastActivity, inFlight });
+
+test('defaults: a global cap always; per principal only matters in multi-user mode', () => {
+  assert.deepStrictEqual(resolveSessionLimits({}, true), {
+    maxTotal: DEFAULT_MAX_SESSIONS,
+    maxPerPrincipal: DEFAULT_MAX_SESSIONS_PER_PRINCIPAL,
+  });
+  // Static-token / unauthenticated modes have one principal for everyone holding the token.
+  assert.deepStrictEqual(resolveSessionLimits({}, false), {
+    maxTotal: DEFAULT_MAX_SESSIONS,
+    maxPerPrincipal: DEFAULT_MAX_SESSIONS,
+  });
+  assert.ok(DEFAULT_MAX_SESSIONS_PER_PRINCIPAL >= 5, 'a user must be able to run several clients');
+});
+
+test('env overrides; invalid values fall back; per principal never exceeds the global cap', () => {
+  assert.deepStrictEqual(
+    resolveSessionLimits({ GTM_MCP_HTTP_MAX_SESSIONS: '40', GTM_MCP_HTTP_MAX_SESSIONS_PER_PRINCIPAL: ' 4 ' }, true),
+    { maxTotal: 40, maxPerPrincipal: 4 }
+  );
+  for (const bad of ['', '0', '-3', 'abc', '2.5']) {
+    assert.deepStrictEqual(
+      resolveSessionLimits({ GTM_MCP_HTTP_MAX_SESSIONS: bad, GTM_MCP_HTTP_MAX_SESSIONS_PER_PRINCIPAL: bad }, true),
+      { maxTotal: DEFAULT_MAX_SESSIONS, maxPerPrincipal: DEFAULT_MAX_SESSIONS_PER_PRINCIPAL },
+      JSON.stringify(bad)
+    );
+  }
+  assert.deepStrictEqual(
+    resolveSessionLimits({ GTM_MCP_HTTP_MAX_SESSIONS: '3', GTM_MCP_HTTP_MAX_SESSIONS_PER_PRINCIPAL: '50' }, true),
+    { maxTotal: 3, maxPerPrincipal: 3 }
+  );
+});
+
+test('under both caps a new session is admitted', () => {
+  const map = new Map([['a1', sess(ALICE, 1)], ['b1', sess(BOB, 2)]]);
+  assert.deepStrictEqual(decideSessionAdmission(map, ALICE, LIMITS), { kind: 'admit' });
+});
+
+test("REGRESSION: at the per-principal cap the principal's OWN least-recently-active idle session is replaced", () => {
+  const map = new Map([
+    ['a-new', sess(ALICE, 30)],
+    ['b-old', sess(BOB, 1)],
+    ['a-old', sess(ALICE, 10)],
+  ]);
+  assert.deepStrictEqual(decideSessionAdmission(map, ALICE, LIMITS), { kind: 'evict', sessionId: 'a-old' });
+});
+
+test('a session with a request in flight is never the one replaced', () => {
+  const map = new Map([['a-old', sess(ALICE, 10, 1)], ['a-new', sess(ALICE, 30)]]);
+  assert.deepStrictEqual(decideSessionAdmission(map, ALICE, LIMITS), { kind: 'evict', sessionId: 'a-new' });
+});
+
+test('REGRESSION: at the per-principal cap with every session busy, the initialize is refused', () => {
+  const map = new Map([['a1', sess(ALICE, 10, 1)], ['a2', sess(ALICE, 30, 2)]]);
+  assert.deepStrictEqual(decideSessionAdmission(map, ALICE, LIMITS), { kind: 'reject', scope: 'principal' });
+});
+
+test("REGRESSION: at the global cap the initialize is refused, never by evicting someone else's session", () => {
+  const map = new Map([
+    ['a1', sess(ALICE, 1)],
+    ['b1', sess(BOB, 2)],
+    ['b2', sess(BOB, 3)],
+    ['c1', sess('stytch:org-1:member-carol', 4)],
+    ['c2', sess('stytch:org-1:member-carol', 5)],
+  ]);
+  assert.deepStrictEqual(decideSessionAdmission(map, ALICE, LIMITS), { kind: 'reject', scope: 'global' });
+});
+
+test('initializes still in progress count against both caps', () => {
+  const map = new Map([['a1', sess(ALICE, 1, 1)]]);
+  assert.deepStrictEqual(
+    decideSessionAdmission(map, ALICE, LIMITS, { total: 1, forPrincipal: 1 }),
+    { kind: 'reject', scope: 'principal' }
+  );
+  assert.deepStrictEqual(
+    decideSessionAdmission(map, BOB, LIMITS, { total: 4, forPrincipal: 0 }),
+    { kind: 'reject', scope: 'global' }
+  );
+});
+
+test('a refused initialize gets a JSON-RPC error that says what to do', () => {
+  const principal = sessionLimitResponse('principal', LIMITS);
+  assert.strictEqual(principal.status, 429);
+  assert.strictEqual(principal.body.jsonrpc, '2.0');
+  assert.strictEqual(principal.body.id, null);
+  assert.match(principal.body.error.message, /limit 2/);
+  assert.match(principal.body.error.message, /DELETE \/mcp|retry later/i);
+  const global = sessionLimitResponse('global', LIMITS);
+  assert.strictEqual(global.status, 503);
+  assert.match(global.body.error.message, /limit \(5\)/);
+});
+
 console.log('\nindex.ts: HTTP transport session lifetime and body limit');
 
 // These two live in src/index.ts, which cannot be imported: it calls main() at module load, so
@@ -326,6 +428,16 @@ test('REGRESSION: trackRequest does not count a response that closed during the 
   const guard = fn.search(/if \(res\.destroyed \|\| res\.closed\) return;/);
   assert.ok(guard >= 0, 'trackRequest must bail out when the response has already closed');
   assert.ok(guard < fn.indexOf('entry.inFlight += 1'), 'the closed check must come before the increment');
+});
+
+test('REGRESSION: POST /mcp runs the session admission check before building a server', () => {
+  const post = handlerCode("app.post('/mcp'");
+  const admit = post.indexOf('decideSessionAdmission(');
+  const build = post.indexOf('createGtmMcpServer(');
+  assert.ok(admit >= 0, 'POST /mcp creates sessions with no admission check');
+  assert.ok(build >= 0, 'createGtmMcpServer not found in POST /mcp');
+  assert.ok(admit < build, 'the admission check must run before createGtmMcpServer');
+  assert.match(post.slice(admit, build), /sessionLimitResponse\(/, 'a refusal must answer with sessionLimitResponse');
 });
 
 test('REGRESSION: the parser never inflates a compressed body', () => {
@@ -468,6 +580,62 @@ await e2e('authenticated body errors are still JSON-RPC errors, and a normal ini
     assert.strictEqual(r.status, 200, await r.text());
     assert.ok(r.headers.get('mcp-session-id'), 'initialize must mint a session');
   } finally {
+    await srv.stop();
+  }
+});
+
+console.log('\nindex.ts end to end: session caps');
+
+await e2e('REGRESSION: initialize stops minting sessions at the cap, and replaces idle ones', async () => {
+  // Static-token mode has a single principal, so its per-principal cap is the global one (2 here).
+  const srv = await startServer({ GTM_MCP_HTTP_AUTH_TOKEN: TOKEN, GTM_MCP_HTTP_MAX_SESSIONS: '2' });
+  const auth = { authorization: `Bearer ${TOKEN}` };
+  const init = async () => {
+    const r = await post(srv.base, INIT_BODY, auth);
+    return { status: r.status, sid: r.headers.get('mcp-session-id'), text: await r.text(), r };
+  };
+  const ping = (sid) =>
+    post(srv.base, JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'ping' }), { ...auth, 'mcp-session-id': sid });
+  const streams = [];
+  try {
+    const a = await init();
+    const b = await init();
+    assert.strictEqual(a.status, 200, a.text);
+    assert.strictEqual(b.status, 200, b.text);
+    // At the cap a third initialize replaces the least-recently-active idle session (a), never more.
+    const c = await init();
+    assert.strictEqual(c.status, 200, c.text);
+    assert.strictEqual(await activeSessions(srv.base), 2, 'the session count must stay at the cap');
+    assert.strictEqual((await ping(a.sid)).status, 404, 'the replaced session must be gone');
+    assert.strictEqual((await ping(b.sid)).status, 200, 'the other session must be untouched');
+
+    // Hold an event stream open on both live sessions: nothing is idle, so the next one is refused.
+    for (const sid of [b.sid, c.sid]) {
+      const ac = new AbortController();
+      const res = await fetch(`${srv.base}/mcp`, {
+        headers: { accept: 'text/event-stream', ...auth, 'mcp-session-id': sid },
+        signal: ac.signal,
+      });
+      assert.strictEqual(res.status, 200, `event stream on ${sid}`);
+      streams.push(ac);
+    }
+    const refused = await init();
+    assert.strictEqual(refused.status, 429, refused.text);
+    assert.ok(refused.r.headers.get('retry-after'), 'a refusal must say when to retry');
+    const body = JSON.parse(refused.text);
+    assert.strictEqual(body.jsonrpc, '2.0');
+    assert.strictEqual(body.error.code, -32000);
+    assert.match(body.error.message, /Too many open MCP sessions/);
+    assert.ok(!refused.sid, 'no session id for a refused initialize');
+    assert.strictEqual(await activeSessions(srv.base), 2);
+
+    // Once a stream closes, that session is idle again and can be replaced.
+    for (const ac of streams.splice(0)) ac.abort();
+    const replaced = await waitFor(async () => (await init()).status === 200, 3000);
+    assert.ok(replaced, 'an idle session must be replaceable once its stream closed');
+    assert.strictEqual(await activeSessions(srv.base), 2);
+  } finally {
+    for (const ac of streams) ac.abort();
     await srv.stop();
   }
 });

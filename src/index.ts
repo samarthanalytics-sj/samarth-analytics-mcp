@@ -37,7 +37,10 @@ import { guardrailBanner, guardrailStatus } from './utils/guardrailMode.js';
 import {
   decidePostRoute,
   decideSessionAccess,
+  decideSessionAdmission,
+  resolveSessionLimits,
   sessionErrorResponse,
+  sessionLimitResponse,
   sessionOwnedBy,
   redactSessionId,
 } from './utils/mcpSession.js';
@@ -342,8 +345,9 @@ async function startHttpServer(auth: OAuth2Client): Promise<void> {
   /** Idle-session sweep. A session used to live until the client sent an explicit DELETE, and a
    *  client that crashes, relaunches or loses the network never sends one: every reconnect minted a
    *  fresh McpServer (every tool registration plus the prompts) and left its predecessor resident
-   *  for the life of the process, so activeSessions and memory only ever climbed, and anyone able to
-   *  reach /mcp could mint sessions without bound by looping initialize. Set
+   *  for the life of the process, so activeSessions and memory only ever climbed. The sweep bounds
+   *  how LONG a session lives; how MANY can exist is bounded by the admission caps below (looping
+   *  initialize used to mint sessions without limit inside one TTL). Set
    *  GTM_MCP_HTTP_SESSION_TTL_MS=0 to turn the sweep off. */
   const ttlRaw = parseInt(process.env.GTM_MCP_HTTP_SESSION_TTL_MS ?? '', 10);
   const sessionTtlMs = Number.isFinite(ttlRaw) && ttlRaw >= 0 ? ttlRaw : 30 * 60_000;
@@ -394,6 +398,34 @@ async function startHttpServer(auth: OAuth2Client): Promise<void> {
     });
   };
 
+  /** Caps on how many sessions may exist (GTM_MCP_HTTP_MAX_SESSIONS, ..._PER_PRINCIPAL). */
+  const sessionLimits = resolveSessionLimits(process.env, multiUser);
+  console.error(
+    `[samarth-gtm-mcp] Session limits: ${sessionLimits.maxTotal} total, ` +
+      `${sessionLimits.maxPerPrincipal} per principal`
+  );
+  /** Initializes admitted but not yet in `sessions` (the SDK registers a session partway through
+   *  handleRequest), per principal. Counted by the admission check so a concurrent burst of
+   *  initializes cannot all pass it before any of them lands in the map. */
+  const pendingInits = new Map<string, number>();
+  const pendingInitsTotal = (): number => {
+    let n = 0;
+    for (const v of pendingInits.values()) n += v;
+    return n;
+  };
+  /** Count one pending initialize for `principal`; the returned release is idempotent. */
+  const holdPendingInit = (principal: string): (() => void) => {
+    pendingInits.set(principal, (pendingInits.get(principal) ?? 0) + 1);
+    let held = true;
+    return () => {
+      if (!held) return;
+      held = false;
+      const left = (pendingInits.get(principal) ?? 1) - 1;
+      if (left > 0) pendingInits.set(principal, left);
+      else pendingInits.delete(principal);
+    };
+  };
+
   /** Does this session exist AND belong to the requesting principal? A session owned by someone else
    *  is reported exactly like an unknown one, so its existence is never confirmed. */
   const ownsSession = (sessionId: string | undefined, principal: string): boolean =>
@@ -421,12 +453,46 @@ async function startHttpServer(auth: OAuth2Client): Promise<void> {
         res.status(status).json(body);
         return;
       } else {
+        // The client hung up while we authenticated or read its body: build nothing for it.
+        if (res.destroyed || res.closed) return;
+        // Admission control BEFORE anything is built, so a refused initialize never costs a ~2 MB
+        // server. See decideSessionAdmission.
+        const admission = decideSessionAdmission(sessions, principal, sessionLimits, {
+          total: pendingInitsTotal(),
+          forPrincipal: pendingInits.get(principal) ?? 0,
+        });
+        if (admission.kind === 'reject') {
+          console.error(
+            `[samarth-gtm-mcp] Refusing a new MCP session: ${admission.scope} limit reached ` +
+              `(active: ${sessions.size})`
+          );
+          const { status, body } = sessionLimitResponse(admission.scope, sessionLimits);
+          res.setHeader('Retry-After', '30');
+          res.status(status).json(body);
+          return;
+        }
+        if (admission.kind === 'evict') {
+          // Same close path as the idle sweep: drop the entry first, then close transport and server.
+          const sid = admission.sessionId;
+          const evicted = sessions.get(sid)!;
+          sessions.delete(sid);
+          console.error(
+            `[samarth-gtm-mcp] Replacing least-recently-active idle HTTP session: ${redactSessionId(sid)} (active: ${sessions.size})`
+          );
+          void Promise.resolve(evicted.transport.close()).catch(() => undefined);
+          void evicted.server.close().catch(() => undefined);
+        }
+        // Counted against the caps until the SDK registers the session (or the request ends without).
+        const releasePending = holdPendingInit(principal);
+        res.once('close', releasePending);
+
         // New session: its own server instance, connected to its own transport.
         const newSessionId = randomUUID();
         const sessionServer = createGtmMcpServer(auth);
         transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => newSessionId,
           onsessioninitialized: (sid) => {
+            releasePending();
             sessions.set(sid, { transport, server: sessionServer, principal, lastActivity: Date.now(), inFlight: 0 });
             console.error(
               `[samarth-gtm-mcp] New HTTP session: ${redactSessionId(sid)} (active: ${sessions.size})`
