@@ -557,7 +557,7 @@ const GA4_TO_META: Record<string, string> = {
 };
 
 /** Resolve free-text (e.g. "add to cart", "viewcontent", "Donate") or a GA4 name (generate_lead,
- *  begin_checkout, view_item, sign_up) to the CANONICAL Meta standard event, or null if it isn't a
+ *  begin_checkout, view_item, sign_up, view_search_results) to the CANONICAL Meta standard event, or null if it isn't a
  *  standard event (→ treat as custom). A direct standard-name match wins over the GA4 alias. PURE. */
 export function metaStandardEvent(event: string): string | null {
   const norm = (event ?? '').trim().toLowerCase().replace(/[\s_-]/g, '');
@@ -2372,8 +2372,9 @@ export function planWebToServerMigration(snapshot: ContainerSnapshot): ServerMig
       continue;
     }
     // Template/Custom-HTML pixels by name or snippet. The vendor's public id is read off the template
-    // param (idKeys) or the init call in the snippet (snippetRe) and carried as `derived`, so the server
-    // tag is created pre-filled. A typed tool's id that is not found (or is a non-Constant {{variable}})
+    // param (idKeys) or the init call in the snippet (snippetRe) and carried as `derived`, which
+    // pre-fills the server tag where the web id IS the server field (an idOptional id, such as
+    // Pinterest's Tag ID, is informational only). A typed tool's id that is not found (or is a non-Constant {{variable}})
     // is listed in `requires`, because the tool refuses without it.
     const html = pv(t, 'html');
     const hay = `${t.name} ${type} ${html}`;

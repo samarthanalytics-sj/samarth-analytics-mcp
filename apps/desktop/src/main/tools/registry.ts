@@ -384,6 +384,24 @@ function coerceTriggerInput(ts: Record<string, unknown>): TriggerInput {
   };
 }
 
+/** Why buildAwctTagOnTrigger would refuse this trigger before any GTM write, or null. Shared with the
+ *  approval card, so the card never counts a tag that will not be built. */
+export function awctTriggerProblem(trigger: Record<string, unknown>): string | null {
+  const triggerInput = coerceTriggerInput(trigger);
+  if (!triggerInput.name.trim()) return 'the trigger needs a name';
+  // A Timer with no interval never fires - refuse it rather than create a dead trigger.
+  if (triggerInput.kind === 'timer' && !s(triggerInput.intervalMs ?? '').trim()) {
+    return 'a timer trigger requires intervalMs (the firing interval in milliseconds, e.g. "30000").';
+  }
+  // Same for a custom_event with no eventName: buildTrigger would emit {{_event}} equals "", which
+  // matches no dataLayer push, so the conversion tag would be created and never fire. Refused before
+  // any GTM write (built-ins, variables, trigger, tag), like create_gtm_tracking_tag does.
+  if (triggerInput.kind === 'custom_event' && !s(triggerInput.eventName ?? '').trim()) {
+    return 'a custom_event trigger requires eventName (the dataLayer event it matches, e.g. "generate_lead").';
+  }
+  return null;
+}
+
 /** Build ONE Google Ads conversion tag (awct) on its trigger, in the GTM draft workspace: reuse-or-
  *  create the named trigger, enable the built-in variables the trigger's conditions need, provision the
  *  trigger's OWN condition variables ({{dlv - key}} / Query String / Click Text lookup), then create the
@@ -397,17 +415,8 @@ async function buildAwctTagOnTrigger(
 ): Promise<{ tagName: string; triggerName: string; reusedTrigger: boolean; createdVariables: string[] }> {
   const { accountId, containerId, workspaceId } = ids;
   const triggerInput = coerceTriggerInput(spec.trigger);
-  if (!triggerInput.name.trim()) throw new Error('the trigger needs a name');
-  // A Timer with no interval never fires - refuse it rather than create a dead trigger.
-  if (triggerInput.kind === 'timer' && !s(triggerInput.intervalMs ?? '').trim()) {
-    throw new Error('a timer trigger requires intervalMs (the firing interval in milliseconds, e.g. "30000").');
-  }
-  // Same for a custom_event with no eventName: buildTrigger would emit {{_event}} equals "", which
-  // matches no dataLayer push, so the conversion tag would be created and never fire. Refused before
-  // any GTM write (built-ins, variables, trigger, tag), like create_gtm_tracking_tag does.
-  if (triggerInput.kind === 'custom_event' && !s(triggerInput.eventName ?? '').trim()) {
-    throw new Error('a custom_event trigger requires eventName (the dataLayer event it matches, e.g. "generate_lead").');
-  }
+  const problem = awctTriggerProblem(spec.trigger);
+  if (problem) throw new Error(problem);
 
   // Enable exactly the built-in variables the trigger's conditions reference (e.g. {{Click Text}}).
   const builtIns = triggerBuiltInVars(triggerInput);
@@ -1595,9 +1604,11 @@ function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean, data
         const { plan, entries } = await buildAdsBatchPlan(a);
         // When this run will also build tags, the card must say so - the Ads actions are the only LIVE,
         // irreversible part; the tags + linker land in the revertible GTM draft. Only count entries that
-        // will actually get a tag (have a trigger and a non-blocked action).
+        // will actually get a tag (have a trigger buildAwctTagOnTrigger accepts and a non-blocked action).
         const buildTags = canBuildTagsFor(a);
-        const willTag = buildTags ? entries.filter((e, i) => e.trigger && !plan.steps[i]?.blocked).length : 0;
+        const willTag = buildTags
+          ? entries.filter((e, i) => e.trigger && !awctTriggerProblem(e.trigger) && !plan.steps[i]?.blocked).length
+          : 0;
         const cardText = willTag
           ? `${plan.text}\n\nThen ${willTag} Google Ads conversion tag${willTag === 1 ? '' : 's'} will be built on ${willTag === 1 ? 'its' : 'their'} trigger${willTag === 1 ? '' : 's'} in the GTM DRAFT workspace (revertible before you publish), plus a Conversion Linker if the container has none. Any entry with no trigger gets the conversion action only.`
           : plan.text;
@@ -4802,7 +4813,7 @@ export function buildToolRegistry(
     {
       name: 'create_meta_capi_server_tag',
       description:
-        'Create a Meta/Facebook Conversions API (CAPI) SERVER tag from the Stape template (stape-io / facebook-tag), imported automatically. containerId must be the SERVER container. Tuned for high Event Match Quality: action source website, Event Enhancement (gtmeec) ON, generate _fbp ON, and the EMQ user_data (em/ph/external_id plus client_ip_address/client_user_agent), ecommerce custom_data and event_id AUTO-MAPPED from {{ed - }} variables that are created if missing, so ONE call yields a working tag; mapEmqVariables=false skips that mapping and the template still auto-extracts user data from the event. pixelId and accessToken are usually {{variables}}. `event`: a Meta standard event (ViewContent, AddToCart, Purchase, Lead) or a GA4 name that maps to one (generate_lead -> Lead, begin_checkout -> InitiateCheckout, view_item -> ViewContent, sign_up -> CompleteRegistration) sets eventNameStandard with Override; any other name is sent as that custom event (Override + eventNameCustom). `userData` ADDS advanced-matching rows on top of the auto-map (em/ph/fn/ln/ct/st/zp/country/external_id/fbc/fbp/client_ip_address/client_user_agent/subscription_id/lead_id/fb_login_id/ge/db); a caller row wins a collision, and these rows ship even with mapEmqVariables=false.',
+        'Create a Meta/Facebook Conversions API (CAPI) SERVER tag from the Stape template (stape-io / facebook-tag), imported automatically. containerId must be the SERVER container. Tuned for high Event Match Quality: action source website, Event Enhancement (gtmeec) ON, generate _fbp ON, and the EMQ user_data (em/ph/external_id plus client_ip_address/client_user_agent), ecommerce custom_data and event_id AUTO-MAPPED from {{ed - }} variables that are created if missing, so ONE call yields a working tag; mapEmqVariables=false skips that mapping and the template still auto-extracts user data from the event. pixelId and accessToken are usually {{variables}}. `event`: a Meta standard event (ViewContent, AddToCart, Purchase, Lead) or a GA4 name that maps to one (generate_lead -> Lead, begin_checkout -> InitiateCheckout, view_item -> ViewContent, sign_up -> CompleteRegistration, view_search_results -> Search) sets eventNameStandard with Override; any other name is sent as that custom event (Override + eventNameCustom). `userData` ADDS advanced-matching rows on top of the auto-map (em/ph/fn/ln/ct/st/zp/country/external_id/fbc/fbp/client_ip_address/client_user_agent/subscription_id/lead_id/fb_login_id/ge/db); a caller row wins a collision, and these rows ship even with mapEmqVariables=false.',
       inputSchema: {
         type: 'object',
         properties: {

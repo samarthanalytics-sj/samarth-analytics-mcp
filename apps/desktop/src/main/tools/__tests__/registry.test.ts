@@ -3450,6 +3450,25 @@ async function main(): Promise<void> {
     assert.ok(fa.calls.some((c) => c.startsWith('createConversionAction:9876543210:Contact form')), 'the duplicate was created');
   });
 
+  await test('ONE-CLICK card: a trigger the tag builder will refuse is not counted as a tag that will be built', async () => {
+    const fa = fakeAds();
+    let cardText = '';
+    const approve: ConfirmFn = async (p) => { cardText = p.summary; return p.details; };
+    const reg = buildToolRegistry(fakeData().data, approve, 'gtm', undefined, undefined, undefined, undefined, fa.ads);
+    const out = JSON.parse(await reg.execute('create_google_ads_conversion_actions_for_tags', {
+      customerId: '9876543210',
+      accountId: '1', containerId: '2', workspaceId: '3',
+      entries: [
+        { tagName: 'Book A Demo Click', trigger: { name: 'Book A Demo Click', kind: 'link_click', clickTextValue: 'Book A Demo' } },
+        { tagName: 'Lead Event', trigger: { name: 'Lead Event', kind: 'custom_event' } },
+        { tagName: 'Heartbeat', trigger: { name: 'Heartbeat', kind: 'timer' } },
+      ],
+    }));
+    assert.match(cardText, /Then 1 Google Ads conversion tag will be built on its trigger/, cardText);
+    assert.equal(out.tagsCreatedCount, 1, JSON.stringify(out));
+    assert.deepEqual(out.tagsFailed.map((t: { tagName: string }) => t.tagName).sort(), ['Heartbeat', 'Lead Event']);
+  });
+
   await test('ONE-CLICK: with GTM ids + a trigger per entry, the SAME approval also builds the tags and a Conversion Linker', async () => {
     const fa = fakeAds();
     const fd = fakeData();
