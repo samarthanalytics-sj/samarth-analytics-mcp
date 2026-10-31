@@ -721,25 +721,43 @@ function ruleRuntimeCookiesBeforeConsent(rt: RuntimeInput, out: ConsentFinding[]
     const cookies = page.cookies ?? [];
     if (cookies.length === 0) continue;
     const cls = classifyState(page.consentState);
+    const deniedState = cls.analytics === "denied" || cls.ads === "denied";
+    const events = page.consentEvents ?? [];
     // Determine when consent default/update happened.
-    const consentTs = (page.consentEvents ?? [])
+    const consentTs = events
       .map((e) => e.tMs)
       .filter((t): t is number => typeof t === "number");
     const firstConsentTMs = consentTs.length ? Math.min(...consentTs) : undefined;
+    // The earliest consent event is usually the denied default, which permits
+    // nothing. Measure against the first event that actually grants analytics
+    // or ad storage; fall back to the earliest event when no granting event was
+    // captured (conservative: never flags more than the earliest-event rule).
+    const grantTs = events
+      .filter(
+        (e) =>
+          typeof e.tMs === "number" &&
+          (e.fields?.analytics_storage === "granted" || e.fields?.ad_storage === "granted"),
+      )
+      .map((e) => e.tMs as number);
+    const grantTMs = grantTs.length ? Math.min(...grantTs) : firstConsentTMs;
     const offenders: string[] = [];
     for (const c of cookies) {
       const name = c.name ?? "";
       if (!TRACKING_COOKIE.test(name)) continue;
-      // Two ways to flag: explicit timing before consent, OR a tracking cookie
-      // present at all under a denied state.
-      if (typeof c.tMs === "number" && typeof firstConsentTMs === "number") {
-        if (c.tMs < firstConsentTMs) offenders.push(name);
-      } else if (cls.analytics === "denied" || cls.ads === "denied") {
+      // Two ways to flag: a tracking cookie present at all under a denied state
+      // (timed or not — storage stays denied for the whole capture), OR explicit
+      // timing showing it was written before consent granted storage.
+      if (deniedState) {
+        offenders.push(name);
+      } else if (typeof c.tMs === "number" && typeof grantTMs === "number" && c.tMs < grantTMs) {
         offenders.push(name);
       }
     }
     if (offenders.length === 0) continue;
     const where = pageWhere(page);
+    const grantLabel = grantTs.length
+      ? "the consent update that granted storage"
+      : "the consent event";
     push(out, {
       id: `consent-runtime-cookie-before:${where}:${Array.from(new Set(offenders)).sort().join(",")}`,
       domain: "consent",
@@ -749,10 +767,9 @@ function ruleRuntimeCookiesBeforeConsent(rt: RuntimeInput, out: ConsentFinding[]
       finding: `Tracking cookie(s) set before/without consent (${Array.from(new Set(offenders)).join(", ")})`,
       entity: { path: where },
       affected: [where],
-      whyItMatters:
-        typeof firstConsentTMs === "number"
-          ? `On "${page.consentState}", these tracking cookies were observed before the consent event at ${firstConsentTMs}ms.`
-          : `On "${page.consentState}" (a denied state), these tracking cookies were present even though storage should be denied.`,
+      whyItMatters: deniedState
+        ? `On "${page.consentState}" (a denied state), these tracking cookies were present even though storage should be denied.`
+        : `On "${page.consentState}", these tracking cookies were observed before ${grantLabel} at ${grantTMs}ms.`,
       suggestedFix:
         "Ensure storage-setting tags are gated on consent and that no tracking cookies are written before the consent default applies.",
       businessImpact:

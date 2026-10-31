@@ -1242,7 +1242,7 @@ test("G20 reconcile gating-vs-vendor needs ads denied (analytics-only denial -> 
 });
 
 // ════════════════════════════════════════════════════════════════════════════
-// GROUP H — built-in Consent Initialization trigger
+// GROUP H — built-in Consent Initialization trigger + timed cookie checks
 // ════════════════════════════════════════════════════════════════════════════
 
 // GTM's built-in "Consent Initialization - All Pages" trigger. triggers.list
@@ -1285,6 +1285,53 @@ test("H05 GA4 tag on built-in Consent Initialization is not a consent setup -> o
   const ga4OnInit = tag({ tagId: "13", name: "GA4 config", type: "gaawc", firingTriggerId: [CONSENT_INIT_BUILTIN] });
   const f = runConsentConfigRules(cfg({ tags: [ga4OnInit, googleTagAllPages], textBlob: consentBlob }));
   assert.ok(has(f, "consent-config-ordering"));
+});
+test("H06 timed tracking cookie written AFTER a denied default on a denied page -> cookie-before HIGH", () => {
+  // Regression: timing was compared against the earliest consent event (the
+  // denied default), so better captures produced fewer findings than untimed ones.
+  const f = runConsentRuntimeRules(
+    rt([{
+      requestedUrl: "https://e/",
+      consentState: "default_denied",
+      consentEvents: [{ kind: "default", tMs: 100, fields: { analytics_storage: "denied", ad_storage: "denied" } }],
+      cookies: [{ name: "_ga", tMs: 300 }, { name: "_fbp", tMs: 350 }],
+    }]),
+  );
+  const m = has(f, "consent-runtime-cookie-before");
+  assert.ok(m, "denied-state tracking cookies must be flagged whether or not timing exists");
+  assert.ok(m!.id.endsWith(":_fbp,_ga"), m!.id);
+  assert.equal(m!.severity, "high");
+});
+test("H07 granted page: cookie written between the denied default and the granting update -> flagged", () => {
+  const f = runConsentRuntimeRules(
+    rt([{
+      requestedUrl: "https://e/",
+      consentState: "granted",
+      consentEvents: [
+        { kind: "default", tMs: 100, fields: { analytics_storage: "denied", ad_storage: "denied" } },
+        { kind: "update", tMs: 500, fields: { analytics_storage: "granted", ad_storage: "granted" } },
+      ],
+      cookies: [{ name: "_ga", tMs: 300 }],
+    }]),
+  );
+  const m = has(f, "consent-runtime-cookie-before");
+  assert.ok(m, "a cookie set before storage was granted must be flagged");
+  assert.equal(m!.confidence, "high");
+  assert.ok(/500ms/.test(m!.whyItMatters), m!.whyItMatters);
+});
+test("H08 granted page: cookie written after the granting update -> no cookie-before finding", () => {
+  const f = runConsentRuntimeRules(
+    rt([{
+      requestedUrl: "https://e/",
+      consentState: "granted",
+      consentEvents: [
+        { kind: "default", tMs: 100, fields: { analytics_storage: "denied", ad_storage: "denied" } },
+        { kind: "update", tMs: 500, fields: { analytics_storage: "granted", ad_storage: "granted" } },
+      ],
+      cookies: [{ name: "_ga", tMs: 600 }],
+    }]),
+  );
+  assert.ok(hasNo(f, "consent-runtime-cookie-before"));
 });
 
 // ── run summary ──────────────────────────────────────────────────────────--
