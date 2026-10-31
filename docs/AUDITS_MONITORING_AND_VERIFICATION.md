@@ -276,7 +276,7 @@ transformations; and duplicate server-tag names.
 ### 2.4 Consent Mode v2 engine (`apps/portal/shared/consent-audit.ts`)
 
 A pure, deterministic, dependency-free engine - the single source of truth for
-Consent Mode v2, exercised by a **170-case test suite** that must stay green
+Consent Mode v2, exercised by a **188-case test suite** that must stay green
 (`npm run test:consent`). Entry `runConsentAudit(cfg, rt)` returns coverage
 (`config_only | runtime_imported | reconciled`), the runtime states seen, state
 coverage, and findings. The four canonical signals are `ad_storage`,

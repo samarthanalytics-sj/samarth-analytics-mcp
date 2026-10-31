@@ -56,7 +56,7 @@ violate one is wrong, no matter how convenient:
 - **`api/**` import safety.** Files under `apps/portal/api/` import only `node:*`
   and `import type` at module load; DB/cache/vault clients load via
   `await import()` *inside the handler, after auth*.
-- **Consent v2 suite stays 170/170** (`npm run test:consent`).
+- **Consent v2 suite stays 188/188** (`npm run test:consent`).
 - **Portal stays responsive** on mobile/tablet/desktop.
 
 ---
@@ -599,7 +599,7 @@ Run this after **every** phase, and as a final gate before declaring production:
       `false`; publish stays MCP-guardrailed even after `approval:decide`.
 - [ ] **`api/**` import safety.** No heavy top-level imports added under
       `apps/portal/api/`; clients load lazily after auth.
-- [ ] **Consent v2 suite 170/170** (`npm run test:consent`).
+- [ ] **Consent v2 suite 188/188** (`npm run test:consent`).
 
 ---
 
@@ -609,7 +609,7 @@ Run this after **every** phase, and as a final gate before declaring production:
 # Root MCP server:
 npm run typecheck && npm run build && npm test
 
-# Consent engine (must be 170/170):
+# Consent engine (must be 188/188):
 npm run test:consent
 
 # Portal:

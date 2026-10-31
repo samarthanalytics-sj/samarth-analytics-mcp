@@ -41,7 +41,7 @@ These are non-negotiable and every component below is designed around them:
   `import type` at module load; heavy modules load lazily *after* auth. The new
   capability route obeys this; any future DB/cache client must be `await
   import()`-ed inside the handler after session validation.
-- **Consent Mode v2 suite stays 170/170.** No engine changes here.
+- **Consent Mode v2 suite stays 188/188.** No engine changes here.
 - **All current tool names, routes, and response shapes unchanged.** New
   surfaces are additive (`/api/system/capabilities`); existing routes keep their
   contracts.
@@ -109,7 +109,7 @@ apps/portal/
   server/                     # local Express mirror (unchanged)
   shared/
     portal-types.ts           # product shapes (source of truth) — unchanged
-    consent-audit.ts          # consent engine — unchanged (170/170)
+    consent-audit.ts          # consent engine — unchanged (188/188)
     production-types.ts       # DB domain models + ProductionStore iface
     cache-keys.ts             # cache key namespace + TTL policy
     cache.ts                  # NEW: CacheStore iface + in-memory/noop + Upstash skeleton
@@ -453,6 +453,6 @@ read replicas if audit-history reads grow.
 - All existing tool names, routes, and response shapes.
 - `node:*`-only top-level imports in `api/**` (DB/cache clients load lazily,
   after auth).
-- Consent v2 suite at 170/170.
+- Consent v2 suite at 188/188.
 - No secrets in repo or Postgres; token bytes only in the vault.
 - Portal mobile/tablet/desktop compatibility.

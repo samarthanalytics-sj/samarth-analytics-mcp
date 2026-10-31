@@ -99,7 +99,7 @@ Root:
 npm run typecheck           # tsc --noEmit
 npm run build               # tsc
 npm test                    # guardrails + auth + pagination + ga4Admin + consent
-npm run test:consent        # Consent Mode v2 suite — must be 170/170
+npm run test:consent        # Consent Mode v2 suite — must be 188/188
 ```
 
 Portal (if touched):
@@ -119,7 +119,7 @@ npm --prefix apps/runtime-worker run check
 
 - [ ] Branch named with a Conventional Commit type prefix.
 - [ ] `npm run typecheck` and `npm run build` pass.
-- [ ] `npm test` passes (incl. consent suite **170/170**).
+- [ ] `npm test` passes (incl. consent suite **188/188**).
 - [ ] Portal touched → `npm run portal:check` and `npm run portal:build` pass; UI still responsive.
 - [ ] Runtime worker touched → `npm --prefix apps/runtime-worker run check` passes.
 - [ ] No secrets, `.env`, `*.gtm-mcp-tokens.json`, service-account keys, or `.vercel/` committed.
@@ -146,6 +146,6 @@ don't place shared helper files inside `api/` (they'd be treated as routes).
 - **Never commit secrets.** `.env`, token files, service-account keys, and
   `.vercel/` are gitignored — keep them out of commits.
 - **Vercel API discipline.** See §10 and `CLAUDE.md`.
-- **Consent suite green.** `npm run test:consent` must stay 170/170.
+- **Consent suite green.** `npm run test:consent` must stay 188/188.
 - **Releases are automated.** Don't hand-edit versions or the changelog;
   `semantic-release` handles them from commits on `main`.

@@ -143,7 +143,7 @@ def build(path):
     y = bullet(c, y, "Read-only GA4 included",
                "Admin + reporting tools to reconcile what's configured vs. what's actually collected.")
     y = bullet(c, y, "Built-in audits",
-               "Including a Consent Mode v2 engine validated by a 170-case test suite.")
+               "Including a Consent Mode v2 engine validated by a 188-case test suite.")
     y = bullet(c, y, "Works with any MCP client",
                "Claude Desktop, Claude Code, Cursor — local stdio or team HTTP deployment.")
     c.showPage()
