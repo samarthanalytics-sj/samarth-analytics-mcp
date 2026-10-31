@@ -16,6 +16,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { gzipSync } from 'node:zlib';
 import { urlAllowed } from '../utils/urlGuard.js';
 import { createRequestGuard, safeFetch } from '../utils/safeFetch.js';
 import {
@@ -1932,6 +1933,44 @@ await withHttpEnv({ WEB_AUDIT_HTTP_AUTH_TOKEN: TEST_HTTP_TOKEN, WEB_AUDIT_HTTP_P
       under.slice(0, 300),
     );
   } finally {
+    await h.close();
+  }
+});
+
+// ── HTTP transport: trailing bytes after a compressed body ──────────────────
+// REGRESSION (GHSA-27r3-jxmh-p828): express.json() is mounted ahead of requireAuth and inflates by
+// default. body-parser 1.20.8 left the gunzip stream piped from the request with no error listener
+// once the JSON was read, so a valid gzip frame, a 0x00 byte and 100 KiB of trailing bytes reached
+// the finished decoder after the 401 went out and threw an uncaught Z_DATA_ERROR: one request
+// without a token took the hosted server down. body-parser 1.20.9 detaches and destroys the decoder.
+
+await withHttpEnv({ WEB_AUDIT_HTTP_AUTH_TOKEN: TEST_HTTP_TOKEN, WEB_AUDIT_HTTP_PORT: '0' }, async () => {
+  const h = await startHttpServer(createWebAuditMcpServer);
+  const uncaught: string[] = [];
+  const onUncaught = (e: Error): void => {
+    uncaught.push(String(e));
+  };
+  process.on('uncaughtException', onUncaught);
+  try {
+    const body = Buffer.concat([gzipSync(Buffer.from(initBody(1))), Buffer.from([0x00]), Buffer.alloc(100 * 1024, 0x58)]);
+    const res = await fetch(`http://127.0.0.1:${h.port}/mcp`, {
+      method: 'POST',
+      headers: { ...OPEN_MCP_HEADERS, 'content-encoding': 'gzip' },
+      body,
+    });
+    await res.text();
+    await new Promise((r) => setTimeout(r, 200));
+    check(
+      'http gzip trailing bytes: no uncaught decoder error after the response (was: Z_DATA_ERROR, process exit)',
+      uncaught.length === 0,
+      uncaught.join('; '),
+    );
+    check('http gzip trailing bytes: the request without a token is still answered 401', res.status === 401, String(res.status));
+    const health = await fetch(`http://127.0.0.1:${h.port}/health`);
+    await health.text();
+    check('http gzip trailing bytes: the server still serves /health afterwards', health.status === 200, String(health.status));
+  } finally {
+    process.off('uncaughtException', onUncaught);
     await h.close();
   }
 });
