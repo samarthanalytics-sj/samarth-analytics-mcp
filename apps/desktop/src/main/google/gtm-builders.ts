@@ -3034,9 +3034,12 @@ export function buildMetaPixelTag(
 
 /** Build a Stape "Facebook Conversion API" SERVER tag (gallery template stape-io/facebook-tag;
  *  `type` = its cvt_ code), tuned for high Event Match Quality: action source = website, Event
- *  Enhancement (the gtmeec cookie) ON, generate _fbp ON. A Meta STANDARD event sets
- *  eventNameStandard with Override (inheritEventName=false); a non-standard event inherits the
- *  incoming event_name. pixelId/accessToken are typically {{variables}}. Field keys
+ *  Enhancement (the gtmeec cookie) ON, generate _fbp ON. inheritEventName is always 'override': a
+ *  Meta STANDARD event, or a GA4 name that maps to one (generate_lead → Lead, begin_checkout →
+ *  InitiateCheckout, view_item → ViewContent, sign_up → CompleteRegistration, view_search_results →
+ *  Search; see metaStandardEvent), sets eventName 'standard' + eventNameStandard; any other name is
+ *  sent as that CUSTOM event (eventName 'custom' + eventNameCustom), never inherited.
+ *  pixelId/accessToken are typically {{variables}}. Field keys
  *  corpus-validated (cvt_5TP8W). The EMQ user-data params come from create_meta_emq_variables. PURE. */
 /** The Meta user_data (advanced-matching / EMQ) rows the CAPI tag sends, as [Facebook key → the
  *  `ed - <emq key>` variable that feeds it]. em/ph/external_id ONLY: the Stape template's own
