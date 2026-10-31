@@ -790,6 +790,111 @@ testAsync("R-googtag control: a G- id that is not on the property is still a str
   assert.ok(out.findings.some((f) => f.finding === MID_MISMATCH));
 });
 
+// The same AW-/DC-/GT- gap in the enhanced-measurement and sGTM rules.
+const EM_MANUAL_PV = "GA4 enhanced measurement is enabled while GTM appears to send page_view manually";
+const SGTM_MISMATCH = "GA4 tag transport_url does not match the selected server container domain";
+const SGTM_NO_CLIENT = "Web GA4 tags route to a server container, but no GA4 client was found there";
+
+function googleTagWith(tagId: string, id: string, name: string, key: string, value: string) {
+  const t = googleTag(tagId, id, name);
+  t.parameter.push({ type: "template", key, value });
+  return t;
+}
+
+const enhancedOnRoutes = (url: URL): StubResponse | undefined =>
+  url.hostname === "analyticsadmin.googleapis.com" && url.pathname.endsWith("/enhancedMeasurementSettings")
+    ? { status: 200, body: { streamEnabled: true } }
+    : streamRoutes(url);
+
+/** A selected server container (domain collect.example.com) with no GA4 client. */
+const SERVER_CONTEXT = { accountId: "1", containerId: "9", workspaceId: "5" };
+const serverContainerRoutes = (url: URL): StubResponse | undefined => {
+  if (url.hostname !== "tagmanager.googleapis.com") return undefined;
+  const p = url.pathname.replace(/^\/tagmanager\/v2/, "");
+  if (p === "/accounts/1/containers/9") {
+    return { status: 200, body: { containerId: "9", usageContext: ["server"], domainName: ["collect.example.com"] } };
+  }
+  if (p === "/accounts/1/containers/9/workspaces/5/clients") return { status: 200, body: { client: [] } };
+  if (p === "/accounts/1/containers/9/workspaces/5/transformations") {
+    return { status: 200, body: { transformation: [] } };
+  }
+  return undefined;
+};
+
+testAsync("R-googtag: an AW- Google tag's send_page_view=false is not GA4 manual page_view handling", async () => {
+  // Regression: any googtag with send_page_view=false counted as GA4 sending
+  // page_view manually, so an Ads Google tag raised the enhanced-measurement
+  // double-count finding.
+  const out = await auditFindings(
+    webFixture([
+      googleTag("1", "G-ABC1234", "GA4 Google tag"),
+      googleTagWith("2", "AW-123456789", "Google Ads tag", "sendPageView", "false"),
+    ]),
+    [enhancedOnRoutes],
+    { ga4PropertyId: "123456" },
+  );
+  assert.ok(!out.findings.some((f) => f.finding === EM_MANUAL_PV), "AW- send_page_view read as GA4 manual page_view");
+});
+
+testAsync("R-googtag control: a G- Google tag with send_page_view=false still trips the enhanced-measurement finding", async () => {
+  const out = await auditFindings(
+    webFixture([googleTagWith("1", "G-ABC1234", "GA4 Google tag", "sendPageView", "false")]),
+    [enhancedOnRoutes],
+    { ga4PropertyId: "123456" },
+  );
+  assert.ok(out.findings.some((f) => f.finding === EM_MANUAL_PV));
+});
+
+testAsync("R-googtag: an AW- Google tag's transport_url is not GA4 server routing", async () => {
+  // Regression: an Ads Google tag pointing at another endpoint got a GA4
+  // transport mismatch, and made the server container's missing GA4 client a
+  // HIGH finding although no GA4 tag routes to it.
+  const out = await auditFindings(
+    webFixture([
+      googleTag("1", "G-ABC1234", "GA4 Google tag"),
+      googleTagWith("2", "AW-123456789", "Google Ads tag", "server_container_url", "https://other.example.net"),
+    ]),
+    [serverContainerRoutes],
+    { serverContext: SERVER_CONTEXT },
+  );
+  assert.ok(!out.findings.some((f) => f.finding === SGTM_MISMATCH), "AW- transport_url reported as a GA4 mismatch");
+  assert.ok(!out.findings.some((f) => f.finding === SGTM_NO_CLIENT), "AW- transport_url counted as GA4 server routing");
+});
+
+testAsync("R-googtag control: a G- Google tag's transport_url is still reconciled against the server container", async () => {
+  const out = await auditFindings(
+    webFixture([
+      googleTagWith("1", "G-ABC1234", "GA4 Google tag", "server_container_url", "https://other.example.net"),
+    ]),
+    [serverContainerRoutes],
+    { serverContext: SERVER_CONTEXT },
+  );
+  assert.ok(out.findings.some((f) => f.finding === SGTM_MISMATCH));
+  assert.ok(out.findings.some((f) => f.finding === SGTM_NO_CLIENT));
+});
+
+test("S-googtag: the Express auditor does not treat AW-/GT- Google tags as GA4 config tags", () => {
+  // Regression: an Ads Google tag got a CRITICAL "missing valid Measurement ID"
+  // finding and, next to the GA4 Google tag, a HIGH duplicate-config finding.
+  const express = (tags: unknown[]) =>
+    runExpressAudit(
+      { tags: tags as never, triggers: [], variables: [], folders: [], builtInVariables: [] },
+      { containerPublicId: "GTM-GOOGTAG" },
+    ).findings.map((f) => f.title);
+  const mixed = express([
+    googleTag("1", "G-ABC1234", "GA4 Google tag"),
+    googleTag("2", "AW-123456789", "Google Ads tag"),
+    googleTag("3", "GT-ABCDEFG", "Google tag (GT)"),
+  ]);
+  assert.ok(!mixed.includes("GA4 Config tag missing valid Measurement ID"), JSON.stringify(mixed));
+  assert.ok(!mixed.includes("Multiple GA4 Config / Google Tag entries"), JSON.stringify(mixed));
+  // Controls: two G- tags are still duplicates; a Google tag with no id still lacks one.
+  const twoGa4 = express([googleTag("1", "G-ABC1234", "GA4 A"), googleTag("2", "G-XYZ9876", "GA4 B")]);
+  assert.ok(twoGa4.includes("Multiple GA4 Config / Google Tag entries"));
+  const noId = express([{ tagId: "1", name: "Bare Google tag", type: "googtag", firingTriggerId: ["2147479553"] }]);
+  assert.ok(noId.includes("GA4 Config tag missing valid Measurement ID"));
+});
+
 // ── Paged GTM lists (nextPageToken) and the Data API report ─────────────────
 
 const WS = "/tagmanager/v2/accounts/1/containers/2/workspaces/3";

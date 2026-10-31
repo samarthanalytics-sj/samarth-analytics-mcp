@@ -1697,7 +1697,8 @@ function ruleCrossEnhancedMeasurement(ctx: Ctx, out: AuditFinding[]) {
   // send_page_view=false, or GA4 event tags sending event_name=page_view.
   let manualPageView = false;
   for (const tag of ctx.tags) {
-    if (isGA4Config(tag)) {
+    // An AW-/DC-/GT- Google tag's send_page_view says nothing about GA4.
+    if (isGA4Config(tag) && !isNonGa4GoogleTag(tag)) {
       const sendPv = tagParam(tag, "sendPageView") ?? tagParam(tag, "send_page_view");
       if (sendPv && /false/i.test(sendPv)) manualPageView = true;
     }
@@ -1940,6 +1941,8 @@ function ruleSgtmTransportMatch(ctx: Ctx, out: AuditFinding[]) {
     .filter(Boolean);
   for (const tag of ctx.tags) {
     if (!isGA4Config(tag) && !isGA4Event(tag)) continue;
+    // AW-/DC-/GT- Google tags are not GA4 tags (see isNonGa4GoogleTag).
+    if (isNonGa4GoogleTag(tag)) continue;
     const transport = tagTransportUrl(tag);
     if (!transport || transport.includes("{{")) continue;
     let host = "";
@@ -1981,9 +1984,13 @@ function ruleSgtmGa4ClientPresence(ctx: Ctx, out: AuditFinding[]) {
   const hasGa4Client = sg.clientTypes.some((t) =>
     /gaaw|ga4|google/i.test(t),
   );
-  // Does the web container route GA4 to a server? (any transport_url present)
+  // Does the web container route GA4 to a server? (any transport_url present
+  // on a GA4 tag; an AW-/DC-/GT- Google tag's transport_url is not GA4 traffic)
   const webRoutesToServer = ctx.tags.some(
-    (t) => (isGA4Config(t) || isGA4Event(t)) && Boolean(tagTransportUrl(t)),
+    (t) =>
+      (isGA4Config(t) || isGA4Event(t)) &&
+      !isNonGa4GoogleTag(t) &&
+      Boolean(tagTransportUrl(t)),
   );
   if (webRoutesToServer && !hasGa4Client) {
     pushFinding(out, {
