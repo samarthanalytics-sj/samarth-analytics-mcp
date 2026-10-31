@@ -452,12 +452,18 @@ function fid(seed: string): string {
 // GTM reads (read-only)
 // ════════════════════════════════════════════════════════════════════════════
 
+const GTM_LIST_MAX_PAGES = 50;
+
 /**
  * Fetch one workspace list (tags/triggers/variables). On a 401/403 the caller
  * has no read access to this container, so we rethrow to abort the whole run
  * (sendGtmError turns it into a precise unauthorized/forbidden response). Any
  * other failure is recorded in `toolFailures` and yields an empty list so the
  * remaining sources can still be audited.
+ *
+ * GTM list endpoints return a `nextPageToken` when more results exist, so a
+ * single call is ONE page: follow it (bounded) so a large workspace is never
+ * silently truncated, and record a tool failure if the page cap is hit.
  */
 async function pullList<T>(
   token: string,
@@ -467,8 +473,23 @@ async function pullList<T>(
   toolFailures: ConsentToolFailure[],
 ): Promise<T[]> {
   try {
-    const data = await gtmFetch<Record<string, T[] | undefined>>(token, path);
-    return data[itemKey] ?? [];
+    const items: T[] = [];
+    let pageToken: string | undefined;
+    for (let i = 0; i < GTM_LIST_MAX_PAGES; i++) {
+      const data = await gtmFetch<Record<string, unknown>>(
+        token,
+        pageToken ? `${path}?pageToken=${encodeURIComponent(pageToken)}` : path,
+      );
+      items.push(...((data[itemKey] as T[] | undefined) ?? []));
+      const next = data.nextPageToken;
+      if (typeof next !== "string" || !next) return items;
+      pageToken = next;
+    }
+    toolFailures.push({
+      resource,
+      message: `The ${resource} list has more than ${GTM_LIST_MAX_PAGES} pages; later pages were not read, so this audit covers a partial list.`,
+    });
+    return items;
   } catch (e) {
     if (e instanceof GtmApiError && (e.status === 401 || e.status === 403)) {
       throw e;

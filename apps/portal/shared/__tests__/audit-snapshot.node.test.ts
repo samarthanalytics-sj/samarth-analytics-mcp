@@ -39,9 +39,11 @@ import {
 // The real Vercel route handlers (Vercel-safe at module load: node:* + types only).
 import auditHandler from "../../api/gtm/audit";
 import consentAuditHandler from "../../api/gtm/consent-audit";
+import accountsHandler from "../../api/gtm/accounts/index";
 import { encodeSessionCookie } from "../../server/gtm/session-cookie";
 // The Express dev-server auditor (node:crypto + types only).
 import { runAudit as runExpressAudit } from "../../server/gtm/audit";
+import { fetchWorkspaceContents, listAccounts } from "../../server/gtm/api";
 
 // ── tiny test harness (mirrors audit-accuracy.node.test.ts) ─────────────────
 
@@ -753,6 +755,162 @@ testAsync("R-googtag control: a G- id that is not on the property is still a str
     ga4PropertyId: "123456",
   });
   assert.ok(out.findings.some((f) => f.finding === MID_MISMATCH));
+});
+
+// ── Paged GTM lists (nextPageToken) and the Data API report ─────────────────
+
+const WS = "/tagmanager/v2/accounts/1/containers/2/workspaces/3";
+
+/** Serve `pages` of one list at `pathname`, chained by nextPageToken. */
+function pagedList(pathname: string, key: string, pages: unknown[][]) {
+  return (url: URL): StubResponse | undefined => {
+    if (url.hostname !== "tagmanager.googleapis.com" || url.pathname !== pathname) return undefined;
+    const i = Number(url.searchParams.get("pageToken") ?? "0");
+    const body: Record<string, unknown> = { [key]: pages[i] ?? [] };
+    if (i + 1 < pages.length) body.nextPageToken = String(i + 1);
+    return { status: 200, body };
+  };
+}
+
+testAsync("R-paging: a trigger on page 2 of triggers.list is not a broken reference", async () => {
+  // Regression: one call per list read only page 1, so tags referencing a
+  // page-2 trigger got HIGH broken-reference findings and counts under-reported.
+  const fx = webFixture([]);
+  const out = await auditFindings(fx, [
+    pagedList(`${WS}/tags`, "tag", [
+      [{ tagId: "1", name: "Lead tag", type: "html", firingTriggerId: ["20"], parameter: [] }],
+      [{ tagId: "2", name: "Late tag", type: "html", firingTriggerId: ["10"], parameter: [] }],
+    ]),
+    pagedList(`${WS}/triggers`, "trigger", [
+      [{ triggerId: "10", name: "Click", type: "click" }],
+      [{ triggerId: "20", name: "Form", type: "formSubmission" }],
+    ]),
+  ]);
+  assert.ok(!out.findings.some((f) => f.finding === BROKEN_FIRE), "page-2 trigger reported missing");
+  assert.ok(
+    !out.findings.some((f) => f.finding === "Trigger is not referenced by any tag or variable"),
+    "trigger used only by a page-2 tag reported unused",
+  );
+  assert.deepEqual(out.counts, { tags: 2, triggers: 2, variables: 0 });
+});
+
+testAsync("R-paging: a list cut off at the page cap is a tool failure, not a broken reference", async () => {
+  const endless = (url: URL): StubResponse | undefined => {
+    if (url.hostname !== "tagmanager.googleapis.com" || url.pathname !== `${WS}/triggers`) return undefined;
+    return { status: 200, body: { trigger: [], nextPageToken: "more" } };
+  };
+  const out = await auditFindings(
+    webFixture([{ tagId: "1", name: "Lead tag", type: "html", firingTriggerId: ["999"], parameter: [] }]),
+    [endless],
+  );
+  assert.ok(!out.findings.some((f) => f.finding === BROKEN_FIRE), "partial trigger list produced a broken reference");
+  assert.ok(
+    (out.toolFailures ?? []).some((t: { resource: string }) => t.resource === "triggers"),
+    "the truncated list must be recorded as a tool failure",
+  );
+  assert.notEqual(out.executiveSummary?.publishSafe, "yes");
+});
+
+testAsync("R-paging: the GA4 Data API report is read past its first page", async () => {
+  // Regression: runReport was sent once with limit 250, so events beyond the
+  // first page were reported as "zero events".
+  let call = 0;
+  const reportRows = [
+    { rows: [{ dimensionValues: [{ value: "sign_up" }], metricValues: [{ value: "5" }] }], rowCount: 2 },
+    { rows: [{ dimensionValues: [{ value: "purchase" }], metricValues: [{ value: "3" }] }], rowCount: 2 },
+  ];
+  const dataApi = (url: URL): StubResponse | undefined => {
+    if (url.hostname !== "analyticsdata.googleapis.com") return undefined;
+    return { status: 200, body: reportRows[call++] ?? { rows: [], rowCount: 2 } };
+  };
+  const eventTag = (tagId: string, ev: string) => ({
+    tagId,
+    name: `GA4 - ${ev}`,
+    type: "gaawe",
+    firingTriggerId: ["2147479553"],
+    parameter: [
+      { type: "template", key: "eventName", value: ev },
+      { type: "template", key: "measurementIdOverride", value: "G-ABC1234" },
+    ],
+  });
+  const out = await auditFindings(
+    webFixture([googleTag("1", "G-ABC1234", "GA4 Google tag"), eventTag("2", "sign_up"), eventTag("3", "purchase")]),
+    [dataApi, streamRoutes],
+    { ga4PropertyId: "123456", enableDataApi: true },
+  );
+  assert.ok(call >= 2, `expected the report to be paged, got ${call} call(s)`);
+  assert.ok(
+    !out.findings.some((f) => /reported zero events/.test(f.finding ?? "")),
+    `events on page 2 reported as zero: ${JSON.stringify(out.findings.filter((f) => /zero events/.test(f.finding ?? "")))}`,
+  );
+});
+
+testAsync("R-paging: /api/gtm/consent-audit audits tags from every page", async () => {
+  const ungated = (tagId: string, name: string) => googleTag(tagId, "G-ABC1234", name);
+  const r = await callRoute(consentAuditHandler, { containerPublicId: "GTM-PAGED" }, [
+    pagedList(`${WS}/tags`, "tag", [[ungated("1", "Page-1 Google tag")], [ungated("2", "Page-2 Google tag")]]),
+    gtmRoutes(webFixture([])),
+  ]);
+  assert.equal(r.status, 200, JSON.stringify(r.json).slice(0, 300));
+  const perTag = r.json.findings.find((f: { finding?: string }) =>
+    /marketing\/analytics tag\(s\) have no per-tag consent settings/.test(f.finding ?? ""),
+  );
+  assert.ok(perTag, "expected the per-tag consent finding");
+  assert.ok(
+    (perTag.affected ?? []).includes("Page-2 Google tag"),
+    `ungated tag on page 2 was not audited: ${JSON.stringify(perTag.affected)}`,
+  );
+});
+
+/** Run `fn` with global fetch served by `routes` (no network). */
+async function withStubbedFetch<T>(
+  routes: Array<(url: URL) => StubResponse | undefined>,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: unknown) => {
+    const url = new URL(String(input instanceof Request ? input.url : input));
+    const hit = routes.map((r) => r(url)).find(Boolean) ?? { status: 404, body: {} };
+    return new Response(JSON.stringify(hit.body), {
+      status: hit.status,
+      headers: { "content-type": "application/json" },
+    });
+  }) as typeof fetch;
+  try {
+    return await fn();
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
+testAsync("S-paging: the Express GTM client follows nextPageToken for lists and workspace contents", async () => {
+  const accounts = await withStubbedFetch(
+    [pagedList("/tagmanager/v2/accounts", "account", [[{ accountId: "1" }], [{ accountId: "2" }]])],
+    () => listAccounts("t"),
+  );
+  assert.deepEqual(accounts.map((a) => a.accountId), ["1", "2"]);
+  const contents = await withStubbedFetch(
+    [
+      pagedList(`${WS}/triggers`, "trigger", [[{ triggerId: "10" }], [{ triggerId: "20" }]]),
+      gtmRoutes(webFixture([])),
+    ],
+    () => fetchWorkspaceContents("t", "1", "2", "3"),
+  );
+  assert.deepEqual(contents.triggers.map((t) => t.triggerId), ["10", "20"]);
+});
+
+testAsync("R-paging: /api/gtm/accounts returns accounts from every page", async () => {
+  const out = await callRoute(accountsHandler, {}, [
+    pagedList("/tagmanager/v2/accounts", "account", [
+      [{ accountId: "1", name: "First" }],
+      [{ accountId: "2", name: "Second" }],
+    ]),
+  ]);
+  assert.equal(out.status, 200, JSON.stringify(out.json).slice(0, 300));
+  assert.deepEqual(
+    out.json.accounts.map((a: { accountId: string }) => a.accountId),
+    ["1", "2"],
+  );
 });
 
 for (const [name, fn] of asyncTests) {

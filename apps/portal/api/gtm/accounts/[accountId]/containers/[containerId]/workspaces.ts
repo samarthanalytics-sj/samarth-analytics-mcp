@@ -66,13 +66,13 @@ export default async function handler(
     if (!token) return sendJson(res, 401, { error: "not_connected" });
 
     try {
-      const data = await gtmFetch<{ workspace?: GtmWorkspace[] }>(
+      const { items: workspaces, truncated } = await gtmListAll<GtmWorkspace>(
         token,
         `/accounts/${encodeURIComponent(accountId)}/containers/${encodeURIComponent(
           containerId,
         )}/workspaces`,
+        "workspace",
       );
-      const workspaces = data.workspace ?? [];
       return sendJson(res, 200, {
         workspaces: workspaces.map((w) => ({
           accountId: w.accountId,
@@ -81,6 +81,7 @@ export default async function handler(
           name: w.name ?? `Workspace ${w.workspaceId}`,
           description: w.description,
         })),
+        ...(truncated ? { truncated: true } : {}),
       });
     } catch (e) {
       return sendGtmError(res, e, "Failed to list GTM workspaces");
@@ -369,4 +370,32 @@ async function gtmFetch<T>(accessToken: string, path: string): Promise<T> {
     throw new GtmApiError(r.status, text);
   }
   return (await r.json()) as T;
+}
+
+/**
+ * GTM list endpoints return a `nextPageToken` when more results exist, so a
+ * single call is ONE page. Follow it (bounded) so the selector never silently
+ * drops items past the first page. Inlined: api/** may only import node:* at
+ * module load.
+ */
+const GTM_LIST_MAX_PAGES = 50;
+
+async function gtmListAll<T>(
+  accessToken: string,
+  path: string,
+  key: string,
+): Promise<{ items: T[]; truncated: boolean }> {
+  const items: T[] = [];
+  let pageToken: string | undefined;
+  for (let i = 0; i < GTM_LIST_MAX_PAGES; i++) {
+    const data = await gtmFetch<Record<string, unknown>>(
+      accessToken,
+      pageToken ? `${path}?pageToken=${encodeURIComponent(pageToken)}` : path,
+    );
+    items.push(...((data[key] as T[] | undefined) ?? []));
+    const next = data.nextPageToken;
+    if (typeof next !== "string" || !next) return { items, truncated: false };
+    pageToken = next;
+  }
+  return { items, truncated: true };
 }

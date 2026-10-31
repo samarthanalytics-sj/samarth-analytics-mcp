@@ -411,6 +411,8 @@ interface AuditState {
   publishedVersion: GtmVersion | null;
   clients: GtmClient[];
   toolFailures: AuditToolFailure[];
+  /** Workspace lists cut short at the paging cap (e.g. "triggers"). */
+  incompleteLists?: string[];
 }
 
 interface WorkspaceContents {
@@ -554,6 +556,8 @@ interface Ctx {
   triggerIdSet: Set<string>;
   triggerById: Map<string, GtmTrigger>;
   builtInTypes: Set<string>;
+  /** Lists only partially read; rules that need the full list skip. */
+  incompleteLists: Set<string>;
   textBlob: string;
   ga4: Ga4AdminState | null;
   runtime: RuntimeState | null;
@@ -597,6 +601,7 @@ function buildCtx(
     triggerIdSet,
     triggerById,
     builtInTypes,
+    incompleteLists: new Set(state.incompleteLists ?? []),
     textBlob: collectTextBlob(state.contents),
     ga4,
     runtime,
@@ -720,6 +725,8 @@ function ruleTagsNoFiringTriggers(ctx: Ctx, out: AuditFinding[]) {
 }
 
 function ruleUnusedTriggers(ctx: Ctx, out: AuditFinding[]) {
+  // References from an unread page would be missed: never report on a partial list.
+  if (ctx.incompleteLists.has("tags") || ctx.incompleteLists.has("variables")) return;
   const used = new Set<string>();
   for (const tag of ctx.tags) {
     for (const tid of [
@@ -757,6 +764,8 @@ function ruleUnusedTriggers(ctx: Ctx, out: AuditFinding[]) {
 }
 
 function ruleUnusedVariables(ctx: Ctx, out: AuditFinding[]) {
+  // References from an unread page would be missed: never report on a partial list.
+  if (["tags", "triggers", "variables"].some((l) => ctx.incompleteLists.has(l))) return;
   const namesUsed = new Set<string>();
   const collect = (s?: string) => {
     if (!s) return;
@@ -832,6 +841,8 @@ function rulePausedTags(ctx: Ctx, out: AuditFinding[]) {
 }
 
 function ruleBrokenReferences(ctx: Ctx, out: AuditFinding[]) {
+  // A trigger on an unread page would look missing: never report on a partial list.
+  if (ctx.incompleteLists.has("triggers")) return;
   for (const tag of ctx.tags) {
     const name = tag.name ?? "Unnamed tag";
     for (const tid of tag.firingTriggerId ?? []) {
@@ -2909,37 +2920,51 @@ async function pullAuditState(
     containerId,
   )}`;
   const toolFailures: AuditToolFailure[] = [];
+  const incompleteLists: string[] = [];
+  const noteTruncated = (resource: string, r: { truncated: boolean }) => {
+    if (!r.truncated) return;
+    incompleteLists.push(resource);
+    toolFailures.push(truncatedListFailure(resource));
+  };
 
   // Workspace contents are required. If they fail, throw — the audit is
-  // meaningless without them.
+  // meaningless without them. Every list follows nextPageToken.
   const [tagsRes, triggersRes, variablesRes, foldersRes, bivRes] =
     await Promise.all([
-      gtmFetch<{ tag?: GtmTag[] }>(token, `${base}/tags`),
-      gtmFetch<{ trigger?: GtmTrigger[] }>(token, `${base}/triggers`),
-      gtmFetch<{ variable?: GtmVariable[] }>(token, `${base}/variables`),
-      gtmFetch<{ folder?: GtmFolder[] }>(token, `${base}/folders`),
-      gtmFetch<{ builtInVariable?: GtmBuiltInVariable[] }>(
+      gtmListAll<GtmTag>(token, `${base}/tags`, "tag"),
+      gtmListAll<GtmTrigger>(token, `${base}/triggers`, "trigger"),
+      gtmListAll<GtmVariable>(token, `${base}/variables`, "variable"),
+      gtmListAll<GtmFolder>(token, `${base}/folders`, "folder"),
+      gtmListAll<GtmBuiltInVariable>(
         token,
         `${base}/built_in_variables`,
+        "builtInVariable",
       ),
     ]);
+  noteTruncated("tags", tagsRes);
+  noteTruncated("triggers", triggersRes);
+  noteTruncated("variables", variablesRes);
+  noteTruncated("folders", foldersRes);
+  noteTruncated("built_in_variables", bivRes);
 
   const contents: WorkspaceContents = {
-    tags: tagsRes.tag ?? [],
-    triggers: triggersRes.trigger ?? [],
-    variables: variablesRes.variable ?? [],
-    folders: foldersRes.folder ?? [],
-    builtInVariables: bivRes.builtInVariable ?? [],
+    tags: tagsRes.items,
+    triggers: triggersRes.items,
+    variables: variablesRes.items,
+    folders: foldersRes.items,
+    builtInVariables: bivRes.items,
     templates: [],
   };
 
   // Best-effort: templates (not always present).
   try {
-    const tplRes = await gtmFetch<{ template?: unknown[] }>(
+    const tplRes = await gtmListAll<unknown>(
       token,
       `${base}/templates`,
+      "template",
     );
-    contents.templates = tplRes.template ?? [];
+    contents.templates = tplRes.items;
+    noteTruncated("templates", tplRes);
   } catch (e) {
     if (e instanceof GtmApiError && e.status !== 404) {
       toolFailures.push({
@@ -2966,11 +2991,13 @@ async function pullAuditState(
   // Workspaces in this container.
   let workspaces: GtmWorkspace[] = [];
   try {
-    const wsRes = await gtmFetch<{ workspace?: GtmWorkspace[] }>(
+    const wsRes = await gtmListAll<GtmWorkspace>(
       token,
       `${containerBase}/workspaces`,
+      "workspace",
     );
-    workspaces = wsRes.workspace ?? [];
+    workspaces = wsRes.items;
+    noteTruncated("workspaces", wsRes);
   } catch (e) {
     toolFailures.push({
       resource: "workspaces",
@@ -3020,11 +3047,9 @@ async function pullAuditState(
   );
   if (isServer) {
     try {
-      const cRes = await gtmFetch<{ client?: GtmClient[] }>(
-        token,
-        `${base}/clients`,
-      );
-      clients = cRes.client ?? [];
+      const cRes = await gtmListAll<GtmClient>(token, `${base}/clients`, "client");
+      clients = cRes.items;
+      noteTruncated("clients", cRes);
     } catch (e) {
       if (e instanceof GtmApiError && e.status !== 404) {
         toolFailures.push({
@@ -3043,6 +3068,7 @@ async function pullAuditState(
     publishedVersion,
     clients,
     toolFailures,
+    incompleteLists,
   };
 }
 
@@ -3263,27 +3289,27 @@ async function pullSgtmContext(
   // container — these endpoints are meaningless (and 404) otherwise.
   if (isServer) {
     try {
-      const cRes = await gtmFetch<{ client?: GtmClient[] }>(
-        token,
-        `${base}/clients`,
-      );
-      for (const c of cRes.client ?? []) {
+      const cRes = await gtmListAll<GtmClient>(token, `${base}/clients`, "client");
+      for (const c of cRes.items) {
         if (c.type) clientTypes.push(c.type);
         if (c.name) clientNames.push(c.name);
       }
+      if (cRes.truncated) failures.push(truncatedListFailure("server_clients"));
       okCount++;
     } catch (e) {
       record("server_clients", e);
     }
 
     try {
-      const tRes = await gtmFetch<{ transformation?: { name?: string }[] }>(
+      const tRes = await gtmListAll<{ name?: string }>(
         token,
         `${base}/transformations`,
+        "transformation",
       );
-      for (const t of tRes.transformation ?? []) {
+      for (const t of tRes.items) {
         if (t.name) transformationNames.push(t.name);
       }
+      if (tRes.truncated) failures.push(truncatedListFailure("server_transformations"));
       okCount++;
     } catch (e) {
       record("server_transformations", e);
@@ -3311,6 +3337,11 @@ async function pullSgtmContext(
 // leaves DATA_API Not Covered — counts are never fabricated.
 const GA4_DATA_V1BETA = "https://analyticsdata.googleapis.com/v1beta";
 const DATA_API_WINDOW_DAYS = 7;
+// runReport returns at most `limit` rows per call plus the total `rowCount`;
+// page with `offset` until every event name is read, so an event beyond the
+// first page is never reported as "zero events".
+const DATA_API_PAGE_LIMIT = 10000;
+const DATA_API_MAX_PAGES = 5;
 
 async function pullDataApiState(
   token: string,
@@ -3324,45 +3355,69 @@ async function pullDataApiState(
   let ok = false;
 
   try {
-    const r = await fetch(
-      `${GA4_DATA_V1BETA}/properties/${encodeURIComponent(numericId)}:runReport`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-          Accept: "application/json",
+    let offset = 0;
+    let complete = false;
+    let failed = false;
+    for (let page = 0; page < DATA_API_MAX_PAGES; page++) {
+      const r = await fetch(
+        `${GA4_DATA_V1BETA}/properties/${encodeURIComponent(numericId)}:runReport`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+          body: JSON.stringify({
+            dimensions: [{ name: "eventName" }],
+            metrics: [{ name: "eventCount" }],
+            dateRanges: [
+              { startDate: `${DATA_API_WINDOW_DAYS}daysAgo`, endDate: "today" },
+            ],
+            limit: DATA_API_PAGE_LIMIT,
+            offset,
+          }),
         },
-        body: JSON.stringify({
-          dimensions: [{ name: "eventName" }],
-          metrics: [{ name: "eventCount" }],
-          dateRanges: [
-            { startDate: `${DATA_API_WINDOW_DAYS}daysAgo`, endDate: "today" },
-          ],
-          limit: 250,
-        }),
-      },
-    );
-    if (!r.ok) {
-      const text = await r.text();
-      failures.push({
-        resource: "ga4_run_report",
-        message: text.slice(0, 300) || `HTTP ${r.status}`,
-        status: r.status,
-      });
-    } else {
+      );
+      if (!r.ok) {
+        const text = await r.text();
+        failures.push({
+          resource: "ga4_run_report",
+          message: text.slice(0, 300) || `HTTP ${r.status}`,
+          status: r.status,
+        });
+        failed = true;
+        break;
+      }
       const json = (await r.json()) as {
         rows?: {
           dimensionValues?: { value?: string }[];
           metricValues?: { value?: string }[];
         }[];
+        rowCount?: number;
       };
-      for (const row of json.rows ?? []) {
+      const rows = json.rows ?? [];
+      for (const row of rows) {
         const name = row.dimensionValues?.[0]?.value;
         const count = Number(row.metricValues?.[0]?.value ?? "0");
         if (name) eventCounts[name] = Number.isFinite(count) ? count : 0;
       }
+      offset += rows.length;
+      const total = typeof json.rowCount === "number" ? json.rowCount : offset;
+      if (rows.length === 0 || offset >= total) {
+        complete = true;
+        break;
+      }
+    }
+    if (!failed && complete) {
       ok = true;
+    } else if (!failed) {
+      // Never report a partial read as complete: leave DATA_API Not Covered so
+      // the zero-events rule cannot misflag events on unread rows.
+      failures.push({
+        resource: "ga4_run_report",
+        message: `The report has more than ${offset} rows; not every event name was read, so zero-event checks were skipped.`,
+      });
     }
   } catch (e) {
     failures.push({
@@ -3798,4 +3853,40 @@ async function gtmFetch<T>(accessToken: string, path: string): Promise<T> {
     throw new GtmApiError(r.status, text);
   }
   return (await r.json()) as T;
+}
+
+/**
+ * GTM list endpoints return a `nextPageToken` when more results exist, so a
+ * single call is ONE page. Follow it (bounded) so a large workspace is never
+ * silently truncated. `truncated` is true only when the page cap was hit and
+ * later pages were left unread — callers must record that as a tool failure.
+ */
+const GTM_LIST_MAX_PAGES = 50;
+
+async function gtmListAll<T>(
+  accessToken: string,
+  path: string,
+  key: string,
+): Promise<{ items: T[]; truncated: boolean }> {
+  const items: T[] = [];
+  let pageToken: string | undefined;
+  for (let i = 0; i < GTM_LIST_MAX_PAGES; i++) {
+    const sep = path.includes("?") ? "&" : "?";
+    const data = await gtmFetch<Record<string, unknown>>(
+      accessToken,
+      pageToken ? `${path}${sep}pageToken=${encodeURIComponent(pageToken)}` : path,
+    );
+    items.push(...((data[key] as T[] | undefined) ?? []));
+    const next = data.nextPageToken;
+    if (typeof next !== "string" || !next) return { items, truncated: false };
+    pageToken = next;
+  }
+  return { items, truncated: true };
+}
+
+function truncatedListFailure(resource: string): AuditToolFailure {
+  return {
+    resource,
+    message: `The ${resource} list has more than ${GTM_LIST_MAX_PAGES} pages; later pages were not read, so this audit covers a partial list.`,
+  };
 }
