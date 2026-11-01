@@ -1,3 +1,9 @@
+## [1.497.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.497.2...v1.497.3) (2026-10-05)
+
+### Bug Fixes
+
+* **package:** publish the bin paths exactly as written ([#982](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/982)) ([7e0a977](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/7e0a9770aef111509a2a60e69fa72bdbe9fe0316))
+
 ## [1.497.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.497.1...v1.497.2) (2026-10-04)
 
 ### Bug Fixes
