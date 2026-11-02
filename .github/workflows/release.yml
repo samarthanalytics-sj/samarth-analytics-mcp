@@ -8,7 +8,7 @@ permissions:
   contents: write
   issues: write
   pull-requests: write
-  id-token: write # npm provenance attestation
+  id-token: write # npm Trusted Publishing (OIDC) and provenance attestation
 
 jobs:
   release:
@@ -50,7 +50,15 @@ jobs:
         # set RELEASE_TOKEN to a fine-grained PAT of a repo admin (Contents,
         # Issues, Pull requests: read/write). Falls back to GITHUB_TOKEN when
         # unset, which works only while main is unprotected.
+        #
+        # npm publishes through Trusted Publishing: @semantic-release/npm exchanges
+        # this job's GitHub OIDC token (id-token: write above) for a short-lived
+        # npm token, so no NPM_TOKEN secret is used. The trusted publisher is set
+        # on npmjs.com for samarth-gtm-mcp: GitHub Actions, samarthanalytics-sj/
+        # samarth-analytics-mcp, workflow release.yml, no environment. Without a
+        # token fallback, a broken trusted-publisher setup now fails in
+        # verifyConditions, BEFORE a version commit or tag is created, instead of
+        # tagging a release that never reaches npm.
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npx semantic-release
