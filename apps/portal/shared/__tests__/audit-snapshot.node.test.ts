@@ -25,6 +25,7 @@ import crypto from "node:crypto";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { runConsentAudit, type ConsentFinding } from "../consent-audit";
 import {
@@ -47,6 +48,7 @@ import containersHandler from "../../api/gtm/accounts/[accountId]/containers/ind
 import workspacesHandler from "../../api/gtm/accounts/[accountId]/containers/[containerId]/workspaces";
 import oauthStatusHandler from "../../api/oauth/status";
 import oauthCallbackHandler from "../../api/oauth/callback";
+import oauthLogoutHandler from "../../api/oauth/logout";
 import {
   decodeSessionCookie,
   encodeOAuthStateCookie,
@@ -54,6 +56,7 @@ import {
 } from "../../server/gtm/session-cookie";
 // The Express dev-server auditor (node:crypto + types only).
 import { runAudit as runExpressAudit } from "../../server/gtm/audit";
+import { revokeOnDisconnect } from "../../server/gtm/revoke";
 import { fetchWorkspaceContents, listAccounts } from "../../server/gtm/api";
 
 // ── tiny test harness (mirrors audit-accuracy.node.test.ts) ─────────────────
@@ -348,7 +351,7 @@ function gtmRoutes(fx: FixtureLike): (url: URL) => StubResponse | undefined {
 async function callRoute(
   handler: (req: IncomingMessage, res: ServerResponse) => unknown,
   body: Record<string, unknown>,
-  routes: Array<(url: URL) => StubResponse | undefined>,
+  routes: Array<(url: URL, init?: RequestInit) => StubResponse | undefined>,
   opts: {
     authenticated?: boolean;
     method?: string;
@@ -357,19 +360,24 @@ async function callRoute(
     session?: Record<string, unknown>;
     /** Full Cookie header, built inside the route env; replaces the default. */
     cookieHeader?: () => string;
+    /** Extra request headers (e.g. origin, host). */
+    headers?: Record<string, string>;
+    /** Env overrides on top of ROUTE_ENV; undefined unsets a variable. */
+    env?: Record<string, string | undefined>;
   } = {},
 ): Promise<{ status: number; json: any; setCookies: string[] }> {
   const savedEnv: Record<string, string | undefined> = {};
-  for (const [k, v] of Object.entries(ROUTE_ENV)) {
-    savedEnv[k] = process.env[k];
-    process.env[k] = v;
+  for (const [k, v] of Object.entries({ ...ROUTE_ENV, ...opts.env })) {
+    if (!(k in savedEnv)) savedEnv[k] = process.env[k];
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
   }
   const realFetch = globalThis.fetch;
-  globalThis.fetch = (async (input: unknown) => {
+  globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
     const url = new URL(String(input instanceof Request ? input.url : input));
     let hit: StubResponse | undefined;
     for (const r of routes) {
-      hit = r(url);
+      hit = r(url, init);
       if (hit) break;
     }
     const res = hit ?? { status: 404, body: { error: { message: "not found" } } };
@@ -394,7 +402,7 @@ async function callRoute(
     const req = {
       method: opts.method ?? "POST",
       url: opts.url ?? "/api/test",
-      headers: cookie ? { cookie } : {},
+      headers: { ...opts.headers, ...(cookie ? { cookie } : {}) },
       body: { accountId: "1", containerId: "2", workspaceId: "3", ...body },
     };
     const headers: Record<string, unknown> = {};
@@ -459,6 +467,92 @@ test("R-guard: api/** routes import only node:* and `import type` at the top lev
   };
   walk(API_DIR);
   assert.deepEqual(offenders, []);
+});
+
+test("R-guard: every relative runtime import reachable from api/** names its .js file", () => {
+  // @vercel/node transpiles each .ts to its own .js ES module without bundling
+  // or rewriting specifiers, and plain Node resolves no extensionless relative
+  // import: `await import("../../shared/consent-audit")` built and traced fine,
+  // then threw ERR_MODULE_NOT_FOUND on every authenticated audit. tsx (tests,
+  // `vercel dev`, the Express server) resolves either form, hiding it.
+  // Read from the AST, so comments, strings and type positions such as
+  // `typeof import("…")` are ignored. A load whose target is not a string
+  // literal cannot be checked, so it is reported as `<non-literal …>`.
+  const runtimeSpecifiers = (file: string): string[] => {
+    const sf = ts.createSourceFile(file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    const out: string[] = [];
+    const literal = (n: ts.Node | undefined): string | undefined =>
+      n && (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) ? n.text : undefined;
+    const isRequire = (callee: ts.Expression): boolean =>
+      (ts.isIdentifier(callee) && callee.text === "require") ||
+      (ts.isCallExpression(callee) && ts.isIdentifier(callee.expression) && callee.expression.text === "createRequire");
+    const walkNode = (node: ts.Node): void => {
+      if (ts.isImportDeclaration(node)) {
+        const clause = node.importClause;
+        const named = clause?.namedBindings;
+        const typeOnly =
+          clause?.isTypeOnly ||
+          (clause && !clause.name && named && ts.isNamedImports(named) && named.elements.length > 0 &&
+            named.elements.every((e) => e.isTypeOnly));
+        if (!typeOnly) out.push(literal(node.moduleSpecifier) ?? "<non-literal import>");
+      } else if (ts.isExportDeclaration(node)) {
+        if (!node.isTypeOnly && node.moduleSpecifier) out.push(literal(node.moduleSpecifier) ?? "<non-literal export>");
+      } else if (ts.isImportEqualsDeclaration(node)) {
+        if (!node.isTypeOnly && ts.isExternalModuleReference(node.moduleReference)) {
+          out.push(literal(node.moduleReference.expression) ?? "<non-literal require>");
+        }
+      } else if (ts.isCallExpression(node)) {
+        if (node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+          out.push(literal(node.arguments[0]) ?? `<non-literal import(${node.arguments[0]?.getText(sf) ?? ""})>`);
+        } else if (isRequire(node.expression)) {
+          out.push(literal(node.arguments[0]) ?? `<non-literal require(${node.arguments[0]?.getText(sf) ?? ""})>`);
+        }
+      }
+      ts.forEachChild(node, walkNode);
+    };
+    walkNode(sf);
+    return out;
+  };
+  const offenders: string[] = [];
+  const seen = new Set<string>();
+  const visit = (file: string): void => {
+    if (seen.has(file)) return;
+    seen.add(file);
+    for (const spec of runtimeSpecifiers(file)) {
+      const rel = `${path.relative(API_DIR, file)} -> ${spec}`;
+      // tsconfig path aliases exist only for tsc, tsx and bundlers.
+      if (spec.startsWith("<non-literal") || spec.startsWith("@/") || spec.startsWith("@shared/")) {
+        offenders.push(rel);
+        continue;
+      }
+      if (!spec.startsWith(".")) continue;
+      if (!spec.endsWith(".js")) {
+        offenders.push(rel);
+        continue;
+      }
+      const target = path.resolve(path.dirname(file), spec.replace(/\.js$/, ".ts"));
+      try {
+        statSync(target);
+      } catch {
+        offenders.push(`${rel} (no ${path.basename(target)})`);
+        continue;
+      }
+      visit(target);
+    }
+  };
+  const walk = (dir: string): void => {
+    for (const name of readdirSync(dir)) {
+      const p = path.join(dir, name);
+      if (statSync(p).isDirectory()) walk(p);
+      else if (p.endsWith(".ts")) visit(p);
+    }
+  };
+  walk(API_DIR);
+  assert.deepEqual(offenders, []);
+  // The lazy engine imports were followed, so their own imports were checked too.
+  for (const engine of ["consent-audit.ts", "audit-accuracy.ts"]) {
+    assert.ok([...seen].some((f) => f.endsWith(path.join("shared", engine))), `${engine} was not reached`);
+  }
 });
 
 testAsync("R-auth: /api/gtm/audit without a session is a clean 401", async () => {
@@ -1221,6 +1315,260 @@ testAsync("R-session /api/oauth/callback mints a sealed session stamped with iat
   const body = Buffer.from(minted.raw.split(".")[1], "base64url").toString("latin1");
   for (const secret of ["1//fresh-refresh-token", "fresh-access-token", "user@example.com"]) {
     assert.ok(!minted.raw.includes(secret) && !body.includes(secret), `session cookie exposes ${secret}`);
+  }
+});
+
+// ── Disconnect Google: revoke the grant, but only in the portal's own project ──
+// Google revokes a user's grant for a whole Google Cloud project. If the MCP
+// server signs users in with a client in the portal's project, even a different
+// client ID, revoking would sign the user out there too. The portal cannot see
+// another deployment's settings, so revoking is opt-in, refuses a shared client
+// or project it can see, and first proves the token refreshes with the portal's
+// own client.
+
+/** Clears variables an operator's shell might export, so the outcome depends only on the test. */
+const LOGOUT_BASE_ENV: Record<string, string | undefined> = {
+  PORTAL_REVOKE_GOOGLE_ON_DISCONNECT: undefined,
+  GOOGLE_OAUTH_CLIENT_ID: undefined,
+  GOOGLE_CLIENT_ID: undefined,
+  SAMARTH_GOOGLE_OAUTH_CLIENT_ID: undefined,
+};
+const REVOKE_ON = { ...LOGOUT_BASE_ENV, PORTAL_REVOKE_GOOGLE_ON_DISCONNECT: "true" };
+const SAME_ORIGIN = { origin: "https://portal.example", host: "portal.example" };
+// Google client IDs start with their project number.
+const PROJECT_A_PORTAL = "1111111111-portal.apps.googleusercontent.com";
+const PROJECT_A_MCP = "1111111111-mcp.apps.googleusercontent.com";
+const PROJECT_B_MCP = "2222222222-mcp.apps.googleusercontent.com";
+
+type GoogleCall = [string, ...string[]];
+
+/** Google's token and revoke endpoints. Records each call without the client secret. */
+function googleStub(calls: GoogleCall[], status: { token?: number; revoke?: number } = {}) {
+  return (url: URL, init?: RequestInit): StubResponse | undefined => {
+    if (url.hostname !== "oauth2.googleapis.com") return undefined;
+    const form = new URLSearchParams(String(init?.body ?? ""));
+    if (url.pathname === "/token" && form.get("grant_type") === "refresh_token") {
+      calls.push(["token", form.get("client_id") ?? "", form.get("refresh_token") ?? ""]);
+      return { status: status.token ?? 200, body: { access_token: "fresh", expires_in: 3600 } };
+    }
+    if (url.pathname === "/revoke") {
+      calls.push(["revoke", form.get("token") ?? ""]);
+      return { status: status.revoke ?? 200, body: {} };
+    }
+    return undefined;
+  };
+}
+
+function clearsSessionCookie(setCookies: string[]): boolean {
+  return setCookies.some((c) => c.startsWith("samarth_portal_sid=;") && c.includes("Max-Age=0"));
+}
+
+/** Runs fn with console.warn captured; returns what it logged. */
+async function captureWarnings(fn: () => Promise<void>): Promise<string[]> {
+  const real = console.warn;
+  const lines: string[] = [];
+  console.warn = (...args: unknown[]) => void lines.push(args.map(String).join(" "));
+  try {
+    await fn();
+  } finally {
+    console.warn = real;
+  }
+  return lines;
+}
+
+testAsync("R-logout: an opted-in same-origin POST proves the token is the portal's, then revokes it", async () => {
+  const calls: GoogleCall[] = [];
+  const r = await callRoute(oauthLogoutHandler, {}, [googleStub(calls)], {
+    url: "/api/oauth/logout",
+    session: { refreshToken: "1//portal-refresh-token" },
+    headers: SAME_ORIGIN,
+    env: REVOKE_ON,
+  });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.json, { connected: false, googleRevoked: true });
+  assert.deepEqual(calls, [
+    ["token", ROUTE_ENV.PORTAL_GOOGLE_OAUTH_CLIENT_ID, "1//portal-refresh-token"],
+    ["revoke", "1//portal-refresh-token"],
+  ]);
+  assert.ok(clearsSessionCookie(r.setCookies), r.setCookies.join(" | "));
+  // A client of the MCP server in another project does not stop it.
+  const other: GoogleCall[] = [];
+  const otherProject = await callRoute(oauthLogoutHandler, {}, [googleStub(other)], {
+    url: "/api/oauth/logout",
+    session: { refreshToken: "1//portal-refresh-token" },
+    headers: SAME_ORIGIN,
+    env: { ...REVOKE_ON, PORTAL_GOOGLE_OAUTH_CLIENT_ID: PROJECT_A_PORTAL, GOOGLE_OAUTH_CLIENT_ID: PROJECT_B_MCP },
+  });
+  assert.equal(otherProject.json?.googleRevoked, true);
+  assert.deepEqual(other.map((c) => c[0]), ["token", "revoke"]);
+});
+
+testAsync("R-logout never revokes unless opted in, nor a client or project shared with the MCP server", async () => {
+  const own = ROUTE_ENV.PORTAL_GOOGLE_OAUTH_CLIENT_ID;
+  for (const env of [
+    // The default: the portal cannot tell whether a separately deployed MCP server uses its client.
+    LOGOUT_BASE_ENV,
+    { ...LOGOUT_BASE_ENV, PORTAL_REVOKE_GOOGLE_ON_DISCONNECT: "1" },
+    { ...REVOKE_ON, PORTAL_GOOGLE_OAUTH_CLIENT_ID: undefined, GOOGLE_OAUTH_CLIENT_ID: "shared-client-id" },
+    { ...REVOKE_ON, PORTAL_GOOGLE_OAUTH_CLIENT_SECRET: undefined },
+    { ...REVOKE_ON, GOOGLE_OAUTH_CLIENT_ID: own },
+    { ...REVOKE_ON, GOOGLE_CLIENT_ID: own },
+    { ...REVOKE_ON, SAMARTH_GOOGLE_OAUTH_CLIENT_ID: own },
+    // A different client in the same Google Cloud project: Google revokes per project.
+    { ...REVOKE_ON, PORTAL_GOOGLE_OAUTH_CLIENT_ID: PROJECT_A_PORTAL, GOOGLE_OAUTH_CLIENT_ID: PROJECT_A_MCP },
+    { ...REVOKE_ON, PORTAL_GOOGLE_OAUTH_CLIENT_ID: PROJECT_A_PORTAL, GOOGLE_CLIENT_ID: PROJECT_A_MCP },
+    { ...REVOKE_ON, PORTAL_GOOGLE_OAUTH_CLIENT_ID: PROJECT_A_PORTAL, SAMARTH_GOOGLE_OAUTH_CLIENT_ID: PROJECT_A_MCP },
+  ]) {
+    const calls: GoogleCall[] = [];
+    const r = await callRoute(oauthLogoutHandler, {}, [googleStub(calls)], {
+      url: "/api/oauth/logout",
+      session: { refreshToken: "1//shared-refresh-token" },
+      headers: SAME_ORIGIN,
+      env,
+    });
+    assert.equal(r.json?.googleRevoked, false, JSON.stringify(env));
+    assert.deepEqual(calls, [], JSON.stringify(env));
+    assert.ok(clearsSessionCookie(r.setCookies), JSON.stringify(env));
+  }
+});
+
+testAsync("R-logout leaves alone a session whose token was issued to another client", async () => {
+  // A cookie minted before the portal moved off a client it shared with the MCP server.
+  const calls: GoogleCall[] = [];
+  let r: Awaited<ReturnType<typeof callRoute>> | undefined;
+  const warnings = await captureWarnings(async () => {
+    r = await callRoute(oauthLogoutHandler, {}, [googleStub(calls, { token: 401 })], {
+      url: "/api/oauth/logout",
+      session: { refreshToken: "1//issued-to-the-shared-client" },
+      headers: SAME_ORIGIN,
+      env: REVOKE_ON,
+    });
+  });
+  assert.deepEqual(r?.json, { connected: false, googleRevoked: false });
+  assert.deepEqual(calls, [["token", ROUTE_ENV.PORTAL_GOOGLE_OAUTH_CLIENT_ID, "1//issued-to-the-shared-client"]]);
+  assert.ok(clearsSessionCookie(r?.setCookies ?? []));
+  assert.equal(warnings.length, 1, warnings.join(" | "));
+  assert.ok(/not revoking/.test(warnings[0]) && !warnings[0].includes("1//"), warnings[0]);
+});
+
+testAsync("R-logout revokes only on a same-origin POST", async () => {
+  for (const [method, headers] of [
+    ["GET", SAME_ORIGIN],
+    ["POST", { host: "portal.example" }],
+    ["POST", { origin: "https://evil.example", host: "portal.example" }],
+    ["POST", { origin: "null", host: "portal.example" }],
+    ["POST", { origin: "http://portal.example.evil.example", host: "portal.example" }],
+  ] as Array<[string, Record<string, string>]>) {
+    const calls: GoogleCall[] = [];
+    const r = await callRoute(oauthLogoutHandler, {}, [googleStub(calls)], {
+      method,
+      url: "/api/oauth/logout",
+      session: { refreshToken: "1//portal-refresh-token" },
+      headers,
+      env: REVOKE_ON,
+    });
+    assert.equal(r.json?.googleRevoked, false, `${method} ${JSON.stringify(headers)}`);
+    assert.deepEqual(calls, [], `${method} ${JSON.stringify(headers)}`);
+    assert.ok(clearsSessionCookie(r.setCookies));
+  }
+  // Behind a proxy the Origin may match the forwarded host instead.
+  const calls: GoogleCall[] = [];
+  const proxied = await callRoute(oauthLogoutHandler, {}, [googleStub(calls)], {
+    url: "/api/oauth/logout",
+    session: { refreshToken: "1//portal-refresh-token" },
+    headers: { origin: "https://portal.example", host: "internal:3000", "x-forwarded-host": "portal.example" },
+    env: REVOKE_ON,
+  });
+  assert.equal(proxied.json?.googleRevoked, true);
+});
+
+testAsync("R-logout still signs out, and logs, when Google refuses; no session revokes nothing", async () => {
+  const calls: GoogleCall[] = [];
+  let refused: Awaited<ReturnType<typeof callRoute>> | undefined;
+  const warnings = await captureWarnings(async () => {
+    refused = await callRoute(oauthLogoutHandler, {}, [googleStub(calls, { revoke: 400 })], {
+      url: "/api/oauth/logout",
+      session: { refreshToken: "1//already-revoked" },
+      headers: SAME_ORIGIN,
+      env: REVOKE_ON,
+    });
+  });
+  assert.equal(refused?.status, 200);
+  assert.deepEqual(refused?.json, { connected: false, googleRevoked: false });
+  assert.ok(clearsSessionCookie(refused?.setCookies ?? []));
+  assert.equal(warnings.length, 1, warnings.join(" | "));
+  assert.ok(/did not confirm/.test(warnings[0]) && !warnings[0].includes("1//"), warnings[0]);
+  for (const opts of [{ authenticated: false }, { session: { refreshToken: undefined } }]) {
+    const none: GoogleCall[] = [];
+    const r = await callRoute(oauthLogoutHandler, {}, [googleStub(none)], {
+      url: "/api/oauth/logout",
+      headers: SAME_ORIGIN,
+      env: REVOKE_ON,
+      ...opts,
+    });
+    assert.deepEqual(r.json, { connected: false, googleRevoked: false }, JSON.stringify(opts));
+    assert.deepEqual(none, [], JSON.stringify(opts));
+  }
+});
+
+testAsync("R-logout: the Vercel route and the Express server's revokeOnDisconnect agree", async () => {
+  const own = ROUTE_ENV.PORTAL_GOOGLE_OAUTH_CLIENT_ID;
+  const envs = [
+    LOGOUT_BASE_ENV,
+    REVOKE_ON,
+    { ...REVOKE_ON, PORTAL_GOOGLE_OAUTH_CLIENT_ID: undefined },
+    { ...REVOKE_ON, GOOGLE_OAUTH_CLIENT_ID: "another-client-id" },
+    { ...REVOKE_ON, GOOGLE_OAUTH_CLIENT_ID: own },
+    { ...REVOKE_ON, PORTAL_GOOGLE_OAUTH_CLIENT_ID: PROJECT_A_PORTAL, GOOGLE_OAUTH_CLIENT_ID: PROJECT_A_MCP },
+    { ...REVOKE_ON, PORTAL_GOOGLE_OAUTH_CLIENT_ID: PROJECT_A_PORTAL, GOOGLE_OAUTH_CLIENT_ID: PROJECT_B_MCP },
+  ];
+  const requests: Array<[string, Record<string, string>]> = [
+    ["POST", SAME_ORIGIN],
+    ["GET", SAME_ORIGIN],
+    ["POST", { origin: "https://evil.example", host: "portal.example" }],
+  ];
+  const statuses = [{}, { token: 400 }, { revoke: 400 }];
+  for (const env of envs) {
+    for (const [method, headers] of requests) {
+      for (const status of statuses) {
+        const label = JSON.stringify({ env, method, headers, status });
+        const routeCalls: GoogleCall[] = [];
+        const expressCalls: GoogleCall[] = [];
+        let route: Awaited<ReturnType<typeof callRoute>> | undefined;
+        let express = false;
+        await captureWarnings(async () => {
+          route = await callRoute(oauthLogoutHandler, {}, [googleStub(routeCalls, status)], {
+            method,
+            url: "/api/oauth/logout",
+            session: { refreshToken: "1//lockstep" },
+            headers,
+            env,
+          });
+          const merged: NodeJS.ProcessEnv = { ...ROUTE_ENV };
+          for (const [k, v] of Object.entries(env)) {
+            if (v === undefined) delete merged[k];
+            else merged[k] = v;
+          }
+          const stub = googleStub(expressCalls, status);
+          const realFetch = globalThis.fetch;
+          globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+            const hit = stub(new URL(String(input)), init) ?? { status: 404, body: {} };
+            return new Response(JSON.stringify(hit.body), { status: hit.status });
+          }) as typeof fetch;
+          try {
+            express = await revokeOnDisconnect(
+              { method, origin: headers.origin, host: headers.host, forwardedHost: undefined },
+              "1//lockstep",
+              merged,
+            );
+          } finally {
+            globalThis.fetch = realFetch;
+          }
+        });
+        assert.equal(route?.json?.googleRevoked, express, label);
+        assert.deepEqual(routeCalls, expressCalls, label);
+      }
+    }
   }
 });
 

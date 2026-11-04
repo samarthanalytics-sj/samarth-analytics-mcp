@@ -59,7 +59,7 @@ const checkSchema = z
     event: z.string().optional(),
     tid: z.string().optional(),
     phase: z.enum(['pre_consent', 'post_consent']).optional(),
-    params: z.record(paramAssertion).optional(),
+    params: z.record(z.string(), paramAssertion).optional(),
     action: actionSchema.optional(),
     allowedCount: z.number().int().nonnegative().optional(),
     keyParams: z.array(z.string()).optional(),

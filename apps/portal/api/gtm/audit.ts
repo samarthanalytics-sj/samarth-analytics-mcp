@@ -2348,8 +2348,10 @@ async function runAudit(
 ): Promise<AuditSummary> {
   // Lazy, post-auth load of the accuracy normalizer every rule's pushFinding()
   // uses. An import failure throws into the handler's catch → JSON error.
+  // Relative specifiers need ".js": Vercel ships each .ts as a separate ES
+  // module and plain Node resolves no extensionless relative import.
   if (!accuracyModule) {
-    accuracyModule = await import("../../shared/audit-accuracy");
+    accuracyModule = await import("../../shared/audit-accuracy.js");
   }
   const runtime = opts.runtime ?? null;
   const sgtm = opts.sgtm ?? null;
@@ -2376,7 +2378,7 @@ async function runAudit(
   // recorded as a finding instead of crashing the function.
   let consentResult: ConsentAuditResult | null = null;
   try {
-    const { runConsentAudit } = await import("../../shared/consent-audit");
+    const { runConsentAudit } = await import("../../shared/consent-audit.js");
     consentResult = runConsentAudit(
       toConsentConfigInput(ctx),
       toConsentRuntimeInput(runtime),

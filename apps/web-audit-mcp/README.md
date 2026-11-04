@@ -5,7 +5,7 @@ crawls the pages with headless Chromium (Playwright), inventories every form,
 finds and **interacts with the consent banner (CMP)**, and produces a
 GDPR/ePrivacy + Google Consent Mode v2 compliance report — using the same
 consent engine (`apps/portal/shared/consent-audit.ts`) that powers the Samarth
-portal and its 170-case test suite.
+portal and its 188-case test suite.
 
 Think "Playwright MCP", but instead of generic browser remote-control it ships
 an opinionated audit agent: one tool call → crawl → forms → banner scenarios →

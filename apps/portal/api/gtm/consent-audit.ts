@@ -277,9 +277,10 @@ export default async function handler(
       );
 
       // Pure consent engine — loaded lazily, only after the session has been
-      // validated, so an import failure surfaces as JSON (not a crash).
-      const { runConsentAudit } = await import("../../shared/consent-audit");
-      const accuracy = await import("../../shared/audit-accuracy");
+      // validated, so an import failure surfaces as JSON (not a crash). The
+      // ".js" is required: Vercel runs each .ts as a separate ES module.
+      const { runConsentAudit } = await import("../../shared/consent-audit.js");
+      const accuracy = await import("../../shared/audit-accuracy.js");
       const result = runConsentAudit(
         toConsentConfigInput(state),
         toConsentRuntimeInput(runtime),

@@ -158,7 +158,7 @@ const nameArg = (plural: string, parent: ParentKind, collection: string) =>
     )
     .describe(`Full resource name of the ${plural.replace(/s$/, '')} to target: "${ga4ResourceNameExample(parent, collection)}".`);
 const bodyArg = z
-  .record(z.unknown())
+  .record(z.string(), z.unknown())
   .optional()
   .describe('Raw request-body object (JSON) merged OVER the typed fields — use for nested/advanced fields not exposed as flat args.');
 

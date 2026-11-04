@@ -14,7 +14,7 @@ are load-bearing; see `CLAUDE.md` for the rules that must not be violated.
 | Portal client | `apps/portal/client/` | Browser (Vite/React) | White-label customer UI for running GTM / Consent Mode v2 / sGTM audits. |
 | Portal API (serverless) | `apps/portal/api/` | Vercel functions | Per-request HTTP handlers: OAuth, session, GTM/GA4 proxy, audit execution. |
 | Portal dev server | `apps/portal/server/` | Node/Express (local) | Local mirror of the serverless routes; uses shared helpers the serverless routes deliberately inline. |
-| Shared audit engines | `apps/portal/shared/` | Framework-free | Pure Consent Mode v2 engine + types, with a 170-case test suite. |
+| Shared audit engines | `apps/portal/shared/` | Framework-free | Pure Consent Mode v2 engine + types, with a 188-case test suite. |
 | Runtime worker | `apps/runtime-worker/` | Node + headless Chromium | Read-only page-capture service feeding runtime evidence into audits. Cannot run on Vercel. |
 
 ## 2. MCP server
@@ -193,7 +193,7 @@ sync by hand.
 lazily import the relevant engine from `apps/portal/shared/`, run it against
 GTM data (and optional runtime-capture evidence), and return JSON. The Consent
 Mode v2 engine (`shared/consent-audit.ts`) is framework-free and covered by
-`shared/__tests__/consent-audit.node.test.ts` (must stay **170/170**, runner
+`shared/__tests__/consent-audit.node.test.ts` (must stay **188/188**, runner
 fails under 100 cases).
 
 ## 4. Runtime worker (`apps/runtime-worker/`)
@@ -270,5 +270,5 @@ navigation timeouts. It never writes to GTM/GA4 and never persists captures.
 - Read-only defaults and the `confirm` + capability-flag gates (§2.5).
 - All existing tool names, routes, and response shapes.
 - The `node:*`-only top-level import rule for `api/**` (§3.2).
-- Consent v2 suite at 170/170.
+- Consent v2 suite at 188/188.
 - Portal mobile/tablet/desktop compatibility.

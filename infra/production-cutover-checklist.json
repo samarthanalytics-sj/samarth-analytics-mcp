@@ -8,7 +8,7 @@
     "Read-only by default: GTM_MCP_ENABLE_WRITES/PUBLISH/DELETES stay false.",
     "No token bytes in Postgres or repo; bytes only in the vault via token_ref.",
     "api/** import-safe: node:* + import type only at module load; clients lazy-load after auth.",
-    "Consent Mode v2 suite stays 170/170 (npm run test:consent).",
+    "Consent Mode v2 suite stays 188/188 (npm run test:consent).",
     "Portal stays responsive on mobile/tablet/desktop."
   ],
   "phases": [
@@ -155,6 +155,6 @@
     "RBAC: viewer read-only; no portal-grantable *:publish; cross-tenant denied before role (-> 404).",
     "Read-only defaults intact; publish stays MCP-guardrailed even after approval:decide.",
     "api/** import safety preserved.",
-    "Consent v2 suite 170/170."
+    "Consent v2 suite 188/188."
   ]
 }
