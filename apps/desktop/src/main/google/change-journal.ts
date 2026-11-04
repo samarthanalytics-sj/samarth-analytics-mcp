@@ -92,12 +92,15 @@ class ChangeJournal {
   }
 }
 
-/** One revert per entity even if a turn touched it more than once. PURE. */
+/** One revert per entity even if a turn touched it more than once. PURE. An entity is identified by
+ *  its full workspace path, not kind:id alone: GTM ids are small per-container integers, and one turn
+ *  can write to several containers (web funnel + the new server container), so web tag #3 and server
+ *  tag #3 are two entities and both must be reverted. */
 function dedupe(refs: ChangeRef[]): ChangeRef[] {
   const seen = new Set<string>();
   const out: ChangeRef[] = [];
   for (const r of refs) {
-    const key = `${r.kind}:${r.id}`;
+    const key = `${r.accountId}/${r.containerId}/${r.workspaceId}:${r.kind}:${r.id}`;
     if (!seen.has(key)) {
       seen.add(key);
       out.push(r);

@@ -136,9 +136,27 @@ export function collectPageInBrowser(): PageScanRaw {
       if (!view) return undefined;
       const r = el.getBoundingClientRect();
       if (r.width === 0 && r.height === 0) return undefined;
+      // An element in a same-origin iframe is measured in THAT frame's viewport. Carry it out through
+      // each enclosing frame (the frame's box, then its border and padding, where its content starts)
+      // to the top document, and only then add the top document's scroll. Not a frame's own scroll:
+      // getBoundingClientRect inside the frame already reflects it. Content scrolled or clipped out of a
+      // frame's viewport is not on the screenshot, so it gets no rect rather than one over whatever sits
+      // below the frame. Cross-origin frames are never scanned, so every frameElement here is readable.
+      let x = r.left;
+      let y = r.top;
+      let win: Window = view;
+      for (let depth = 0; win.frameElement; depth++) {
+        if (depth >= 10 || x + r.width <= 0 || y + r.height <= 0 || x >= win.innerWidth || y >= win.innerHeight) return undefined;
+        const fe = win.frameElement;
+        const fb = fe.getBoundingClientRect();
+        const fs = win.parent.getComputedStyle(fe);
+        x += fb.left + fe.clientLeft + (parseFloat(fs.paddingLeft) || 0);
+        y += fb.top + fe.clientTop + (parseFloat(fs.paddingTop) || 0);
+        win = win.parent;
+      }
       return {
-        x: Math.round(r.left + (view.scrollX || 0)),
-        y: Math.round(r.top + (view.scrollY || 0)),
+        x: Math.round(x + (win.scrollX || 0)),
+        y: Math.round(y + (win.scrollY || 0)),
         w: Math.round(r.width),
         h: Math.round(r.height),
       };

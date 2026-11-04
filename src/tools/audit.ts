@@ -18,6 +18,7 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { gtmId } from '../utils/schemas.js';
 import type { GtmClient } from '../utils/gtmClient.js';
 import { jsonResult, errorResult } from '../utils/toolResponse.js';
 import { paginate } from '../utils/pagination.js';
@@ -89,9 +90,9 @@ export function registerAuditTools(server: McpServer, getClient: () => GtmClient
         'Returns structured findings with severity levels (error/warning/info). ' +
         'This is a read-only operation — it never modifies anything.',
       inputSchema: z.object({
-        accountId: z.string(),
-        containerId: z.string(),
-        workspaceId: z.string(),
+        accountId: gtmId,
+        containerId: gtmId,
+        workspaceId: gtmId,
         includeInfo: z
           .boolean()
           .optional()

@@ -7,8 +7,8 @@ and a future live deployment.
 
 > **Nothing here wires a live service.** No `pg`/`drizzle`/`supabase-js`
 > dependency is added; no secret manager is contacted; no env defaults change.
-> The portal continues to run exactly as today (Vercel serverless + signed
-> cookies, no database). Every module is pure or inert-by-default and is unit
+> The portal continues to run exactly as today (Vercel serverless + an
+> encrypted, 30-day session cookie, no database). Every module is pure or inert-by-default and is unit
 > tested without credentials.
 
 ## Guardrails preserved
@@ -70,7 +70,7 @@ manager (roadmap Phase 2).
   production deployment can therefore **never silently hold real tokens in
   process memory**. Tests and local dev opt in explicitly.
 - **`detectVaultProvider(env)`** — reads env **presence** only to report the
-  intended provider; returns `"none"` today (signed-cookie deployment).
+  intended provider; returns `"none"` today (encrypted-cookie deployment).
 
 ### Recommended providers
 
@@ -104,9 +104,13 @@ Pure authorization over the `memberships` `(user, org, role)` tuple.
   on org B is `cross_tenant` regardless of role (callers should map this to 404
   to avoid leaking existence). `can()` / `assertCan()` wrap it for boolean and
   throwing call sites.
-- **`canAssignRole(actor, target)`** — escalation guard: an admin may assign only
-  roles strictly below admin (cannot mint admins/owners); an owner may assign any
-  role (incl. ownership transfer).
+- **`canAssignRole(actor, current, next)`** — escalation guard: an admin may
+  change only a membership strictly below admin, and only to a role strictly
+  below admin (cannot mint admins/owners, nor demote the owner or another
+  admin); an owner may assign any role (incl. ownership transfer).
+- **`canRemoveMember(actor, target)`** — the same "strictly below" rule for
+  `member:remove`: an admin cannot remove the owner or another admin. Callers
+  must still refuse to demote or remove an org's last owner.
 
 | | viewer | member | admin | owner |
 | --- | :-: | :-: | :-: | :-: |

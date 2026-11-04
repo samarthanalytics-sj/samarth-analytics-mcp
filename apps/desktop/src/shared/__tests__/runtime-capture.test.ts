@@ -82,6 +82,23 @@ check('classify: linkedin px → ad', classifyCollector('https://px.ads.linkedin
 check('classify: bing bat → ad', classifyCollector('https://bat.bing.com/action/0?ti=1') === 'ad');
 check('classify: reddit alb → ad', classifyCollector('https://alb.reddit.com/rp.gif?id=1') === 'ad');
 check('classify: cross-site non-tracking asset → null', classifyCollector('https://cdn.example.com/logo.png') === null);
+// The X pixel sends each event to analytics.twitter.com AND t.co; aborting only one of the pair used to
+// let a synthetic/verify conversion reach X through the other.
+check('classify: X analytics.twitter.com/1/i/adsct → ad', classifyCollector('https://analytics.twitter.com/1/i/adsct?txn_id=o1&events=%5B%5B%22pageview%22%5D%5D') === 'ad');
+check('classify: X twin t.co/1/i/adsct → ad', classifyCollector('https://t.co/1/i/adsct?txn_id=o1&events=%5B%5B%22pageview%22%5D%5D') === 'ad');
+check('classify: X t.co/i/adsct → ad', classifyCollector('https://t.co/i/adsct?txn_id=o1') === 'ad');
+check('classify: an ordinary t.co share link is NOT a beacon', classifyCollector('https://t.co/AbC123xyz') === null);
+for (const u of [
+  'https://tr-shadow.snapchat.com/p?pid=1',
+  'https://q.quora.com/_/ad/abc123/pixel?tag=Purchase',
+  'https://trc.taboola.com/1234567/log/3/unip?en=make_purchase',
+  'https://tr.outbrain.com/unifiedPixel?marketerId=1&name=Purchase',
+  'https://sp.analytics.yahoo.com/spp.pl?a=1&.yp=2&ea=purchase',
+  'https://sslwidget.criteo.com/event?a=1&p0=e%3Dtrans',
+  'https://s.amazon-adsystem.com/iu3?pid=abc&event=Purchase',
+]) {
+  check(`classify: ${new URL(u).hostname} conversion beacon → ad`, classifyCollector(u) === 'ad');
+}
 
 // ── evaluateRuntimeCapture ─────────────────────────────────────────────────────
 {
@@ -168,6 +185,11 @@ check('beacon: DoubleClick → google_ads', beaconPlatform('https://ad.doublecli
 check('beacon: google.com/pagead → google_ads', beaconPlatform('https://www.google.com/pagead/1p-conversion/123') === 'google_ads');
 check('beacon: Hotjar → hotjar', beaconPlatform('https://in.hotjar.com/api/v2/x') === 'hotjar');
 check('beacon: unknown host → other:<host>', beaconPlatform('https://track.acme-pixel.io/e?id=1') === 'other:track.acme-pixel.io');
+check('beacon: X t.co twin → twitter', beaconPlatform('https://t.co/1/i/adsct?txn_id=o1') === 'twitter');
+check('beacon: X analytics.twitter.com → twitter', beaconPlatform('https://analytics.twitter.com/1/i/adsct?txn_id=o1') === 'twitter');
+// Newly aborted ad beacons must never be credited to a Google Ads tag.
+check('beacon: an aborted Quora beacon stays itself, never google_ads', beaconPlatform('https://q.quora.com/_/ad/abc123/pixel?tag=Purchase') === 'other:q.quora.com');
+check('beacon: an aborted Taboola beacon stays itself, never google_ads', beaconPlatform('https://trc.taboola.com/1234567/log/3/unip?en=make_purchase') === 'other:trc.taboola.com');
 check('beacon: garbage url → other', beaconPlatform('not a url') === 'other');
 check('beaconHost: extracts the host', beaconHost('https://ct.pinterest.com/v3/?x=1') === 'ct.pinterest.com');
 check('isKnownAdPlatform: linkedin yes, ga4/other no', isKnownAdPlatform('linkedin') && !isKnownAdPlatform('ga4') && !isKnownAdPlatform('other:x'));

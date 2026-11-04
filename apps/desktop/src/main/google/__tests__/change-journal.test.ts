@@ -109,6 +109,26 @@ async function main(): Promise<void> {
     check('partial: nothing left after the retry succeeds', changeJournal.peekLast() === null);
   }
 
+  // Regression: dedupe keyed on kind:id only. GTM ids are small per-container integers, so a turn that
+  // wrote web tag #3 AND server tag #3 (web funnel + setup_server_ecommerce_funnel in one query) kept
+  // only the first; revertLast spliced the turn and never reverted (or kept) the second.
+  {
+    const web: ChangeRef = { ...ref('3'), containerId: 'WEB', label: 'Google Tag (#3) [web]' };
+    const server: ChangeRef = { ...ref('3'), containerId: 'SRV', workspaceId: '9', label: 'GA4 relay (#3) [server]' };
+    check('dedupe: same kind:id in two containers are two entities', _dedupe([web, server]).length === 2);
+    check('dedupe: the same entity twice is still one', _dedupe([web, { ...web }]).length === 1);
+    await changeJournal.runTurn('acct-1', async () => {
+      changeJournal.record(web);
+      changeJournal.record(server);
+    });
+    check('cross-container: peekLast offers both entities', changeJournal.peekLast()?.length === 2);
+    const touched: string[] = [];
+    const out = await changeJournal.revertLast(async (r) => { touched.push(`${r.containerId}/${r.kind}/${r.id}`); });
+    check('cross-container: revertLast reverts BOTH containers\' tag #3',
+      touched.join(',') === 'WEB/tag/3,SRV/tag/3' && out.reverted.length === 2 && out.failed.length === 0);
+    check('cross-container: nothing silently left behind', changeJournal.peekLast() === null);
+  }
+
   // A double-clicked Revert must not run the same reverts twice.
   {
     await changeJournal.runTurn('acct-1', async () => { changeJournal.record(ref('once')); });

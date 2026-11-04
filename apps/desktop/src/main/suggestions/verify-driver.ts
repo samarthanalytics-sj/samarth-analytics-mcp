@@ -12,7 +12,7 @@
 // Playwright is OPTIONAL (loaded lazily); if absent the caller gets a clear error.
 
 import os from 'node:os';
-import { requestAllowed } from './ssrf';
+import { requestAllowed, watchRedirectHops, type RedirectHopWatch } from './ssrf';
 import { classifyCollector, syntheticDataLayerEvent, buildNetworkLog, summarizeDataLayer, type Collector, type DescribedHit, type DataLayerEventView } from '../../shared/runtime-capture';
 import { isMonitorHit, parseMonitorHit, type MonitorEvent } from './tag-monitor';
 import { isFormEventName } from './form-tag-match';
@@ -185,6 +185,8 @@ export interface VerifyDriverOptions {
   /** Fired as each page's drive BEGINS (best-effort) so the caller can stream a live "verifying <url>"
    *  progress feed. `done` counts pages started so far (1-based), `total` is the page count. */
   onPageProgress?: (page: string, done: number, total: number) => void;
+  /** Test seam: a Playwright-shaped module used instead of loading the installed one. */
+  playwright?: unknown;
 }
 /** GTM's on-page debug signal (Phase B). Best-effort + observable — NOT the full Tag-Assistant
  *  per-tag protocol (that is undocumented and needs live-GTM validation). */
@@ -274,7 +276,7 @@ export interface PreflightDetection {
  *  closed immediately; analytics collectors are aborted so detection never delivers a hit; SSRF-guarded. */
 export async function detectLiveContainers(
   url: string,
-  opts: { settleMs?: number; navTimeoutMs?: number; shouldStop?: () => boolean } = {},
+  opts: { settleMs?: number; navTimeoutMs?: number; shouldStop?: () => boolean; /** Test seam: a Playwright-shaped module. */ playwright?: unknown } = {},
 ): Promise<PreflightDetection> {
   const navTimeoutMs = opts.navTimeoutMs ?? 20_000;
   const settleMs = opts.settleMs ?? 1200;
@@ -282,7 +284,7 @@ export async function detectLiveContainers(
   if (!(await requestAllowed(url))) {
     return { liveContainers: [], measurementIds: [], detected: false, pageOk: false, error: `Refusing to load ${url}: blocked by the SSRF guard (private/loopback/invalid host).` };
   }
-  const pw = await loadPlaywright();
+  const pw = (opts.playwright as Playwright | undefined) ?? (await loadPlaywright());
   if (!pw) throw new PlaywrightUnavailableError();
   const netContainers = new Set<string>();
   const netMeasurement = new Set<string>();
@@ -292,7 +294,7 @@ export async function detectLiveContainers(
     const context = await browser.newContext({ viewport: { width: 1366, height: 900 } });
     // Watch every request for a GTM container loader / gtag config (a second live signal alongside the
     // booted globals), abort analytics collectors so a detection load never delivers a real hit, and
-    // SSRF-guard everything else.
+    // SSRF-guard everything else. Redirect hops never reach this handler; `landing` re-checks them.
     await context.route('**/*', (route) => {
       const reqUrl = route.request().url();
       const gtm = reqUrl.match(/googletagmanager\.com\/gtm\.js\?[^"'\s]*id=(GTM-[A-Z0-9]+)/i);
@@ -303,6 +305,7 @@ export async function detectLiveContainers(
       void requestAllowed(reqUrl).then((ok) => (ok ? route.continue() : route.abort()), () => route.abort());
     });
     const page = await context.newPage();
+    const landing = watchRedirectHops(page);
     console.log(`[preflight] navigating (nav timeout ${navTimeoutMs}ms) ...`);
     // domcontentloaded (not networkidle): many sites LAZY-load GTM (requestIdleCallback / setTimeout, 2s+)
     // for performance, so networkidle can resolve BEFORE GTM ever loads. We poll for the container below
@@ -310,10 +313,13 @@ export async function detectLiveContainers(
     const resp = await page
       .goto(url, { waitUntil: 'domcontentloaded', timeout: navTimeoutMs })
       .catch((e: unknown) => { console.log(`[preflight] navigation issue: ${e instanceof Error ? e.message : String(e)}`); return null; });
+    // A page that redirected somewhere the SSRF guard refuses is not read, not even its status.
+    const blocked = await landing.blockedLanding(resp);
+    if (blocked) return { liveContainers: [], measurementIds: [], detected: false, pageOk: false, error: blocked };
     const status = resp ? resp.status() : null;
     const pageOk = status === null || status < 400; // goto can resolve with a null response on some SPAs
     // POLL for GTM to actually appear rather than reading once after a fixed delay: a fixed short settle
-    // misses a container the site defers (e.g. get.chewbox.example and samarthanalytics.com load GTM ~2s after
+    // misses a container the site defers (e.g. client sites such as get.example-client.example load GTM ~2s after
     // idle). Return as soon as a container is seen, then wait a short grace so a NESTED container (one GTM
     // that loads another) also registers. Overall cap keeps a genuinely container-less page from hanging.
     const pollDeadline = Date.now() + Math.max(settleMs, 7000);
@@ -328,6 +334,9 @@ export async function detectLiveContainers(
       }
       await page.waitForTimeout(350);
     }
+    // Again after the reads: an iframe or a script-driven navigation can redirect somewhere refused.
+    const blockedLate = await landing.blockedLanding(null);
+    if (blockedLate) return { liveContainers: [], measurementIds: [], detected: false, pageOk: false, error: blockedLate };
     // window.google_tag_manager keys = the containers that actually BOOTED (the ground truth), unioned
     // with the gtm.js loader requests seen above.
     const liveContainers = Array.from(new Set([...booted.containerIds.map((s) => s.toUpperCase()), ...netContainers]));
@@ -1052,7 +1061,7 @@ export async function runVerifyDriver(
   if (!(await requestAllowed(url))) {
     return { pagesOk: false, injected: false, previewAuth, perTag, error: `Refusing to load ${url}: blocked by the SSRF guard (private/loopback/invalid host).` };
   }
-  const pw = await loadPlaywright();
+  const pw = (opts.playwright as Playwright | undefined) ?? (await loadPlaywright());
   if (!pw) throw new PlaywrightUnavailableError();
 
   // Shared, ORDER-INDEPENDENT aggregation across all page workers (appends are safe on JS's single
@@ -1083,6 +1092,8 @@ export async function runVerifyDriver(
     armed: { on: boolean };
     /** GTM Monitor pixel URLs captured on this worker (authoritative per-tag firing) — parsed at the end. */
     monitorHits: string[];
+    /** Re-checks the redirect hops the route handler never sees (Playwright routes only a chain's first URL). */
+    landing: RedirectHopWatch;
   }
   // Monitor pixels, collected per worker → merged + parsed into MonitorEvent[] for authoritative verdicts.
   const monitorHitsByWorker: string[][] = [];
@@ -1141,7 +1152,7 @@ export async function runVerifyDriver(
         );
       });
       const page = await context.newPage();
-      return { context, page, captured, armed, monitorHits };
+      return { context, page, captured, armed, monitorHits, landing: watchRedirectHops(page) };
     };
     const closeWorker = async (w: VerifyWorker): Promise<void> => {
       capturedByWorker.push(w.captured);
@@ -1166,17 +1177,36 @@ export async function runVerifyDriver(
       // depend on which pages a worker happened to claim.
       w.armed.on = false;
       const loadStart = captured.length;
+      const monitorStart = w.monitorHits.length;
+      // A page that redirected somewhere the SSRF guard refuses: drop what was captured on it and report
+      // its tags as not driven, with the refusal as the reason.
+      const refusePage = (note: string): void => {
+        captured.splice(loadStart);
+        w.monitorHits.splice(monitorStart);
+        for (const t of groupTags) perTag.push({ tagId: t.id, kind: 'navigate', targetFound: false, performed: false, note, hits: [] });
+      };
+      w.landing.reset(); // a new navigation on this worker's page: earlier pages' hops no longer count
+      let resp: PwResponse | null = null;
       try {
         // In preview mode, navigate WITH the env params so the site's own gtm.js serves our previewed
         // version at its bootstrap (the injected loader below is deduped when the site already embeds this
         // container). pagesDriven/notes keep the clean pageUrl; only the goto carries the params.
-        await page.goto(withPreviewParams(pageUrl, previewParams), { waitUntil: 'networkidle', timeout: navTimeoutMs });
+        resp = await page.goto(withPreviewParams(pageUrl, previewParams), { waitUntil: 'networkidle', timeout: navTimeoutMs });
       } catch (e) {
         const note = `could not load ${pageUrl}: ${(e instanceof Error ? e.message : String(e)).slice(0, 120)}`;
         for (const t of groupTags) perTag.push({ tagId: t.id, kind: 'navigate', targetFound: false, performed: false, note, hits: [] });
         return; // this page failed to load — the pool moves on to the next queued page
       }
+      // Playwright never routes a redirect hop, so a page that landed somewhere the SSRF guard refuses is
+      // checked here, before anything is injected, clicked or read on it.
+      const blocked = await w.landing.blockedLanding(resp);
+      if (blocked) {
+        refusePage(blocked);
+        return;
+      }
       pagesDriven.push(pageUrl);
+      // This page's results, kept only if the page is still clean once it has been driven (below).
+      const pagePerTag: PerTagCapture[] = [];
 
       // FALLBACK loader injection — ONLY when the container isn't already on the page. If we navigated
       // with env preview params and the site embeds this container, its own gtm.js already served our
@@ -1233,7 +1263,7 @@ export async function runVerifyDriver(
 
         // Fire-on-load trigger (pageview / base Google tag): attribute this page's load hits.
         if (kind === 'pageview') {
-          perTag.push({
+          pagePerTag.push({
             tagId: tag.id,
             kind: 'navigate',
             targetFound: true,
@@ -1248,7 +1278,7 @@ export async function runVerifyDriver(
         if (kind === 'custom_event') {
           const evName = tag.trigger.eventName ?? '';
           if (!evName) {
-            perTag.push({ tagId: tag.id, kind: 'custom_event', targetFound: false, performed: false, note: 'the trigger has no dataLayer event name', hits: [] });
+            pagePerTag.push({ tagId: tag.id, kind: 'custom_event', targetFound: false, performed: false, note: 'the trigger has no dataLayer event name', hits: [] });
             continue;
           }
           const before = captured.length;
@@ -1285,7 +1315,7 @@ export async function runVerifyDriver(
           // so its non-fire is "not reproduced here", not "broken". Non-form custom events (cta_click,
           // scroll) need no condition, so a bare push fully exercises them.
           const conditionSupplied = Object.keys(data).length > 0 || !isFormEventName(evName);
-          perTag.push({
+          pagePerTag.push({
             tagId: tag.id,
             kind: 'custom_event',
             targetFound: true,
@@ -1312,7 +1342,7 @@ export async function runVerifyDriver(
         // tag gets NO shot, because the top-of-page fallback reads as "checked the wrong place". The
         // status + note already tell the operator the control wasn't found.
         const shot = outcome.targetFound ? await captureShot(page, shotState) : undefined;
-        perTag.push({
+        pagePerTag.push({
           tagId: tag.id,
           kind: kind === 'form_submit' ? 'submit' : 'click',
           targetFound: outcome.targetFound,
@@ -1322,6 +1352,17 @@ export async function runVerifyDriver(
           ...(shot ? { screenshot: shot } : {}),
         });
       }
+
+      // Again before keeping anything: an iframe, a subresource or a script can redirect somewhere refused
+      // while the page is driven. Its hits, screenshots and dataLayer are then dropped, not just its load.
+      const blockedLate = await w.landing.blockedLanding(null);
+      if (blockedLate) {
+        const at = pagesDriven.indexOf(pageUrl);
+        if (at >= 0) pagesDriven.splice(at, 1);
+        refusePage(blockedLate);
+        return;
+      }
+      perTag.push(...pagePerTag);
 
       // After driving this page, read GTM's on-page debug signal + the site's real dataLayer pushes
       // (always — the dataLayer inspector is core, not gated behind gtmDebug). Best-effort.
@@ -1577,6 +1618,8 @@ export async function runSuggestionScreenshots(
     onProgress?: (done: number, total: number, tagId: string, page: string) => void;
     /** Page-level parallelism (pages shot at once, each in its own tab). Defaults to cores-1 (capped). */
     concurrency?: number;
+    /** Test seam: a Playwright-shaped module used instead of loading the installed one. */
+    playwright?: unknown;
   } = {},
 ): Promise<{ pagesOk: boolean; error?: string; shots: SuggestionShot[] }> {
   const navTimeoutMs = opts.navTimeoutMs ?? 20_000;
@@ -1586,7 +1629,7 @@ export async function runSuggestionScreenshots(
   if (!(await requestAllowed(url))) {
     return { pagesOk: false, error: `Refusing to load ${url}: blocked by the SSRF guard (private/loopback/invalid host).`, shots };
   }
-  const pw = await loadPlaywright();
+  const pw = (opts.playwright as Playwright | undefined) ?? (await loadPlaywright());
   if (!pw) throw new PlaywrightUnavailableError();
 
   let browser: PwBrowser | null = null;
@@ -1595,15 +1638,34 @@ export async function runSuggestionScreenshots(
     // No request-capture here (locate-only), so pages can share ONE context; each worker just owns its
     // own tab. The screenshot cap (shotState) is shared so the total stays bounded across workers.
     const context = await browser.newContext({ viewport: { width: 1366, height: 900 } });
+    // SSRF: the start URL is checked above, but each page (a tag's page can resolve to another host)
+    // and everything it loads is a request too. Same guard as the other headless drivers: block any
+    // routed request to a private/loopback/metadata host. Redirect hops never reach this handler;
+    // each tab's `landing` re-checks them.
+    await context.route('**/*', (route) => {
+      void requestAllowed(route.request().url()).then(
+        (ok) => (ok ? route.continue() : route.abort()),
+        () => route.abort(),
+      );
+    });
     const shotState = { n: 0 };
 
-    const shotOnePage = async (page: PwPage, [pageUrl, groupTags]: [string, SuggestionShotTag[]]): Promise<void> => {
+    const shotOnePage = async (w: { page: PwPage; landing: RedirectHopWatch }, [pageUrl, groupTags]: [string, SuggestionShotTag[]]): Promise<void> => {
+      const { page, landing } = w;
+      landing.reset(); // a new navigation on this tab: earlier pages' hops no longer count
+      let resp: PwResponse | null = null;
       try {
-        await page.goto(pageUrl, { waitUntil: 'networkidle', timeout: navTimeoutMs });
+        resp = await page.goto(pageUrl, { waitUntil: 'networkidle', timeout: navTimeoutMs });
       } catch {
         for (const t of groupTags) shots.push({ tagId: t.id, page: pageUrl });
         return; // this page failed to load — the pool moves on to the next queued page
       }
+      // A page that redirected somewhere the SSRF guard refuses is never shot.
+      if (await landing.blockedLanding(resp)) {
+        for (const t of groupTags) shots.push({ tagId: t.id, page: pageUrl });
+        return;
+      }
+      const pageShots: SuggestionShot[] = [];
       // A short head-start settle; the per-tag poll below covers anything that renders later.
       await page.waitForTimeout(Math.min(Math.max(settleMs, 400), 1200));
       // Drop the cookie-consent banner (and similar fixed overlays) so a ringed FOOTER element — an
@@ -1648,8 +1710,13 @@ export async function runSuggestionScreenshots(
         // the whole page, so keep its shot full-viewport (no ring to box).
         const boxToRing = t.trigger.kind !== 'pageview';
         const screenshot = found ? await captureShot(page, shotState, { boxToRing }) : undefined;
-        shots.push({ tagId: t.id, page: pageUrl, ...(screenshot ? { screenshot } : {}) });
+        const shot: SuggestionShot = { tagId: t.id, page: pageUrl, ...(screenshot ? { screenshot } : {}) };
+        shots.push(shot);
+        pageShots.push(shot);
       }
+      // Again once shot: an iframe or a script can redirect somewhere refused after the load, and a
+      // screenshot would show it. This page's pictures are then dropped.
+      if (await landing.blockedLanding(null)) for (const shot of pageShots) delete shot.screenshot;
     };
 
     // Shoot pages in parallel across a bounded pool of tabs (each page handled exactly once, none skipped).
@@ -1658,9 +1725,12 @@ export async function runSuggestionScreenshots(
     await runPagePool(
       pageGroups,
       concurrency,
-      () => context.newPage(),
+      async () => {
+        const page = await context.newPage();
+        return { page, landing: watchRedirectHops(page) };
+      },
       shotOnePage,
-      (page) => page.close(),
+      (w) => w.page.close(),
     );
     return { pagesOk: true, shots };
   } catch (e) {

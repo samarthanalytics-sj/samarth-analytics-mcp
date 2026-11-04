@@ -19,6 +19,7 @@ import { registerProvidersIpc } from './ipc/providers-ipc';
 import { registerAdsIpc } from './ipc/ads-ipc';
 import { registerNotifyIpc } from './ipc/notify-ipc';
 import { GoogleAdsService, type AdsRequest } from './google/ads-service';
+import { callerAccountView } from './google/account-scope';
 import { GoogleAuthService } from './services/google-auth-service';
 import { closeOpenTaWindow } from './suggestions/ta-driver';
 import { registerGoogleIpc } from './ipc/google-ipc';
@@ -275,9 +276,10 @@ app.whenReady().then(() => {
   // chokepoint that clears the vault and raises the Re-connect banner. The scope string is read off the
   // vaulted token so a missing `adwords` grant is caught BEFORE a call: it surfaces as a 403, which is
   // not invalid_grant, so nothing downstream would classify it.
+  // Inside a monitor sweep pinned with runAsAccount, both resolve THAT account instead (see account-scope).
   const adsService = new GoogleAdsService({
     auth: async () => {
-      const active = registry.getActiveView();
+      const active = callerAccountView(registry);
       if (!active) throw new Error('No active account. Connect a Google account first.');
       if (!active.hasGoogleToken) throw new Error('The active account is not signed in to Google.');
       const client = clientManager.getClient(active.id);
@@ -292,7 +294,7 @@ app.whenReady().then(() => {
     // Resolved per call against the ACTIVE account, not captured once: an account with its own
     // token (it reaches Ads through a different manager's API access) must be called with that one,
     // and the active account changes while the app runs. Falls back to the shared token.
-    developerToken: () => providerKeys.getAdsDeveloperToken(registry.getActiveView()?.id),
+    developerToken: () => providerKeys.getAdsDeveloperToken(callerAccountView(registry)?.id),
   });
   const auditHistory = new AuditHistoryStore(join(dataDir, 'audit-history.json'));
   const manifests = new ManifestStore(join(dataDir, 'manifests.json'));
@@ -394,6 +396,8 @@ app.whenReady().then(() => {
 
   const tagWatch = new TagWatchService({
     fetchGtagJs: (id) => dataService.fetchGtagJs(id),
+    // The Slack webhook is a bearer secret: kept encrypted here, never in the config file or renderer.
+    secrets,
     configPath: join(dataDir, 'tag-watch-config.json'),
     emit: (config) => {
       for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('tagwatch:changed', config);

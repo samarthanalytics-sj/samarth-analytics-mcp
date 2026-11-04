@@ -5,7 +5,7 @@ crawls the pages with headless Chromium (Playwright), inventories every form,
 finds and **interacts with the consent banner (CMP)**, and produces a
 GDPR/ePrivacy + Google Consent Mode v2 compliance report — using the same
 consent engine (`apps/portal/shared/consent-audit.ts`) that powers the Samarth
-portal and its 170-case test suite.
+portal and its 188-case test suite.
 
 Think "Playwright MCP", but instead of generic browser remote-control it ships
 an opinionated audit agent: one tool call → crawl → forms → banner scenarios →
@@ -88,7 +88,11 @@ The server has **two interaction surfaces** with different guarantees:
   authorised to test. The CLI (`samarth-verify`) is an explicit local invocation.
 - **SSRF guard** (same rules as the runtime worker): loopback, RFC-1918,
   CGNAT, link-local/cloud-metadata and encoded-IP forms are always blocked —
-  for the start URL, every redirect, and every subresource.
+  for the start URL and every subresource. Playwright never routes a redirect
+  hop, so every hop is re-checked after navigation: a page that redirects to
+  such an address is reported as blocked and nothing is read from it. Stopping
+  the redirected request itself needs egress control (an SSRF-filtering proxy
+  in front of the browser).
 - **Budgets**: hard caps on pages (25), depth (4), timeouts and settle times.
 
 ## Setup
@@ -148,7 +152,9 @@ misconfigured browser host is visible before the first audit. **`WEB_AUDIT_HTTP_
 is required** — without it the HTTP server refuses to start. For local
 development only, `WEB_AUDIT_HTTP_ALLOW_UNAUTHENTICATED=true` starts it without
 auth, bound to `127.0.0.1` (so it is unreachable from other machines, and from
-outside a container).
+outside a container). In that mode every request must also carry a loopback
+`Host` (and, when present, a loopback `Origin`), so a DNS-rebinding web page in
+your browser cannot drive `/mcp`; anything else gets a 403.
 
 ## Environment variables
 
@@ -165,6 +171,7 @@ outside a container).
 | `WEB_AUDIT_HTTP_PORT` / `PORT` | `8080` | HTTP listen port (`WEB_AUDIT_HTTP_PORT` wins). |
 | `WEB_AUDIT_HTTP_AUTH_TOKEN` | *(required for HTTP)* | Bearer token required on `/mcp`. Unset = the HTTP server refuses to start. |
 | `WEB_AUDIT_HTTP_ALLOW_UNAUTHENTICATED` | `false` | `true` lets the HTTP server start without a token, for local development only; it then binds `127.0.0.1`. |
+| `WEB_AUDIT_HTTP_SESSION_TTL_MS` | `1800000` (30 min) | Closes an HTTP session idle this long with no request in flight (a client that exits without `DELETE /mcp` otherwise leaks it). `0` disables the sweep. |
 
 ## Development
 

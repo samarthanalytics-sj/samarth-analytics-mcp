@@ -136,6 +136,28 @@ test('a covered CAPI event reads existing; an uncovered one stays missing', () =
   assert.equal(plan.items.find((i) => i.id === 'tiktok_capi:generate_lead')!.status, 'missing');
 });
 
+test('an X server tag under the tools\' default name "X CAPI Tag" covers its event (no duplicate offered)', () => {
+  const xWeb: ContainerSnapshot = {
+    tags: [tag({ tagId: 'w1', name: 'X pixel - Purchase', type: 'html', firingTriggerId: ['11'], parameter: [{ type: 'template', key: 'html', value: "twq('event','tw-o1abc-xyz')" }] })],
+    triggers: [evTrigger('11', 'purchase')],
+    variables: [],
+  };
+  const xServer = (name: string, keys: string[]): ServerContainerSnapshot => ({
+    taggingServerUrls: [],
+    clients: [{ clientId: 'c1', name: 'GA4', type: 'gaaw_client' }],
+    tags: [tag({ tagId: 's1', name, type: 'cvt_TW1', firingTriggerId: ['91'], parameter: keys.map((key) => ({ type: 'template', key, value: 'v' })) })],
+    triggers: [evTrigger('91', 'purchase')],
+    variables: [],
+    transformations: [],
+  });
+  const status = (server: ServerContainerSnapshot) =>
+    buildServerPlan(emptyInput({ web: xWeb, server })).items.find((i) => i.id === 'x_capi:purchase')?.status;
+  assert.equal(status(xServer('X CAPI Tag', ['pixelId', 'pixelAccessToken', 'eventId'])), 'existing', 'the default name with the X template shape');
+  assert.equal(status(xServer('Server conversions', ['pixelId', 'pixelAccessToken', 'eventId'])), 'existing', 'recognised by shape under any name');
+  assert.equal(status(xServer('X CAPI Tag', [])), 'existing', 'the default name alone is recognised');
+  assert.equal(status(xServer('Unrelated', [])), 'missing');
+});
+
 test('planReadiness: missing values and unchecked dependencies surface; satisfied ones do not', () => {
   const plan = buildServerPlan(emptyInput({ derivedMeasurementId: null }));
   const items = plan.items;
@@ -289,11 +311,22 @@ test('apply: an existing Custom Event trigger (listGtmTriggers row) is REUSED, n
   // conditions but no raw customEventFilter. The old match read customEventFilter, so it never found
   // a trigger from an earlier run and created "ce - purchase (server)" next to "ce - purchase".
   const rows: ListedTrigger[] = [
-    { triggerId: '7', name: 'ce - purchase', type: 'customEvent', customEventName: 'purchase', conditions: [] },
+    { triggerId: '7', name: 'ce - purchase', type: 'customEvent', customEventName: 'purchase', customEventExact: true, conditions: [] },
     { triggerId: '8', name: 'All Pages', type: 'pageview', customEventName: '', conditions: [] },
   ];
   assert.deepEqual(eventTriggerFor(rows, 'purchase'), { reuse: '7' });
   assert.deepEqual(eventTriggerFor(rows, 'lead'), { create: 'ce - lead' }, 'a missing event gets the plain name');
+});
+
+test('apply: a regex / contains / negated event trigger is NOT reused as "event equals X"', () => {
+  // customEventName drops the operator, so `{{_event}} matches regex purchase` (unanchored: also
+  // purchase_refund), `contains purchase` and `NOT equals purchase` all list as "purchase" with no
+  // conditions. Reusing one fired the new CAPI tag on other events, sent to the platform as conversions.
+  const inexact: ListedTrigger = { triggerId: '7', name: 'ce - purchase', type: 'customEvent', customEventName: 'purchase', customEventExact: false, conditions: [] };
+  assert.deepEqual(eventTriggerFor([inexact], 'purchase'), { create: 'ce - purchase (server)' });
+  const { customEventExact: _omit, ...unknownOp } = inexact;
+  assert.deepEqual(eventTriggerFor([unknownOp], 'purchase'), { create: 'ce - purchase (server)' }, 'a row that does not say it is exact is not reused');
+  assert.deepEqual(eventTriggerFor([inexact, { ...inexact, triggerId: '11', name: 'purchase exact', customEventExact: true }], 'purchase'), { reuse: '11' }, 'an exact sibling is still reused');
 });
 
 test('apply: a trigger with extra conditions is not reused, and a new one always gets a FREE name', () => {
@@ -338,5 +371,72 @@ test('CAPI items: a per-conversion id is required PER EVENT, so two X / LinkedIn
   assert.deepEqual(r.map((x) => [x.id, x.missingValues]), [['x_capi:generate_lead', ['x.eventId@generate_lead']]]);
 });
 
-console.log(`\n${passed} passed, ${failed} failed`);
-if (failed > 0) process.exit(1);
+// ── applyServerPlan wiring: CAPI match-quality variable provisioning ─────────────────────────────
+// Regression: a failure creating the Meta/TikTok `ed - ...` variables was swallowed (.catch(() => null))
+// and the platform marked provisioned, so the tag was built on dangling references, the error named
+// the reference instead of the cause, and later events never retried. GTM is answered by a fake auth
+// client (googleapis sends every request through auth.request); nothing leaves the machine.
+async function applyWiring(): Promise<void> {
+  const { GoogleDataService } = await import('../data-service');
+  type Ctor = ConstructorParameters<typeof GoogleDataService>;
+  const gtmCalls: string[] = [];
+  let triggerSeq = 0;
+  const fakeAuth = {
+    request: async (opts: { url?: unknown; method?: unknown }) => {
+      gtmCalls.push(`${String(opts.method ?? 'GET')} ${String(opts.url)}`);
+      triggerSeq += 1;
+      return { data: { triggerId: `T${triggerSeq}` }, status: 200, headers: {}, config: opts };
+    },
+  };
+  const svc = new GoogleDataService(
+    { getActiveView: () => ({ id: 'acct', email: 'a@x.com', hasGoogleToken: true }) } as unknown as Ctor[0],
+    { getClient: () => fakeAuth } as unknown as Ctor[1],
+  );
+  const stub = svc as unknown as Record<string, unknown>;
+  const varCreates: string[] = [];
+  let varListings = 0;
+  let failNextVariable = true;
+  const tagCreates: string[] = [];
+  stub.findServerContainerByName = async () => ({ containerId: '99', publicId: 'GTM-SRV', name: 'Server' });
+  stub.defaultWorkspaceId = async () => '5';
+  stub.listGtmClients = async () => [];
+  stub.listGtmTriggers = async () => [];
+  stub.listGtmTags = async () => [];
+  stub.listGtmEnabledBuiltInVariables = async () => [];
+  stub.listGtmVariables = async () => { varListings += 1; return []; };
+  stub.importGalleryTemplate = async () => ({ type: 'cvt_capi' });
+  stub.createGtmVariable = async (_a: string, _c: string, _w: string, v: { name?: string }) => {
+    if (failNextVariable) { failNextVariable = false; throw new Error(`Found entity with the same name: ${v.name}`); }
+    varCreates.push(String(v.name));
+    return { variableId: String(varCreates.length), name: String(v.name), type: 'ed' };
+  };
+  stub.createGtmTag = async (_a: string, _c: string, _w: string, t: { name?: string }) => {
+    tagCreates.push(String(t.name));
+    return { tagId: String(tagCreates.length), name: String(t.name), type: 'cvt_capi' };
+  };
+  const out = await svc.applyServerPlan('1', '10', { newName: 'Server' },
+    ['meta_capi:purchase', 'meta_capi:generate_lead', 'snapchat_capi:purchase'],
+    { capi: { 'meta.pixelId': 'P1', 'meta.accessToken': 'test-token', 'snapchat.pixelId': 'S1', 'snapchat.accessToken': 'test-token' } });
+
+  test('apply: a failed ed - variable provisioning FAILS that CAPI item with the real cause', () => {
+    assert.ok(!out.applied.includes('meta_capi:purchase'), 'never reported as applied');
+    const f = out.failed.find((x) => x.id === 'meta_capi:purchase');
+    assert.ok(f, 'reported as failed');
+    assert.match(f!.error, /match-quality variables/);
+    assert.match(f!.error, /Found entity with the same name/, 'the variable error, not a dangling-reference one');
+    assert.ok(!tagCreates.includes('Meta CAPI - purchase'), 'no tag is built on dangling {{ed - ...}} references');
+    assert.equal(gtmCalls.filter((c) => /triggers/.test(c)).length, 2, 'the failed item leaves no stray trigger (only the 2 applied items create one)');
+  });
+  test('apply: the next event retries the provisioning, and Meta + Snapchat share the one variable set', () => {
+    assert.deepEqual(out.applied, ['meta_capi:generate_lead', 'snapchat_capi:purchase']);
+    assert.deepEqual(tagCreates, ['Meta CAPI - generate_lead', 'Snapchat CAPI - purchase']);
+    // 1 plan-wide listing + the failing item's provisioning + ONE retry; Snapchat reuses the 'meta' set.
+    assert.equal(varListings, 3, 'provisioned on the failing item, retried once on the next, then never again');
+    assert.ok(varCreates.length > 0);
+  });
+}
+
+void applyWiring().catch((e) => { failed++; console.error(`  ✗ applyServerPlan wiring: ${(e as Error).message}`); }).then(() => {
+  console.log(`\n${passed} passed, ${failed} failed`);
+  if (failed > 0) process.exit(1);
+});

@@ -7,8 +7,16 @@ import type { StreamEvent } from './types.js';
  * Watches the RESPONSE. The request is no use for this: once express.json() has read the body, the
  * request has already emitted 'close', so a listener added in the handler never fires. And the
  * response closes after a normal end too, which is told apart by `writableFinished`.
+ *
+ * Also covers a client that left BEFORE this was called. 'close' is emitted once and never again,
+ * so a handler that awaited something first (acquiring a session, reading an attachment) and only
+ * then subscribed used to miss a Stop pressed during that await, and ran the whole turn for nobody.
  */
 export function onClientGone(res: Response, fn: () => void): void {
+  if (res.destroyed && !res.writableFinished) {
+    queueMicrotask(fn);
+    return;
+  }
   res.on('close', () => {
     if (!res.writableFinished) fn();
   });

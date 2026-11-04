@@ -13,8 +13,8 @@
  * instead of a browser-level failure it has to guess about.
  *
  * The work itself is NOT cancelled. An MCP tool call in flight has no abort channel, so this bounds
- * how long a caller waits, not how long the child process works. The pool entry is released by the
- * caller's `finally` either way.
+ * how long a caller waits, not how long the child process works. Which is why a pool entry the work
+ * runs on must be released when the WORK settles, not when the deadline fires: see deadlineHolding.
  */
 export class DeadlineError extends Error {
   readonly code = 'timed_out';
@@ -54,4 +54,28 @@ export function deadline<T>(work: Promise<T>, ms: number, message: string): Prom
       },
     );
   });
+}
+
+/**
+ * `deadline` for work that holds something while it runs: `release` is called exactly once, when
+ * the work itself settles (resolves, rejects or throws), never when the deadline fires.
+ *
+ * The caller stops waiting at the deadline; the work does not stop. Releasing a pooled MCP child at
+ * that moment told the pool it was idle while a batch of tag creates was still running on it, so a
+ * token change, an identity refresh or the capacity check could close it under the batch and fail
+ * every remaining create with "not connected", half-way through the workspace.
+ */
+export function deadlineHolding<T>(
+  work: () => T | Promise<T>,
+  ms: number,
+  message: string,
+  release: () => void,
+): Promise<T> {
+  // Started inside a promise, so a synchronous throw is a rejection that still releases.
+  const running = Promise.resolve().then(work);
+  void running.then(
+    () => release(),
+    () => release(),
+  );
+  return deadline(running, ms, message);
 }

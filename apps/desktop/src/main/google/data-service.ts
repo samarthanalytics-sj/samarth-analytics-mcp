@@ -6,7 +6,7 @@ import type { OAuth2Client } from 'google-auth-library';
 import type { AccountClientManager } from './account-clients';
 import type { RegistryService } from '../services/registry-service';
 import type { ContainerSnapshot, ServerContainerSnapshot } from './gtm-builders';
-import { ga4TagFields, readGa4EventParameters, applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, normalizeTriggerType, setCustomEventName, customEventNameOf, describeTriggerConditions, buildGa4Client, buildGa4ServerTag, buildStapeDataTag, buildStapeDataClient, buildServerAllEventsTrigger, buildServerEventTrigger, buildAdsConversionServerTag, buildMetaEmqVariables, buildTikTokEmqVariables, buildEcommerceDlvVariables, buildGa4EventTag, buildTrigger, planTriggerRetarget, type TriggerInput, buildGtmClient, buildVariable, sanitizeName, matchesServerContainer, customTemplateType, upsertGoogleTagConfig, taggingUrlFirstPartyIssue, parseTemplateParameters, summariseTagTypes, type TemplateField, type TagTypeProfile, triggerUsageBreakdown, detectMetaTags, planWebToServerMigration, evaluateTrackingSetup, GA4_ECOMMERCE_FUNNEL_EVENTS, type TrackingSetupReport, type TrackingSetupCheck } from './gtm-builders';
+import { ga4TagFields, readGa4EventParameters, applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, normalizeTriggerType, setCustomEventName, customEventNameOf, customEventIsExactEquals, describeTriggerConditions, buildGa4Client, buildGa4ServerTag, buildStapeDataTag, buildStapeDataClient, buildServerAllEventsTrigger, buildServerEventTrigger, buildAdsConversionServerTag, buildMetaEmqVariables, buildTikTokEmqVariables, buildEcommerceDlvVariables, buildGa4EventTag, buildTrigger, planTriggerRetarget, type TriggerInput, buildGtmClient, buildVariable, sanitizeName, matchesServerContainer, customTemplateType, upsertGoogleTagConfig, taggingUrlFirstPartyIssue, parseTemplateParameters, summariseTagTypes, type TemplateField, type TagTypeProfile, triggerUsageBreakdown, detectMetaTags, planWebToServerMigration, evaluateTrackingSetup, GA4_ECOMMERCE_FUNNEL_EVENTS, type TrackingSetupReport, type TrackingSetupCheck } from './gtm-builders';
 import {
   galleryCoordinatesFor, matchInstalledTemplate, templateInstallError,
 } from '../../../../../src/shared/gtm-template-sources';
@@ -16,6 +16,7 @@ import { buildProbeHit, probeSuffix, probeVerdict, describeProbe, probeTargets, 
 import { resolveGa4MeasurementIds } from './gtm-ga4-check';
 import { withQuotaRetry, withRetry, QUOTA_RE, TRANSIENT_5XX_RE, NOT_FOUND_OR_PERMISSION_RE } from './quota-retry';
 import { log } from '../logger';
+import { callerAccountView } from './account-scope';
 
 import type { Ga4PropertySnapshot } from './ga4-audit';
 import type { DataQualityCounts } from './ga4-data-quality';
@@ -405,7 +406,9 @@ export class GoogleDataService {
   }
 
   private activeAuth(): OAuth2Client {
-    const active = this.registry.getActiveView();
+    // The CALLER's account: a background monitor sweep pinned with runAsAccount keeps the account it
+    // started on across an account switch; everything else follows the active account.
+    const active = callerAccountView(this.registry);
     if (!active) throw new Error('No active account. Connect a Google account first.');
     if (!active.hasGoogleToken) {
       throw new Error('The active account is not signed in to Google.');
@@ -417,7 +420,8 @@ export class GoogleDataService {
    *  Assistant browser profile (so switching to a different Gmail uses that Gmail's own TA session, not
    *  a shared one) and to steer its Google sign-in to the right account. Null if none is active. */
   activeAccountIdentity(): { id: string; email: string } | null {
-    const active = this.registry.getActiveView();
+    // Same resolution as activeAuth, so a pinned call's container-cache key matches the token it used.
+    const active = callerAccountView(this.registry);
     return active ? { id: active.id, email: active.email } : null;
   }
 
@@ -1650,7 +1654,7 @@ export class GoogleDataService {
     accountId: string,
     containerId: string,
     workspaceId: string
-  ): Promise<Array<{ triggerId: string; name: string; type: string; customEventName: string; conditions: string[] }>> {
+  ): Promise<Array<{ triggerId: string; name: string; type: string; customEventName: string; customEventExact?: boolean; conditions: string[] }>> {
     const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
     const gtm = tagmanager({ version: 'v2', auth });
     const parent = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`;
@@ -1666,6 +1670,9 @@ export class GoogleDataService {
       // For Custom Event triggers, surface the dataLayer event so callers can detect a
       // duplicate that fires on the same event under a different name.
       customEventName: customEventNameOf(t as unknown as Record<string, unknown>),
+      // customEventName drops the operator: false here means the event match is a regex, a
+      // 'contains', negated or case-insensitive, so it does NOT fire on exactly that one event.
+      ...(t.type === 'customEvent' ? { customEventExact: customEventIsExactEquals(t as unknown as Record<string, unknown>) } : {}),
       // The REAL firing conditions decoded from filter/autoEventFilter (e.g.
       // "{{Click Classes}} contains res-brochure-download"). Without this a caller
       // answering "check trigger conditions" can only guess them from the name.
@@ -2133,7 +2140,7 @@ export class GoogleDataService {
         requestBody: { name: trName, type: 'customEvent', customEventFilter: [{ type: 'equals', parameter: [{ type: 'template', key: 'arg0', value: '{{_event}}' }, { type: 'template', key: 'arg1', value: eventName }] }] },
       }));
       const id = created.data.triggerId ?? '';
-      localTriggers.push({ triggerId: id, name: trName, type: 'customEvent', customEventName: eventName, conditions: [] });
+      localTriggers.push({ triggerId: id, name: trName, type: 'customEvent', customEventName: eventName, customEventExact: true, conditions: [] });
       return id;
     };
     for (const id of capiIds) {
@@ -2159,10 +2166,19 @@ export class GoogleDataService {
           templateType[platform] = (await this.q(() => this.importGalleryTemplate(accountId, cid, workspaceId, spec.gallery[0], spec.gallery[1]))).type;
         }
         const type = templateType[platform];
-        if (spec.emqVariables && !varsDone.has(platform)) {
-          if (spec.emqVariables === 'meta') await this.q(() => this.createMetaEmqVariables(accountId, cid, workspaceId)).catch(() => null);
-          if (spec.emqVariables === 'tiktok') await this.q(() => this.createTikTokEmqVariables(accountId, cid, workspaceId)).catch(() => null);
-          varsDone.add(platform);
+        // The tag references these `ed - ...` variables, so a provisioning failure fails THIS item with
+        // its real cause (it used to be swallowed and the tag create then failed on a dangling
+        // reference, or the set was marked done and never retried). Only a successful run marks the
+        // set done, keyed by the set (Meta and Snapchat share 'meta'), so the next item retries it.
+        const set = spec.emqVariables;
+        if (set && !varsDone.has(set)) {
+          try {
+            if (set === 'meta') await this.q(() => this.createMetaEmqVariables(accountId, cid, workspaceId));
+            else await this.q(() => this.createTikTokEmqVariables(accountId, cid, workspaceId));
+          } catch (e) {
+            throw new Error(`Could not create the ${set === 'meta' ? 'Meta' : 'TikTok'} match-quality variables (ed - ...) this tag references: ${msg(e)}`);
+          }
+          varsDone.add(set);
         }
         const triggerId = await ensureEventTrigger(event);
         // The spec adapts the declared credentials onto this vendor's own argument order.
@@ -2347,9 +2363,16 @@ export class GoogleDataService {
     const server = await this.getServerContainerSnapshot(accountId, containerId, workspaceId);
     const taggingUrl = (server.taggingServerUrls ?? []).find((u) => /^https:/i.test(u));
     if (!taggingUrl) throw new Error('This server container has no https tagging server URL recorded, so there is nothing to send the probe to. Record it first (set_server_container_tagging_url).');
+    // The hit goes to the LIVE tagging server, which runs the PUBLISHED version, not the draft
+    // workspace. Deciding where it lands from the draft let a relay repointed (or paused) in an
+    // unpublished draft pass the check while the live relay re-routed the probe into another
+    // production property. So the targets come from the live version; the draft is only used to
+    // explain a refusal.
+    const live = await this.getGtmLiveVersionSnapshot(accountId, containerId);
+    if (!live) throw new Error('This server container has no published version, so the live tagging server forwards nothing. No probe was sent. Publish the server container first.');
     // Which id to probe: the explicit one, else the single id the active relays forward. Several
     // ids means the caller must choose; guessing would probe a property the user did not mean.
-    const targets = probeTargets(server);
+    const targets = probeTargets(live);
     let measurementId = (opts?.measurementId ?? '').trim();
     if (!measurementId) {
       const relayIds = [...targets.forwarded];
@@ -2363,7 +2386,12 @@ export class GoogleDataService {
     // Refuse BEFORE sending an id this server would not deliver to (a literal relay re-routes it into
     // another production property) or one nothing corroborates and this account cannot read back.
     const refusal = probeTargetRefusal(targets, measurementId, Boolean(hit0));
-    if (refusal) throw new Error(refusal);
+    if (refusal) {
+      const draftAllows = probeTargetRefusal(probeTargets(server), measurementId, Boolean(hit0)) === null;
+      throw new Error(draftAllows
+        ? `${refusal} (Checked against the PUBLISHED version the live tagging server runs. The draft workspace would forward ${measurementId.toUpperCase()}, but that change is not live yet: publish the server container first, then probe.)`
+        : refusal);
+    }
     const hit = buildProbeHit({ taggingUrl, measurementId, suffix: probeSuffix() });
     const taggingHost = new URL(taggingUrl).host;
     const { requestAllowed } = await import('../suggestions/ssrf');

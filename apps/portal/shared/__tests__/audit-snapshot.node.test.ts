@@ -21,9 +21,11 @@
  */
 
 import assert from "node:assert";
+import crypto from "node:crypto";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { runConsentAudit, type ConsentFinding } from "../consent-audit";
 import {
@@ -39,7 +41,23 @@ import {
 // The real Vercel route handlers (Vercel-safe at module load: node:* + types only).
 import auditHandler from "../../api/gtm/audit";
 import consentAuditHandler from "../../api/gtm/consent-audit";
-import { encodeSessionCookie } from "../../server/gtm/session-cookie";
+import sgtmHandler from "../../api/gtm/sgtm";
+import ga4AdminHandler from "../../api/ga4/admin";
+import accountsHandler from "../../api/gtm/accounts/index";
+import containersHandler from "../../api/gtm/accounts/[accountId]/containers/index";
+import workspacesHandler from "../../api/gtm/accounts/[accountId]/containers/[containerId]/workspaces";
+import oauthStatusHandler from "../../api/oauth/status";
+import oauthCallbackHandler from "../../api/oauth/callback";
+import oauthLogoutHandler from "../../api/oauth/logout";
+import {
+  decodeSessionCookie,
+  encodeOAuthStateCookie,
+  encodeSessionCookie,
+} from "../../server/gtm/session-cookie";
+// The Express dev-server auditor (node:crypto + types only).
+import { runAudit as runExpressAudit } from "../../server/gtm/audit";
+import { revokeOnDisconnect } from "../../server/gtm/revoke";
+import { fetchWorkspaceContents, listAccounts } from "../../server/gtm/api";
 
 // ── tiny test harness (mirrors audit-accuracy.node.test.ts) ─────────────────
 
@@ -333,20 +351,33 @@ function gtmRoutes(fx: FixtureLike): (url: URL) => StubResponse | undefined {
 async function callRoute(
   handler: (req: IncomingMessage, res: ServerResponse) => unknown,
   body: Record<string, unknown>,
-  routes: Array<(url: URL) => StubResponse | undefined>,
-  opts: { authenticated?: boolean } = {},
-): Promise<{ status: number; json: any }> {
+  routes: Array<(url: URL, init?: RequestInit) => StubResponse | undefined>,
+  opts: {
+    authenticated?: boolean;
+    method?: string;
+    url?: string;
+    /** Extra/overriding session fields sealed into the default session cookie. */
+    session?: Record<string, unknown>;
+    /** Full Cookie header, built inside the route env; replaces the default. */
+    cookieHeader?: () => string;
+    /** Extra request headers (e.g. origin, host). */
+    headers?: Record<string, string>;
+    /** Env overrides on top of ROUTE_ENV; undefined unsets a variable. */
+    env?: Record<string, string | undefined>;
+  } = {},
+): Promise<{ status: number; json: any; setCookies: string[] }> {
   const savedEnv: Record<string, string | undefined> = {};
-  for (const [k, v] of Object.entries(ROUTE_ENV)) {
-    savedEnv[k] = process.env[k];
-    process.env[k] = v;
+  for (const [k, v] of Object.entries({ ...ROUTE_ENV, ...opts.env })) {
+    if (!(k in savedEnv)) savedEnv[k] = process.env[k];
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
   }
   const realFetch = globalThis.fetch;
-  globalThis.fetch = (async (input: unknown) => {
+  globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
     const url = new URL(String(input instanceof Request ? input.url : input));
     let hit: StubResponse | undefined;
     for (const r of routes) {
-      hit = r(url);
+      hit = r(url, init);
       if (hit) break;
     }
     const res = hit ?? { status: 404, body: { error: { message: "not found" } } };
@@ -356,20 +387,22 @@ async function callRoute(
     });
   }) as typeof fetch;
   try {
-    const cookie =
-      opts.authenticated === false
+    const cookie = opts.cookieHeader
+      ? opts.cookieHeader()
+      : opts.authenticated === false
         ? undefined
         : `samarth_portal_sid=${encodeURIComponent(
             encodeSessionCookie({
               accessToken: "test-access-token",
               expiresAt: Date.now() + 3_600_000,
               scopes: [],
+              ...opts.session,
             }),
           )}`;
     const req = {
-      method: "POST",
-      url: "/api/test",
-      headers: cookie ? { cookie } : {},
+      method: opts.method ?? "POST",
+      url: opts.url ?? "/api/test",
+      headers: { ...opts.headers, ...(cookie ? { cookie } : {}) },
       body: { accountId: "1", containerId: "2", workspaceId: "3", ...body },
     };
     const headers: Record<string, unknown> = {};
@@ -387,7 +420,19 @@ async function callRoute(
       },
     };
     await handler(req as unknown as IncomingMessage, res as unknown as ServerResponse);
-    return { status: res.statusCode, json: sent ? JSON.parse(sent) : null };
+    let json: any = null;
+    try {
+      json = sent ? JSON.parse(sent) : null;
+    } catch {
+      json = null; // HTML pages (OAuth callback errors) are not JSON
+    }
+    const rawSetCookie = headers["set-cookie"];
+    const setCookies = rawSetCookie === undefined
+      ? []
+      : Array.isArray(rawSetCookie)
+        ? rawSetCookie.map(String)
+        : [String(rawSetCookie)];
+    return { status: res.statusCode, json, setCookies };
   } finally {
     globalThis.fetch = realFetch;
     for (const [k, v] of Object.entries(savedEnv)) {
@@ -422,6 +467,92 @@ test("R-guard: api/** routes import only node:* and `import type` at the top lev
   };
   walk(API_DIR);
   assert.deepEqual(offenders, []);
+});
+
+test("R-guard: every relative runtime import reachable from api/** names its .js file", () => {
+  // @vercel/node transpiles each .ts to its own .js ES module without bundling
+  // or rewriting specifiers, and plain Node resolves no extensionless relative
+  // import: `await import("../../shared/consent-audit")` built and traced fine,
+  // then threw ERR_MODULE_NOT_FOUND on every authenticated audit. tsx (tests,
+  // `vercel dev`, the Express server) resolves either form, hiding it.
+  // Read from the AST, so comments, strings and type positions such as
+  // `typeof import("…")` are ignored. A load whose target is not a string
+  // literal cannot be checked, so it is reported as `<non-literal …>`.
+  const runtimeSpecifiers = (file: string): string[] => {
+    const sf = ts.createSourceFile(file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    const out: string[] = [];
+    const literal = (n: ts.Node | undefined): string | undefined =>
+      n && (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) ? n.text : undefined;
+    const isRequire = (callee: ts.Expression): boolean =>
+      (ts.isIdentifier(callee) && callee.text === "require") ||
+      (ts.isCallExpression(callee) && ts.isIdentifier(callee.expression) && callee.expression.text === "createRequire");
+    const walkNode = (node: ts.Node): void => {
+      if (ts.isImportDeclaration(node)) {
+        const clause = node.importClause;
+        const named = clause?.namedBindings;
+        const typeOnly =
+          clause?.isTypeOnly ||
+          (clause && !clause.name && named && ts.isNamedImports(named) && named.elements.length > 0 &&
+            named.elements.every((e) => e.isTypeOnly));
+        if (!typeOnly) out.push(literal(node.moduleSpecifier) ?? "<non-literal import>");
+      } else if (ts.isExportDeclaration(node)) {
+        if (!node.isTypeOnly && node.moduleSpecifier) out.push(literal(node.moduleSpecifier) ?? "<non-literal export>");
+      } else if (ts.isImportEqualsDeclaration(node)) {
+        if (!node.isTypeOnly && ts.isExternalModuleReference(node.moduleReference)) {
+          out.push(literal(node.moduleReference.expression) ?? "<non-literal require>");
+        }
+      } else if (ts.isCallExpression(node)) {
+        if (node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+          out.push(literal(node.arguments[0]) ?? `<non-literal import(${node.arguments[0]?.getText(sf) ?? ""})>`);
+        } else if (isRequire(node.expression)) {
+          out.push(literal(node.arguments[0]) ?? `<non-literal require(${node.arguments[0]?.getText(sf) ?? ""})>`);
+        }
+      }
+      ts.forEachChild(node, walkNode);
+    };
+    walkNode(sf);
+    return out;
+  };
+  const offenders: string[] = [];
+  const seen = new Set<string>();
+  const visit = (file: string): void => {
+    if (seen.has(file)) return;
+    seen.add(file);
+    for (const spec of runtimeSpecifiers(file)) {
+      const rel = `${path.relative(API_DIR, file)} -> ${spec}`;
+      // tsconfig path aliases exist only for tsc, tsx and bundlers.
+      if (spec.startsWith("<non-literal") || spec.startsWith("@/") || spec.startsWith("@shared/")) {
+        offenders.push(rel);
+        continue;
+      }
+      if (!spec.startsWith(".")) continue;
+      if (!spec.endsWith(".js")) {
+        offenders.push(rel);
+        continue;
+      }
+      const target = path.resolve(path.dirname(file), spec.replace(/\.js$/, ".ts"));
+      try {
+        statSync(target);
+      } catch {
+        offenders.push(`${rel} (no ${path.basename(target)})`);
+        continue;
+      }
+      visit(target);
+    }
+  };
+  const walk = (dir: string): void => {
+    for (const name of readdirSync(dir)) {
+      const p = path.join(dir, name);
+      if (statSync(p).isDirectory()) walk(p);
+      else if (p.endsWith(".ts")) visit(p);
+    }
+  };
+  walk(API_DIR);
+  assert.deepEqual(offenders, []);
+  // The lazy engine imports were followed, so their own imports were checked too.
+  for (const engine of ["consent-audit.ts", "audit-accuracy.ts"]) {
+    assert.ok([...seen].some((f) => f.endsWith(path.join("shared", engine))), `${engine} was not reached`);
+  }
 });
 
 testAsync("R-auth: /api/gtm/audit without a session is a clean 401", async () => {
@@ -615,6 +746,830 @@ testAsync("R-ga4: a failed custom-dimensions read does not misflag params as unr
 testAsync("R-ga4: a failed custom-metrics read does not misflag params as unregistered", async () => {
   const findings = await auditWithGa4({ dimensions: OK_DIMS, metrics: FAILED_READ });
   assert.ok(!findings.some((x) => x.finding === UNREGISTERED_PARAMS));
+});
+
+// ── GTM built-in trigger ids (2147479xxx) ───────────────────────────────────
+// triggers.list never returns GTM's built-in triggers (All Pages = 2147479553,
+// Consent Initialization = 2147479572, ...), so a tag on one references an id
+// that is in no listed trigger. That is normal, not a broken reference.
+
+const BROKEN_FIRE = "Tag references a firing trigger that does not exist";
+const BROKEN_BLOCK = "Tag references a blocking trigger that does not exist";
+
+function webFixture(tags: unknown[], triggers: unknown[] = []): FixtureLike {
+  return { containerPublicId: "GTM-BUILTIN", usageContext: ["web"], config: { tags, triggers, variables: [] } };
+}
+
+async function auditFindings(fx: FixtureLike, extra: Array<(url: URL) => StubResponse | undefined> = [], body: Record<string, unknown> = {}) {
+  const r = await callRoute(auditHandler, { containerPublicId: fx.containerPublicId, ...body }, [...extra, gtmRoutes(fx)]);
+  assert.equal(r.status, 200, JSON.stringify(r.json).slice(0, 300));
+  return r.json as { findings: Array<{ id: string; finding?: string; affected?: string[] }>; [k: string]: any };
+}
+
+testAsync("R-builtin: a tag on the built-in All Pages trigger is not a broken reference", async () => {
+  // Regression: every tag on All Pages got a HIGH "firing trigger that does not
+  // exist" finding and publishSafe "no".
+  const out = await auditFindings(GA4_PARAMS_WEB);
+  assert.ok(!out.findings.some((f) => f.finding === BROKEN_FIRE), "built-in All Pages flagged as missing");
+  assert.ok(
+    out.findings.some((f) => f.finding === "GA4 Event tag is configured on an All Pages / pageview trigger"),
+    "a GA4 event tag on the built-in All Pages trigger should get the All Pages finding",
+  );
+});
+
+testAsync("R-builtin: built-in Consent Initialization / Initialization ids are not broken references either", async () => {
+  const out = await auditFindings(
+    webFixture([
+      { tagId: "1", name: "CMP", type: "html", firingTriggerId: ["2147479572"], blockingTriggerId: ["2147479573"], parameter: [] },
+    ]),
+  );
+  assert.ok(!out.findings.some((f) => f.finding === BROKEN_FIRE || f.finding === BROKEN_BLOCK));
+});
+
+testAsync("R-builtin control: an id just outside the built-in band is still flagged", async () => {
+  const out = await auditFindings(
+    webFixture([{ tagId: "1", name: "Stray", type: "html", firingTriggerId: ["2147478553"], parameter: [] }]),
+  );
+  assert.ok(out.findings.some((f) => f.finding === BROKEN_FIRE && (f.affected ?? []).includes("Stray")));
+});
+
+test("S-builtin: the Express auditor exempts built-in ids but still flags dangling ones", () => {
+  const summary = runExpressAudit(
+    {
+      tags: [
+        { tagId: "1", name: "Google tag", type: "googtag", firingTriggerId: ["2147479553"], blockingTriggerId: ["2147479572"] },
+        { tagId: "2", name: "Stray", type: "html", firingTriggerId: ["2147478553"] },
+      ],
+      triggers: [],
+      variables: [],
+      folders: [],
+      builtInVariables: [],
+    },
+    { containerPublicId: "GTM-BUILTIN" },
+  );
+  const broken = summary.findings.filter((f) => /missing (firing|blocking) trigger/.test(f.title ?? ""));
+  assert.deepEqual(
+    broken.map((f) => f.affects),
+    [["Stray"]],
+    `only the out-of-band id should be flagged, got ${JSON.stringify(broken.map((f) => f.description))}`,
+  );
+});
+
+// ── Google tag IDs that are not GA4 measurement IDs (AW-/DC-/GT-) ───────────
+
+const MID_SHAPE = "GA4 tag has a measurement ID that does not look like G-XXXXXXX or GT-XXXXXXX";
+const MID_MISMATCH =
+  "GTM references GA4 measurement ID(s) that do not match any data stream on the selected GA4 property";
+
+function googleTag(tagId: string, id: string, name: string) {
+  return {
+    tagId,
+    name,
+    type: "googtag",
+    firingTriggerId: ["2147479553"],
+    parameter: [{ type: "template", key: "tagId", value: id }],
+  };
+}
+
+const streamRoutes = (url: URL): StubResponse | undefined => {
+  if (url.hostname !== "analyticsadmin.googleapis.com") return undefined;
+  const p = url.pathname;
+  if (p.endsWith("/dataStreams")) {
+    return {
+      status: 200,
+      body: { dataStreams: [{ name: "properties/123456/dataStreams/1", webStreamData: { measurementId: "G-ABC1234" } }] },
+    };
+  }
+  if (p.endsWith("/customDimensions")) return { status: 200, body: { customDimensions: [] } };
+  if (p.endsWith("/customMetrics")) return { status: 200, body: { customMetrics: [] } };
+  if (p.endsWith("/dataRetentionSettings")) return { status: 200, body: {} };
+  if (p.endsWith("/googleAdsLinks")) return { status: 200, body: { googleAdsLinks: [] } };
+  if (p.endsWith("/enhancedMeasurementSettings")) return { status: 200, body: { streamEnabled: false } };
+  return undefined;
+};
+
+testAsync("R-googtag: a GA4 Google tag plus a Google Ads (AW-) Google tag is not a bad GA4 id or a duplicate", async () => {
+  // Regression: AW- on a googtag got a HIGH "does not look like G-" finding and
+  // counted as a second GA4 config tag.
+  const out = await auditFindings(
+    webFixture([googleTag("1", "G-ABC1234", "GA4 Google tag"), googleTag("2", "AW-123456789", "Google Ads tag")]),
+  );
+  assert.ok(!out.findings.some((f) => f.finding === MID_SHAPE), "AW- Google tag shape-checked as GA4");
+  assert.ok(!out.findings.some((f) => /Google tag \/ GA4 Configuration tags \(one expected\)/.test(f.finding ?? "")));
+});
+
+testAsync("R-googtag: a GT- Google tag is not reported as a measurement ID missing from the data streams", async () => {
+  // Regression: GT- ids were compared with stream measurementIds (always G-) and
+  // always produced a HIGH CONFIG+GA4_ADMIN mismatch.
+  const out = await auditFindings(
+    webFixture([googleTag("1", "G-ABC1234", "GA4 Google tag"), googleTag("2", "GT-ABCDEFG", "Google tag (GT)")]),
+    [streamRoutes],
+    { ga4PropertyId: "123456" },
+  );
+  assert.ok(!out.findings.some((f) => f.finding === MID_MISMATCH), "GT- id reported as a stream mismatch");
+  assert.deepEqual(out.gtmMeasurementIds, ["G-ABC1234"]);
+});
+
+testAsync("R-googtag control: two G- Google tags still trip the config-count finding", async () => {
+  const out = await auditFindings(
+    webFixture([googleTag("1", "G-ABC1234", "GA4 tag A"), googleTag("2", "G-XYZ9876", "GA4 tag B")]),
+  );
+  assert.ok(out.findings.some((f) => /Container has 2 Google tag \/ GA4 Configuration tags/.test(f.finding ?? "")));
+});
+
+testAsync("R-googtag control: a G- id that is not on the property is still a stream mismatch", async () => {
+  const out = await auditFindings(webFixture([googleTag("1", "G-OTHER99", "Wrong GA4 tag")]), [streamRoutes], {
+    ga4PropertyId: "123456",
+  });
+  assert.ok(out.findings.some((f) => f.finding === MID_MISMATCH));
+});
+
+// The same AW-/DC-/GT- gap in the enhanced-measurement and sGTM rules.
+const EM_MANUAL_PV = "GA4 enhanced measurement is enabled while GTM appears to send page_view manually";
+const SGTM_MISMATCH = "GA4 tag transport_url does not match the selected server container domain";
+const SGTM_NO_CLIENT = "Web GA4 tags route to a server container, but no GA4 client was found there";
+
+function googleTagWith(tagId: string, id: string, name: string, key: string, value: string) {
+  const t = googleTag(tagId, id, name);
+  t.parameter.push({ type: "template", key, value });
+  return t;
+}
+
+const enhancedOnRoutes = (url: URL): StubResponse | undefined =>
+  url.hostname === "analyticsadmin.googleapis.com" && url.pathname.endsWith("/enhancedMeasurementSettings")
+    ? { status: 200, body: { streamEnabled: true } }
+    : streamRoutes(url);
+
+/** A selected server container (domain collect.example.com) with no GA4 client. */
+const SERVER_CONTEXT = { accountId: "1", containerId: "9", workspaceId: "5" };
+const serverContainerRoutes = (url: URL): StubResponse | undefined => {
+  if (url.hostname !== "tagmanager.googleapis.com") return undefined;
+  const p = url.pathname.replace(/^\/tagmanager\/v2/, "");
+  if (p === "/accounts/1/containers/9") {
+    return { status: 200, body: { containerId: "9", usageContext: ["server"], domainName: ["collect.example.com"] } };
+  }
+  if (p === "/accounts/1/containers/9/workspaces/5/clients") return { status: 200, body: { client: [] } };
+  if (p === "/accounts/1/containers/9/workspaces/5/transformations") {
+    return { status: 200, body: { transformation: [] } };
+  }
+  return undefined;
+};
+
+testAsync("R-googtag: an AW- Google tag's send_page_view=false is not GA4 manual page_view handling", async () => {
+  // Regression: any googtag with send_page_view=false counted as GA4 sending
+  // page_view manually, so an Ads Google tag raised the enhanced-measurement
+  // double-count finding.
+  const out = await auditFindings(
+    webFixture([
+      googleTag("1", "G-ABC1234", "GA4 Google tag"),
+      googleTagWith("2", "AW-123456789", "Google Ads tag", "sendPageView", "false"),
+    ]),
+    [enhancedOnRoutes],
+    { ga4PropertyId: "123456" },
+  );
+  assert.ok(!out.findings.some((f) => f.finding === EM_MANUAL_PV), "AW- send_page_view read as GA4 manual page_view");
+});
+
+testAsync("R-googtag control: a G- Google tag with send_page_view=false still trips the enhanced-measurement finding", async () => {
+  const out = await auditFindings(
+    webFixture([googleTagWith("1", "G-ABC1234", "GA4 Google tag", "sendPageView", "false")]),
+    [enhancedOnRoutes],
+    { ga4PropertyId: "123456" },
+  );
+  assert.ok(out.findings.some((f) => f.finding === EM_MANUAL_PV));
+});
+
+testAsync("R-googtag: an AW- Google tag's transport_url is not GA4 server routing", async () => {
+  // Regression: an Ads Google tag pointing at another endpoint got a GA4
+  // transport mismatch, and made the server container's missing GA4 client a
+  // HIGH finding although no GA4 tag routes to it.
+  const out = await auditFindings(
+    webFixture([
+      googleTag("1", "G-ABC1234", "GA4 Google tag"),
+      googleTagWith("2", "AW-123456789", "Google Ads tag", "server_container_url", "https://other.example.net"),
+    ]),
+    [serverContainerRoutes],
+    { serverContext: SERVER_CONTEXT },
+  );
+  assert.ok(!out.findings.some((f) => f.finding === SGTM_MISMATCH), "AW- transport_url reported as a GA4 mismatch");
+  assert.ok(!out.findings.some((f) => f.finding === SGTM_NO_CLIENT), "AW- transport_url counted as GA4 server routing");
+});
+
+testAsync("R-googtag control: a G- Google tag's transport_url is still reconciled against the server container", async () => {
+  const out = await auditFindings(
+    webFixture([
+      googleTagWith("1", "G-ABC1234", "GA4 Google tag", "server_container_url", "https://other.example.net"),
+    ]),
+    [serverContainerRoutes],
+    { serverContext: SERVER_CONTEXT },
+  );
+  assert.ok(out.findings.some((f) => f.finding === SGTM_MISMATCH));
+  assert.ok(out.findings.some((f) => f.finding === SGTM_NO_CLIENT));
+});
+
+test("S-googtag: the Express auditor does not treat AW-/GT- Google tags as GA4 config tags", () => {
+  // Regression: an Ads Google tag got a CRITICAL "missing valid Measurement ID"
+  // finding and, next to the GA4 Google tag, a HIGH duplicate-config finding.
+  const express = (tags: unknown[]) =>
+    runExpressAudit(
+      { tags: tags as never, triggers: [], variables: [], folders: [], builtInVariables: [] },
+      { containerPublicId: "GTM-GOOGTAG" },
+    ).findings.map((f) => f.title);
+  const mixed = express([
+    googleTag("1", "G-ABC1234", "GA4 Google tag"),
+    googleTag("2", "AW-123456789", "Google Ads tag"),
+    googleTag("3", "GT-ABCDEFG", "Google tag (GT)"),
+  ]);
+  assert.ok(!mixed.includes("GA4 Config tag missing valid Measurement ID"), JSON.stringify(mixed));
+  assert.ok(!mixed.includes("Multiple GA4 Config / Google Tag entries"), JSON.stringify(mixed));
+  // Controls: two G- tags are still duplicates; a Google tag with no id still lacks one.
+  const twoGa4 = express([googleTag("1", "G-ABC1234", "GA4 A"), googleTag("2", "G-XYZ9876", "GA4 B")]);
+  assert.ok(twoGa4.includes("Multiple GA4 Config / Google Tag entries"));
+  const noId = express([{ tagId: "1", name: "Bare Google tag", type: "googtag", firingTriggerId: ["2147479553"] }]);
+  assert.ok(noId.includes("GA4 Config tag missing valid Measurement ID"));
+});
+
+// ── Paged GTM lists (nextPageToken) and the Data API report ─────────────────
+
+const WS = "/tagmanager/v2/accounts/1/containers/2/workspaces/3";
+
+/** Serve `pages` of one list at `pathname`, chained by nextPageToken. */
+function pagedList(pathname: string, key: string, pages: unknown[][]) {
+  return (url: URL): StubResponse | undefined => {
+    if (url.hostname !== "tagmanager.googleapis.com" || url.pathname !== pathname) return undefined;
+    const i = Number(url.searchParams.get("pageToken") ?? "0");
+    const body: Record<string, unknown> = { [key]: pages[i] ?? [] };
+    if (i + 1 < pages.length) body.nextPageToken = String(i + 1);
+    return { status: 200, body };
+  };
+}
+
+testAsync("R-paging: a trigger on page 2 of triggers.list is not a broken reference", async () => {
+  // Regression: one call per list read only page 1, so tags referencing a
+  // page-2 trigger got HIGH broken-reference findings and counts under-reported.
+  const fx = webFixture([]);
+  const out = await auditFindings(fx, [
+    pagedList(`${WS}/tags`, "tag", [
+      [{ tagId: "1", name: "Lead tag", type: "html", firingTriggerId: ["20"], parameter: [] }],
+      [{ tagId: "2", name: "Late tag", type: "html", firingTriggerId: ["10"], parameter: [] }],
+    ]),
+    pagedList(`${WS}/triggers`, "trigger", [
+      [{ triggerId: "10", name: "Click", type: "click" }],
+      [{ triggerId: "20", name: "Form", type: "formSubmission" }],
+    ]),
+  ]);
+  assert.ok(!out.findings.some((f) => f.finding === BROKEN_FIRE), "page-2 trigger reported missing");
+  assert.ok(
+    !out.findings.some((f) => f.finding === "Trigger is not referenced by any tag or variable"),
+    "trigger used only by a page-2 tag reported unused",
+  );
+  assert.deepEqual(out.counts, { tags: 2, triggers: 2, variables: 0 });
+});
+
+testAsync("R-paging: a list cut off at the page cap is a tool failure, not a broken reference", async () => {
+  const endless = (url: URL): StubResponse | undefined => {
+    if (url.hostname !== "tagmanager.googleapis.com" || url.pathname !== `${WS}/triggers`) return undefined;
+    return { status: 200, body: { trigger: [], nextPageToken: "more" } };
+  };
+  const out = await auditFindings(
+    webFixture([{ tagId: "1", name: "Lead tag", type: "html", firingTriggerId: ["999"], parameter: [] }]),
+    [endless],
+  );
+  assert.ok(!out.findings.some((f) => f.finding === BROKEN_FIRE), "partial trigger list produced a broken reference");
+  assert.ok(
+    (out.toolFailures ?? []).some((t: { resource: string }) => t.resource === "triggers"),
+    "the truncated list must be recorded as a tool failure",
+  );
+  assert.notEqual(out.executiveSummary?.publishSafe, "yes");
+});
+
+testAsync("R-paging: the GA4 Data API report is read past its first page", async () => {
+  // Regression: runReport was sent once with limit 250, so events beyond the
+  // first page were reported as "zero events".
+  let call = 0;
+  const reportRows = [
+    { rows: [{ dimensionValues: [{ value: "sign_up" }], metricValues: [{ value: "5" }] }], rowCount: 2 },
+    { rows: [{ dimensionValues: [{ value: "purchase" }], metricValues: [{ value: "3" }] }], rowCount: 2 },
+  ];
+  const dataApi = (url: URL): StubResponse | undefined => {
+    if (url.hostname !== "analyticsdata.googleapis.com") return undefined;
+    return { status: 200, body: reportRows[call++] ?? { rows: [], rowCount: 2 } };
+  };
+  const eventTag = (tagId: string, ev: string) => ({
+    tagId,
+    name: `GA4 - ${ev}`,
+    type: "gaawe",
+    firingTriggerId: ["2147479553"],
+    parameter: [
+      { type: "template", key: "eventName", value: ev },
+      { type: "template", key: "measurementIdOverride", value: "G-ABC1234" },
+    ],
+  });
+  const out = await auditFindings(
+    webFixture([googleTag("1", "G-ABC1234", "GA4 Google tag"), eventTag("2", "sign_up"), eventTag("3", "purchase")]),
+    [dataApi, streamRoutes],
+    { ga4PropertyId: "123456", enableDataApi: true },
+  );
+  assert.ok(call >= 2, `expected the report to be paged, got ${call} call(s)`);
+  assert.ok(
+    !out.findings.some((f) => /reported zero events/.test(f.finding ?? "")),
+    `events on page 2 reported as zero: ${JSON.stringify(out.findings.filter((f) => /zero events/.test(f.finding ?? "")))}`,
+  );
+});
+
+testAsync("R-paging: /api/gtm/consent-audit audits tags from every page", async () => {
+  const ungated = (tagId: string, name: string) => googleTag(tagId, "G-ABC1234", name);
+  const r = await callRoute(consentAuditHandler, { containerPublicId: "GTM-PAGED" }, [
+    pagedList(`${WS}/tags`, "tag", [[ungated("1", "Page-1 Google tag")], [ungated("2", "Page-2 Google tag")]]),
+    gtmRoutes(webFixture([])),
+  ]);
+  assert.equal(r.status, 200, JSON.stringify(r.json).slice(0, 300));
+  const perTag = r.json.findings.find((f: { finding?: string }) =>
+    /marketing\/analytics tag\(s\) have no per-tag consent settings/.test(f.finding ?? ""),
+  );
+  assert.ok(perTag, "expected the per-tag consent finding");
+  assert.ok(
+    (perTag.affected ?? []).includes("Page-2 Google tag"),
+    `ungated tag on page 2 was not audited: ${JSON.stringify(perTag.affected)}`,
+  );
+});
+
+/** Run `fn` with global fetch served by `routes` (no network). */
+async function withStubbedFetch<T>(
+  routes: Array<(url: URL) => StubResponse | undefined>,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: unknown) => {
+    const url = new URL(String(input instanceof Request ? input.url : input));
+    const hit = routes.map((r) => r(url)).find(Boolean) ?? { status: 404, body: {} };
+    return new Response(JSON.stringify(hit.body), {
+      status: hit.status,
+      headers: { "content-type": "application/json" },
+    });
+  }) as typeof fetch;
+  try {
+    return await fn();
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
+testAsync("S-paging: the Express GTM client follows nextPageToken for lists and workspace contents", async () => {
+  const accounts = await withStubbedFetch(
+    [pagedList("/tagmanager/v2/accounts", "account", [[{ accountId: "1" }], [{ accountId: "2" }]])],
+    () => listAccounts("t"),
+  );
+  assert.deepEqual(accounts.map((a) => a.accountId), ["1", "2"]);
+  const contents = await withStubbedFetch(
+    [
+      pagedList(`${WS}/triggers`, "trigger", [[{ triggerId: "10" }], [{ triggerId: "20" }]]),
+      gtmRoutes(webFixture([])),
+    ],
+    () => fetchWorkspaceContents("t", "1", "2", "3"),
+  );
+  assert.deepEqual(contents.triggers.map((t) => t.triggerId), ["10", "20"]);
+});
+
+testAsync("R-paging: /api/gtm/accounts returns accounts from every page", async () => {
+  const out = await callRoute(accountsHandler, {}, [
+    pagedList("/tagmanager/v2/accounts", "account", [
+      [{ accountId: "1", name: "First" }],
+      [{ accountId: "2", name: "Second" }],
+    ]),
+  ]);
+  assert.equal(out.status, 200, JSON.stringify(out.json).slice(0, 300));
+  assert.deepEqual(
+    out.json.accounts.map((a: { accountId: string }) => a.accountId),
+    ["1", "2"],
+  );
+});
+
+// ── Session cookie: every api/** copy agrees with server/gtm/session-cookie ──
+// Regression: the session cookie was signed-only base64 JSON with no issued-at.
+// Anyone holding a copy could read the Google tokens out of it, and every route
+// accepted it forever (each refresh re-minted it with a new Max-Age). Now the
+// tokens are sealed (AES-256-GCM) and every route enforces a 30-day absolute
+// lifetime from sign-in that a refresh does not extend.
+
+type RouteHandler = (req: IncomingMessage, res: ServerResponse) => unknown;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const GA4_SCOPE = "https://www.googleapis.com/auth/analytics.readonly";
+const STATUS_ROUTE = "/api/oauth/status";
+
+const SESSION_ROUTES: Array<{ name: string; handler: RouteHandler; method: string; url: string }> = [
+  { name: STATUS_ROUTE, handler: oauthStatusHandler, method: "GET", url: "/api/oauth/status" },
+  { name: "/api/gtm/accounts", handler: accountsHandler, method: "GET", url: "/api/gtm/accounts" },
+  {
+    name: "/api/gtm/accounts/:id/containers",
+    handler: containersHandler as RouteHandler,
+    method: "GET",
+    url: "/api/gtm/accounts/1/containers?accountId=1",
+  },
+  {
+    name: "/api/gtm/accounts/:id/containers/:id/workspaces",
+    handler: workspacesHandler as RouteHandler,
+    method: "GET",
+    url: "/api/gtm/accounts/1/containers/2/workspaces?accountId=1&containerId=2",
+  },
+  { name: "/api/gtm/audit", handler: auditHandler, method: "POST", url: "/api/gtm/audit" },
+  { name: "/api/gtm/consent-audit", handler: consentAuditHandler, method: "POST", url: "/api/gtm/consent-audit" },
+  { name: "/api/gtm/sgtm", handler: sgtmHandler, method: "POST", url: "/api/gtm/sgtm" },
+  { name: "/api/ga4/admin", handler: ga4AdminHandler, method: "POST", url: "/api/ga4/admin" },
+];
+
+function withRouteSecret<T>(fn: () => T): T {
+  const prev = process.env.PORTAL_SESSION_SECRET;
+  process.env.PORTAL_SESSION_SECRET = SECRET;
+  try {
+    return fn();
+  } finally {
+    if (prev === undefined) delete process.env.PORTAL_SESSION_SECRET;
+    else process.env.PORTAL_SESSION_SECRET = prev;
+  }
+}
+
+function sessionAccepted(route: { name: string }, r: { status: number; json: any }): boolean {
+  if (route.name === STATUS_ROUTE) return r.json?.connected === true;
+  return r.status !== 401 && r.json?.error !== "not_connected";
+}
+
+/** The pre-fix wire format: `v1.<base64url(json)>.<hmac>`, tokens readable. */
+function legacySignedCookie(tokens: Record<string, unknown>): string {
+  const payload = `v1.${Buffer.from(JSON.stringify(tokens)).toString("base64url")}`;
+  return `${payload}.${crypto.createHmac("sha256", SECRET).update(payload).digest("base64url")}`;
+}
+
+/** The session cookie a response set, decoded with the server module. */
+function sessionFromSetCookie(setCookies: string[]) {
+  const prefix = "samarth_portal_sid=";
+  const line = setCookies.find((c) => c.startsWith(prefix) && !c.startsWith(`${prefix};`));
+  if (!line) return null;
+  const raw = decodeURIComponent(line.slice(prefix.length).split(";")[0]);
+  return { raw, tokens: withRouteSecret(() => decodeSessionCookie(raw)) };
+}
+
+const tokenRefreshRoute = (url: URL): StubResponse | undefined =>
+  url.hostname === "oauth2.googleapis.com" && url.pathname === "/token"
+    ? { status: 200, body: { access_token: "refreshed-access-token", expires_in: 3600 } }
+    : undefined;
+
+for (const route of SESSION_ROUTES) {
+  const call = { method: route.method, url: route.url };
+
+  testAsync(`R-session ${route.name}: a fresh sealed session is accepted`, async () => {
+    const r = await callRoute(route.handler, {}, [], { ...call, session: { scopes: [GA4_SCOPE] } });
+    assert.ok(sessionAccepted(route, r), `${r.status} ${JSON.stringify(r.json).slice(0, 200)}`);
+  });
+
+  testAsync(`R-session ${route.name}: a sealed session past the 30-day lifetime is rejected`, async () => {
+    const r = await callRoute(route.handler, {}, [tokenRefreshRoute], {
+      ...call,
+      session: { scopes: [GA4_SCOPE], iat: Date.now() - 31 * DAY_MS, refreshToken: "1//old-refresh" },
+    });
+    assert.ok(!sessionAccepted(route, r), "a 31-day-old session must not be honoured");
+    if (route.name !== STATUS_ROUTE) assert.equal(r.status, 401);
+    assert.equal(sessionFromSetCookie(r.setCookies), null, "a stale session must not be re-minted");
+  });
+
+  testAsync(`R-session ${route.name}: a legacy signed-only v1 cookie is rejected`, async () => {
+    const legacy = legacySignedCookie({
+      accessToken: "test-access-token",
+      expiresAt: Date.now() + 3_600_000,
+      iat: Date.now(),
+      scopes: [GA4_SCOPE],
+    });
+    const r = await callRoute(route.handler, {}, [], {
+      ...call,
+      cookieHeader: () => `samarth_portal_sid=${encodeURIComponent(legacy)}`,
+    });
+    assert.ok(!sessionAccepted(route, r), "unencrypted v1 cookies are no longer accepted");
+  });
+
+  if (route.name === STATUS_ROUTE) continue; // status never refreshes
+
+  testAsync(`R-session ${route.name}: a token refresh keeps the original sign-in time`, async () => {
+    const iat = Date.now() - 10 * DAY_MS;
+    const r = await callRoute(route.handler, {}, [tokenRefreshRoute], {
+      ...call,
+      session: {
+        scopes: [GA4_SCOPE],
+        iat,
+        accessToken: "expired-access-token",
+        expiresAt: Date.now() - 1000,
+        refreshToken: "1//refresh-token",
+        email: "user@example.com",
+        userName: "Example User",
+        picture: "https://example.com/p.png",
+      },
+    });
+    assert.ok(sessionAccepted(route, r), `${r.status} ${JSON.stringify(r.json).slice(0, 200)}`);
+    const rotated = sessionFromSetCookie(r.setCookies);
+    assert.ok(rotated?.tokens, "the refreshed session cookie must decode");
+    assert.equal(rotated.tokens.accessToken, "refreshed-access-token");
+    assert.equal(rotated.tokens.refreshToken, "1//refresh-token");
+    assert.equal(rotated.tokens.iat, iat, "refresh must not extend the session");
+    // Regression: the route decoders dropped userName/picture, so the first
+    // refresh outside /api/oauth/status erased the signed-in user's profile.
+    assert.equal(rotated.tokens.email, "user@example.com");
+    assert.equal(rotated.tokens.userName, "Example User", "refresh dropped userName");
+    assert.equal(rotated.tokens.picture, "https://example.com/p.png", "refresh dropped picture");
+    assert.ok(!rotated.raw.includes("refreshed-access-token"), "rotated cookie leaks the token");
+  });
+}
+
+testAsync("R-session /api/oauth/callback mints a sealed session stamped with iat", async () => {
+  const { state, cookie: stateCookie } = withRouteSecret(() => encodeOAuthStateCookie());
+  const googleOAuth = (url: URL): StubResponse | undefined => {
+    if (url.hostname === "oauth2.googleapis.com" && url.pathname === "/token") {
+      return {
+        status: 200,
+        body: {
+          access_token: "fresh-access-token",
+          refresh_token: "1//fresh-refresh-token",
+          expires_in: 3600,
+          scope: `https://www.googleapis.com/auth/tagmanager.readonly ${GA4_SCOPE}`,
+        },
+      };
+    }
+    if (url.hostname === "openidconnect.googleapis.com") {
+      return { status: 200, body: { email: "user@example.com", name: "User", picture: "https://example.com/p.png" } };
+    }
+    return undefined;
+  };
+  const before = Date.now();
+  const r = await callRoute(oauthCallbackHandler, {}, [googleOAuth], {
+    method: "GET",
+    url: `/api/oauth/callback?code=test-code&state=${encodeURIComponent(state)}`,
+    cookieHeader: () => `samarth_portal_oauth_state=${encodeURIComponent(stateCookie)}`,
+  });
+  assert.equal(r.status, 302);
+  const minted = sessionFromSetCookie(r.setCookies);
+  assert.ok(minted?.tokens, "callback must set a session cookie the server module decodes");
+  assert.ok(minted.raw.startsWith("v1e."), minted.raw.slice(0, 8));
+  assert.equal(minted.tokens.refreshToken, "1//fresh-refresh-token");
+  assert.ok(
+    typeof minted.tokens.iat === "number" && minted.tokens.iat >= before && minted.tokens.iat <= Date.now(),
+    "iat must be the sign-in time",
+  );
+  const body = Buffer.from(minted.raw.split(".")[1], "base64url").toString("latin1");
+  for (const secret of ["1//fresh-refresh-token", "fresh-access-token", "user@example.com"]) {
+    assert.ok(!minted.raw.includes(secret) && !body.includes(secret), `session cookie exposes ${secret}`);
+  }
+});
+
+// ── Disconnect Google: revoke the grant, but only in the portal's own project ──
+// Google revokes a user's grant for a whole Google Cloud project. If the MCP
+// server signs users in with a client in the portal's project, even a different
+// client ID, revoking would sign the user out there too. The portal cannot see
+// another deployment's settings, so revoking is opt-in, refuses a shared client
+// or project it can see, and first proves the token refreshes with the portal's
+// own client.
+
+/** Clears variables an operator's shell might export, so the outcome depends only on the test. */
+const LOGOUT_BASE_ENV: Record<string, string | undefined> = {
+  PORTAL_REVOKE_GOOGLE_ON_DISCONNECT: undefined,
+  GOOGLE_OAUTH_CLIENT_ID: undefined,
+  GOOGLE_CLIENT_ID: undefined,
+  SAMARTH_GOOGLE_OAUTH_CLIENT_ID: undefined,
+};
+const REVOKE_ON = { ...LOGOUT_BASE_ENV, PORTAL_REVOKE_GOOGLE_ON_DISCONNECT: "true" };
+const SAME_ORIGIN = { origin: "https://portal.example", host: "portal.example" };
+// Google client IDs start with their project number.
+const PROJECT_A_PORTAL = "1111111111-portal.apps.googleusercontent.com";
+const PROJECT_A_MCP = "1111111111-mcp.apps.googleusercontent.com";
+const PROJECT_B_MCP = "2222222222-mcp.apps.googleusercontent.com";
+
+type GoogleCall = [string, ...string[]];
+
+/** Google's token and revoke endpoints. Records each call without the client secret. */
+function googleStub(calls: GoogleCall[], status: { token?: number; revoke?: number } = {}) {
+  return (url: URL, init?: RequestInit): StubResponse | undefined => {
+    if (url.hostname !== "oauth2.googleapis.com") return undefined;
+    const form = new URLSearchParams(String(init?.body ?? ""));
+    if (url.pathname === "/token" && form.get("grant_type") === "refresh_token") {
+      calls.push(["token", form.get("client_id") ?? "", form.get("refresh_token") ?? ""]);
+      return { status: status.token ?? 200, body: { access_token: "fresh", expires_in: 3600 } };
+    }
+    if (url.pathname === "/revoke") {
+      calls.push(["revoke", form.get("token") ?? ""]);
+      return { status: status.revoke ?? 200, body: {} };
+    }
+    return undefined;
+  };
+}
+
+function clearsSessionCookie(setCookies: string[]): boolean {
+  return setCookies.some((c) => c.startsWith("samarth_portal_sid=;") && c.includes("Max-Age=0"));
+}
+
+/** Runs fn with console.warn captured; returns what it logged. */
+async function captureWarnings(fn: () => Promise<void>): Promise<string[]> {
+  const real = console.warn;
+  const lines: string[] = [];
+  console.warn = (...args: unknown[]) => void lines.push(args.map(String).join(" "));
+  try {
+    await fn();
+  } finally {
+    console.warn = real;
+  }
+  return lines;
+}
+
+testAsync("R-logout: an opted-in same-origin POST proves the token is the portal's, then revokes it", async () => {
+  const calls: GoogleCall[] = [];
+  const r = await callRoute(oauthLogoutHandler, {}, [googleStub(calls)], {
+    url: "/api/oauth/logout",
+    session: { refreshToken: "1//portal-refresh-token" },
+    headers: SAME_ORIGIN,
+    env: REVOKE_ON,
+  });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.json, { connected: false, googleRevoked: true });
+  assert.deepEqual(calls, [
+    ["token", ROUTE_ENV.PORTAL_GOOGLE_OAUTH_CLIENT_ID, "1//portal-refresh-token"],
+    ["revoke", "1//portal-refresh-token"],
+  ]);
+  assert.ok(clearsSessionCookie(r.setCookies), r.setCookies.join(" | "));
+  // A client of the MCP server in another project does not stop it.
+  const other: GoogleCall[] = [];
+  const otherProject = await callRoute(oauthLogoutHandler, {}, [googleStub(other)], {
+    url: "/api/oauth/logout",
+    session: { refreshToken: "1//portal-refresh-token" },
+    headers: SAME_ORIGIN,
+    env: { ...REVOKE_ON, PORTAL_GOOGLE_OAUTH_CLIENT_ID: PROJECT_A_PORTAL, GOOGLE_OAUTH_CLIENT_ID: PROJECT_B_MCP },
+  });
+  assert.equal(otherProject.json?.googleRevoked, true);
+  assert.deepEqual(other.map((c) => c[0]), ["token", "revoke"]);
+});
+
+testAsync("R-logout never revokes unless opted in, nor a client or project shared with the MCP server", async () => {
+  const own = ROUTE_ENV.PORTAL_GOOGLE_OAUTH_CLIENT_ID;
+  for (const env of [
+    // The default: the portal cannot tell whether a separately deployed MCP server uses its client.
+    LOGOUT_BASE_ENV,
+    { ...LOGOUT_BASE_ENV, PORTAL_REVOKE_GOOGLE_ON_DISCONNECT: "1" },
+    { ...REVOKE_ON, PORTAL_GOOGLE_OAUTH_CLIENT_ID: undefined, GOOGLE_OAUTH_CLIENT_ID: "shared-client-id" },
+    { ...REVOKE_ON, PORTAL_GOOGLE_OAUTH_CLIENT_SECRET: undefined },
+    { ...REVOKE_ON, GOOGLE_OAUTH_CLIENT_ID: own },
+    { ...REVOKE_ON, GOOGLE_CLIENT_ID: own },
+    { ...REVOKE_ON, SAMARTH_GOOGLE_OAUTH_CLIENT_ID: own },
+    // A different client in the same Google Cloud project: Google revokes per project.
+    { ...REVOKE_ON, PORTAL_GOOGLE_OAUTH_CLIENT_ID: PROJECT_A_PORTAL, GOOGLE_OAUTH_CLIENT_ID: PROJECT_A_MCP },
+    { ...REVOKE_ON, PORTAL_GOOGLE_OAUTH_CLIENT_ID: PROJECT_A_PORTAL, GOOGLE_CLIENT_ID: PROJECT_A_MCP },
+    { ...REVOKE_ON, PORTAL_GOOGLE_OAUTH_CLIENT_ID: PROJECT_A_PORTAL, SAMARTH_GOOGLE_OAUTH_CLIENT_ID: PROJECT_A_MCP },
+  ]) {
+    const calls: GoogleCall[] = [];
+    const r = await callRoute(oauthLogoutHandler, {}, [googleStub(calls)], {
+      url: "/api/oauth/logout",
+      session: { refreshToken: "1//shared-refresh-token" },
+      headers: SAME_ORIGIN,
+      env,
+    });
+    assert.equal(r.json?.googleRevoked, false, JSON.stringify(env));
+    assert.deepEqual(calls, [], JSON.stringify(env));
+    assert.ok(clearsSessionCookie(r.setCookies), JSON.stringify(env));
+  }
+});
+
+testAsync("R-logout leaves alone a session whose token was issued to another client", async () => {
+  // A cookie minted before the portal moved off a client it shared with the MCP server.
+  const calls: GoogleCall[] = [];
+  let r: Awaited<ReturnType<typeof callRoute>> | undefined;
+  const warnings = await captureWarnings(async () => {
+    r = await callRoute(oauthLogoutHandler, {}, [googleStub(calls, { token: 401 })], {
+      url: "/api/oauth/logout",
+      session: { refreshToken: "1//issued-to-the-shared-client" },
+      headers: SAME_ORIGIN,
+      env: REVOKE_ON,
+    });
+  });
+  assert.deepEqual(r?.json, { connected: false, googleRevoked: false });
+  assert.deepEqual(calls, [["token", ROUTE_ENV.PORTAL_GOOGLE_OAUTH_CLIENT_ID, "1//issued-to-the-shared-client"]]);
+  assert.ok(clearsSessionCookie(r?.setCookies ?? []));
+  assert.equal(warnings.length, 1, warnings.join(" | "));
+  assert.ok(/not revoking/.test(warnings[0]) && !warnings[0].includes("1//"), warnings[0]);
+});
+
+testAsync("R-logout revokes only on a same-origin POST", async () => {
+  for (const [method, headers] of [
+    ["GET", SAME_ORIGIN],
+    ["POST", { host: "portal.example" }],
+    ["POST", { origin: "https://evil.example", host: "portal.example" }],
+    ["POST", { origin: "null", host: "portal.example" }],
+    ["POST", { origin: "http://portal.example.evil.example", host: "portal.example" }],
+  ] as Array<[string, Record<string, string>]>) {
+    const calls: GoogleCall[] = [];
+    const r = await callRoute(oauthLogoutHandler, {}, [googleStub(calls)], {
+      method,
+      url: "/api/oauth/logout",
+      session: { refreshToken: "1//portal-refresh-token" },
+      headers,
+      env: REVOKE_ON,
+    });
+    assert.equal(r.json?.googleRevoked, false, `${method} ${JSON.stringify(headers)}`);
+    assert.deepEqual(calls, [], `${method} ${JSON.stringify(headers)}`);
+    assert.ok(clearsSessionCookie(r.setCookies));
+  }
+  // Behind a proxy the Origin may match the forwarded host instead.
+  const calls: GoogleCall[] = [];
+  const proxied = await callRoute(oauthLogoutHandler, {}, [googleStub(calls)], {
+    url: "/api/oauth/logout",
+    session: { refreshToken: "1//portal-refresh-token" },
+    headers: { origin: "https://portal.example", host: "internal:3000", "x-forwarded-host": "portal.example" },
+    env: REVOKE_ON,
+  });
+  assert.equal(proxied.json?.googleRevoked, true);
+});
+
+testAsync("R-logout still signs out, and logs, when Google refuses; no session revokes nothing", async () => {
+  const calls: GoogleCall[] = [];
+  let refused: Awaited<ReturnType<typeof callRoute>> | undefined;
+  const warnings = await captureWarnings(async () => {
+    refused = await callRoute(oauthLogoutHandler, {}, [googleStub(calls, { revoke: 400 })], {
+      url: "/api/oauth/logout",
+      session: { refreshToken: "1//already-revoked" },
+      headers: SAME_ORIGIN,
+      env: REVOKE_ON,
+    });
+  });
+  assert.equal(refused?.status, 200);
+  assert.deepEqual(refused?.json, { connected: false, googleRevoked: false });
+  assert.ok(clearsSessionCookie(refused?.setCookies ?? []));
+  assert.equal(warnings.length, 1, warnings.join(" | "));
+  assert.ok(/did not confirm/.test(warnings[0]) && !warnings[0].includes("1//"), warnings[0]);
+  for (const opts of [{ authenticated: false }, { session: { refreshToken: undefined } }]) {
+    const none: GoogleCall[] = [];
+    const r = await callRoute(oauthLogoutHandler, {}, [googleStub(none)], {
+      url: "/api/oauth/logout",
+      headers: SAME_ORIGIN,
+      env: REVOKE_ON,
+      ...opts,
+    });
+    assert.deepEqual(r.json, { connected: false, googleRevoked: false }, JSON.stringify(opts));
+    assert.deepEqual(none, [], JSON.stringify(opts));
+  }
+});
+
+testAsync("R-logout: the Vercel route and the Express server's revokeOnDisconnect agree", async () => {
+  const own = ROUTE_ENV.PORTAL_GOOGLE_OAUTH_CLIENT_ID;
+  const envs = [
+    LOGOUT_BASE_ENV,
+    REVOKE_ON,
+    { ...REVOKE_ON, PORTAL_GOOGLE_OAUTH_CLIENT_ID: undefined },
+    { ...REVOKE_ON, GOOGLE_OAUTH_CLIENT_ID: "another-client-id" },
+    { ...REVOKE_ON, GOOGLE_OAUTH_CLIENT_ID: own },
+    { ...REVOKE_ON, PORTAL_GOOGLE_OAUTH_CLIENT_ID: PROJECT_A_PORTAL, GOOGLE_OAUTH_CLIENT_ID: PROJECT_A_MCP },
+    { ...REVOKE_ON, PORTAL_GOOGLE_OAUTH_CLIENT_ID: PROJECT_A_PORTAL, GOOGLE_OAUTH_CLIENT_ID: PROJECT_B_MCP },
+  ];
+  const requests: Array<[string, Record<string, string>]> = [
+    ["POST", SAME_ORIGIN],
+    ["GET", SAME_ORIGIN],
+    ["POST", { origin: "https://evil.example", host: "portal.example" }],
+  ];
+  const statuses = [{}, { token: 400 }, { revoke: 400 }];
+  for (const env of envs) {
+    for (const [method, headers] of requests) {
+      for (const status of statuses) {
+        const label = JSON.stringify({ env, method, headers, status });
+        const routeCalls: GoogleCall[] = [];
+        const expressCalls: GoogleCall[] = [];
+        let route: Awaited<ReturnType<typeof callRoute>> | undefined;
+        let express = false;
+        await captureWarnings(async () => {
+          route = await callRoute(oauthLogoutHandler, {}, [googleStub(routeCalls, status)], {
+            method,
+            url: "/api/oauth/logout",
+            session: { refreshToken: "1//lockstep" },
+            headers,
+            env,
+          });
+          const merged: NodeJS.ProcessEnv = { ...ROUTE_ENV };
+          for (const [k, v] of Object.entries(env)) {
+            if (v === undefined) delete merged[k];
+            else merged[k] = v;
+          }
+          const stub = googleStub(expressCalls, status);
+          const realFetch = globalThis.fetch;
+          globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+            const hit = stub(new URL(String(input)), init) ?? { status: 404, body: {} };
+            return new Response(JSON.stringify(hit.body), { status: hit.status });
+          }) as typeof fetch;
+          try {
+            express = await revokeOnDisconnect(
+              { method, origin: headers.origin, host: headers.host, forwardedHost: undefined },
+              "1//lockstep",
+              merged,
+            );
+          } finally {
+            globalThis.fetch = realFetch;
+          }
+        });
+        assert.equal(route?.json?.googleRevoked, express, label);
+        assert.deepEqual(routeCalls, expressCalls, label);
+      }
+    }
+  }
 });
 
 for (const [name, fn] of asyncTests) {

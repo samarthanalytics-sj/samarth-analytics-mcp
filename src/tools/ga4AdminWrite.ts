@@ -31,7 +31,15 @@ import { z } from 'zod';
 import type { Ga4AdminClient, Ga4AdminAlphaClient } from '../utils/ga4Client.js';
 import { getGuardrailConfig, checkGa4Guardrails } from '../utils/guardrails.js';
 import { jsonResult, textResult, errorText } from '../utils/toolResponse.js';
-import { formatGa4Error, toPropertyName } from '../utils/ga4Errors.js';
+import { formatGa4Error, requireGa4Identifier, toAccountName, toDataStreamName, toPropertyName } from '../utils/ga4Errors.js';
+import {
+  ga4AccountId,
+  ga4DataStreamId,
+  ga4PropertyId,
+  ga4ResourceNameExample,
+  ga4ResourceNamePattern,
+  type Ga4ParentKind,
+} from '../utils/schemas.js';
 
 /** The four uniform mutating methods on a GA4 Admin collection. Cast the real
  *  googleapis sub-resource to this at the factory boundary (its param unions are
@@ -63,19 +71,6 @@ function bindVerb<K extends keyof Ga4SubResource>(s: Ga4SubResource, verb: K): G
   return (fn as (...a: never[]) => unknown).bind(s) as Ga4SubResource[K];
 }
 
-/** Normalize an account id into `accounts/{id}`. */
-function toAccountName(account: string): string {
-  const t = account.trim();
-  return t.startsWith('accounts/') ? t : `accounts/${t}`;
-}
-
-/** Build a `properties/{id}/dataStreams/{streamId}` parent. */
-function toDataStreamName(property: string, dataStreamId: string): string {
-  const s = dataStreamId.trim();
-  const suffix = s.startsWith('dataStreams/') ? s : `dataStreams/${s}`;
-  return `${toPropertyName(property)}/${suffix}`;
-}
-
 /** Compute an updateMask from the top-level keys actually supplied (excluding
  *  the raw `body` escape hatch and an explicit updateMask). GA4 patch requires
  *  it; callers can override with an explicit `updateMask`. */
@@ -90,7 +85,7 @@ function pickDefined(a: Record<string, unknown>, keys: string[]): Record<string,
   return out;
 }
 
-type ParentKind = 'property' | 'dataStream' | 'account';
+type ParentKind = Ga4ParentKind;
 
 interface VerbSpec {
   /** Typed fields beyond the parent/name (empty for raw-body-only resources). */
@@ -137,6 +132,10 @@ interface ResourceDesc {
   plural: string;
   version: 'v1beta' | 'v1alpha';
   parent: ParentKind;
+  /** The API collection segment under the parent, e.g. 'keyEvents'. update/delete/archive refuse a
+   *  `name` that is not exactly `<parent>/<collection>/<id>`, so a "delete key event" tool cannot be
+   *  pointed at an account, and no name can carry a ':verb', query or fragment. */
+  collection: string;
   /** Return the googleapis sub-resource (typed loosely — see Ga4SubResource). */
   sub: (c: AnyGa4Client) => Ga4SubResource;
   /** True when create/update accept a raw `body` object passthrough (merged over
@@ -148,11 +147,18 @@ interface ResourceDesc {
   archive?: { desc: string };
 }
 
-const propertyArg = z.string().min(1).describe('GA4 property ID, e.g. "123456789" or "properties/123456789".');
-const nameArg = (plural: string) =>
-  z.string().min(1).describe(`Full resource name of the ${plural.replace(/s$/, '')} to target, e.g. "properties/123/…/456".`);
+const propertyArg = ga4PropertyId.describe('GA4 property ID, e.g. "123456789" or "properties/123456789".');
+const dataStreamArg = ga4DataStreamId.describe('Data stream ID (numeric) or "dataStreams/{id}".');
+const nameArg = (plural: string, parent: ParentKind, collection: string) =>
+  z
+    .string()
+    .regex(
+      ga4ResourceNamePattern(parent, collection),
+      `must be the full resource name of a ${plural.replace(/s$/, '')}: "${ga4ResourceNameExample(parent, collection)}"`
+    )
+    .describe(`Full resource name of the ${plural.replace(/s$/, '')} to target: "${ga4ResourceNameExample(parent, collection)}".`);
 const bodyArg = z
-  .record(z.unknown())
+  .record(z.string(), z.unknown())
   .optional()
   .describe('Raw request-body object (JSON) merged OVER the typed fields — use for nested/advanced fields not exposed as flat args.');
 
@@ -171,8 +177,8 @@ function registerResource(
     r.parent === 'property'
       ? { property: propertyArg }
       : r.parent === 'dataStream'
-        ? { property: propertyArg, dataStreamId: z.string().min(1).describe('Data stream ID (numeric) or "dataStreams/{id}".') }
-        : { accountId: z.string().min(1).describe('GA4 account ID, e.g. "123456" or "accounts/123456".') };
+        ? { property: propertyArg, dataStreamId: dataStreamArg }
+        : { accountId: ga4AccountId.describe('GA4 account ID, e.g. "123456" or "accounts/123456".') };
   const parentPath = (a: Record<string, unknown>): string =>
     r.parent === 'property'
       ? toPropertyName(String(a.property))
@@ -181,6 +187,11 @@ function registerResource(
         : toAccountName(String(a.accountId));
 
   const allowRaw = r.rawBody ?? false;
+
+  // update/delete/archive target one item of THIS collection and nothing else.
+  const namePattern = ga4ResourceNamePattern(r.parent, r.collection);
+  const nameExample = `"${ga4ResourceNameExample(r.parent, r.collection)}"`;
+  const itemName = (a: Record<string, unknown>): string => requireGa4Identifier(a.name, namePattern, 'name', nameExample);
 
   // ── create ────────────────────────────────────────────────────────────────
   if (r.create) {
@@ -199,9 +210,9 @@ function registerResource(
       async (a: Record<string, unknown>) => {
         try {
           const { dryRun } = checkGa4Guardrails('write', a.confirm as boolean, getGuardrailConfig());
+          const parent = parentPath(a);
           const requestBody = { ...(spec.toBody ? spec.toBody(a) : {}), ...((a.body as object) ?? {}) };
           spec.validate?.(requestBody);
-          const parent = parentPath(a);
           if (dryRun) return textResult(`[DRY RUN] Would create ${r.plural} under ${parent}: ${JSON.stringify(requestBody)}`);
           const fn = bindVerb(sub(), 'create');
           if (!fn) return errorText(`ga4_create_${r.key} failed: create is not supported for ${r.plural}.`);
@@ -226,7 +237,7 @@ function registerResource(
           : `[GA4 WRITE] ${spec.desc} Pass only the fields to change; updateMask is derived from them ` +
             `(override with an explicit updateMask for nested paths). Requires GA4_MCP_ENABLE_WRITES=true and confirm=true.`,
         inputSchema: z.object({
-          name: nameArg(r.plural),
+          name: nameArg(r.plural, r.parent, r.collection),
           ...(spec.fields ?? {}),
           ...(allowRaw ? { body: bodyArg } : {}),
           ...(spec.noUpdateMask
@@ -245,7 +256,7 @@ function registerResource(
           const mask = (spec.noUpdateMask ? undefined : (a.updateMask as string | undefined)?.trim()) || deriveUpdateMask(requestBody);
           if (!mask) return errorText(`ga4_update_${r.key} failed: nothing to update - supply at least one field or updateMask.`);
           const updateMask = spec.noUpdateMask ? undefined : mask;
-          const name = String(a.name).trim();
+          const name = itemName(a);
           if (dryRun)
             return textResult(
               `[DRY RUN] Would patch ${name} ${updateMask ? `(mask ${updateMask})` : '(full replace, no updateMask)'}: ${JSON.stringify(requestBody)}`
@@ -267,12 +278,12 @@ function registerResource(
       `ga4_delete_${r.key}`,
       {
         description: `[GA4 DELETE] ${r.del.desc} Requires GA4_MCP_ENABLE_DELETES=true and confirm=true.`,
-        inputSchema: z.object({ name: nameArg(r.plural), confirm: z.boolean().describe('Must be true to delete.') }),
+        inputSchema: z.object({ name: nameArg(r.plural, r.parent, r.collection), confirm: z.boolean().describe('Must be true to delete.') }),
       },
       async (a: Record<string, unknown>) => {
         try {
           const { dryRun } = checkGa4Guardrails('delete', a.confirm as boolean, getGuardrailConfig());
-          const name = String(a.name).trim();
+          const name = itemName(a);
           if (dryRun) return textResult(`[DRY RUN] Would delete ${name}`);
           const fn = bindVerb(sub(), 'delete');
           if (!fn) return errorText(`ga4_delete_${r.key} failed: delete is not supported for ${r.plural}.`);
@@ -293,12 +304,12 @@ function registerResource(
         description:
           `[GA4 DELETE] ${r.archive.desc} Archiving is effectively permanent (no un-archive). ` +
           `Requires GA4_MCP_ENABLE_DELETES=true and confirm=true.`,
-        inputSchema: z.object({ name: nameArg(r.plural), confirm: z.boolean().describe('Must be true to archive.') }),
+        inputSchema: z.object({ name: nameArg(r.plural, r.parent, r.collection), confirm: z.boolean().describe('Must be true to archive.') }),
       },
       async (a: Record<string, unknown>) => {
         try {
           const { dryRun } = checkGa4Guardrails('delete', a.confirm as boolean, getGuardrailConfig());
-          const name = String(a.name).trim();
+          const name = itemName(a);
           if (dryRun) return textResult(`[DRY RUN] Would archive ${name}`);
           const fn = bindVerb(sub(), 'archive');
           if (!fn) return errorText(`ga4_archive_${r.key} failed: archive is not supported for ${r.plural}.`);
@@ -323,7 +334,7 @@ function catalog(): ResourceDesc[] {
   return [
     // ── v1beta, property-parented ─────────────────────────────────────────────
     {
-      key: 'key_event', plural: 'key events', version: 'v1beta', parent: 'property',
+      key: 'key_event', plural: 'key events', version: 'v1beta', parent: 'property', collection: 'keyEvents',
       sub: beta((c) => c.properties.keyEvents), rawBody: true,
       create: {
         fields: {
@@ -337,7 +348,7 @@ function catalog(): ResourceDesc[] {
       del: { desc: 'Delete a key event (it reverts to a normal event).' },
     },
     {
-      key: 'custom_dimension', plural: 'custom dimensions', version: 'v1beta', parent: 'property',
+      key: 'custom_dimension', plural: 'custom dimensions', version: 'v1beta', parent: 'property', collection: 'customDimensions',
       sub: beta((c) => c.properties.customDimensions),
       create: {
         fields: {
@@ -354,7 +365,7 @@ function catalog(): ResourceDesc[] {
       archive: { desc: 'Archive a custom dimension (there is no hard delete).' },
     },
     {
-      key: 'custom_metric', plural: 'custom metrics', version: 'v1beta', parent: 'property',
+      key: 'custom_metric', plural: 'custom metrics', version: 'v1beta', parent: 'property', collection: 'customMetrics',
       sub: beta((c) => c.properties.customMetrics),
       create: {
         fields: {
@@ -372,7 +383,7 @@ function catalog(): ResourceDesc[] {
       archive: { desc: 'Archive a custom metric (there is no hard delete).' },
     },
     {
-      key: 'data_stream', plural: 'data streams', version: 'v1beta', parent: 'property',
+      key: 'data_stream', plural: 'data streams', version: 'v1beta', parent: 'property', collection: 'dataStreams',
       sub: beta((c) => c.properties.dataStreams), rawBody: true,
       create: {
         fields: {
@@ -404,7 +415,7 @@ function catalog(): ResourceDesc[] {
       del: { desc: 'Delete a data stream (removes its measurement ID / firebase app id).' },
     },
     {
-      key: 'google_ads_link', plural: 'Google Ads links', version: 'v1beta', parent: 'property',
+      key: 'google_ads_link', plural: 'Google Ads links', version: 'v1beta', parent: 'property', collection: 'googleAdsLinks',
       sub: beta((c) => c.properties.googleAdsLinks),
       create: {
         fields: {
@@ -418,7 +429,7 @@ function catalog(): ResourceDesc[] {
       del: { desc: 'Delete a Google Ads link.' },
     },
     {
-      key: 'firebase_link', plural: 'Firebase links', version: 'v1beta', parent: 'property',
+      key: 'firebase_link', plural: 'Firebase links', version: 'v1beta', parent: 'property', collection: 'firebaseLinks',
       sub: beta((c) => c.properties.firebaseLinks),
       create: { fields: { project: z.string().min(1).describe('Firebase project id or number ("projects/{id}").') }, toBody: (a) => ({ project: a.project }), desc: 'Create a Firebase link (no update; delete + recreate to change).' },
       del: { desc: 'Delete a Firebase link.' },
@@ -426,7 +437,7 @@ function catalog(): ResourceDesc[] {
 
     // ── v1beta, dataStream-parented ──────────────────────────────────────────
     {
-      key: 'measurement_protocol_secret', plural: 'Measurement Protocol secrets', version: 'v1beta', parent: 'dataStream',
+      key: 'measurement_protocol_secret', plural: 'Measurement Protocol secrets', version: 'v1beta', parent: 'dataStream', collection: 'measurementProtocolSecrets',
       sub: beta((c) => c.properties.dataStreams.measurementProtocolSecrets),
       create: { fields: { displayName: z.string().min(1).describe('Human-readable name for the secret.') }, toBody: (a) => ({ displayName: a.displayName }), desc: 'Create a Measurement Protocol secret on a data stream. The response includes the secretValue — store it securely.' },
       update: { fields: { displayName: z.string().min(1) }, toBody: (a) => ({ displayName: a.displayName }), desc: 'Rename a Measurement Protocol secret.' },
@@ -435,25 +446,28 @@ function catalog(): ResourceDesc[] {
 
     // ── v1alpha, property-parented (raw body for complex shapes) ──────────────
     {
-      key: 'audience', plural: 'audiences', version: 'v1alpha', parent: 'property',
+      key: 'audience', plural: 'audiences', version: 'v1alpha', parent: 'property', collection: 'audiences',
       sub: alpha((c) => c.properties.audiences), rawBody: true,
       create: { fields: { displayName: z.string().optional(), description: z.string().optional(), membershipDurationDays: z.number().optional() }, toBody: (a) => ({ ...(a.displayName !== undefined ? { displayName: a.displayName } : {}), ...(a.description !== undefined ? { description: a.description } : {}), ...(a.membershipDurationDays !== undefined ? { membershipDurationDays: a.membershipDurationDays } : {}) }), desc: 'Create an audience. Pass the filterClauses via `body` (see the Admin API Audience shape).' },
       update: { fields: { displayName: z.string().optional(), description: z.string().optional() }, toBody: (a) => ({ ...(a.displayName !== undefined ? { displayName: a.displayName } : {}), ...(a.description !== undefined ? { description: a.description } : {}) }), desc: 'Update an audience (only displayName/description are mutable; filters are immutable).' },
       archive: { desc: 'Archive an audience (stops collection; effectively permanent).' },
     },
     {
-      key: 'channel_group', plural: 'channel groups', version: 'v1alpha', parent: 'property',
+      key: 'channel_group', plural: 'channel groups', version: 'v1alpha', parent: 'property', collection: 'channelGroups',
       sub: alpha((c) => c.properties.channelGroups), rawBody: true,
       create: { fields: { displayName: z.string().optional(), description: z.string().optional() }, toBody: (a) => ({ ...(a.displayName !== undefined ? { displayName: a.displayName } : {}), ...(a.description !== undefined ? { description: a.description } : {}) }), desc: 'Create a custom channel group. Pass groupingRule[] via `body`.' },
       update: { desc: 'Update a custom channel group (supply groupingRule/displayName via body).' },
       del: { desc: 'Delete a custom channel group.' },
     },
     {
-      key: 'calculated_metric', plural: 'calculated metrics', version: 'v1alpha', parent: 'property',
+      key: 'calculated_metric', plural: 'calculated metrics', version: 'v1alpha', parent: 'property', collection: 'calculatedMetrics',
       sub: alpha((c) => c.properties.calculatedMetrics), rawBody: true,
       create: {
         fields: {
-          calculatedMetricId: z.string().min(1).describe('The user-chosen id for the calculated metric (used in reporting).'),
+          calculatedMetricId: z
+            .string()
+            .regex(/^[A-Za-z0-9_]{1,80}$/, 'must be 1-80 letters, digits or "_"')
+            .describe('The user-chosen id for the calculated metric (used in reporting): 1-80 letters, digits or "_".'),
           displayName: z.string().optional(),
           metricUnit: z.string().optional(),
           formula: z.string().optional().describe('The calculation formula, e.g. "{{purchase_revenue}} / {{sessions}}".'),
@@ -466,41 +480,41 @@ function catalog(): ResourceDesc[] {
       del: { desc: 'Delete a calculated metric.' },
     },
     {
-      key: 'expanded_data_set', plural: 'expanded data sets', version: 'v1alpha', parent: 'property',
+      key: 'expanded_data_set', plural: 'expanded data sets', version: 'v1alpha', parent: 'property', collection: 'expandedDataSets',
       sub: alpha((c) => c.properties.expandedDataSets), rawBody: true,
       create: { fields: { displayName: z.string().optional(), description: z.string().optional() }, toBody: (a) => ({ ...(a.displayName !== undefined ? { displayName: a.displayName } : {}), ...(a.description !== undefined ? { description: a.description } : {}) }), desc: 'Create an expanded data set (GA4 360 only). Pass dimensionNames/metricNames/dimensionFilterExpression via `body`.' },
       update: { desc: 'Update an expanded data set (360). Supply fields via body.' },
       del: { desc: 'Delete an expanded data set (360).' },
     },
     {
-      key: 'display_video_360_advertiser_link', plural: 'Display & Video 360 advertiser links', version: 'v1alpha', parent: 'property',
+      key: 'display_video_360_advertiser_link', plural: 'Display & Video 360 advertiser links', version: 'v1alpha', parent: 'property', collection: 'displayVideo360AdvertiserLinks',
       sub: alpha((c) => c.properties.displayVideo360AdvertiserLinks), rawBody: true,
       create: { fields: { advertiserId: z.string().optional().describe('DV360 advertiser id.') }, toBody: (a) => (a.advertiserId !== undefined ? { advertiserId: a.advertiserId } : {}), desc: 'Create a Display & Video 360 advertiser link.' },
       update: { desc: 'Update a DV360 advertiser link (ads personalization / campaign data sharing via body).' },
       del: { desc: 'Delete a DV360 advertiser link.' },
     },
     {
-      key: 'search_ads_360_link', plural: 'Search Ads 360 links', version: 'v1alpha', parent: 'property',
+      key: 'search_ads_360_link', plural: 'Search Ads 360 links', version: 'v1alpha', parent: 'property', collection: 'searchAds360Links',
       sub: alpha((c) => c.properties.searchAds360Links), rawBody: true,
       create: { fields: { advertiserId: z.string().optional() }, toBody: (a) => (a.advertiserId !== undefined ? { advertiserId: a.advertiserId } : {}), desc: 'Create a Search Ads 360 link.' },
       update: { desc: 'Update a Search Ads 360 link (data-sharing flags via body).' },
       del: { desc: 'Delete a Search Ads 360 link.' },
     },
     {
-      key: 'adsense_link', plural: 'AdSense links', version: 'v1alpha', parent: 'property',
+      key: 'adsense_link', plural: 'AdSense links', version: 'v1alpha', parent: 'property', collection: 'adSenseLinks',
       sub: alpha((c) => c.properties.adSenseLinks), rawBody: true,
       create: { fields: { adClientCode: z.string().optional().describe('AdSense ad client code, e.g. "ca-pub-…".') }, toBody: (a) => (a.adClientCode !== undefined ? { adClientCode: a.adClientCode } : {}), desc: 'Create an AdSense link (no update).' },
       del: { desc: 'Delete an AdSense link.' },
     },
     {
-      key: 'subproperty_event_filter', plural: 'subproperty event filters', version: 'v1alpha', parent: 'property',
+      key: 'subproperty_event_filter', plural: 'subproperty event filters', version: 'v1alpha', parent: 'property', collection: 'subpropertyEventFilters',
       sub: alpha((c) => c.properties.subpropertyEventFilters), rawBody: true,
       create: { desc: 'Create a subproperty event filter (GA4 360). Supply applyToProperty + filterClauses via `body`.' },
       update: { desc: 'Update a subproperty event filter (360).' },
       del: { desc: 'Delete a subproperty event filter (360).' },
     },
     {
-      key: 'rollup_property_source_link', plural: 'rollup property source links', version: 'v1alpha', parent: 'property',
+      key: 'rollup_property_source_link', plural: 'rollup property source links', version: 'v1alpha', parent: 'property', collection: 'rollupPropertySourceLinks',
       sub: alpha((c) => c.properties.rollupPropertySourceLinks), rawBody: true,
       create: { fields: { sourceProperty: z.string().optional().describe('Source property resource name to include in the rollup.') }, toBody: (a) => (a.sourceProperty !== undefined ? { sourceProperty: a.sourceProperty } : {}), desc: 'Add a source property to a rollup property (GA4 360, no update).' },
       del: { desc: 'Remove a source property from a rollup (360).' },
@@ -508,14 +522,14 @@ function catalog(): ResourceDesc[] {
 
     // ── v1alpha, dataStream-parented ─────────────────────────────────────────
     {
-      key: 'event_create_rule', plural: 'event create rules', version: 'v1alpha', parent: 'dataStream',
+      key: 'event_create_rule', plural: 'event create rules', version: 'v1alpha', parent: 'dataStream', collection: 'eventCreateRules',
       sub: alpha((c) => c.properties.dataStreams.eventCreateRules), rawBody: true,
       create: { fields: { destinationEvent: z.string().optional().describe('Name of the new event this rule creates.') }, toBody: (a) => (a.destinationEvent !== undefined ? { destinationEvent: a.destinationEvent } : {}), desc: 'Create an event-create rule on a data stream (server-side event creation). Supply eventConditions/parameterMutations via `body`.' },
       update: { desc: 'Update an event-create rule (conditions/mutations via body).' },
       del: { desc: 'Delete an event-create rule.' },
     },
     {
-      key: 'skadnetwork_conversion_value_schema', plural: 'SKAdNetwork conversion value schemas', version: 'v1alpha', parent: 'dataStream',
+      key: 'skadnetwork_conversion_value_schema', plural: 'SKAdNetwork conversion value schemas', version: 'v1alpha', parent: 'dataStream', collection: 'sKAdNetworkConversionValueSchema',
       sub: alpha((c) => c.properties.dataStreams.sKAdNetworkConversionValueSchema), rawBody: true,
       create: { desc: 'Create the SKAdNetwork conversion value schema on an iOS data stream. Supply postbackWindow settings via `body`.' },
       update: { desc: 'Update the SKAdNetwork conversion value schema.' },
@@ -524,7 +538,7 @@ function catalog(): ResourceDesc[] {
 
     // ── v1alpha, access bindings (user permissions) ──────────────────────────
     {
-      key: 'property_access_binding', plural: 'property access bindings', version: 'v1alpha', parent: 'property',
+      key: 'property_access_binding', plural: 'property access bindings', version: 'v1alpha', parent: 'property', collection: 'accessBindings',
       sub: alpha((c) => c.properties.accessBindings),
       create: {
         fields: {
@@ -538,7 +552,7 @@ function catalog(): ResourceDesc[] {
       del: { desc: "Revoke a user's access to a property (needs analytics.manage.users)." },
     },
     {
-      key: 'account_access_binding', plural: 'account access bindings', version: 'v1alpha', parent: 'account',
+      key: 'account_access_binding', plural: 'account access bindings', version: 'v1alpha', parent: 'account', collection: 'accessBindings',
       sub: alpha((c) => c.accounts.accessBindings),
       create: { fields: { user: z.string().min(1), roles: z.array(z.string()).min(1) }, toBody: (a) => ({ user: a.user, roles: a.roles }), desc: 'Grant a user access to a GA4 account (needs analytics.manage.users).' },
       update: { fields: { roles: z.array(z.string()).min(1) }, toBody: (a) => ({ roles: a.roles }), noUpdateMask: true, desc: "Change a user's roles on an account (needs analytics.manage.users). The roles you pass replace the binding's roles." },
@@ -563,7 +577,7 @@ export function registerGa4AdminWriteTools(
       description:
         '[GA4 WRITE] Create a new GA4 property under an account. Requires GA4_MCP_ENABLE_WRITES=true and confirm=true.',
       inputSchema: z.object({
-        accountId: z.string().min(1).describe('Parent account ID ("123456" or "accounts/123456").'),
+        accountId: ga4AccountId.describe('Parent account ID ("123456" or "accounts/123456").'),
         displayName: z.string().min(1),
         timeZone: z.string().min(1).describe('IANA time zone, e.g. "America/New_York".'),
         currencyCode: z.string().min(1).describe('ISO 4217 currency, e.g. "USD".'),
@@ -720,7 +734,7 @@ export function registerGa4AdminWriteTools(
       }
     );
   };
-  const streamFields: z.ZodRawShape = { property: propertyArg, dataStreamId: z.string().min(1).describe('Data stream ID (numeric) or "dataStreams/{id}".') };
+  const streamFields: z.ZodRawShape = { property: propertyArg, dataStreamId: dataStreamArg };
   singleton(
     'ga4_update_enhanced_measurement',
     "Update a WEB data stream's Enhanced Measurement: master streamEnabled plus per-signal toggles (scrolls, outbound clicks, site search + query params, video engagement, file downloads, form interactions, SPA page changes).",
@@ -782,7 +796,7 @@ export function registerGa4AdminWriteTools(
     'ga4_update_account',
     {
       description: '[GA4 WRITE] Update a GA4 account (displayName). Requires GA4_MCP_ENABLE_WRITES=true and confirm=true.',
-      inputSchema: z.object({ accountId: z.string().min(1), displayName: z.string().min(1), confirm: z.boolean() }),
+      inputSchema: z.object({ accountId: ga4AccountId, displayName: z.string().min(1), confirm: z.boolean() }),
     },
     async ({ accountId, displayName, confirm }) => {
       try {
@@ -802,7 +816,7 @@ export function registerGa4AdminWriteTools(
       description:
         '[GA4 DELETE] Soft-delete (trash) an entire GA4 account and all its properties. High blast radius — recoverable from the trash for a limited time. ' +
         'Requires GA4_MCP_ENABLE_DELETES=true and confirm=true.',
-      inputSchema: z.object({ accountId: z.string().min(1), confirm: z.boolean() }),
+      inputSchema: z.object({ accountId: ga4AccountId, confirm: z.boolean() }),
     },
     async ({ accountId, confirm }) => {
       try {

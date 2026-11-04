@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { once } from 'node:events';
 import type { AddressInfo } from 'node:net';
+import { gzipSync } from 'node:zlib';
 import express from 'express';
 import { ApprovalBroker, ApprovalError, summarizeWrite } from '../approvals.js';
 import { onClientGone } from '../sse.js';
@@ -241,6 +242,118 @@ await test('a client that leaves mid-stream is noticed, so its turn can be stopp
 
 await test('a response that simply finished is not mistaken for a client leaving', async () => {
   assert.equal(await serveOnce(false), 0);
+});
+
+/**
+ * The chat route awaits a session and the attachments before it can subscribe. The client leaves
+ * during that await, so its 'close' has already been emitted (once, never again) by the time
+ * onClientGone is called. Reports how many times it fired.
+ */
+async function serveAfterClientLeft(): Promise<number> {
+  const app = express();
+  app.use(express.json());
+  let gone = 0;
+  let started!: () => void;
+  const handlerStarted = new Promise<void>((r) => (started = r));
+  let finished!: () => void;
+  const handled = new Promise<void>((r) => (finished = r));
+  app.post('/chat', async (_req, res) => {
+    started();
+    // Stands in for pool.acquire / extractAll: the client is destroyed while this is pending.
+    await new Promise((r) => setTimeout(r, 150));
+    onClientGone(res, () => gone++);
+    // Long enough for a microtask or a late 'close' to land, and to catch a second firing.
+    await new Promise((r) => setTimeout(r, 50));
+    finished();
+  });
+  const server = app.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const { port } = server.address() as AddressInfo;
+  const client = http.request({
+    host: '127.0.0.1',
+    port,
+    method: 'POST',
+    path: '/chat',
+    headers: { 'content-type': 'application/json' },
+  });
+  client.on('error', () => {});
+  client.end(JSON.stringify({ messages: [] }));
+  await handlerStarted;
+  client.destroy();
+  await handled;
+  server.closeAllConnections();
+  server.close();
+  return gone;
+}
+
+await test('a client that left before the handler subscribed is still noticed, exactly once', async () => {
+  // The chat route used to subscribe only after pool.acquire, extractAll and beginConversation. A
+  // Stop pressed during those seconds was never seen, so the turn ran to the end and applied its
+  // writes for a client that had already gone.
+  assert.equal(await serveAfterClientLeft(), 1);
+});
+
+/**
+ * Sends a valid gzip frame, a 0x00 byte and 100 KiB of trailing bytes to the body parser the chat
+ * service mounts globally (index.ts: express.json({ limit: '28mb' }), ahead of every route and of
+ * authentication), then reports any uncaught exception raised within 200 ms of the response.
+ */
+async function trailingBytesAfterGzip(): Promise<{ status: number; uncaught: string[] }> {
+  const app = express();
+  app.use(express.json({ limit: '28mb' }));
+  // Stands in for every route answering without a valid bearer token.
+  app.post('/v1/chat', (_req, res) => res.status(401).json({ error: 'unauthorized' }));
+  const uncaught: string[] = [];
+  const onUncaught = (e: Error): void => {
+    uncaught.push(String(e));
+  };
+  process.on('uncaughtException', onUncaught);
+  const server = app.listen(0, '127.0.0.1');
+  try {
+    await once(server, 'listening');
+    const { port } = server.address() as AddressInfo;
+    const body = Buffer.concat([
+      gzipSync(Buffer.from(JSON.stringify({ messages: [] }))),
+      Buffer.from([0x00]),
+      Buffer.alloc(100 * 1024, 0x58),
+    ]);
+    const status = await new Promise<number>((resolve, reject) => {
+      const client = http.request(
+        {
+          host: '127.0.0.1',
+          port,
+          method: 'POST',
+          path: '/v1/chat',
+          headers: {
+            'content-type': 'application/json',
+            'content-encoding': 'gzip',
+            'content-length': String(body.length),
+          },
+        },
+        (res) => {
+          res.resume();
+          res.on('end', () => resolve(res.statusCode ?? 0));
+        },
+      );
+      client.on('error', reject);
+      client.end(body);
+    });
+    await new Promise((r) => setTimeout(r, 200));
+    return { status, uncaught };
+  } finally {
+    process.off('uncaughtException', onUncaught);
+    server.closeAllConnections();
+    server.close();
+  }
+}
+
+await test('trailing bytes after a gzip body cannot crash the service (GHSA-27r3-jxmh-p828)', async () => {
+  // body-parser 1.20.8 left the gunzip stream piped from the request with no error listener once the
+  // JSON was read, so the trailing bytes reached the finished decoder and threw an uncaught
+  // Z_DATA_ERROR after the 401 went out: one unauthenticated request took the process down.
+  const { status, uncaught } = await trailingBytesAfterGzip();
+  assert.deepEqual(uncaught, []);
+  assert.equal(status, 401);
 });
 
 console.log('typed confirmation for deletes');

@@ -23,7 +23,8 @@ export interface Ga4CollectEvent {
 }
 
 // 'ad' is the catch-all for other ad-tech beacon endpoints (Google Ads/DoubleClick, Pinterest, Snap,
-// LinkedIn, Reddit, Bing, X) — captured + ABORTED like any collector so a synthetic event never
+// LinkedIn, Reddit, Bing, X and its t.co twin, Quora, Taboola, Outbrain, Yahoo, Criteo, Amazon) —
+// captured + ABORTED like any collector so a synthetic event never
 // delivers a real conversion to them, but not attributed to a GA4 funnel destination.
 export type Collector = 'ga4' | 'meta' | 'tiktok' | 'server' | 'ad';
 
@@ -116,11 +117,15 @@ export function classifyCollector(url: string, serverHost?: string | null): Coll
   // a synthetic 'purchase' must never deliver a real conversion to any of them. Not attributed to a
   // GA4 funnel destination; captured as 'ad' so the caller can see they fired.
   const AD_HOSTS = [
-    'doubleclick.net', 'googleadservices.com', 'ct.pinterest.com', 'tr.snapchat.com',
+    'doubleclick.net', 'googleadservices.com', 'ct.pinterest.com', 'tr.snapchat.com', 'tr-shadow.snapchat.com',
     'px.ads.linkedin.com', 'dc.ads.linkedin.com', 'alb.reddit.com', 'bat.bing.com',
-    'analytics.twitter.com', 'ads-api.twitter.com',
+    'analytics.twitter.com', 'ads-api.twitter.com', 'q.quora.com', 'trc.taboola.com', 'tr.outbrain.com',
+    'ads.yahoo.com', 'sp.analytics.yahoo.com', 'sslwidget.criteo.com', 's.amazon-adsystem.com',
   ];
   if (AD_HOSTS.some((h) => host === h || host.endsWith(`.${h}`))) return 'ad';
+  // The X pixel sends every event TWICE: to analytics.twitter.com AND to t.co/1/i/adsct. Path-scoped,
+  // so an ordinary t.co share link is never treated as a beacon.
+  if (host === 't.co' && /\/i\/adsct/.test(path)) return 'ad';
   // Google Ads conversion / remarketing pixels served off google.<tld>.
   if ((host === 'google.com' || /(^|\.)google\.[a-z.]+$/.test(host)) && (path.startsWith('/pagead') || path.startsWith('/ccm/collect') || path.startsWith('/ads'))) {
     return 'ad';
@@ -153,13 +158,15 @@ export function beaconPlatform(url: string): string {
     [/(^|\.)reddit\.com$/, 'reddit'],
     [/(^|\.)snapchat\.com$/, 'snapchat'],
     [/(^|\.)bing\.com$/, 'bing'],
-    [/(^|\.)(twitter|x)\.com$/, 'twitter'],
+    [/(^|\.)(twitter|x)\.com$|^t\.co$/, 'twitter'],
     [/(^|\.)hotjar\.com$/, 'hotjar'],
     [/(^|\.)clarity\.ms$/, 'clarity'],
     [/(^|\.)(doubleclick\.net|googleadservices\.com)$/, 'google_ads'],
   ];
   for (const [re, name] of named) if (re.test(host)) return name;
-  if (c === 'ad') return 'google_ads'; // the remaining google.<tld>/pagead conversion pixels
+  // The remaining google.<tld>/pagead conversion pixels. Host-checked: any other aborted ad beacon
+  // (Quora, Taboola, Outbrain, ...) must stay visible as itself, never be credited to a Google Ads tag.
+  if (c === 'ad' && (host === 'google.com' || /(^|\.)google\.[a-z.]+$/.test(host))) return 'google_ads';
   return `other:${host}`;
 }
 

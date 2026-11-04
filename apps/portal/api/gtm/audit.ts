@@ -37,14 +37,26 @@ import type { EvidenceItem as AccuracyEvidenceItem } from "../../shared/audit-ac
  * - When uncertain, mark `needsManualReview: true` instead of guessing.
  */
 
-const COOKIE_VERSION = "v1";
+// Session cookie `v1e`: AES-256-GCM sealed tokens + absolute lifetime. Must
+// stay byte-compatible with server/gtm/session-cookie.ts and the other api/**
+// copies (keep them in lockstep). Sealed, not just signed, so a leaked cookie
+// does not expose the Google tokens; `iat` (sign-in time) caps a session at
+// SESSION_MAX_AGE_MS on the server however often the access token refreshes.
+// Signed-only `v1` session cookies are rejected (those users sign in again).
+const SESSION_COOKIE_VERSION = "v1e";
+const SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+const SESSION_CLOCK_SKEW_MS = 5 * 60 * 1000;
 const SESSION_COOKIE = "samarth_portal_sid";
 
 interface SessionTokensShape {
   accessToken: string;
   refreshToken?: string;
   expiresAt: number;
+  /** Sign-in time (ms epoch); bounds the session to SESSION_MAX_AGE_MS. */
+  iat?: number;
   email?: string;
+  userName?: string;
+  picture?: string;
   scopes?: string[];
 }
 
@@ -411,6 +423,8 @@ interface AuditState {
   publishedVersion: GtmVersion | null;
   clients: GtmClient[];
   toolFailures: AuditToolFailure[];
+  /** Workspace lists cut short at the paging cap (e.g. "triggers"). */
+  incompleteLists?: string[];
 }
 
 interface WorkspaceContents {
@@ -554,6 +568,8 @@ interface Ctx {
   triggerIdSet: Set<string>;
   triggerById: Map<string, GtmTrigger>;
   builtInTypes: Set<string>;
+  /** Lists only partially read; rules that need the full list skip. */
+  incompleteLists: Set<string>;
   textBlob: string;
   ga4: Ga4AdminState | null;
   runtime: RuntimeState | null;
@@ -597,6 +613,7 @@ function buildCtx(
     triggerIdSet,
     triggerById,
     builtInTypes,
+    incompleteLists: new Set(state.incompleteLists ?? []),
     textBlob: collectTextBlob(state.contents),
     ga4,
     runtime,
@@ -639,6 +656,19 @@ function isGA4Config(tag: GtmTag): boolean {
 function isGA4Event(tag: GtmTag): boolean {
   return tag.type === "gaawe";
 }
+/** The ID a Google tag (googtag) points at: tagId, or measurementId on older exports. */
+function googtagId(tag: GtmTag): string {
+  return tagParam(tag, "tagId") ?? tagParam(tag, "measurementId") ?? "";
+}
+/**
+ * A Google tag (googtag) is a GA4 tag only when its ID is a G- measurement ID
+ * (or a variable). AW- (Google Ads), DC- (Floodlight) and GT- (generic Google
+ * tag) IDs are Google tag IDs, not GA4 measurement IDs, so they must not be
+ * shape-checked, counted, or reconciled as GA4. Mirrors src/tools/audit.ts.
+ */
+function isNonGa4GoogleTag(tag: GtmTag): boolean {
+  return tag.type === "googtag" && /^(AW|DC|GT)-/i.test(googtagId(tag));
+}
 function isMarketingOrAnalyticsTag(tag: GtmTag): boolean {
   const t = (tag.type ?? "").toLowerCase();
   if (!t) return false;
@@ -665,6 +695,15 @@ function isMarketingOrAnalyticsTag(tag: GtmTag): boolean {
 }
 
 const ALL_PAGES_TRIGGER_TYPE = "pageview";
+
+// GTM's reserved built-in triggers (All Pages = 2147479553, Consent
+// Initialization = 2147479572, Initialization = 2147479573, ...) live in the
+// 2147479xxx band and are never returned by triggers.list, so a "does this
+// trigger exist?" check against the listed triggers alone would call every tag
+// on All Pages a broken reference. Mirrors src/utils/builtinTriggers.ts
+// (inlined: api/** may only import node:* at the top level).
+const BUILTIN_ALL_PAGES_TRIGGER_ID = "2147479553";
+const isBuiltinTriggerId = (id: string): boolean => /^2147479\d{3}$/.test(id);
 
 // ── Rules ────────────────────────────────────────────────────────────────
 
@@ -698,6 +737,8 @@ function ruleTagsNoFiringTriggers(ctx: Ctx, out: AuditFinding[]) {
 }
 
 function ruleUnusedTriggers(ctx: Ctx, out: AuditFinding[]) {
+  // References from an unread page would be missed: never report on a partial list.
+  if (ctx.incompleteLists.has("tags") || ctx.incompleteLists.has("variables")) return;
   const used = new Set<string>();
   for (const tag of ctx.tags) {
     for (const tid of [
@@ -735,6 +776,8 @@ function ruleUnusedTriggers(ctx: Ctx, out: AuditFinding[]) {
 }
 
 function ruleUnusedVariables(ctx: Ctx, out: AuditFinding[]) {
+  // References from an unread page would be missed: never report on a partial list.
+  if (["tags", "triggers", "variables"].some((l) => ctx.incompleteLists.has(l))) return;
   const namesUsed = new Set<string>();
   const collect = (s?: string) => {
     if (!s) return;
@@ -810,10 +853,12 @@ function rulePausedTags(ctx: Ctx, out: AuditFinding[]) {
 }
 
 function ruleBrokenReferences(ctx: Ctx, out: AuditFinding[]) {
+  // A trigger on an unread page would look missing: never report on a partial list.
+  if (ctx.incompleteLists.has("triggers")) return;
   for (const tag of ctx.tags) {
     const name = tag.name ?? "Unnamed tag";
     for (const tid of tag.firingTriggerId ?? []) {
-      if (!ctx.triggerIdSet.has(tid)) {
+      if (!ctx.triggerIdSet.has(tid) && !isBuiltinTriggerId(tid)) {
         pushFinding(out, {
           id: fid(`broken-fire:${tag.tagId}:${tid}`),
           category: "dead_config",
@@ -831,7 +876,7 @@ function ruleBrokenReferences(ctx: Ctx, out: AuditFinding[]) {
       }
     }
     for (const tid of tag.blockingTriggerId ?? []) {
-      if (!ctx.triggerIdSet.has(tid)) {
+      if (!ctx.triggerIdSet.has(tid) && !isBuiltinTriggerId(tid)) {
         pushFinding(out, {
           id: fid(`broken-block:${tag.tagId}:${tid}`),
           category: "dead_config",
@@ -853,8 +898,8 @@ function ruleBrokenReferences(ctx: Ctx, out: AuditFinding[]) {
 
 // B. GA4 integrity
 function ruleGA4ConfigCount(ctx: Ctx, out: AuditFinding[]) {
-  const configTags = ctx.tags.filter(isGA4Config);
-  if (configTags.length === 0) {
+  const googleTags = ctx.tags.filter(isGA4Config);
+  if (googleTags.length === 0) {
     // Only emit if any GA4 event tag exists — otherwise this is not a GA4
     // container and the finding would be a false positive.
     if (ctx.tags.some(isGA4Event)) {
@@ -876,6 +921,9 @@ function ruleGA4ConfigCount(ctx: Ctx, out: AuditFinding[]) {
     }
     return;
   }
+  // An AW-/DC-/GT- Google tag is not a GA4 config tag: the common GA4 + Google
+  // Ads pairing is two Google tags but only one GA4 base tag.
+  const configTags = googleTags.filter((t) => !isNonGa4GoogleTag(t));
   if (configTags.length > 1) {
     pushFinding(out, {
       id: fid(`ga4-config-count:${configTags.length}`),
@@ -900,6 +948,8 @@ function ruleGA4MeasurementIdsConsistent(ctx: Ctx, out: AuditFinding[]) {
   const offenders: string[] = [];
   for (const tag of ctx.tags) {
     if (!isGA4Config(tag) && !isGA4Event(tag)) continue;
+    // AW-/DC-/GT- Google tags are not GA4 tags: never shape-check them.
+    if (isNonGa4GoogleTag(tag)) continue;
     const id =
       tagParam(tag, "tagId") ??
       tagParam(tag, "measurementId") ??
@@ -1004,10 +1054,11 @@ function ruleGA4AllPages(ctx: Ctx, out: AuditFinding[]) {
   for (const tag of ctx.tags) {
     if (!isGA4Event(tag)) continue;
     const name = tag.name ?? "GA4 event";
-    const usesAllPages = (tag.firingTriggerId ?? []).some((tid) => {
-      const trig = ctx.triggerById.get(tid);
-      return trig?.type === ALL_PAGES_TRIGGER_TYPE;
-    });
+    const usesAllPages = (tag.firingTriggerId ?? []).some(
+      (tid) =>
+        tid === BUILTIN_ALL_PAGES_TRIGGER_ID ||
+        ctx.triggerById.get(tid)?.type === ALL_PAGES_TRIGGER_TYPE,
+    );
     if (usesAllPages) {
       pushFinding(out, {
         id: fid(`ga4-event-allpages:${tag.tagId}`),
@@ -1446,7 +1497,12 @@ function ruleConversionLinker(ctx: Ctx, out: AuditFinding[]) {
 // No runtime claims are made — this reconciles configuration intent against
 // the GA4 property's registered settings.
 
-/** Collect distinct GA4 measurement IDs (G-/GT-) referenced in GTM config. */
+/**
+ * Collect distinct GA4 measurement IDs (G- only) referenced in GTM config. GT-
+ * (and AW-/DC-) IDs are Google tag IDs, not measurement IDs: they can never
+ * equal a data stream's G- measurementId, so reconciling them would always
+ * report a false mismatch.
+ */
 function gtmGa4MeasurementIds(ctx: Ctx): Set<string> {
   const ids = new Set<string>();
   for (const tag of ctx.tags) {
@@ -1456,7 +1512,7 @@ function gtmGa4MeasurementIds(ctx: Ctx): Set<string> {
       tagParam(tag, "measurementId") ??
       tagParam(tag, "measurementIdOverride");
     if (!id) continue;
-    if (/^G-/i.test(id) || /^GT-/i.test(id)) ids.add(id.toUpperCase());
+    if (/^G-/i.test(id)) ids.add(id.toUpperCase());
   }
   return ids;
 }
@@ -1643,7 +1699,8 @@ function ruleCrossEnhancedMeasurement(ctx: Ctx, out: AuditFinding[]) {
   // send_page_view=false, or GA4 event tags sending event_name=page_view.
   let manualPageView = false;
   for (const tag of ctx.tags) {
-    if (isGA4Config(tag)) {
+    // An AW-/DC-/GT- Google tag's send_page_view says nothing about GA4.
+    if (isGA4Config(tag) && !isNonGa4GoogleTag(tag)) {
       const sendPv = tagParam(tag, "sendPageView") ?? tagParam(tag, "send_page_view");
       if (sendPv && /false/i.test(sendPv)) manualPageView = true;
     }
@@ -1886,6 +1943,8 @@ function ruleSgtmTransportMatch(ctx: Ctx, out: AuditFinding[]) {
     .filter(Boolean);
   for (const tag of ctx.tags) {
     if (!isGA4Config(tag) && !isGA4Event(tag)) continue;
+    // AW-/DC-/GT- Google tags are not GA4 tags (see isNonGa4GoogleTag).
+    if (isNonGa4GoogleTag(tag)) continue;
     const transport = tagTransportUrl(tag);
     if (!transport || transport.includes("{{")) continue;
     let host = "";
@@ -1927,9 +1986,13 @@ function ruleSgtmGa4ClientPresence(ctx: Ctx, out: AuditFinding[]) {
   const hasGa4Client = sg.clientTypes.some((t) =>
     /gaaw|ga4|google/i.test(t),
   );
-  // Does the web container route GA4 to a server? (any transport_url present)
+  // Does the web container route GA4 to a server? (any transport_url present
+  // on a GA4 tag; an AW-/DC-/GT- Google tag's transport_url is not GA4 traffic)
   const webRoutesToServer = ctx.tags.some(
-    (t) => (isGA4Config(t) || isGA4Event(t)) && Boolean(tagTransportUrl(t)),
+    (t) =>
+      (isGA4Config(t) || isGA4Event(t)) &&
+      !isNonGa4GoogleTag(t) &&
+      Boolean(tagTransportUrl(t)),
   );
   if (webRoutesToServer && !hasGa4Client) {
     pushFinding(out, {
@@ -2285,8 +2348,10 @@ async function runAudit(
 ): Promise<AuditSummary> {
   // Lazy, post-auth load of the accuracy normalizer every rule's pushFinding()
   // uses. An import failure throws into the handler's catch → JSON error.
+  // Relative specifiers need ".js": Vercel ships each .ts as a separate ES
+  // module and plain Node resolves no extensionless relative import.
   if (!accuracyModule) {
-    accuracyModule = await import("../../shared/audit-accuracy");
+    accuracyModule = await import("../../shared/audit-accuracy.js");
   }
   const runtime = opts.runtime ?? null;
   const sgtm = opts.sgtm ?? null;
@@ -2313,7 +2378,7 @@ async function runAudit(
   // recorded as a finding instead of crashing the function.
   let consentResult: ConsentAuditResult | null = null;
   try {
-    const { runConsentAudit } = await import("../../shared/consent-audit");
+    const { runConsentAudit } = await import("../../shared/consent-audit.js");
     consentResult = runConsentAudit(
       toConsentConfigInput(ctx),
       toConsentRuntimeInput(runtime),
@@ -2876,37 +2941,51 @@ async function pullAuditState(
     containerId,
   )}`;
   const toolFailures: AuditToolFailure[] = [];
+  const incompleteLists: string[] = [];
+  const noteTruncated = (resource: string, r: { truncated: boolean }) => {
+    if (!r.truncated) return;
+    incompleteLists.push(resource);
+    toolFailures.push(truncatedListFailure(resource));
+  };
 
   // Workspace contents are required. If they fail, throw — the audit is
-  // meaningless without them.
+  // meaningless without them. Every list follows nextPageToken.
   const [tagsRes, triggersRes, variablesRes, foldersRes, bivRes] =
     await Promise.all([
-      gtmFetch<{ tag?: GtmTag[] }>(token, `${base}/tags`),
-      gtmFetch<{ trigger?: GtmTrigger[] }>(token, `${base}/triggers`),
-      gtmFetch<{ variable?: GtmVariable[] }>(token, `${base}/variables`),
-      gtmFetch<{ folder?: GtmFolder[] }>(token, `${base}/folders`),
-      gtmFetch<{ builtInVariable?: GtmBuiltInVariable[] }>(
+      gtmListAll<GtmTag>(token, `${base}/tags`, "tag"),
+      gtmListAll<GtmTrigger>(token, `${base}/triggers`, "trigger"),
+      gtmListAll<GtmVariable>(token, `${base}/variables`, "variable"),
+      gtmListAll<GtmFolder>(token, `${base}/folders`, "folder"),
+      gtmListAll<GtmBuiltInVariable>(
         token,
         `${base}/built_in_variables`,
+        "builtInVariable",
       ),
     ]);
+  noteTruncated("tags", tagsRes);
+  noteTruncated("triggers", triggersRes);
+  noteTruncated("variables", variablesRes);
+  noteTruncated("folders", foldersRes);
+  noteTruncated("built_in_variables", bivRes);
 
   const contents: WorkspaceContents = {
-    tags: tagsRes.tag ?? [],
-    triggers: triggersRes.trigger ?? [],
-    variables: variablesRes.variable ?? [],
-    folders: foldersRes.folder ?? [],
-    builtInVariables: bivRes.builtInVariable ?? [],
+    tags: tagsRes.items,
+    triggers: triggersRes.items,
+    variables: variablesRes.items,
+    folders: foldersRes.items,
+    builtInVariables: bivRes.items,
     templates: [],
   };
 
   // Best-effort: templates (not always present).
   try {
-    const tplRes = await gtmFetch<{ template?: unknown[] }>(
+    const tplRes = await gtmListAll<unknown>(
       token,
       `${base}/templates`,
+      "template",
     );
-    contents.templates = tplRes.template ?? [];
+    contents.templates = tplRes.items;
+    noteTruncated("templates", tplRes);
   } catch (e) {
     if (e instanceof GtmApiError && e.status !== 404) {
       toolFailures.push({
@@ -2933,11 +3012,13 @@ async function pullAuditState(
   // Workspaces in this container.
   let workspaces: GtmWorkspace[] = [];
   try {
-    const wsRes = await gtmFetch<{ workspace?: GtmWorkspace[] }>(
+    const wsRes = await gtmListAll<GtmWorkspace>(
       token,
       `${containerBase}/workspaces`,
+      "workspace",
     );
-    workspaces = wsRes.workspace ?? [];
+    workspaces = wsRes.items;
+    noteTruncated("workspaces", wsRes);
   } catch (e) {
     toolFailures.push({
       resource: "workspaces",
@@ -2987,11 +3068,9 @@ async function pullAuditState(
   );
   if (isServer) {
     try {
-      const cRes = await gtmFetch<{ client?: GtmClient[] }>(
-        token,
-        `${base}/clients`,
-      );
-      clients = cRes.client ?? [];
+      const cRes = await gtmListAll<GtmClient>(token, `${base}/clients`, "client");
+      clients = cRes.items;
+      noteTruncated("clients", cRes);
     } catch (e) {
       if (e instanceof GtmApiError && e.status !== 404) {
         toolFailures.push({
@@ -3010,6 +3089,7 @@ async function pullAuditState(
     publishedVersion,
     clients,
     toolFailures,
+    incompleteLists,
   };
 }
 
@@ -3230,27 +3310,27 @@ async function pullSgtmContext(
   // container — these endpoints are meaningless (and 404) otherwise.
   if (isServer) {
     try {
-      const cRes = await gtmFetch<{ client?: GtmClient[] }>(
-        token,
-        `${base}/clients`,
-      );
-      for (const c of cRes.client ?? []) {
+      const cRes = await gtmListAll<GtmClient>(token, `${base}/clients`, "client");
+      for (const c of cRes.items) {
         if (c.type) clientTypes.push(c.type);
         if (c.name) clientNames.push(c.name);
       }
+      if (cRes.truncated) failures.push(truncatedListFailure("server_clients"));
       okCount++;
     } catch (e) {
       record("server_clients", e);
     }
 
     try {
-      const tRes = await gtmFetch<{ transformation?: { name?: string }[] }>(
+      const tRes = await gtmListAll<{ name?: string }>(
         token,
         `${base}/transformations`,
+        "transformation",
       );
-      for (const t of tRes.transformation ?? []) {
+      for (const t of tRes.items) {
         if (t.name) transformationNames.push(t.name);
       }
+      if (tRes.truncated) failures.push(truncatedListFailure("server_transformations"));
       okCount++;
     } catch (e) {
       record("server_transformations", e);
@@ -3278,6 +3358,11 @@ async function pullSgtmContext(
 // leaves DATA_API Not Covered — counts are never fabricated.
 const GA4_DATA_V1BETA = "https://analyticsdata.googleapis.com/v1beta";
 const DATA_API_WINDOW_DAYS = 7;
+// runReport returns at most `limit` rows per call plus the total `rowCount`;
+// page with `offset` until every event name is read, so an event beyond the
+// first page is never reported as "zero events".
+const DATA_API_PAGE_LIMIT = 10000;
+const DATA_API_MAX_PAGES = 5;
 
 async function pullDataApiState(
   token: string,
@@ -3291,45 +3376,69 @@ async function pullDataApiState(
   let ok = false;
 
   try {
-    const r = await fetch(
-      `${GA4_DATA_V1BETA}/properties/${encodeURIComponent(numericId)}:runReport`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-          Accept: "application/json",
+    let offset = 0;
+    let complete = false;
+    let failed = false;
+    for (let page = 0; page < DATA_API_MAX_PAGES; page++) {
+      const r = await fetch(
+        `${GA4_DATA_V1BETA}/properties/${encodeURIComponent(numericId)}:runReport`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+          body: JSON.stringify({
+            dimensions: [{ name: "eventName" }],
+            metrics: [{ name: "eventCount" }],
+            dateRanges: [
+              { startDate: `${DATA_API_WINDOW_DAYS}daysAgo`, endDate: "today" },
+            ],
+            limit: DATA_API_PAGE_LIMIT,
+            offset,
+          }),
         },
-        body: JSON.stringify({
-          dimensions: [{ name: "eventName" }],
-          metrics: [{ name: "eventCount" }],
-          dateRanges: [
-            { startDate: `${DATA_API_WINDOW_DAYS}daysAgo`, endDate: "today" },
-          ],
-          limit: 250,
-        }),
-      },
-    );
-    if (!r.ok) {
-      const text = await r.text();
-      failures.push({
-        resource: "ga4_run_report",
-        message: text.slice(0, 300) || `HTTP ${r.status}`,
-        status: r.status,
-      });
-    } else {
+      );
+      if (!r.ok) {
+        const text = await r.text();
+        failures.push({
+          resource: "ga4_run_report",
+          message: text.slice(0, 300) || `HTTP ${r.status}`,
+          status: r.status,
+        });
+        failed = true;
+        break;
+      }
       const json = (await r.json()) as {
         rows?: {
           dimensionValues?: { value?: string }[];
           metricValues?: { value?: string }[];
         }[];
+        rowCount?: number;
       };
-      for (const row of json.rows ?? []) {
+      const rows = json.rows ?? [];
+      for (const row of rows) {
         const name = row.dimensionValues?.[0]?.value;
         const count = Number(row.metricValues?.[0]?.value ?? "0");
         if (name) eventCounts[name] = Number.isFinite(count) ? count : 0;
       }
+      offset += rows.length;
+      const total = typeof json.rowCount === "number" ? json.rowCount : offset;
+      if (rows.length === 0 || offset >= total) {
+        complete = true;
+        break;
+      }
+    }
+    if (!failed && complete) {
       ok = true;
+    } else if (!failed) {
+      // Never report a partial read as complete: leave DATA_API Not Covered so
+      // the zero-events rule cannot misflag events on unread rows.
+      failures.push({
+        resource: "ga4_run_report",
+        message: `The report has more than ${offset} rows; not every event name was read, so zero-event checks were skipped.`,
+      });
     }
   } catch (e) {
     failures.push({
@@ -3618,20 +3727,66 @@ function base64UrlDecode(input: string): Buffer {
   return Buffer.from(padded.replace(/-/g, "+").replace(/_/g, "/"), "base64");
 }
 
-function signPayload(payload: string, secret: string): string {
-  return base64UrlEncode(
-    crypto.createHmac("sha256", secret).update(payload).digest(),
+function sessionCookieKey(secret: string): Buffer {
+  return Buffer.from(
+    crypto.hkdfSync(
+      "sha256",
+      secret,
+      "samarth-portal-session",
+      "samarth_portal_sid v1e aes-256-gcm",
+      32,
+    ),
   );
 }
 
-function safeEqual(a: string, b: string): boolean {
+function isSessionFresh(iat: unknown, now: number = Date.now()): iat is number {
+  return (
+    typeof iat === "number" &&
+    Number.isFinite(iat) &&
+    iat <= now + SESSION_CLOCK_SKEW_MS &&
+    now - iat <= SESSION_MAX_AGE_MS
+  );
+}
+
+function sealSessionPayload(payload: object, secret: string): string {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv(
+    "aes-256-gcm",
+    sessionCookieKey(secret),
+    iv,
+    { authTagLength: 16 },
+  );
+  cipher.setAAD(Buffer.from(SESSION_COOKIE_VERSION, "utf8"));
+  const body = Buffer.concat([
+    cipher.update(JSON.stringify(payload), "utf8"),
+    cipher.final(),
+  ]);
+  return `${SESSION_COOKIE_VERSION}.${base64UrlEncode(
+    Buffer.concat([iv, body, cipher.getAuthTag()]),
+  )}`;
+}
+
+function openSessionPayload(value: string, secret: string): unknown {
+  const parts = value.split(".");
+  if (parts.length !== 2 || parts[0] !== SESSION_COOKIE_VERSION) return null;
   try {
-    const bufA = Buffer.from(a);
-    const bufB = Buffer.from(b);
-    if (bufA.length !== bufB.length) return false;
-    return crypto.timingSafeEqual(bufA, bufB);
+    const raw = base64UrlDecode(parts[1]);
+    if (raw.length <= 12 + 16) return null;
+    const decipher = crypto.createDecipheriv(
+      "aes-256-gcm",
+      sessionCookieKey(secret),
+      raw.subarray(0, 12),
+      { authTagLength: 16 },
+    );
+    decipher.setAAD(Buffer.from(SESSION_COOKIE_VERSION, "utf8"));
+    decipher.setAuthTag(raw.subarray(raw.length - 16));
+    const json = Buffer.concat([
+      decipher.update(raw.subarray(12, raw.length - 16)),
+      decipher.final(),
+    ]).toString("utf8");
+    return JSON.parse(json);
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -3640,43 +3795,33 @@ function decodeSessionCookie(
   secret: string,
 ): SessionTokensShape | null {
   if (!value) return null;
-  const parts = value.split(".");
-  if (parts.length !== 3) return null;
-  const [version, body, sig] = parts;
-  if (version !== COOKIE_VERSION) return null;
-  let expected: string;
-  try {
-    expected = signPayload(`${version}.${body}`, secret);
-  } catch {
+  const parsed = openSessionPayload(value, secret) as Partial<SessionTokensShape> | null;
+  if (!parsed || typeof parsed !== "object" || typeof parsed.accessToken !== "string") {
     return null;
   }
-  if (!safeEqual(sig, expected)) return null;
-  try {
-    const json = base64UrlDecode(body).toString("utf8");
-    const parsed = JSON.parse(json) as Partial<SessionTokensShape> | null;
-    if (!parsed || typeof parsed.accessToken !== "string") return null;
-    return {
-      accessToken: parsed.accessToken,
-      refreshToken:
-        typeof parsed.refreshToken === "string"
-          ? parsed.refreshToken
-          : undefined,
-      expiresAt: typeof parsed.expiresAt === "number" ? parsed.expiresAt : 0,
-      email: typeof parsed.email === "string" ? parsed.email : undefined,
-      scopes: Array.isArray(parsed.scopes) ? parsed.scopes : [],
-    };
-  } catch {
-    return null;
-  }
+  const iat = parsed.iat;
+  if (!isSessionFresh(iat)) return null;
+  return {
+    accessToken: parsed.accessToken,
+    refreshToken:
+      typeof parsed.refreshToken === "string" ? parsed.refreshToken : undefined,
+    expiresAt: typeof parsed.expiresAt === "number" ? parsed.expiresAt : 0,
+    iat,
+    email: typeof parsed.email === "string" ? parsed.email : undefined,
+    userName: typeof parsed.userName === "string" ? parsed.userName : undefined,
+    picture: typeof parsed.picture === "string" ? parsed.picture : undefined,
+    scopes: Array.isArray(parsed.scopes) ? parsed.scopes : [],
+  };
 }
 
 function encodeSessionCookie(
   tokens: SessionTokensShape,
   secret: string,
 ): string {
-  const payload = `${COOKIE_VERSION}.${base64UrlEncode(JSON.stringify(tokens))}`;
-  const sig = signPayload(payload, secret);
-  return `${payload}.${sig}`;
+  return sealSessionPayload(
+    { ...tokens, iat: typeof tokens.iat === "number" ? tokens.iat : Date.now() },
+    secret,
+  );
 }
 
 function setSessionCookie(res: ServerResponse, value: string): void {
@@ -3765,4 +3910,40 @@ async function gtmFetch<T>(accessToken: string, path: string): Promise<T> {
     throw new GtmApiError(r.status, text);
   }
   return (await r.json()) as T;
+}
+
+/**
+ * GTM list endpoints return a `nextPageToken` when more results exist, so a
+ * single call is ONE page. Follow it (bounded) so a large workspace is never
+ * silently truncated. `truncated` is true only when the page cap was hit and
+ * later pages were left unread — callers must record that as a tool failure.
+ */
+const GTM_LIST_MAX_PAGES = 50;
+
+async function gtmListAll<T>(
+  accessToken: string,
+  path: string,
+  key: string,
+): Promise<{ items: T[]; truncated: boolean }> {
+  const items: T[] = [];
+  let pageToken: string | undefined;
+  for (let i = 0; i < GTM_LIST_MAX_PAGES; i++) {
+    const sep = path.includes("?") ? "&" : "?";
+    const data = await gtmFetch<Record<string, unknown>>(
+      accessToken,
+      pageToken ? `${path}${sep}pageToken=${encodeURIComponent(pageToken)}` : path,
+    );
+    items.push(...((data[key] as T[] | undefined) ?? []));
+    const next = data.nextPageToken;
+    if (typeof next !== "string" || !next) return { items, truncated: false };
+    pageToken = next;
+  }
+  return { items, truncated: true };
+}
+
+function truncatedListFailure(resource: string): AuditToolFailure {
+  return {
+    resource,
+    message: `The ${resource} list has more than ${GTM_LIST_MAX_PAGES} pages; later pages were not read, so this audit covers a partial list.`,
+  };
 }

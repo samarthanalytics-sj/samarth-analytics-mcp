@@ -13,7 +13,7 @@ Stop clicking through GTM. Connect Claude (Desktop, Code, or Cursor) directly to
 - **107 tools** — tags, triggers, variables, versions, server-side containers, zones, templates, GA4 Admin + reporting
 - **Read-only by default** — writes, publishes, and deletes are each behind separate opt-in flags
 - **Every mutation requires `confirm: true`** — the AI can't change anything by accident
-- **Built-in audits** — including a Consent Mode v2 engine backed by a 170-case test suite
+- **Built-in audits** — including a Consent Mode v2 engine backed by a 188-case test suite
 
 ---
 

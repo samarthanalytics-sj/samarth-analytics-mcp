@@ -21,6 +21,7 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { gtmId } from '../utils/schemas.js';
 import type { GtmClient } from '../utils/gtmClient.js';
 import { checkGuardrails, getGuardrailConfig, formatGoogleError } from '../utils/guardrails.js';
 import { paginate } from '../utils/pagination.js';
@@ -59,9 +60,9 @@ import {
 } from '../shared/server-migration.js';
 
 const wsBase = z.object({
-  accountId: z.string().describe('GTM account ID.'),
-  containerId: z.string().describe('The SERVER container ID (for the plan tool: the WEB container).'),
-  workspaceId: z.string().describe('Workspace ID.'),
+  accountId: gtmId.describe('GTM account ID.'),
+  containerId: gtmId.describe('The SERVER container ID (for the plan tool: the WEB container).'),
+  workspaceId: gtmId.describe('Workspace ID.'),
 });
 const rowsSchema = z
   .array(z.object({ name: z.string(), value: z.string() }))
@@ -183,9 +184,9 @@ const CAPI_TOOLS: CapiSpec[] = [
   },
   {
     name: 'create_pinterest_capi_server_tag', defaultTagName: 'Pinterest CAPI Tag', gallery: ['pinterest', 'ss-gtm-template'],
-    description: 'Create a Pinterest Conversions API SERVER tag from the official template (pinterest/ss-gtm-template), imported automatically. advertiserId is the Pinterest Ad Account / tag id (public), apiAccessToken the Conversions API token. Omit `event` to inherit the incoming event name (auto-mapped); pass a Pinterest standard event (checkout, lead, signup, …) or a GA4 name to force one.',
-    fields: { advertiserId: z.string(), apiAccessToken: z.string().describe(tokenDoc('Pinterest Conversions API token')), event: z.string().optional(), testMode: z.boolean().optional() },
-    validate: (a) => firstMissing(need(a, 'advertiserId', 'the Pinterest advertiser id'), need(a, 'apiAccessToken', 'the API access token')),
+    description: 'Create a Pinterest Conversions API SERVER tag from the official template (pinterest/ss-gtm-template), imported automatically. advertiserId is the Pinterest Ad Account ID (549 followed by 9 digits, from Ads Manager; NOT the web Tag ID), apiAccessToken the Conversions API token. Omit `event` to inherit the incoming event name (auto-mapped); pass a Pinterest standard event (checkout, lead, signup, …) or a GA4 name to force one.',
+    fields: { advertiserId: z.string().describe('Pinterest Ad Account ID (549 followed by 9 digits), not the web Tag ID.'), apiAccessToken: z.string().describe(tokenDoc('Pinterest Conversions API token')), event: z.string().optional(), testMode: z.boolean().optional() },
+    validate: (a) => firstMissing(need(a, 'advertiserId', 'the Pinterest Ad Account ID, 549…'), need(a, 'apiAccessToken', 'the API access token')),
     build: (type, name, a, firingTriggerId) => buildPinterestCapiServerTag(type, name, s(a.advertiserId), s(a.apiAccessToken), { event: opt(a.event), testMode: b(a.testMode), firingTriggerId }),
   },
   {
@@ -305,11 +306,13 @@ export function registerServerMigrationTools(server: McpServer, getClient: () =>
       description:
         'READ-ONLY: given a WEB container, list every tag that can move to a SERVER container and the plan to port each: ' +
         'which server tool builds it (the create_*_capi_server_tag / create_server_tag tools here), the public ids read off the ' +
-        'web tag (`derived` - Pixel IDs from template params or the fbq/ttq/pintrk/rdt/snaptr/uet/twq init calls, so the server ' +
-        'tag is created pre-filled), and the secrets you must still ask the user for (`requires` - CAPI access tokens are never in ' +
+        'web tag (`derived` - Pixel IDs from template params or the fbq/ttq/pintrk/rdt/snaptr/uet/twq init calls, which pre-fill the ' +
+        'server tag where the web id IS the server field; the Pinterest Tag ID and LinkedIn Partner ID are informational only, the ' +
+        'server tag needs a different id listed in `requires`), and the secrets you must still ask the user for (`requires` - CAPI access tokens are never in ' +
         'a web container). Creates NOTHING. GA4 is reported once in `ga4` (port it with create_server_tag platform "ga4" as the ' +
-        'relay, or the setup_server_side_container prompt; a {{Constant}} Measurement ID is resolved to its value, any other ' +
-        '{{variable}} id is listed in ga4.unresolvedRefs - ask the user for the G- id); Google Ads conversion (awct) / remarketing (sp) -> create_server_tag; ' +
+        'relay, or the setup_server_side_container prompt; a {{Constant}} Measurement ID is resolved to its value, a Lookup/RegEx ' +
+        'Table to its G- outputs (one holding only AW-/GT- ids is a Google Ads tag, not GA4), any other {{variable}} id is listed in ' +
+        'ga4.unresolvedRefs - ask the user for the G- id, or confirm it is a Google Ads (AW-) tag and not GA4); Google Ads conversion (awct) / remarketing (sp) -> create_server_tag; ' +
         'Meta/TikTok/LinkedIn/Pinterest/Reddit/Snapchat/Microsoft/Amazon/StackAdapt/X/Quora/AdRoll/Nextdoor/Yelp/Spotify/' +
         'LINE Yahoo/RTB House pixels -> their typed tool (native Microsoft UET `baut` and LinkedIn Insight `bzi` tags are ' +
         'recognised by type); analytics (Mixpanel, Matomo, Piwik PRO, Piano, Plausible, Umami, Pirsch, Snowplow, Klaviyo) and ' +

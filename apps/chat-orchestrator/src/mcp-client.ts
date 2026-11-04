@@ -4,9 +4,9 @@
  * The browser can never reach the MCP server directly: its HTTP transport sets no CORS headers and
  * its sessions live in process memory. This module is the only thing that talks to it.
  *
- * Two transports are supported. `stdio` spawns the built MCP server as a child process and is the
- * right default for a single-identity proof of concept. `http` connects to an already-running MCP
- * instance, which is what a multi-instance deployment uses later.
+ * Two transports are supported. `stdio` spawns the built MCP server as a child process, one per user
+ * in per-user identity mode. `http` connects to an already-running MCP instance and is
+ * single-identity only: it sends one orchestrator-wide bearer token, never a user's Google token.
  */
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { OrchestratorConfig } from './config.js';
@@ -70,6 +70,14 @@ export class McpConnection {
     );
 
     if (this.cfg.mcp.transport === 'http') {
+      // Nothing below forwards the user's token, so connecting would run this "per-user" session as
+      // the remote server's own identity. loadConfig refuses the combination; this is the backstop.
+      if (this.googleAccessToken) {
+        throw new Error(
+          'A per-user Google identity cannot be sent over MCP_TRANSPORT=http; refusing rather than ' +
+            "running as the remote MCP server's shared identity.",
+        );
+      }
       const { StreamableHTTPClientTransport } = await import(
         '@modelcontextprotocol/sdk/client/streamableHttp.js'
       );
@@ -184,6 +192,16 @@ export class McpConnection {
     return this.client;
   }
 
+  /**
+   * True once a connected client has lost its transport: the child exited, crashed or was killed.
+   * The SDK drops the transport on close and fails every later request with "Not connected", which
+   * is not an auth failure, so nothing retries it. Whatever caches this connection (the pool, the
+   * scanner, the boot probe) must replace it rather than hand it out again.
+   */
+  isDead(): boolean {
+    return this.client !== null && this.client.transport === undefined;
+  }
+
   listTools(): ToolDef[] {
     return this.tools;
   }
@@ -214,14 +232,31 @@ export class McpConnection {
    * A name this server never listed is refused here rather than forwarded. Callers are expected to
    * check their own permitted set first (the chat loop does); this is the backstop for one that
    * does not, so no caller can reach a tool the catalog does not account for.
+   *
+   * `timeoutMs` replaces the SDK's own per-request limit, which is 60 s whenever none is given. A
+   * caller with a longer budget of its own (a site scan, a chat turn) must pass it, or the SDK fails
+   * the call at one minute with "Request timed out" before that budget can ever take effect.
    */
-  async callTool(name: string, args: Record<string, unknown>): Promise<{ ok: boolean; text: string }> {
+  async callTool(
+    name: string,
+    args: Record<string, unknown>,
+    opts: { timeoutMs?: number } = {},
+  ): Promise<{ ok: boolean; text: string }> {
     try {
       const client = this.requireClient();
       if (!this.tools.some((t) => t.name === name)) {
         return { ok: false, text: `Tool call refused: "${name}" is not a tool this server provides.` };
       }
-      const result = await client.callTool({ name, arguments: args });
+      const timeout =
+        opts.timeoutMs !== undefined && Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0
+          ? // Clamped: past 2^31-1 ms setTimeout fires at once, which would fail every call.
+            Math.min(opts.timeoutMs, 2_147_483_647)
+          : undefined;
+      const result = await client.callTool(
+        { name, arguments: args },
+        undefined,
+        timeout === undefined ? undefined : { timeout },
+      );
       const blocks = Array.isArray(result.content) ? result.content : [];
       const text = blocks
         .map((c: { type?: string; text?: string }) => (c.type === 'text' ? (c.text ?? '') : ''))

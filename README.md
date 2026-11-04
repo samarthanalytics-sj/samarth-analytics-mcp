@@ -222,6 +222,8 @@ For Google Workspace organizations:
 | `GTM_MCP_HTTP_AUTH_TOKEN` | — | Bearer token gating `/mcp` (http transport). With neither this nor `STYTCH_PROJECT_ID` set, the HTTP transport **refuses to start**. |
 | `GTM_MCP_HTTP_ALLOW_UNAUTHENTICATED` | `false` | Local-dev opt-in to start without auth. Binds loopback only unless `GTM_MCP_HTTP_HOST` overrides. |
 | `GTM_MCP_HTTP_HOST` | — | Bind host. Defaults to loopback when unauthenticated, all interfaces when authenticated. |
+| `GTM_MCP_HTTP_MAX_SESSIONS` | `100` | Cap on live HTTP sessions (each holds its own MCP server, ~2 MB). Past it, `initialize` gets a JSON-RPC error (503 + `Retry-After`). |
+| `GTM_MCP_HTTP_MAX_SESSIONS_PER_PRINCIPAL` | `10` (multi-user), else the global cap | Cap per authenticated user. At the cap a new `initialize` replaces that user's least-recently-active idle session; if none is idle it gets a JSON-RPC error (429 + `Retry-After`). |
 | `STYTCH_PROJECT_ID` | — | Setting this switches the HTTP transport to **multi-user mode**: each `/mcp` request carries a Stytch JWT resolved to that user's own Google identity. Unset = single-identity mode. Only Connected App access tokens are accepted (`client_id` required, session JWTs rejected), and issuer/audience are always pinned: `STYTCH_JWT_ISSUER` / `STYTCH_JWT_AUDIENCE` default to `stytch.com/<project id>` / `<project id>` (see `.env.example`). |
 | `STYTCH_SECRET` | — | Stytch project secret (server-only). Required when `STYTCH_PROJECT_ID` is set — the server exits without it. |
 | `STYTCH_PUBLIC_TOKEN` | — | Publishable token powering the `/oauth/authorize` page. Not a secret. |
@@ -556,7 +558,7 @@ Fly.io has no request timeout limitations and supports persistent WebSocket/SSE 
 ### Docker
 
 ```dockerfile
-FROM node:20-alpine
+FROM node:22-alpine
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci --omit=dev

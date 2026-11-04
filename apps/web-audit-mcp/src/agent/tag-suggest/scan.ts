@@ -20,8 +20,8 @@
 // unit-tested without a browser; scanSiteForTagSuggestions is the thin browser
 // glue, mirroring compliance.ts (crawl, then re-open a ranked page subset).
 
-import { loadPlaywright, PlaywrightMissingError, openInstrumentedPage } from '../browser.js';
-import { crawlSite, normalizeUrl, sameSite, type CrawledPage } from '../crawler.js';
+import { loadPlaywright, PlaywrightMissingError, openInstrumentedPage, type PwResponse } from '../browser.js';
+import { crawlSite, normalizeUrl, sameSite, blockNoteOf, type CrawledPage } from '../crawler.js';
 import { scanForms } from '../forms.js';
 import { discoverInteractiveForms } from './interactive-forms.js';
 import { loadConfig, clampOpt } from '../../utils/config.js';
@@ -296,6 +296,21 @@ export function accountNotScanned(
 export function scanResponseFailure(status: number | null, headers: HeaderBag): string | null {
   if (status === null || status < 400) return null;
   return botBlockReason(status, headers) ?? `http ${status}`;
+}
+
+/**
+ * scanResponseFailure for a worker's live goto response, judged on the FULL header list.
+ *
+ * Playwright's headers() leaves Set-Cookie out, so a block whose only marker is a vendor cookie
+ * (PerimeterX _px3, Imperva visid_incap, DataDome, Akamai _abck) read as a bare "http 403" and the
+ * "the site blocked the scanner" warning never fired. The crawler's blockNoteOf reads allHeaders() for
+ * a block status only, bounded, falling back to headers(), so a navigation never hangs on it.
+ */
+export async function workerResponseFailure(resp: Pick<PwResponse, 'status' | 'headers' | 'allHeaders'>): Promise<string | null> {
+  const status = resp.status();
+  const plain = scanResponseFailure(status, {});
+  if (plain === null) return null;
+  return (await blockNoteOf(resp, status)) ?? plain;
 }
 
 const CREATE_NOTE =
@@ -609,7 +624,7 @@ export async function scanSiteForTagSuggestions(
     const workerCount = Math.max(1, Math.min(SCAN_CONCURRENCY, targets.length));
 
     const worker = async (): Promise<void> => {
-      const context = await browser.newContext({ viewport: { width: 1366, height: 900 } });
+      const context = await browser.newContext({ viewport: { width: 1366, height: 900 }, serviceWorkers: 'block' });
       try {
         const inst = await openInstrumentedPage(context);
         const page = inst.page;
@@ -617,8 +632,15 @@ export async function scanSiteForTagSuggestions(
           try {
             inst.markNavigationStart();
             const resp = await page.goto(entryNavUrl(target.url, startNormUrl, startHash), { waitUntil: 'domcontentloaded', timeout: config.navTimeoutMs });
+            // Playwright never routes a redirect hop, so a page that redirected somewhere the SSRF
+            // guard refuses is dropped before anything (its status included) is read from it.
+            const blocked = await inst.blockedLanding(resp);
+            if (blocked) {
+              collectFailures.push({ url: target.url, reason: blocked });
+              continue;
+            }
             // A bot challenge or an error page is not a page with no forms: name it, and do not scan it.
-            const failure = resp ? scanResponseFailure(resp.status(), resp.headers()) : null;
+            const failure = resp ? await workerResponseFailure(resp) : null;
             if (failure) {
               collectFailures.push({ url: target.url, reason: failure });
               continue;
@@ -626,6 +648,15 @@ export async function scanSiteForTagSuggestions(
             await page.waitForTimeout(settleMs);
             const raw = await collectPageRaw(page);
             const forms = await scanForms(page, page.url());
+            // Once more after the settle, before the screenshot and before any interactive click: a
+            // script-driven redirect into a refused address during the settle must stop the page here,
+            // not after discoverInteractiveForms has already clicked on it.
+            const blockedSettled = await inst.blockedLanding(null);
+            if (blockedSettled) {
+              collectFailures.push({ url: target.url, reason: blockedSettled });
+              continue;
+            }
+            let image: PageImage | null = null;
             if (options.captureImages && totalImageBytes < MAX_TOTAL_IMAGE_BYTES) {
               // After the collect, never before: the screenshot must show the page the suggestions
               // were read from, including anything the settle time brought in. And before any
@@ -638,11 +669,11 @@ export async function scanSiteForTagSuggestions(
                 const shot = await page.screenshot({ fullPage: true, type: 'jpeg', quality: 55 });
                 if (shot.byteLength <= MAX_IMAGE_BYTES) {
                   totalImageBytes += shot.byteLength;
-                  pageImages.push({
+                  image = {
                     page: pagePath(target.url),
                     image: shot.toString('base64'),
                     bytes: shot.byteLength,
-                  });
+                  };
                 }
               } catch {
                 /* no proof for this page; the suggestions from it still stand */
@@ -657,6 +688,16 @@ export async function scanSiteForTagSuggestions(
               // has no position on that picture to be ringed at.
               if (revealed && revealed.forms.length) forms.push(...revealed.forms.map((f) => ({ ...f, rect: undefined })));
             }
+            // Again after the reads: an iframe, a subresource or a script-driven navigation can redirect
+            // somewhere refused during the settle. Everything read from this page, its picture included,
+            // is then dropped.
+            const blockedLate = await inst.blockedLanding(null);
+            if (blockedLate) {
+              if (image) totalImageBytes -= image.bytes;
+              collectFailures.push({ url: target.url, reason: blockedLate });
+              continue;
+            }
+            if (image) pageImages.push(image);
             pageScans.push(
               toPageScan(target.url, raw, forms.map((f) => ({ purpose: f.purpose, action: f.action, method: f.method, formId: f.formId, providerFormId: f.providerFormId, formClasses: f.formClasses, title: f.title, fields: f.fields.map((x) => ({ type: x.type, name: x.name, required: x.required })), hidden: f.hidden, rect: f.rect })), siteHost),
             );

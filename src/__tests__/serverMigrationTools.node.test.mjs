@@ -121,6 +121,43 @@ await test('plan_server_migration_from_web: a {{Constant}} GA4 Measurement ID re
   assert.equal(r2.items.length, 0);
 });
 
+await test('plan_server_migration_from_web: a Google tag whose Lookup Table holds only AW- ids is Google Ads, never GA4', async () => {
+  const table = (name, rows, def) => ({
+    variableId: name, name, type: 'smm',
+    parameter: [
+      { type: 'boolean', key: 'setDefaultValue', value: def ? 'true' : 'false' },
+      { type: 'template', key: 'input', value: '{{Page Hostname}}' },
+      ...(def ? [P('defaultValue', def)] : []),
+      { type: 'list', key: 'map', list: rows.map(([k, v]) => ({ type: 'map', map: [P('key', k), P('value', v)] })) },
+    ],
+  });
+  // Ads-only container: no GA4 property exists, so there is nothing to relay and no G- id to ask for.
+  const ads = stubClient({
+    variables: [table('Ads Tag ID', [['example.com', 'AW-123456789']], 'AW-123456789')],
+    tags: [{ tagId: '1', name: 'Google Tag', type: 'googtag', parameter: [P('tagId', '{{Ads Tag ID}}')] }],
+  });
+  const r1 = json(await callValidated(serverWith(ads), 'plan_server_migration_from_web', WS));
+  assert.deepEqual(r1.ga4, { present: false, measurementIds: [] }, 'same result as a literal AW- Google tag');
+  assert.equal(r1.summary.auto, 0);
+
+  // A table whose outputs ARE G- ids contributes them, so nothing is left to ask for.
+  const ga4 = stubClient({
+    variables: [table('GA4 by host', [['example.com', 'G-PROD1'], ['staging.example.com', 'g-stage1']])],
+    tags: [{ tagId: '1', name: 'Google Tag', type: 'googtag', parameter: [P('tagId', '{{GA4 by host}}')] }],
+  });
+  const r2 = json(await callValidated(serverWith(ga4), 'plan_server_migration_from_web', WS));
+  assert.deepEqual(r2.ga4, { present: true, measurementIds: ['G-PROD1', 'G-STAGE1'] });
+  assert.equal(r2.summary.auto, 1);
+
+  // A data layer variable cannot be read statically: still reported for the user to confirm.
+  const dlv = stubClient({
+    variables: [{ variableId: 'v3', name: 'DLV - tag id', type: 'v', parameter: [P('name', 'tagId')] }],
+    tags: [{ tagId: '1', name: 'Google Tag', type: 'googtag', parameter: [P('tagId', '{{DLV - tag id}}')] }],
+  });
+  const r3 = json(await callValidated(serverWith(dlv), 'plan_server_migration_from_web', WS));
+  assert.deepEqual(r3.ga4, { present: true, measurementIds: [], unresolvedRefs: ['{{DLV - tag id}}'] });
+});
+
 await test('plan_server_migration_from_web: a {{variable}} id is never carried into derived; missing ids are required; keys match the tool fields', async () => {
   const client = stubClient({
     variables: [{ variableId: 'v1', name: 'TikTok ID', type: 'c', parameter: [P('value', 'C7TK')] }],
@@ -150,6 +187,31 @@ await test('plan_server_migration_from_web: a {{variable}} id is never carried i
   assert.deepEqual(by('Reddit').derived, { pixelId: 't2_abc' }, 'create_reddit_capi_server_tag takes pixelId, not the GTM accountId');
   assert.deepEqual(by('Amazon Ads').derived, { tagIds: ['tag-987'] }, 'create_amazon_capi_server_tag takes a tagIds array');
   assert.ok(!JSON.stringify(res.items.map((i) => i.derived)).includes('{{'), 'no web-container variable reference is ever carried');
+});
+
+await test('plan_server_migration_from_web: the Pinterest Tag ID is never the advertiserId; a saq(ts) StackAdapt id is a universal pixel', async () => {
+  const client = stubClient({
+    tags: [
+      { tagId: '1', name: 'Pinterest Tag', type: 'cvt_PIN1', parameter: [P('tagId', '2613000000000')] },
+      { tagId: '2', name: 'Pin snippet', type: 'html', parameter: [P('html', "<script>pintrk('load','2614000000000')</script>")] },
+      { tagId: '3', name: 'StackAdapt', type: 'html', parameter: [P('html', "<script>saq('ts','SA-55')</script>")] },
+      // A template id with no snippet: its pixel type is unknown, so it must be asked for, not defaulted to conv.
+      { tagId: '4', name: 'StackAdapt conv', type: 'cvt_SA1', parameter: [P('pixelID', 'SA-77')] },
+    ],
+  });
+  const res = json(await callValidated(serverWith(client), 'plan_server_migration_from_web', WS));
+  const pins = res.items.filter((i) => i.destination === 'Pinterest');
+  assert.equal(pins.length, 2);
+  for (const p of pins) {
+    assert.equal(p.derived.advertiserId, undefined, `${p.webTag}: the web Tag ID is not the Ad Account ID`);
+    assert.deepEqual(p.requires, ['advertiserId', 'apiAccessToken'], `${p.webTag}: the Ad Account ID is required`);
+  }
+  assert.deepEqual(pins.map((p) => p.derived.tagId), ['2613000000000', '2614000000000'], 'the Tag ID is still reported, as information');
+  const sa = (name) => res.items.find((i) => i.webTag === name);
+  assert.deepEqual(sa('StackAdapt').derived, { pixelID: 'SA-55', pixelType: 'universal' });
+  assert.deepEqual(sa('StackAdapt').requires, []);
+  assert.deepEqual(sa('StackAdapt conv').derived, { pixelID: 'SA-77' });
+  assert.deepEqual(sa('StackAdapt conv').requires, ['pixelType']);
 });
 
 await test('a CAPI tool with the template already installed: no import, tag created with the cvt type, credentials and trigger', async () => {
@@ -256,6 +318,30 @@ await test('Meta / TikTok / Snapchat CAPI tools create the ed - variables their 
   } finally {
     if (prevDry === undefined) delete process.env.DRY_RUN; else process.env.DRY_RUN = prevDry;
   }
+});
+
+await test('the shared ed - external_id is defined the same whichever CAPI tool runs first (user_id fallback kept)', async () => {
+  // TikTok first, then Meta, in ONE workspace: Meta skips the names TikTok already created, so TikTok's
+  // definition is what the Meta tag reads.
+  const client = stubClient({ templates: [INSTALLED('stape-io', 'tiktok-tag', 'TT1'), INSTALLED('stape-io', 'facebook-tag', 'FB1')] });
+  const s = serverWith(client);
+  await callValidated(s, 'create_tiktok_capi_server_tag', { ...WS, pixelId: 'C1', accessToken: '{{T}}', event: 'purchase', confirm: true });
+  const meta = json(await callValidated(s, 'create_meta_capi_server_tag', { ...WS, pixelId: '1', accessToken: '{{T}}', event: 'Purchase', confirm: true }));
+  assert.ok(meta.variables.skipped.includes('ed - external_id'), 'Meta reuses the existing variable');
+  const created = client.calls.filter((c) => c.kind === 'variable').map((c) => c.body);
+  const ext = created.filter((v) => v.name === 'ed - external_id');
+  assert.equal(ext.length, 1, 'created once');
+  assert.equal(paramVal(ext[0], 'defaultValue'), '{{ed - user_id}}', 'external_id falls back to the GA4 user_id even when TikTok created it');
+  assert.ok(created.some((v) => v.name === 'ed - user_id'), 'the fallback variable exists');
+});
+
+await test('create_meta_capi_server_tag: a GA4 event name is mapped to the Meta standard event (dedups with the Pixel)', async () => {
+  const client = stubClient({ templates: [INSTALLED('stape-io', 'facebook-tag', 'FB1')] });
+  await callValidated(serverWith(client), 'create_meta_capi_server_tag', { ...WS, pixelId: '1', accessToken: '{{T}}', event: 'generate_lead', confirm: true });
+  const tag = client.calls.find((c) => c.kind === 'tag').body;
+  assert.equal(paramVal(tag, 'eventName'), 'standard');
+  assert.equal(paramVal(tag, 'eventNameStandard'), 'Lead', 'generate_lead is sent as Lead, not a custom generate_lead');
+  assert.equal(paramVal(tag, 'eventNameCustom'), undefined);
 });
 
 await test('a CAPI tag create that fails after the template import says the template is already in the workspace', async () => {

@@ -367,6 +367,26 @@ export function customEventNameOf(trigger: Record<string, unknown>): string {
   return '';
 }
 
+/**
+ * True only when a Custom Event trigger's event match is EXACTLY `{{_event}} equals <name>`: one
+ * customEventFilter condition, type 'equals', on {{_event}}, with a value, not negated and not
+ * case-insensitive. customEventNameOf reads only arg0/arg1, so a regex (unanchored in GTM), a
+ * 'contains' or a negated condition all decode to the same name; anything reusing a trigger to
+ * mean "fires on exactly this event" must check this too, or it fires on more (or other) events.
+ * PURE.
+ */
+export function customEventIsExactEquals(trigger: Record<string, unknown>): boolean {
+  const cef = (trigger as { customEventFilter?: unknown }).customEventFilter;
+  if (!Array.isArray(cef) || cef.length !== 1) return false;
+  const cond = cef[0] as { type?: unknown; parameter?: unknown };
+  if (String(cond?.type ?? '') !== 'equals') return false;
+  const params = Array.isArray(cond.parameter) ? (cond.parameter as Array<{ key?: unknown; value?: unknown }>) : [];
+  const val = (k: string): string => String(params.find((p) => p?.key === k)?.value ?? '');
+  if (val('arg0') !== '{{_event}}' || !val('arg1')) return false;
+  if (val('negate') === 'true' || val('ignore_case') === 'true') return false;
+  return true;
+}
+
 /** How a trigger CONDITION's operator prints in readable form. Keys are the GTM API
  *  Condition.type enum; anything unmapped falls through to the raw type string. */
 const CONDITION_OPERATOR_WORD: Record<string, string> = {
@@ -1038,8 +1058,22 @@ export function buildAllowParamsTransformation(name: string, allowedParams: stri
 
 /* ───────────── Container audit ───────────── */
 
+/**
+ * Every tool an audit finding's `fix` can name. AuditFix.tool is typed to this list, so the audit
+ * engine cannot emit a fix for any other tool until it is added here, and the Container audit
+ * panel's gtm:applyFix runs ONLY these (see suggestions/audit-fix.ts): it executes a fix the
+ * renderer sends with a confirm fn standing in for the panel's own confirmation, so it must never
+ * reach bulk deletes, container creates or the live-GA4 runtime probe.
+ */
+export const AUDIT_FIX_TOOLS = ['set_gtm_tag_paused', 'set_gtm_tag_consent', 'update_gtm_tag', 'delete_gtm_trigger', 'delete_gtm_variable'] as const;
+export type AuditFixTool = (typeof AUDIT_FIX_TOOLS)[number];
+/** True when `name` is a tool an audit fix may run. PURE. */
+export function isAuditFixTool(name: unknown): name is AuditFixTool {
+  return typeof name === 'string' && (AUDIT_FIX_TOOLS as readonly string[]).includes(name);
+}
+
 export interface AuditFix {
-  tool: string;
+  tool: AuditFixTool;
   args: Record<string, unknown>;
 }
 export interface AuditFinding {
@@ -3000,9 +3034,12 @@ export function buildMetaPixelTag(
 
 /** Build a Stape "Facebook Conversion API" SERVER tag (gallery template stape-io/facebook-tag;
  *  `type` = its cvt_ code), tuned for high Event Match Quality: action source = website, Event
- *  Enhancement (the gtmeec cookie) ON, generate _fbp ON. A Meta STANDARD event sets
- *  eventNameStandard with Override (inheritEventName=false); a non-standard event inherits the
- *  incoming event_name. pixelId/accessToken are typically {{variables}}. Field keys
+ *  Enhancement (the gtmeec cookie) ON, generate _fbp ON. inheritEventName is always 'override': a
+ *  Meta STANDARD event, or a GA4 name that maps to one (generate_lead → Lead, begin_checkout →
+ *  InitiateCheckout, view_item → ViewContent, sign_up → CompleteRegistration, view_search_results →
+ *  Search; see metaStandardEvent), sets eventName 'standard' + eventNameStandard; any other name is
+ *  sent as that CUSTOM event (eventName 'custom' + eventNameCustom), never inherited.
+ *  pixelId/accessToken are typically {{variables}}. Field keys
  *  corpus-validated (cvt_5TP8W). The EMQ user-data params come from create_meta_emq_variables. PURE. */
 /** The Meta user_data (advanced-matching / EMQ) rows the CAPI tag sends, as [Facebook key → the
  *  `ed - <emq key>` variable that feeds it]. em/ph/external_id ONLY: the Stape template's own

@@ -150,6 +150,8 @@ The portal now implements a live, browser-driven QC audit:
    [Google Cloud Console](https://console.cloud.google.com/apis/credentials):
    - Application type: **Web application**
    - Authorized redirect URI: e.g. `http://localhost:5000/api/oauth/callback`
+   - To use `PORTAL_REVOKE_GOOGLE_ON_DISCONNECT` later, create it in a Google
+     Cloud project of its own: Google revokes access per project.
 2. Copy `apps/portal/.env.example` to `apps/portal/.env` and fill in
    `PORTAL_GOOGLE_OAUTH_CLIENT_ID`, `PORTAL_GOOGLE_OAUTH_CLIENT_SECRET`, and
    `PORTAL_GOOGLE_OAUTH_REDIRECT_URI` (or `PORTAL_PUBLIC_URL` for hosted).
@@ -163,7 +165,7 @@ The portal now implements a live, browser-driven QC audit:
 | `/api/oauth/status`                                                              | GET    | Whether the session is connected     |
 | `/api/oauth/start`                                                               | GET    | Begin Google OAuth                   |
 | `/api/oauth/callback`                                                            | GET    | Exchange code for tokens             |
-| `/api/oauth/logout`                                                              | POST   | Clear the session                    |
+| `/api/oauth/logout`                                                              | POST   | Clear the session; revoke the Google grant if `PORTAL_REVOKE_GOOGLE_ON_DISCONNECT=true` |
 | `/api/gtm/accounts`                                                              | GET    | List GTM accounts                    |
 | `/api/gtm/accounts/:accountId/containers`                                        | GET    | List containers                      |
 | `/api/gtm/accounts/:accountId/containers/:containerId/workspaces`                | GET    | List workspaces                      |
@@ -333,9 +335,9 @@ before starting, and serve over HTTPS in production.
 
 The repo ships Vercel-compatible serverless handlers in `apps/portal/api/`.
 They reuse the same GTM client and audit logic as the Express routes, but
-swap the in-memory session map for a **stateless, HMAC-signed cookie** so
-the OAuth tokens survive across cold starts and different function
-instances.
+swap the in-memory session map for a **stateless, encrypted cookie**
+(AES-256-GCM, keyed from `PORTAL_SESSION_SECRET`) so the OAuth tokens
+survive across cold starts and different function instances.
 
 **Project root in Vercel:** `apps/portal` (the repo is a monorepo and the
 portal lives in a subfolder — point Vercel at it via *Project Settings →
@@ -359,6 +361,10 @@ Variables):**
 | `PORTAL_GOOGLE_OAUTH_CLIENT_SECRET` | OAuth client secret |
 | `PORTAL_GOOGLE_OAUTH_REDIRECT_URI` | `https://<your-vercel-domain>/api/oauth/callback` |
 | `PORTAL_SESSION_SECRET` | 32+ char random hex (generate with `openssl rand -hex 32`) |
+
+Optional: `PORTAL_REVOKE_GOOGLE_ON_DISCONNECT=true` makes "Disconnect Google"
+revoke the user's Google grant. Set it only when this OAuth client lives in a
+Google Cloud project no other app signs users in with (see Limitations below).
 
 `PORTAL_GOOGLE_OAUTH_REDIRECT_URI` must also be added as an authorized
 redirect URI on the Google OAuth client. For preview deployments add the
@@ -387,13 +393,45 @@ you prefer to drive deploys from the workspace root, run
 `vercel --cwd apps/portal --prod`.
 
 **Limitations on Vercel:**
-- OAuth tokens live in a signed cookie on the user's browser, not in a
-  server-side store. They are protected by the user's HttpOnly + Secure
-  cookie. Access tokens expire after ~1 hour and are refreshed on demand
-  (rotating the cookie).
+- OAuth tokens live in an encrypted cookie on the user's browser, not in a
+  server-side store. The browser cannot read or alter them, and the cookie is
+  HttpOnly + Secure. Access tokens expire after ~1 hour and are refreshed on
+  demand (rotating the cookie).
+- Sessions end 30 days after sign-in, enforced on the server; refreshing does
+  not extend them. "Disconnect Google" clears the cookie. By default a copy of
+  it taken earlier keeps working until its 30 days are up, unless you rotate
+  `PORTAL_SESSION_SECRET` or the user removes the app's access in their Google
+  account. Rotating `PORTAL_SESSION_SECRET` (or the cookie-format change to
+  `v1e`) signs everyone out once.
+- Set `PORTAL_REVOKE_GOOGLE_ON_DISCONNECT=true` to also revoke the user's
+  Google grant on Disconnect, which ends every copy of the cookie once Google
+  confirms. Only do that when `PORTAL_GOOGLE_OAUTH_CLIENT_ID` (with its own
+  `PORTAL_GOOGLE_OAUTH_CLIENT_SECRET`) lives in a Google Cloud project that no
+  other app signs users in with. Google revokes a grant per user and
+  **project**: every OAuth client in that project loses the user's tokens. If
+  the MCP server uses a client in the same project, even a different client
+  ID, a portal Disconnect signs the user out of the MCP server too, and the
+  portal cannot see the MCP server's settings to check. What the portal does
+  check:
+  - It refuses when `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_CLIENT_ID` or
+    `SAMARTH_GOOGLE_OAUTH_CLIENT_ID` in its environment names the same client
+    or a client in the same project (client IDs start with the project
+    number).
+  - It refreshes the session's token with its own client before revoking, so a
+    session signed in before you moved the portal to its own client is left
+    alone.
+  - It revokes only on a same-origin POST, which is what the portal's own
+    buttons send.
+
+  Revoking signs the user out of the portal everywhere, including other
+  devices, because they all share the grant. "Connect a different Google
+  account" disconnects first, so it revokes too. When Google refuses or times
+  out, the user is still signed out and the function logs a warning (never the
+  token).
 - There is **no shared server-side state** — anything currently using the
   in-memory `Map` in `server/gtm/oauth.ts` (the session map and CSRF
-  state map) is replaced by signed cookies in the Vercel handlers.
+  state map) is replaced by cookies in the Vercel handlers: the encrypted
+  session cookie and a short-lived signed OAuth-state cookie.
   If you add features that require a shared cache, plug a Redis / Upstash
   store into `apps/portal/server/gtm/vercel-helpers.ts`.
 - The SQLite `data.db` used by `server/storage.ts` is **not** writable on

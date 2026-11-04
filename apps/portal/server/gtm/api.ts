@@ -35,6 +35,37 @@ export class GtmApiError extends Error {
   }
 }
 
+/**
+ * GTM list endpoints return a `nextPageToken` when more results exist, so a
+ * single call is ONE page. Follow it (bounded) so large accounts/workspaces are
+ * never silently truncated. Hitting the page cap throws rather than returning
+ * a partial list that callers would present as complete.
+ */
+const GTM_LIST_MAX_PAGES = 50;
+
+async function gtmListAll<T>(
+  accessToken: string,
+  path: string,
+  key: string,
+): Promise<T[]> {
+  const items: T[] = [];
+  let pageToken: string | undefined;
+  for (let i = 0; i < GTM_LIST_MAX_PAGES; i++) {
+    const data = await gtmFetch<Record<string, unknown>>(
+      accessToken,
+      pageToken ? `${path}?pageToken=${encodeURIComponent(pageToken)}` : path,
+    );
+    items.push(...((data[key] as T[] | undefined) ?? []));
+    const next = data.nextPageToken;
+    if (typeof next !== "string" || !next) return items;
+    pageToken = next;
+  }
+  throw new GtmApiError(
+    502,
+    `${key} list has more than ${GTM_LIST_MAX_PAGES} pages; refusing to return a partial list.`,
+  );
+}
+
 // ── Types (subset of GTM v2 responses we use) ────────────────────────────
 
 export interface GtmAccount {
@@ -105,19 +136,18 @@ export interface GtmBuiltInVariable {
 // ── API methods ──────────────────────────────────────────────────────────
 
 export async function listAccounts(token: string): Promise<GtmAccount[]> {
-  const data = await gtmFetch<{ account?: GtmAccount[] }>(token, `/accounts`);
-  return data.account ?? [];
+  return gtmListAll<GtmAccount>(token, `/accounts`, "account");
 }
 
 export async function listContainers(
   token: string,
   accountId: string,
 ): Promise<GtmContainer[]> {
-  const data = await gtmFetch<{ container?: GtmContainer[] }>(
+  return gtmListAll<GtmContainer>(
     token,
     `/accounts/${encodeURIComponent(accountId)}/containers`,
+    "container",
   );
-  return data.container ?? [];
 }
 
 export async function listWorkspaces(
@@ -125,13 +155,13 @@ export async function listWorkspaces(
   accountId: string,
   containerId: string,
 ): Promise<GtmWorkspace[]> {
-  const data = await gtmFetch<{ workspace?: GtmWorkspace[] }>(
+  return gtmListAll<GtmWorkspace>(
     token,
     `/accounts/${encodeURIComponent(accountId)}/containers/${encodeURIComponent(
       containerId,
     )}/workspaces`,
+    "workspace",
   );
-  return data.workspace ?? [];
 }
 
 export interface WorkspaceContents {
@@ -391,8 +421,7 @@ export async function fetchConsentWorkspaceContents(
     resource: string,
   ): Promise<T[]> => {
     try {
-      const data = await gtmFetch<Record<string, T[] | undefined>>(token, path);
-      return data[itemKey] ?? [];
+      return await gtmListAll<T>(token, path, itemKey);
     } catch (e) {
       if (e instanceof GtmApiError && (e.status === 401 || e.status === 403)) {
         throw e;
@@ -424,21 +453,12 @@ export async function fetchWorkspaceContents(
   const base = `/accounts/${encodeURIComponent(accountId)}/containers/${encodeURIComponent(
     containerId,
   )}/workspaces/${encodeURIComponent(workspaceId)}`;
-  const [tagsRes, triggersRes, variablesRes, foldersRes, bivRes] = await Promise.all([
-    gtmFetch<{ tag?: GtmTag[] }>(token, `${base}/tags`),
-    gtmFetch<{ trigger?: GtmTrigger[] }>(token, `${base}/triggers`),
-    gtmFetch<{ variable?: GtmVariable[] }>(token, `${base}/variables`),
-    gtmFetch<{ folder?: GtmFolder[] }>(token, `${base}/folders`),
-    gtmFetch<{ builtInVariable?: GtmBuiltInVariable[] }>(
-      token,
-      `${base}/built_in_variables`,
-    ),
+  const [tags, triggers, variables, folders, builtInVariables] = await Promise.all([
+    gtmListAll<GtmTag>(token, `${base}/tags`, "tag"),
+    gtmListAll<GtmTrigger>(token, `${base}/triggers`, "trigger"),
+    gtmListAll<GtmVariable>(token, `${base}/variables`, "variable"),
+    gtmListAll<GtmFolder>(token, `${base}/folders`, "folder"),
+    gtmListAll<GtmBuiltInVariable>(token, `${base}/built_in_variables`, "builtInVariable"),
   ]);
-  return {
-    tags: tagsRes.tag ?? [],
-    triggers: triggersRes.trigger ?? [],
-    variables: variablesRes.variable ?? [],
-    folders: foldersRes.folder ?? [],
-    builtInVariables: bivRes.builtInVariable ?? [],
-  };
+  return { tags, triggers, variables, folders, builtInVariables };
 }

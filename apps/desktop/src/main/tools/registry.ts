@@ -198,13 +198,25 @@ const EMPTY_SCHEMA = { type: 'object', properties: {}, additionalProperties: fal
 const s = (v: unknown): string => String(v ?? '');
 
 /** Human-readable one-line description of a suggested tag's trigger condition, for suggest_tags_from_url. */
-function describeTriggerCondition(t: Record<string, unknown> | undefined): string {
+export function describeTriggerCondition(t: Record<string, unknown> | undefined): string {
   const g = (k: string): string | undefined => (t && typeof t[k] === 'string' ? (t[k] as string) : undefined);
   const kind = g('kind') ?? '';
-  // Must mirror buildTrigger's per-field defaults, or the approval card states an operator GTM will
-  // not actually use. Both CLASS fields default to `contains` there, because {{Click Classes}} /
-  // {{Form Classes}} hold the whole class attribute and an `equals` on one class never matches.
-  const OP_DEFAULT: Record<string, string> = { clickClassesOperator: 'contains', formClassesOperator: 'contains' };
+  // Must mirror buildTrigger's per-field defaults (src/shared/gtm-builders.ts), or the description
+  // states an operator GTM will not actually use: an "equals" read for a trigger that really
+  // `contains` hides that it also fires on "Book A Demo Now". Both CLASS fields default to `contains`
+  // because {{Click Classes}} / {{Form Classes}} hold the whole class attribute. Page Path is the one
+  // per-kind default: `equals` on a form submit, `contains` everywhere else. Form ID, Click ID and
+  // Page Hostname default to `equals`.
+  const OP_DEFAULT: Record<string, string> = {
+    clickTextOperator: 'contains',
+    clickUrlOperator: 'contains',
+    clickClassesOperator: 'contains',
+    formClassesOperator: 'contains',
+    pageUrlOperator: 'contains',
+    pagePathOperator: kind === 'form_submit' ? 'equals' : 'contains',
+    queryStringOperator: 'contains',
+    referrerOperator: 'contains',
+  };
   const op = (k: string): string => g(k) ?? OP_DEFAULT[k] ?? 'equals';
   if (kind === 'form_submit') {
     if (g('formIdValue')) return `form submit where Form ID ${op('formIdOperator')} "${g('formIdValue')}"`;
@@ -372,6 +384,24 @@ function coerceTriggerInput(ts: Record<string, unknown>): TriggerInput {
   };
 }
 
+/** Why buildAwctTagOnTrigger would refuse this trigger before any GTM write, or null. Shared with the
+ *  approval card, so the card never counts a tag that will not be built. */
+export function awctTriggerProblem(trigger: Record<string, unknown>): string | null {
+  const triggerInput = coerceTriggerInput(trigger);
+  if (!triggerInput.name.trim()) return 'the trigger needs a name';
+  // A Timer with no interval never fires - refuse it rather than create a dead trigger.
+  if (triggerInput.kind === 'timer' && !s(triggerInput.intervalMs ?? '').trim()) {
+    return 'a timer trigger requires intervalMs (the firing interval in milliseconds, e.g. "30000").';
+  }
+  // Same for a custom_event with no eventName: buildTrigger would emit {{_event}} equals "", which
+  // matches no dataLayer push, so the conversion tag would be created and never fire. Refused before
+  // any GTM write (built-ins, variables, trigger, tag), like create_gtm_tracking_tag does.
+  if (triggerInput.kind === 'custom_event' && !s(triggerInput.eventName ?? '').trim()) {
+    return 'a custom_event trigger requires eventName (the dataLayer event it matches, e.g. "generate_lead").';
+  }
+  return null;
+}
+
 /** Build ONE Google Ads conversion tag (awct) on its trigger, in the GTM draft workspace: reuse-or-
  *  create the named trigger, enable the built-in variables the trigger's conditions need, provision the
  *  trigger's OWN condition variables ({{dlv - key}} / Query String / Click Text lookup), then create the
@@ -385,11 +415,8 @@ async function buildAwctTagOnTrigger(
 ): Promise<{ tagName: string; triggerName: string; reusedTrigger: boolean; createdVariables: string[] }> {
   const { accountId, containerId, workspaceId } = ids;
   const triggerInput = coerceTriggerInput(spec.trigger);
-  if (!triggerInput.name.trim()) throw new Error('the trigger needs a name');
-  // A Timer with no interval never fires - refuse it rather than create a dead trigger.
-  if (triggerInput.kind === 'timer' && !s(triggerInput.intervalMs ?? '').trim()) {
-    throw new Error('a timer trigger requires intervalMs (the firing interval in milliseconds, e.g. "30000").');
-  }
+  const problem = awctTriggerProblem(spec.trigger);
+  if (problem) throw new Error(problem);
 
   // Enable exactly the built-in variables the trigger's conditions reference (e.g. {{Click Text}}).
   const builtIns = triggerBuiltInVars(triggerInput);
@@ -1577,9 +1604,11 @@ function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean, data
         const { plan, entries } = await buildAdsBatchPlan(a);
         // When this run will also build tags, the card must say so - the Ads actions are the only LIVE,
         // irreversible part; the tags + linker land in the revertible GTM draft. Only count entries that
-        // will actually get a tag (have a trigger and a non-blocked action).
+        // will actually get a tag (have a trigger buildAwctTagOnTrigger accepts and a non-blocked action).
         const buildTags = canBuildTagsFor(a);
-        const willTag = buildTags ? entries.filter((e, i) => e.trigger && !plan.steps[i]?.blocked).length : 0;
+        const willTag = buildTags
+          ? entries.filter((e, i) => e.trigger && !awctTriggerProblem(e.trigger) && !plan.steps[i]?.blocked).length
+          : 0;
         const cardText = willTag
           ? `${plan.text}\n\nThen ${willTag} Google Ads conversion tag${willTag === 1 ? '' : 's'} will be built on ${willTag === 1 ? 'its' : 'their'} trigger${willTag === 1 ? '' : 's'} in the GTM DRAFT workspace (revertible before you publish), plus a Conversion Linker if the container has none. Any entry with no trigger gets the conversion action only.`
           : plan.text;
@@ -2131,7 +2160,8 @@ function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean, data
       name: 'create_google_ads_user_list',
       description:
         'Create a CRM-based Customer Match user list (CONTACT_INFO: emails/phones) - the missing target when ' +
-        'upload_google_ads_customer_match has no list to add members to. LIVE account write. membershipLifeSpanDays ' +
+        'upload_google_ads_customer_match has no list to add members to. LIVE account write: it shows a SINGLE ' +
+        'one-click approval card (no typed word, NOT a two-step delete). membershipLifeSpanDays ' +
         'default 180 (max 540; 0 = unlimited is not offered). The new list starts EMPTY - follow with the upload tool.',
       inputSchema: {
         type: 'object',
@@ -2145,9 +2175,12 @@ function buildGoogleAdsTools(ads: GoogleAdsService, writesEnabled: boolean, data
         additionalProperties: false,
       },
       write: true,
-      // A create, so one click - see create_google_ads_conversion_action. An audience list is
-      // additive and spends nothing.
-      summarize: (a) => `Create Customer Match user list "${s(a.name)}" in LIVE Google Ads account ${s(a.customerId)}`,
+      // ONE approval card, no typed word - the same rung as create_google_ads_conversion_action. An
+      // audience list is additive and spends nothing, so the delete wording would be theatre, but it is
+      // LIVE in the advertiser's account the moment it applies and this app cannot remove it, so it
+      // does not belong in the auto-apply bucket (Tool.approval).
+      approval: true,
+      summarize: (a) => `Create Customer Match user list "${s(a.name)}" in LIVE Google Ads account ${s(a.customerId)}. This is not a draft: it exists in Google Ads the moment it is created`,
       precheck: () => adsNotReady(ads),
       handler: (a) =>
         run(async () => {
@@ -2738,7 +2771,7 @@ export function buildToolRegistry(
     {
       name: 'plan_server_migration_from_web',
       description:
-        'READ-ONLY: given a WEB container, list every convertible tag and the plan to port it to a SERVER container - which server tool builds each, the destination ids read off the web tag (`derived`, e.g. the public Pixel ID from a template param or the fbq/ttq/pintrk/rdt/snaptr/twq init call, so the server tag is created pre-filled), and the secrets (CAPI access tokens) the caller must still supply (`requires`). Creates NOTHING. GA4 is ported automatically as the relay by create_server_container_from_web (reported in `ga4`); Google Ads conversion (awct) and remarketing (sp) -> create_server_tag; Meta/TikTok/LinkedIn/Pinterest/Reddit/Snapchat/Microsoft/Amazon/StackAdapt pixels -> their typed create_*_capi_server_tag tool (native Microsoft UET `baut` and LinkedIn Insight `bzi` tags are recognised by type); Quora/AdRoll/Nextdoor/Yelp/Spotify/LINE Yahoo/RTB House/X -> their typed tools; analytics (Mixpanel, Matomo, Piwik PRO, Piano, Plausible, Umami, Pirsch, Snowplow, Klaviyo) and affiliate networks (Awin, CJ, Impact, Rakuten, ShareASale, Tradedoubler, Webgains, Admitad, Adtraction, Affiliate Future, Effinity, Refersion, Tapfiliate, Everflow, Voluum) -> GENERIC items (status "generic"): import the named stape-io template with import_gallery_template and create_tag with the fields in `requires` + `derived`; Floodlight (flc) -> the generic import path; Google Ads call conversion has no sGTM equivalent; Conversion Linker (gclidw) needs no server tag. Returns { ga4, items[], summary }. Use it to scope a full web->server migration, then run the listed tools one per destination.',
+        'READ-ONLY: given a WEB container, list every convertible tag and the plan to port it to a SERVER container - which server tool builds each, the destination ids read off the web tag (`derived`, e.g. the public Pixel ID from a template param or the fbq/ttq/pintrk/rdt/snaptr/twq init call, which pre-fills the server tag where the web id IS the server field; the Pinterest Tag ID and LinkedIn Partner ID are informational only, the server tag needs a different id listed in `requires`), and the secrets (CAPI access tokens) the caller must still supply (`requires`). Creates NOTHING. GA4 is ported automatically as the relay by create_server_container_from_web (reported in `ga4`); Google Ads conversion (awct) and remarketing (sp) -> create_server_tag; Meta/TikTok/LinkedIn/Pinterest/Reddit/Snapchat/Microsoft/Amazon/StackAdapt pixels -> their typed create_*_capi_server_tag tool (native Microsoft UET `baut` and LinkedIn Insight `bzi` tags are recognised by type); Quora/AdRoll/Nextdoor/Yelp/Spotify/LINE Yahoo/RTB House/X -> their typed tools; analytics (Mixpanel, Matomo, Piwik PRO, Piano, Plausible, Umami, Pirsch, Snowplow, Klaviyo) and affiliate networks (Awin, CJ, Impact, Rakuten, ShareASale, Tradedoubler, Webgains, Admitad, Adtraction, Affiliate Future, Effinity, Refersion, Tapfiliate, Everflow, Voluum) -> GENERIC items (status "generic"): import the named stape-io template with import_gallery_template and create_tag with the fields in `requires` + `derived`; Floodlight (flc) -> the generic import path; Google Ads call conversion has no sGTM equivalent; Conversion Linker (gclidw) needs no server tag. Returns { ga4, items[], summary }. Use it to scope a full web->server migration, then run the listed tools one per destination.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -3852,6 +3885,13 @@ export function buildToolRegistry(
         if (triggerInput.kind === 'timer' && !s(triggerInput.intervalMs ?? '').trim()) {
           throw new Error('trigger.kind "timer" requires trigger.intervalMs (the firing interval in milliseconds, e.g. "30000").');
         }
+        // Same for a custom_event with no trigger.eventName: buildTrigger would emit {{_event}} equals "",
+        // which matches no dataLayer push, so the tag is created and never fires. Refuse it here, before
+        // built-ins are enabled and variables created below. The tag's eventName is deliberately NOT
+        // reused: the dataLayer event and the GA4 event name are often different.
+        if (triggerInput.kind === 'custom_event' && !s(triggerInput.eventName ?? '').trim()) {
+          throw new Error('trigger.kind "custom_event" requires trigger.eventName (the dataLayer event it matches, e.g. "generate_lead"); it is separate from the tag\'s eventName.');
+        }
 
         // Companion Lookup Table variables an event parameter references (e.g. a per-page form_name):
         // normalize now so their INPUT built-in ({{Page Path}}) is enabled and the smm var provisioned.
@@ -4423,7 +4463,7 @@ export function buildToolRegistry(
     {
       name: 'probe_server_runtime',
       description:
-        'RUNTIME PROOF for a SERVER container: sends ONE labelled synthetic GA4 event (named samarth_probe_<id>, throwaway client id, debug_mode on) through the recorded tagging server and reads it back from the realtime report of the GA4 property. This is the only check that proves the round trip web -> tagging server -> GA4 relay -> property actually works; every other server check proves configuration only. It DELIVERS a hit into a production property, so it is human-approved and never runs on a schedule. Result status: pass (seen in realtime, with latency), not_verified (accepted by the server but not seen within the wait: realtime can lag, so this is NOT a failure), or send_failed (the server refused it: a 400 means no client claimed /g/collect). Pass measurementId when the server forwards more than one id. Takes up to 2 minutes.',
+        'RUNTIME PROOF for a SERVER container: sends ONE labelled synthetic GA4 event (named samarth_probe_<id>, throwaway client id, debug_mode on) through the recorded tagging server and reads it back from the realtime report of the GA4 property. This is the only check that proves the round trip web -> tagging server -> GA4 relay -> property actually works; every other server check proves configuration only. It DELIVERS a hit into a production property, so it is human-approved and never runs on a schedule. Result status: pass (seen in realtime, with latency), not_verified (accepted by the server but not seen within the wait: realtime can lag, so this is NOT a failure), or send_failed (the server refused it: a 400 means no client claimed /g/collect). Where the hit lands is decided from the container\'s PUBLISHED version (what the live tagging server runs), not the draft workspace, so a relay changed only in the draft must be published before it can be probed. Pass measurementId when the server forwards more than one id. Takes up to 2 minutes.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -4705,7 +4745,7 @@ export function buildToolRegistry(
     {
       name: 'create_meta_pixel_tag',
       description:
-        'Create a Meta (Facebook) Pixel WEB tag from the official community template (imported automatically) with the CORRECT event fields. Use this instead of hand-building a cvt_ template tag, which gets the event wrong. `event`: a Meta standard event (PageView, ViewContent, Search, AddToCart, InitiateCheckout, AddPaymentInfo, Purchase, Lead, CompleteRegistration, Contact, Donate, Subscribe) sets eventName=standard + standardEventName; anything else becomes a CUSTOM event, and free text like "add to cart" resolves to AddToCart. `objectProperties` are the Meta Object Properties; OMIT it and the tool auto-fills the event\'s recommended properties from {{dlv - ecommerce.*}} variables, creating them; pass [] for none. `advancedMatching` rows are the Pixel\'s user-identity params (em/fn/ln/ph/ct/st/zp/cn/external_id/ge/db; country auto-maps to cn). Without firingTriggerId the tag will not fire.',
+        'Create a Meta (Facebook) Pixel WEB tag from the official community template (imported automatically) with the CORRECT event fields. Use this instead of hand-building a cvt_ template tag, which gets the event wrong. `event`: a Meta standard event (PageView, ViewContent, Search, AddToCart, InitiateCheckout, AddPaymentInfo, Purchase, Lead, CompleteRegistration, Contact, Donate, Subscribe) or a GA4 name that maps to one (generate_lead -> Lead, begin_checkout -> InitiateCheckout, view_item -> ViewContent, sign_up -> CompleteRegistration, view_search_results -> Search) sets eventName=standard + standardEventName; anything else becomes a CUSTOM event, and free text like "add to cart" resolves to AddToCart. `objectProperties` are the Meta Object Properties; OMIT it and the tool auto-fills the event\'s recommended properties from {{dlv - ecommerce.*}} variables, creating them; pass [] for none. `advancedMatching` rows are the Pixel\'s user-identity params (em/fn/ln/ph/ct/st/zp/cn/external_id/ge/db; country auto-maps to cn). Without firingTriggerId the tag will not fire.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -4773,7 +4813,7 @@ export function buildToolRegistry(
     {
       name: 'create_meta_capi_server_tag',
       description:
-        'Create a Meta/Facebook Conversions API (CAPI) SERVER tag from the Stape template (stape-io / facebook-tag), imported automatically. containerId must be the SERVER container. Tuned for high Event Match Quality: action source website, Event Enhancement (gtmeec) ON, generate _fbp ON, and the EMQ user_data (em/ph/external_id plus client_ip_address/client_user_agent), ecommerce custom_data and event_id AUTO-MAPPED from {{ed - }} variables that are created if missing, so ONE call yields a working tag; mapEmqVariables=false skips that mapping and the template still auto-extracts user data from the event. pixelId and accessToken are usually {{variables}}. `event`: a Meta standard event (ViewContent, AddToCart, Purchase, Lead) sets eventNameStandard with Override; anything else inherits the incoming event_name. `userData` ADDS advanced-matching rows on top of the auto-map (em/ph/fn/ln/ct/st/zp/country/external_id/fbc/fbp/client_ip_address/client_user_agent/subscription_id/lead_id/fb_login_id/ge/db); a caller row wins a collision, and these rows ship even with mapEmqVariables=false.',
+        'Create a Meta/Facebook Conversions API (CAPI) SERVER tag from the Stape template (stape-io / facebook-tag), imported automatically. containerId must be the SERVER container. Tuned for high Event Match Quality: action source website, Event Enhancement (gtmeec) ON, generate _fbp ON, and the EMQ user_data (em/ph/external_id plus client_ip_address/client_user_agent), ecommerce custom_data and event_id AUTO-MAPPED from {{ed - }} variables that are created if missing, so ONE call yields a working tag; mapEmqVariables=false skips that mapping and the template still auto-extracts user data from the event. pixelId and accessToken are usually {{variables}}. `event`: a Meta standard event (ViewContent, AddToCart, Purchase, Lead) or a GA4 name that maps to one (generate_lead -> Lead, begin_checkout -> InitiateCheckout, view_item -> ViewContent, sign_up -> CompleteRegistration, view_search_results -> Search) sets eventNameStandard with Override; any other name is sent as that custom event (Override + eventNameCustom). `userData` ADDS advanced-matching rows on top of the auto-map (em/ph/fn/ln/ct/st/zp/country/external_id/fbc/fbp/client_ip_address/client_user_agent/subscription_id/lead_id/fb_login_id/ge/db); a caller row wins a collision, and these rows ship even with mapEmqVariables=false.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -6999,8 +7039,8 @@ export function buildToolRegistry(
       // than pasted ones. The CREATE, because the whole point of that flow is "there is no action
       // for this form yet" - scoping it out (as this briefly did) left the chat able to read a
       // label but not mint one, so a user asking for a conversion tag on a new form had to switch
-      // to the Ads tab, create it, and come back. It is additive, spends nothing, and applies in
-      // one click like every other create.
+      // to the Ads tab, create it, and come back. It is additive and spends nothing, but it is LIVE,
+      // so it shows its own one-click approval card (Tool.approval), never the two-step delete card.
       //
       // Still excluded: everything that MOVES MONEY OR DATA (campaign status, budgets, negative
       // keywords, the three uploads, and edits to an existing action). All the guidance about

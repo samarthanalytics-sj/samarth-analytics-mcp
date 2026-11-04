@@ -9,7 +9,7 @@
  * consent", "tag fired after reject").
  */
 
-import type { PwBrowser, CapturedHit } from './browser.js';
+import type { PwBrowser, PwResponse, CapturedHit } from './browser.js';
 import { openInstrumentedPage } from './browser.js';
 import { detectCmp, interactWithCmp, type CmpDetection, type CmpInteraction } from './cmp.js';
 import { scanForms, type FormAnalysis } from './forms.js';
@@ -122,21 +122,46 @@ export async function captureScenario(
   opts: CaptureOptions,
 ): Promise<ScenarioCapture> {
   const notes: string[] = [];
-  const context = await browser.newContext({ viewport: { width: 1366, height: 900 } });
+  const context = await browser.newContext({ viewport: { width: 1366, height: 900 }, serviceWorkers: 'block' });
   try {
     const inst = await openInstrumentedPage(context);
     const page = inst.page;
+    // A page that redirected somewhere the SSRF guard refuses: nothing from it, not even its status.
+    const refused = (note: string): ScenarioCapture => ({
+      scenario,
+      requestedUrl: url,
+      finalUrl: null,
+      httpStatus: null,
+      cmp: { detected: false, rejectOnFirstLayer: false },
+      interaction: null,
+      interactionTMs: null,
+      trackerHits: [],
+      networkRequestCount: 0,
+      consentEvents: [],
+      dataLayerEvents: [],
+      dataLayerKeys: [],
+      cookiesPreInteraction: [],
+      cookiesFinal: [],
+      consoleErrors: [],
+      pageErrors: [],
+      forms: null,
+      notes: [...notes, note],
+    });
 
     const navStartWall = Date.now();
     inst.markNavigationStart();
     let httpStatus: number | null = null;
+    let resp: PwResponse | null = null;
     try {
-      const resp = await page.goto(url, { waitUntil: 'load', timeout: opts.navTimeoutMs });
+      resp = await page.goto(url, { waitUntil: 'load', timeout: opts.navTimeoutMs });
       httpStatus = resp ? resp.status() : null;
     } catch (err) {
       notes.push(`navigation failed: ${err instanceof Error ? err.message : String(err)}`.slice(0, 300));
     }
     await page.waitForTimeout(opts.settleMs);
+    // Before any read or banner click: Playwright never routes a redirect hop (see watchLanding).
+    const blocked = await inst.blockedLanding(resp);
+    if (blocked) return refused(blocked);
 
     const cookiesPreInteraction = (await context.cookies()).map((c) => c.name);
     const cmp = await detectCmp(page);
@@ -159,6 +184,9 @@ export async function captureScenario(
     const dlLog = await page.evaluate<DlLogEntry[]>(readDlLogInPage).catch(() => [] as DlLogEntry[]);
     const forms = opts.scanForms ? await scanForms(page, page.url()).catch(() => null) : null;
     const cookiesFinal = (await context.cookies()).map((c) => c.name);
+    // Again after the reads: the banner click or a late script can navigate through a redirect too.
+    const blockedLate = await inst.blockedLanding(null);
+    if (blockedLate) return refused(blockedLate);
 
     return {
       scenario,

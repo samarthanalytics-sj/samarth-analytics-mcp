@@ -82,7 +82,7 @@ check('no em dashes in operator-facing text (house style)',
   !/[—–]/.test((formIdScope(HS)?.note ?? '') + (ephemeralFormIdNote([HS[0]]) ?? '')));
 
 // -- The provider's own id (HubSpot data-form-id): ONE sample is enough ----------
-// Verified live on get.chewbox.example: the wrapper and the <form> both carry
+// Verified live on get.example-client.example: the wrapper and the <form> both carry
 // data-form-id="11111111-2222-4333-8444-555555555555", and the DOM id ends with it.
 {
   const one = ['abcdef12-7777-4888-8999-abcdefabcdef-' + FORM_GUID];
@@ -108,7 +108,7 @@ check('provider id: blank is ignored, ordinary ids unaffected', (() => {
 
 // -- stableFormKey: one form read twice must not become two forms ----------------
 {
-  // The real field signature from get.chewbox.example carries a per-render GUID AND an epoch-ms run.
+  // The real field signature from get.example-client.example carries a per-render GUID AND an epoch-ms run.
   const key = (guid: string, stamp: string): string =>
     `https://forms-na2.hsforms.com/submissions|post|0-1/firstname,0-1/email,${guid}-${stamp}-input,hs_context`;
   const a = stableFormKey(key('abcdef12-7777-4888-8999-abcdefabcdef', '2118870237419'));

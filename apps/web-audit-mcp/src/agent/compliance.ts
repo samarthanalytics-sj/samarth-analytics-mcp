@@ -8,7 +8,7 @@
  *   2. Form rules (agent/forms.ts) — PII collection without notice, pre-ticked
  *      marketing opt-ins, third-party/insecure form actions.
  *   3. The shared Consent Mode v2 engine (apps/portal/shared/consent-audit.ts) —
- *      the same 170-case-tested engine the portal uses. RUNTIME rules only when
+ *      the same 188-case-tested engine the portal uses. RUNTIME rules only when
  *      no GTM container is supplied; the full CONFIG + RUNTIME + reconcile
  *      engine ("reconciled" coverage) when a container export is passed in.
  *

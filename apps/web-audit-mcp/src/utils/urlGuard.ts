@@ -5,8 +5,10 @@
  * prime SSRF target: a request can be steered at cloud metadata
  * (169.254.169.254), loopback, or RFC-1918 hosts to read internal services.
  * Used both at tool admission (with the operator allowlist) and on every
- * in-browser request (private-range rules only) so a redirect from an
- * allowlisted page to an internal host is still blocked.
+ * routed in-browser request (private-range rules only). Playwright never routes
+ * a redirect hop, so a redirect from an allowlisted page to an internal host is
+ * caught after navigation instead (watchLanding in agent/browser.ts), and
+ * nothing is read from that page.
  *
  * Behaviour intentionally mirrors the runtime-worker guard; if you fix a
  * bypass here, fix it there too.

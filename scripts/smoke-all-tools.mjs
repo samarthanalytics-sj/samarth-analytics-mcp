@@ -6,13 +6,21 @@
 // server returns a structured JSON-RPC response for every single one — no
 // crash, no hang, no unhandled rejection.
 //
-// Safe by construction:
-//   - The child runs with a sanitized env: all Google/OAuth credentials and
-//     GTM_MCP_ENABLE_* flags are stripped, and GTM_MCP_TOKEN_FILE points at a
-//     nonexistent path. Every tool therefore fails at the auth or guardrail
-//     layer BEFORE any network call to Google.
-//   - Write/publish/delete tools are additionally blocked by the read-only
-//     guardrail defaults, so even with credentials present nothing mutates.
+// Safe by construction (see buildSmokeChildEnv):
+//   - Every guardrail flag (GTM_MCP_ENABLE_* AND GA4_MCP_ENABLE_*) is pinned to
+//     "false" and every Google/OAuth credential variable to "", rather than
+//     only deleted: the server runs `import 'dotenv/config'`, and dotenv fills
+//     in any DELETED key from a .env but never overrides one that is set.
+//   - The child runs in an empty temp directory with DOTENV_CONFIG_PATH aimed
+//     at a file that does not exist, so a developer .env (and the default
+//     ./.gtm-mcp-tokens.json) is never read; GTM_MCP_TOKEN_FILE and
+//     GOOGLE_APPLICATION_CREDENTIALS point at nonexistent files, so neither the
+//     token file nor Application Default Credentials can authenticate.
+//   - If the server still reports loading credentials (or never logs that it is
+//     ready, so that cannot be ruled out), the run aborts before calling a
+//     single tool.
+// Every tool therefore fails at the auth or guardrail layer BEFORE any network
+// call to Google, even though gated tools receive confirm:true.
 //
 // Expected outcome per tool: an in-band tool error (isError: true) with an
 // auth/guardrail message, or a JSON-RPC error for schema rejection. A timeout,
@@ -22,7 +30,53 @@
 //   node scripts/smoke-all-tools.mjs [--mcp dist/index.js] [--timeout 15000]
 
 import { spawn } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+/** Every guardrail flag the server reads (src/utils/guardrails.ts). */
+export const GUARDRAIL_FLAGS = [
+  "GTM_MCP_ENABLE_WRITES",
+  "GTM_MCP_ENABLE_PUBLISH",
+  "GTM_MCP_ENABLE_DELETES",
+  "GA4_MCP_ENABLE_WRITES",
+  "GA4_MCP_ENABLE_DELETES",
+];
+
+/** Every credential variable the server reads (src/auth/googleAuth.ts, tokenSource.ts). */
+export const CREDENTIAL_VARS = [
+  "GOOGLE_ACCESS_TOKEN",
+  "GOOGLE_REFRESH_TOKEN",
+  "GOOGLE_SERVICE_ACCOUNT_KEY_FILE",
+  "GOOGLE_OAUTH_CLIENT_ID",
+  "GOOGLE_OAUTH_CLIENT_SECRET",
+  "GOOGLE_CLIENT_ID",
+  "GOOGLE_CLIENT_SECRET",
+  "SAMARTH_GOOGLE_OAUTH_CLIENT_ID",
+  "SAMARTH_GOOGLE_OAUTH_CLIENT_SECRET",
+];
+
+/**
+ * The child server's environment: no credentials, every write/publish/delete
+ * flag off, and nothing that dotenv or ADC could re-populate from disk.
+ * `sandbox` is an empty directory the child runs in.
+ */
+export function buildSmokeChildEnv(baseEnv, sandbox) {
+  const env = { ...baseEnv, GTM_MCP_TRANSPORT: "stdio" };
+  for (const key of Object.keys(env)) {
+    if (/^(GOOGLE_|SAMARTH_|GTM_MCP_ENABLE_|GA4_MCP_ENABLE_|DOTENV_)/i.test(key)) delete env[key];
+  }
+  for (const key of GUARDRAIL_FLAGS) env[key] = "false";
+  for (const key of CREDENTIAL_VARS) env[key] = "";
+  env.DRY_RUN = "true";
+  env.DOTENV_CONFIG_PATH = path.join(sandbox, "no.env");
+  env.GTM_MCP_TOKEN_FILE = path.join(sandbox, "no-tokens.json");
+  // google-auth-library tries this path before the gcloud well-known file and
+  // fails outright when it does not exist, so ADC can never authenticate.
+  env.GOOGLE_APPLICATION_CREDENTIALS = path.join(sandbox, "no-adc.json");
+  return env;
+}
 
 function parseArgs(argv) {
   const out = { mcp: "dist/index.js", timeout: 15000 };
@@ -93,26 +147,52 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   const mcpPath = path.resolve(args.mcp);
 
-  // Sanitized child env: no credentials, no write flags, dead token path.
-  const env = { ...process.env, GTM_MCP_TRANSPORT: "stdio" };
-  for (const key of Object.keys(env)) {
-    if (/^(GOOGLE_|SAMARTH_|GTM_MCP_ENABLE_)/i.test(key)) delete env[key];
-  }
-  env.GTM_MCP_TOKEN_FILE = path.join(
-    process.cwd(),
-    "nonexistent-smoke-tokens",
-    "no-tokens.json",
-  );
+  // Sanitized child env in an empty sandbox cwd (see buildSmokeChildEnv).
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "smoke-all-"));
+  process.on("exit", () => fs.rmSync(sandbox, { recursive: true, force: true }));
+  const env = buildSmokeChildEnv(process.env, sandbox);
 
   const child = spawn(process.execPath, [mcpPath], {
     stdio: ["pipe", "pipe", "pipe"],
+    cwd: sandbox,
     env,
   });
 
   let stderrTail = "";
+  // The server logs which credentials it loaded. Any of these means the
+  // sandbox leaked and tool calls could reach Google, so the run must stop.
+  let credentialsLoaded = null;
+  // The stdio server logs this once connected, AFTER buildGoogleAuth has logged
+  // which credentials it loaded (src/index.ts). stderr is a separate pipe from
+  // stdout, so the credential line can be read after the initialize answer; but
+  // stderr itself is ordered, so once this line is read, any credential line
+  // logged before it has been read too.
+  const READY_LINE = "[samarth-gtm-mcp] Server ready on stdio transport";
+  let serverReady = false;
+  let onReady = null;
   child.stderr.on("data", (c) => {
     stderrTail = (stderrTail + c.toString("utf8")).slice(-2000);
+    const m = /\[auth\] Using (OAuth2 user credentials|service account credentials)/.exec(stderrTail);
+    if (m && !credentialsLoaded) credentialsLoaded = m[1];
+    if (!serverReady && stderrTail.includes(READY_LINE)) {
+      serverReady = true;
+      onReady?.();
+    }
   });
+  function waitForReady(timeoutMs) {
+    if (serverReady) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        onReady = null;
+        resolve(false);
+      }, timeoutMs);
+      onReady = () => {
+        clearTimeout(timer);
+        onReady = null;
+        resolve(true);
+      };
+    });
+  }
 
   let crashed = null;
   child.on("exit", (code, signal) => {
@@ -178,6 +258,35 @@ async function main() {
   );
   notify("notifications/initialized");
 
+  let toolsCalled = 0;
+  function abortIfCredentialsLoaded() {
+    if (credentialsLoaded) {
+      shuttingDown = true;
+      child.kill("SIGTERM");
+      console.error(
+        `smoke-all-tools: ABORTED - the server loaded ${credentialsLoaded} despite the sanitized ` +
+          "environment, so tool calls could reach Google. " +
+          (toolsCalled === 0 ? "No tool was called." : `Stopped after ${toolsCalled} tool call(s).`),
+      );
+      process.exit(1);
+    }
+  }
+
+  // buildGoogleAuth runs (and logs) before the server answers initialize, but on
+  // stderr, which may be read after that answer. Wait for the ready line logged
+  // after it, then check; fail closed if it never comes.
+  const ready = await waitForReady(args.timeout);
+  abortIfCredentialsLoaded();
+  if (!ready) {
+    shuttingDown = true;
+    child.kill("SIGTERM");
+    console.error(
+      `smoke-all-tools: ABORTED - the server never logged "${READY_LINE}" within ${args.timeout} ms, ` +
+        "so whether it loaded credentials is unknown. No tool was called.",
+    );
+    process.exit(1);
+  }
+
   // Collect the full tool list (paginate if the server ever does).
   const tools = [];
   let cursor;
@@ -194,6 +303,9 @@ async function main() {
 
   for (const tool of tools) {
     if (crashed) break;
+    // Re-checked before every call: a credential line read at any point stops the run.
+    abortIfCredentialsLoaded();
+    toolsCalled++;
     const callArgs = synthesizeArgs(tool.inputSchema);
     let outcome;
     let detail = "";
@@ -262,7 +374,18 @@ async function main() {
   process.exit(failures.length === 0 && !crashed ? 0 : 1);
 }
 
-main().catch((e) => {
-  console.error(`smoke-all-tools: fatal — ${e?.message ?? e}`);
-  process.exit(1);
-});
+// Run only when executed directly, so tests can import buildSmokeChildEnv.
+// realpath on both sides: the ESM loader resolves symlinks, argv[1] does not.
+function isMainModule() {
+  try {
+    return fs.realpathSync(process.argv[1] ?? "") === fs.realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+if (isMainModule()) {
+  main().catch((e) => {
+    console.error(`smoke-all-tools: fatal — ${e?.message ?? e}`);
+    process.exit(1);
+  });
+}

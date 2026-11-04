@@ -98,6 +98,24 @@ function isGA4Config(tag: GtmTag): boolean {
 function isGA4Event(tag: GtmTag): boolean {
   return tag.type === "gaawe";
 }
+/**
+ * A Google tag (googtag) whose ID is AW- (Google Ads), DC- (Floodlight) or GT-
+ * (generic Google tag) is not a GA4 tag: it has no G- measurement ID to check
+ * and is not a second GA4 config tag. Mirrors api/gtm/audit.ts and
+ * src/tools/audit.ts.
+ */
+function isNonGa4GoogleTag(tag: GtmTag): boolean {
+  const id = tagParam(tag, "tagId") ?? tagParam(tag, "measurementId") ?? "";
+  return tag.type === "googtag" && /^(AW|DC|GT)-/i.test(id);
+}
+
+// GTM's reserved built-in triggers (All Pages = 2147479553, Consent
+// Initialization = 2147479572, ...) live in the 2147479xxx band and are never
+// returned by triggers.list, so they must not count as dangling references.
+// Mirrors src/utils/builtinTriggers.ts.
+function isBuiltinTriggerId(id: string): boolean {
+  return /^2147479\d{3}$/.test(id);
+}
 
 function looksGeneric(name: string): boolean {
   if (!name) return true;
@@ -152,7 +170,7 @@ function ruleBrokenReferences(ctx: Ctx, out: AuditFinding[]) {
   for (const tag of ctx.tags) {
     const name = tag.name ?? "Unnamed tag";
     for (const tid of tag.firingTriggerId ?? []) {
-      if (!ctx.triggerIdSet.has(tid)) {
+      if (!ctx.triggerIdSet.has(tid) && !isBuiltinTriggerId(tid)) {
         out.push({
           id: fid(`broken-fire:${tag.tagId}:${tid}`),
           category: "ga4",
@@ -165,7 +183,7 @@ function ruleBrokenReferences(ctx: Ctx, out: AuditFinding[]) {
       }
     }
     for (const tid of tag.blockingTriggerId ?? []) {
-      if (!ctx.triggerIdSet.has(tid)) {
+      if (!ctx.triggerIdSet.has(tid) && !isBuiltinTriggerId(tid)) {
         out.push({
           id: fid(`broken-block:${tag.tagId}:${tid}`),
           category: "ga4",
@@ -181,7 +199,7 @@ function ruleBrokenReferences(ctx: Ctx, out: AuditFinding[]) {
 }
 
 function ruleGA4ConfigCount(ctx: Ctx, out: AuditFinding[]) {
-  const configTags = ctx.tags.filter(isGA4Config);
+  const configTags = ctx.tags.filter((t) => isGA4Config(t) && !isNonGa4GoogleTag(t));
   if (configTags.length > 1) {
     out.push({
       id: fid(`ga4-config-count:${configTags.length}`),
@@ -197,7 +215,7 @@ function ruleGA4ConfigCount(ctx: Ctx, out: AuditFinding[]) {
 
 function ruleGA4MissingMeasurementId(ctx: Ctx, out: AuditFinding[]) {
   for (const tag of ctx.tags) {
-    if (!isGA4Config(tag)) continue;
+    if (!isGA4Config(tag) || isNonGa4GoogleTag(tag)) continue;
     const measurementId = tagParam(tag, "tagId") ?? tagParam(tag, "measurementId");
     const name = tag.name ?? "GA4 config";
     if (!measurementId || !/^G-/i.test(measurementId)) {

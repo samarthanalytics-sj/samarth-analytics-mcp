@@ -17,7 +17,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
 
       - name: Install dependencies
@@ -56,6 +56,11 @@ jobs:
 
       - name: Test orchestrator
         run: npm --prefix apps/chat-orchestrator test
+
+      # The compiled dist/ under plain node, as the Docker image runs it (entrypoint, ESM output,
+      # .js import extensions, PDF extraction in its worker). tsx above never exercises that path.
+      - name: Test orchestrator build output
+        run: npm --prefix apps/chat-orchestrator run test:build
 
       # Desktop app suite (registry approval guardrails, builders, smoke). Pure
       # Node via tsx — the Electron binary is never launched, so skip its download.

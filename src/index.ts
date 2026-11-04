@@ -37,11 +37,18 @@ import { guardrailBanner, guardrailStatus } from './utils/guardrailMode.js';
 import {
   decidePostRoute,
   decideSessionAccess,
+  decideSessionAdmission,
+  resolveSessionLimits,
   sessionErrorResponse,
+  sessionLimitResponse,
   sessionOwnedBy,
   redactSessionId,
 } from './utils/mcpSession.js';
-import { createStytchTokenValidator, resolveStytchTokenPins } from './auth/stytchTokenValidator.js';
+import {
+  createStytchTokenValidator,
+  JwksUnavailableError,
+  resolveStytchTokenPins,
+} from './auth/stytchTokenValidator.js';
 import type { StytchClaims } from './auth/stytchTokenValidator.js';
 
 async function main(): Promise<void> {
@@ -81,30 +88,48 @@ async function startHttpServer(auth: OAuth2Client): Promise<void> {
   // large tags_create html parameter), and body-parser answers with an HTML 413 that a JSON-RPC
   // client cannot parse - so the identical call succeeded over stdio and died over HTTP with an
   // unreadable error. 8mb matches the sibling apps/web-audit-mcp HTTP server.
+  //
+  // The parser is NOT mounted globally. It used to be the first app.use(), so every request -
+  // unauthenticated ones and POSTs to paths that do not exist included - was buffered to 8mb and
+  // JSON.parse'd on the event loop before /mcp sent its 401; with gzip inflation an 8 kB request
+  // became an 8 MB parse (~0.4 s blocked, ~170 MB heap). It now runs only inside POST /mcp, AFTER
+  // resolveAuthForRequest has passed (see readJsonBody), and never inflates: the MCP SDK's own
+  // transport reads request bodies uncompressed too, so no conforming client sends a compressed one.
   const bodyLimit = process.env.GTM_MCP_HTTP_BODY_LIMIT ?? '8mb';
-  app.use(express.json({ limit: bodyLimit }));
-  // Body-parser failures (oversized or malformed JSON) never reach a route, so convert them here
-  // into a JSON-RPC error body. Express's default error handler would send HTML.
-  app.use(
-    (
-      err: Error & { status?: number; type?: string },
-      _req: import('express').Request,
-      res: import('express').Response,
-      next: import('express').NextFunction
-    ): void => {
-      if (res.headersSent) {
-        next(err);
-        return;
-      }
-      const tooLarge = err.type === 'entity.too.large';
-      const message = tooLarge
-        ? `Request body exceeds the ${bodyLimit} limit. Raise GTM_MCP_HTTP_BODY_LIMIT if this call is legitimate.`
+  const jsonBody = express.json({ limit: bodyLimit, inflate: false });
+  // Body-parser failures (oversized, compressed or malformed JSON) answered as a JSON-RPC error body;
+  // Express's default error handler would send HTML.
+  const sendBodyParserError = (
+    res: import('express').Response,
+    err: Error & { status?: number; type?: string }
+  ): void => {
+    if (res.headersSent) return;
+    const tooLarge = err.type === 'entity.too.large';
+    const message = tooLarge
+      ? `Request body exceeds the ${bodyLimit} limit. Raise GTM_MCP_HTTP_BODY_LIMIT if this call is legitimate.`
+      : err.type === 'encoding.unsupported'
+        ? 'Compressed request bodies are not accepted; send the JSON-RPC body uncompressed.'
         : `Malformed request body: ${err.message}`;
-      res
-        .status(typeof err.status === 'number' ? err.status : 400)
-        .json({ jsonrpc: '2.0', error: { code: tooLarge ? -32600 : -32700, message }, id: null });
-    }
-  );
+    res
+      .status(typeof err.status === 'number' ? err.status : 400)
+      .json({ jsonrpc: '2.0', error: { code: tooLarge ? -32600 : -32700, message }, id: null });
+  };
+  /** Parse the JSON body of an ALREADY-AUTHENTICATED POST /mcp. Resolves false when the body was
+   *  rejected, in which case the JSON-RPC error response has already been sent. */
+  const readJsonBody = (
+    req: import('express').Request,
+    res: import('express').Response
+  ): Promise<boolean> =>
+    new Promise((resolve) => {
+      jsonBody(req, res, (err?: unknown) => {
+        if (err) {
+          sendBodyParserError(res, err as Error & { status?: number; type?: string });
+          resolve(false);
+          return;
+        }
+        resolve(true);
+      });
+    });
 
   // PORT is the conventional env var injected by hosts like Render/Fly;
   // GTM_MCP_HTTP_PORT takes precedence when explicitly set (blank counts as unset).
@@ -137,7 +162,7 @@ async function startHttpServer(auth: OAuth2Client): Promise<void> {
     console.error(`[samarth-gtm-mcp] WARNING: ${binding.warning}`);
   }
   // DNS-rebinding guard for the unauthenticated loopback server (see needsRebindingGuard). Registered
-  // before every route so POST, GET and DELETE /mcp are all covered.
+  // before every route so POST, GET and DELETE /mcp are all covered, before any body is read.
   if (needsRebindingGuard(binding)) {
     app.use((req, res, next) => {
       const reason = rebindingRejection(req.headers.host, req.headers.origin);
@@ -240,12 +265,23 @@ async function startHttpServer(auth: OAuth2Client): Promise<void> {
         send401(res, 'Missing bearer token.');
         return undefined;
       }
-      // Step 1 — validate the Stytch JWT. A failure here is genuinely an
-      // auth problem (bad signature/expiry/issuer), so it stays a 401 challenge.
+      // Step 1 — validate the Stytch JWT. A failure here is an auth problem (bad
+      // signature/expiry/issuer), so it stays a 401 challenge - EXCEPT when Stytch's JWKS
+      // could not be fetched and no usable cached copy remains: that is an upstream outage,
+      // and a 401 challenge would send every connected client back through OAuth. Like
+      // step 2's upstream failures it is answered without a challenge (503 + Retry-After).
       let claims: StytchClaims;
       try {
         claims = await validator!.validate(m[1]);
       } catch (err) {
+        if (err instanceof JwksUnavailableError) {
+          console.error(`[samarth-gtm-mcp] token validation unavailable: ${err.message}`);
+          res.setHeader('Retry-After', '30');
+          res.status(503).json({
+            error: 'Authorization server keys are temporarily unavailable; retry shortly.',
+          });
+          return undefined;
+        }
         console.error(
           '[samarth-gtm-mcp] token validation failed:',
           err instanceof Error ? err.message : String(err)
@@ -324,8 +360,9 @@ async function startHttpServer(auth: OAuth2Client): Promise<void> {
   /** Idle-session sweep. A session used to live until the client sent an explicit DELETE, and a
    *  client that crashes, relaunches or loses the network never sends one: every reconnect minted a
    *  fresh McpServer (every tool registration plus the prompts) and left its predecessor resident
-   *  for the life of the process, so activeSessions and memory only ever climbed, and anyone able to
-   *  reach /mcp could mint sessions without bound by looping initialize. Set
+   *  for the life of the process, so activeSessions and memory only ever climbed. The sweep bounds
+   *  how LONG a session lives; how MANY can exist is bounded by the admission caps below (looping
+   *  initialize used to mint sessions without limit inside one TTL). Set
    *  GTM_MCP_HTTP_SESSION_TTL_MS=0 to turn the sweep off. */
   const ttlRaw = parseInt(process.env.GTM_MCP_HTTP_SESSION_TTL_MS ?? '', 10);
   const sessionTtlMs = Number.isFinite(ttlRaw) && ttlRaw >= 0 ? ttlRaw : 30 * 60_000;
@@ -359,17 +396,49 @@ async function startHttpServer(auth: OAuth2Client): Promise<void> {
   /** Guard a session against the idle sweep for the LIFE of a request. Counts it as in-flight and
    *  stamps lastActivity now; on the response closing (normal end, abort, or an SSE stream the client
    *  finally disconnects) decrements and re-stamps. Without this, lastActivity is only set when a
-   *  request begins, so a tool call or event stream that outlives the TTL gets closed mid-flight. */
+   *  request begins, so a tool call or event stream that outlives the TTL gets closed mid-flight.
+   *  Called AFTER the async auth step: a client that hung up during it has already emitted its one
+   *  'close', so counting it would pin inFlight above zero and exempt the session from the sweep
+   *  for the life of the process. */
   const trackRequest = (
     entry: { inFlight: number; lastActivity: number },
     res: import('express').Response,
   ): void => {
-    entry.inFlight += 1;
     entry.lastActivity = Date.now();
+    if (res.destroyed || res.closed) return; // 'close' already fired; it will not fire again
+    entry.inFlight += 1;
     res.once('close', () => {
       entry.inFlight = Math.max(0, entry.inFlight - 1);
       entry.lastActivity = Date.now();
     });
+  };
+
+  /** Caps on how many sessions may exist (GTM_MCP_HTTP_MAX_SESSIONS, ..._PER_PRINCIPAL). */
+  const sessionLimits = resolveSessionLimits(process.env, multiUser);
+  console.error(
+    `[samarth-gtm-mcp] Session limits: ${sessionLimits.maxTotal} total, ` +
+      `${sessionLimits.maxPerPrincipal} per principal`
+  );
+  /** Initializes admitted but not yet in `sessions` (the SDK registers a session partway through
+   *  handleRequest), per principal. Counted by the admission check so a concurrent burst of
+   *  initializes cannot all pass it before any of them lands in the map. */
+  const pendingInits = new Map<string, number>();
+  const pendingInitsTotal = (): number => {
+    let n = 0;
+    for (const v of pendingInits.values()) n += v;
+    return n;
+  };
+  /** Count one pending initialize for `principal`; the returned release is idempotent. */
+  const holdPendingInit = (principal: string): (() => void) => {
+    pendingInits.set(principal, (pendingInits.get(principal) ?? 0) + 1);
+    let held = true;
+    return () => {
+      if (!held) return;
+      held = false;
+      const left = (pendingInits.get(principal) ?? 1) - 1;
+      if (left > 0) pendingInits.set(principal, left);
+      else pendingInits.delete(principal);
+    };
   };
 
   /** Does this session exist AND belong to the requesting principal? A session owned by someone else
@@ -382,6 +451,8 @@ async function startHttpServer(auth: OAuth2Client): Promise<void> {
       const authed = await resolveAuthForRequest(req, res);
       if (!authed) return; // 401 already sent
       const { client: reqAuth, principal } = authed;
+      // Only now read the body: an unauthenticated caller never gets it buffered or parsed.
+      if (!(await readJsonBody(req, res))) return; // JSON-RPC body error already sent
 
       const sessionId = req.headers['mcp-session-id'] as string | undefined;
       const route = decidePostRoute(sessionId, ownsSession(sessionId, principal), req.body);
@@ -397,12 +468,46 @@ async function startHttpServer(auth: OAuth2Client): Promise<void> {
         res.status(status).json(body);
         return;
       } else {
+        // The client hung up while we authenticated or read its body: build nothing for it.
+        if (res.destroyed || res.closed) return;
+        // Admission control BEFORE anything is built, so a refused initialize never costs a ~2 MB
+        // server. See decideSessionAdmission.
+        const admission = decideSessionAdmission(sessions, principal, sessionLimits, {
+          total: pendingInitsTotal(),
+          forPrincipal: pendingInits.get(principal) ?? 0,
+        });
+        if (admission.kind === 'reject') {
+          console.error(
+            `[samarth-gtm-mcp] Refusing a new MCP session: ${admission.scope} limit reached ` +
+              `(active: ${sessions.size})`
+          );
+          const { status, body } = sessionLimitResponse(admission.scope, sessionLimits);
+          res.setHeader('Retry-After', '30');
+          res.status(status).json(body);
+          return;
+        }
+        if (admission.kind === 'evict') {
+          // Same close path as the idle sweep: drop the entry first, then close transport and server.
+          const sid = admission.sessionId;
+          const evicted = sessions.get(sid)!;
+          sessions.delete(sid);
+          console.error(
+            `[samarth-gtm-mcp] Replacing least-recently-active idle HTTP session: ${redactSessionId(sid)} (active: ${sessions.size})`
+          );
+          void Promise.resolve(evicted.transport.close()).catch(() => undefined);
+          void evicted.server.close().catch(() => undefined);
+        }
+        // Counted against the caps until the SDK registers the session (or the request ends without).
+        const releasePending = holdPendingInit(principal);
+        res.once('close', releasePending);
+
         // New session: its own server instance, connected to its own transport.
         const newSessionId = randomUUID();
         const sessionServer = createGtmMcpServer(auth);
         transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => newSessionId,
           onsessioninitialized: (sid) => {
+            releasePending();
             sessions.set(sid, { transport, server: sessionServer, principal, lastActivity: Date.now(), inFlight: 0 });
             console.error(
               `[samarth-gtm-mcp] New HTTP session: ${redactSessionId(sid)} (active: ${sessions.size})`

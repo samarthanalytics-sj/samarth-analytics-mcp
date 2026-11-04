@@ -226,5 +226,18 @@ await test('a 403/scope error is surfaced as isError with a re-consent hint', as
   assert.ok(/analytics\.readonly/.test(res.content[0].text), 'should include scope hint');
 });
 
+await test('a property / dataStreamId carrying a path, ":verb", "?" or "#" is refused before any call', async () => {
+  // toPropertyName only prefixed "properties/", and googleapis expands {+name} as a reserved
+  // string, so these ids retargeted the request. It is shared with the write and Data API tools.
+  const { server, calls } = buildServer();
+  for (const property of ['1/customDimensions/7:archive#', '1?x=1', '../accounts/1', '']) {
+    const res = await callTool(server, 'ga4_property_get', { property });
+    assert.ok(res.isError && /property/.test(res.content[0].text), `${JSON.stringify(property)}: ${res.content[0].text}`);
+  }
+  const em = await callTool(server, 'ga4_enhanced_measurement_get', { property: '123', dataStreamId: '9/../../x:y#' });
+  assert.ok(em.isError && /dataStreamId/.test(em.content[0].text), em.content[0].text);
+  assert.strictEqual(calls.properties_get.length + calls.enhanced.length, 0, 'nothing may be requested');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

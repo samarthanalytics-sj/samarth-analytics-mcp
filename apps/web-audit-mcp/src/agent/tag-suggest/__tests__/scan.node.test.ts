@@ -2,7 +2,7 @@
  * Phase 3 orchestrator — pure report-building tests (no browser).
  * Run: tsx apps/web-audit-mcp/src/agent/tag-suggest/__tests__/scan.node.test.ts
  */
-import { pagePath, toPageScan, assembleTagReport, accountNotScanned, entryNavUrl, scanSiteForTagSuggestions, scanResponseFailure, type AssembleArgs } from '../scan.js';
+import { pagePath, toPageScan, assembleTagReport, accountNotScanned, entryNavUrl, scanSiteForTagSuggestions, scanResponseFailure, workerResponseFailure, type AssembleArgs } from '../scan.js';
 import { isBotBlockReason } from '../../bot-block.js';
 import type { PageScan, PageScanRaw, RawElement } from '../collect.js';
 import type { PageSignals } from '../types.js';
@@ -130,6 +130,39 @@ check('scanResponseFailure: no status (same-document navigation) keeps scanning'
     out.length === 1 && out[0].url === url && isBotBlockReason(out[0].reason), JSON.stringify(out));
 }
 
+// ── workerResponseFailure: the worker classifies on the FULL header list ─────────────────────────────
+// Playwright's headers() leaves Set-Cookie out, so a block whose only marker is a vendor cookie was a bare
+// "http 403" on the workers' path (the crawler already read allHeaders()), and the "the site blocked the
+// scanner" warning never fired in chosen-pages mode, where the workers are the only navigation.
+{
+  let allHeadersCalls = 0;
+  const resp = (status: number, cookie: string) => ({
+    status: () => status,
+    headers: (): Record<string, string> => ({ 'content-type': 'text/html' }),
+    allHeaders: async (): Promise<Record<string, string>> => {
+      allHeadersCalls += 1;
+      return { 'content-type': 'text/html', 'set-cookie': cookie };
+    },
+  });
+  check('workerResponseFailure: a cookie-only PerimeterX 403 is named from allHeaders()',
+    (await workerResponseFailure(resp(403, 'pxcts=1; Path=/\n_px3=abc; Path=/'))) === 'blocked by PerimeterX bot protection');
+  check('workerResponseFailure: a cookie-only Imperva / DataDome / Akamai 403 is named too',
+    (await workerResponseFailure(resp(403, 'visid_incap_1=abc'))) === 'blocked by Imperva bot protection' &&
+    (await workerResponseFailure(resp(403, 'datadome=abc'))) === 'blocked by DataDome bot protection' &&
+    (await workerResponseFailure(resp(403, '_abck=abc'))) === 'blocked by Akamai bot protection');
+  const before = allHeadersCalls;
+  check('workerResponseFailure: a plain 404 is "http 404", without reading allHeaders()',
+    (await workerResponseFailure(resp(404, '_px3=abc'))) === 'http 404' && allHeadersCalls === before, String(allHeadersCalls - before));
+  check('workerResponseFailure: an origin 403 with no WAF marker stays "http 403"',
+    (await workerResponseFailure(resp(403, 'session=1'))) === 'http 403');
+  check('workerResponseFailure: a 200 is scanned, and allHeaders() is not read for it',
+    (await workerResponseFailure(resp(200, '_px3=abc'))) === null && allHeadersCalls === before + 1, String(allHeadersCalls - before));
+  const reason = await workerResponseFailure(resp(403, '_px3=abc'));
+  const out = accountNotScanned([], [], new Set(['https://acme.com/pricing']), reason ? [{ url: 'https://acme.com/pricing', reason }] : []);
+  check('workerResponseFailure: a cookie-only block on a chosen page is recognised as a bot block (warning fires)',
+    out.length === 1 && isBotBlockReason(out[0].reason), JSON.stringify(out));
+}
+
 // ── report.existingTracking is populated (Phase 2) ────────────────────────────
 {
   const trackedSig: PageSignals = {
@@ -181,10 +214,35 @@ check('entryNavUrl: null normalised start → unchanged', entryNavUrl(START, nul
   const clicks = src.indexOf('discoverInteractiveForms(');
   check('worker: the page screenshot is taken before interactive form discovery clicks anything',
     shot > 0 && clicks > 0 && shot < clicks, `screenshot@${shot} discover@${clicks}`);
-  const statusCheck = src.indexOf('scanResponseFailure(');
+  const statusCheck = src.indexOf('workerResponseFailure(');
   const collect = src.indexOf('collectPageRaw(');
   check('worker: the goto response status is checked before the page is read',
     statusCheck > 0 && collect > 0 && statusCheck < collect, `status@${statusCheck} collect@${collect}`);
+  // ...on the full header list: headers() alone omits Set-Cookie, the only marker some WAFs send.
+  check('worker: the response is classified by workerResponseFailure, never on resp.headers() alone',
+    !/resp\.headers\(\)/.test(src), 'resp.headers() found in the worker');
+
+  // Playwright never routes a redirect hop, so a target that 302s to a private/metadata address used to
+  // be read and SCREENSHOTTED. Where the page landed must be checked right after goto (before even its
+  // status is used), and again after every read, before its picture or scan is kept.
+  const goto = src.indexOf('page.goto(');
+  const landedFirst = src.indexOf('blockedLanding(');
+  const landedLast = src.lastIndexOf('blockedLanding(');
+  const imageKept = src.indexOf('pageImages.push(');
+  const scanKept = src.indexOf('pageScans.push(');
+  check('worker: the landing is checked right after goto, before the status or any read',
+    goto > 0 && landedFirst > goto && landedFirst < statusCheck && landedFirst < collect,
+    `goto@${goto} landing@${landedFirst} status@${statusCheck}`);
+  check('worker: the landing is re-checked after the reads, before the screenshot or scan is kept',
+    landedLast > landedFirst && landedLast > shot && landedLast > clicks && landedLast < imageKept && landedLast < scanKept,
+    `landing@${landedLast} shot@${shot} image@${imageKept} scan@${scanKept}`);
+  // A script-driven redirect during the settle must be refused BEFORE the opt-in reveal clicks run on
+  // the page (and before it is pictured), not only by the late check that comes after them.
+  const settle = src.indexOf('waitForTimeout(settleMs)');
+  const landedSettled = src.indexOf('blockedLanding(', settle);
+  check('worker: the landing is re-checked after the settle, before the screenshot and before any interactive click',
+    settle > landedFirst && landedSettled > settle && landedSettled < shot && landedSettled < clicks && landedSettled < landedLast,
+    `settle@${settle} landing@${landedSettled} shot@${shot} discover@${clicks}`);
 }
 
 console.log(`\nTag-scan: ${passed} passed, ${failed} failed`);

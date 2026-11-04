@@ -11,7 +11,7 @@ import { jsonResult, textResult, errorResult, errorText } from '../utils/toolRes
 import {
   googleErrorStatus, isDuplicateNameError, explainMissingEntity, explainDuplicateName,
 } from '../utils/writeDiagnostics.js';
-import { workspaceScope as wsBase } from '../utils/schemas.js';
+import { gtmId, workspaceScope as wsBase } from '../utils/schemas.js';
 import { gtmParameterArray as parameterSchema } from '../utils/paramSchema.js';
 import { mergeParametersByKey } from '../utils/tagParams.js';
 import type { tagmanager_v2 } from 'googleapis';
@@ -43,7 +43,7 @@ export function registerVariableTools(server: McpServer, getClient: () => GtmCli
     'variables_get',
     {
       description: 'Get a specific GTM variable.',
-      inputSchema: wsBase.extend({ variableId: z.string() }),
+      inputSchema: wsBase.extend({ variableId: gtmId }),
     },
     async ({ accountId, containerId, workspaceId, variableId }) => {
       try {
@@ -106,7 +106,7 @@ export function registerVariableTools(server: McpServer, getClient: () => GtmCli
       description:
         '[WRITE] Update a GTM variable (read-modify-write — omitted fields are preserved; `parameter` is merged by key). Requires GTM_MCP_ENABLE_WRITES=true and confirm=true.',
       inputSchema: wsBase.extend({
-        variableId: z.string(),
+        variableId: gtmId,
         name: z.string().optional(),
         type: z.string().optional(),
         parameter: parameterSchema,
@@ -153,7 +153,7 @@ export function registerVariableTools(server: McpServer, getClient: () => GtmCli
     {
       description: '[DELETE] Delete a GTM variable. Requires GTM_MCP_ENABLE_DELETES=true and confirm=true.',
       inputSchema: wsBase.extend({
-        variableId: z.string(),
+        variableId: gtmId,
         confirm: z.boolean(),
       }),
     },

@@ -6,11 +6,12 @@
 // reuses Electron's own Chromium) is the zero-install default.
 //
 // Runs the SAME in-page extractors as the other engines via page.evaluate, with
-// the SSRF guard applied to every request (incl. redirects/subresources).
+// the SSRF guard applied to every routed request (navigations, subresources) and
+// to every redirect hop, which Playwright never routes (watchRedirectHops).
 
 import { collectPageInBrowser, type PageScanRaw } from '../../../../web-audit-mcp/src/agent/tag-suggest/collect.js';
 import { extractFormsInPage, type RawForm } from '../../../../web-audit-mcp/src/agent/forms.js';
-import { requestAllowed } from './ssrf';
+import { requestAllowed, watchRedirectHops } from './ssrf';
 import type { PageDriver, DrivenPage } from './scan-core';
 
 // Minimal structural typings for the Playwright surface we use, so this file
@@ -63,6 +64,8 @@ async function loadPlaywright(): Promise<Playwright | null> {
 export interface PlaywrightDriverOptions {
   navTimeoutMs?: number;
   settleMs?: number;
+  /** Test seam: a Playwright-shaped module used instead of loading the installed one. */
+  playwright?: unknown;
 }
 
 export async function createPlaywrightDriver(opts: PlaywrightDriverOptions = {}): Promise<PageDriver> {
@@ -70,12 +73,13 @@ export async function createPlaywrightDriver(opts: PlaywrightDriverOptions = {})
   // undefined → AUTO: rely on networkidle (below) + a small post-idle buffer; a
   // number → that exact extra wait.
   const settleMs = opts.settleMs ?? 300;
-  const pw = await loadPlaywright();
+  const pw = (opts.playwright as Playwright | undefined) ?? (await loadPlaywright());
   if (!pw) throw new PlaywrightUnavailableError();
 
   const browser = await pw.chromium.launch({ headless: true });
   const context = await browser.newContext({ viewport: { width: 1366, height: 900 } });
-  // SSRF: block any request (incl. redirects/subresources) to a private host.
+  // SSRF: block any routed request (navigation or subresource) to a private host. Redirect hops never
+  // reach this handler; `landing` below re-checks them.
   await context.route('**/*', (route) => {
     void requestAllowed(route.request().url()).then(
       (ok) => (ok ? route.continue() : route.abort()),
@@ -83,17 +87,27 @@ export async function createPlaywrightDriver(opts: PlaywrightDriverOptions = {})
     );
   });
   const page = await context.newPage();
+  const landing = watchRedirectHops(page);
 
   return {
     async open(url: string): Promise<DrivenPage> {
       try {
+        landing.reset(); // a new navigation: hops of the previous page no longer count
         // networkidle waits for lazy/JS-rendered forms + embeds to finish loading.
         const resp = await page.goto(url, { waitUntil: 'networkidle', timeout: navTimeoutMs });
+        // A page that redirected somewhere the SSRF guard refuses is dropped before anything (its
+        // status included) is read from it.
+        const blocked = await landing.blockedLanding(resp);
+        if (blocked) return { ok: false, httpStatus: null, finalUrl: null, error: blocked };
         const status = resp ? resp.status() : null;
         if (status !== null && status >= 400) return { ok: true, httpStatus: status, finalUrl: page.url() || url };
         await page.waitForTimeout(settleMs);
         const raw = await page.evaluate<PageScanRaw>(collectPageInBrowser);
         const rawForms = await page.evaluate<RawForm[]>(extractFormsInPage);
+        // Again after the reads: an iframe, a subresource or a script-driven navigation can redirect
+        // somewhere refused during the settle. Everything read from this page is then dropped.
+        const blockedLate = await landing.blockedLanding(null);
+        if (blockedLate) return { ok: false, httpStatus: null, finalUrl: null, error: blockedLate };
         return { ok: true, httpStatus: status, finalUrl: page.url() || url, raw, rawForms: Array.isArray(rawForms) ? rawForms : [] };
       } catch (e) {
         return { ok: false, httpStatus: null, finalUrl: null, error: (e instanceof Error ? e.message : String(e)).slice(0, 200) };

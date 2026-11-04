@@ -311,8 +311,9 @@ export interface AuditSummary {
   /** Sentence summary: e.g. "Checked 47 items: 1 Critical, 3 High, 5 Medium, 2 Low." */
   summary?: string;
   /**
-   * GA4 measurement IDs (G-XXXX / GT-XXXX) discovered on GTM GA4 config/event
-   * tags. Used by the audit page to auto-match a GA4 property for cross-source
+   * GA4 measurement IDs (G-XXXX only) discovered on GTM GA4 config/event tags.
+   * GT-/AW-/DC- Google tag IDs are not measurement IDs and are excluded. Used
+   * by the audit page to auto-match a GA4 property for cross-source
    * reconciliation. Empty when the container has no GA4 tags.
    */
   gtmMeasurementIds?: string[];

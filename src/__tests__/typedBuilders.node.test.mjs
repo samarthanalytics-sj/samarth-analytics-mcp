@@ -446,6 +446,38 @@ await test('element_visibility with no target is refused, like a timer with no i
   assert.strictEqual(client.calls.length, 0);
 });
 
+await test('custom_event with no trigger.eventName is refused, and the tag eventName is NOT borrowed', async () => {
+  // The tag has eventName, the trigger does not: buildTrigger emitted {{_event}} equals "", a
+  // trigger that matches no dataLayer push. It was created, bound to the tag, reported as success,
+  // and dead once published. The tag's GA4 event name is not reused, because the dataLayer event
+  // it fires on is often a different string.
+  const client = stubClient();
+  const res = await call(serverWith(client), 'create_gtm_tracking_tag', {
+    ...EMAIL_TAG,
+    eventName: 'generate_lead',
+    trigger: { name: 'CE - generate_lead', kind: 'custom_event' },
+  });
+  assert.match(text(res), /custom_event" requires trigger\.eventName/);
+  assert.strictEqual(client.calls.length, 0, 'nothing may be written for a trigger that can never fire');
+});
+
+await test('a {{Click Text}} condition with no operator is "contains", and the schema says so', async () => {
+  // The schema documented "Default equals" while buildTrigger emits contains, so a caller relying
+  // on the documented exact match for "Apply" got a trigger that also fires on "Apply now".
+  const client = stubClient();
+  const server = serverWith(client);
+  await callValidated(server, 'create_gtm_tracking_tag', {
+    ...EMAIL_TAG,
+    trigger: { name: 'Apply Click', kind: 'link_click', clickTextValue: 'Apply' },
+  });
+  const trig = client.calls.find((c) => c.kind === 'trigger').body;
+  const cond = trig.filter.find((f) => f.parameter.some((p) => p.value === '{{Click Text}}'));
+  assert.strictEqual(cond.type, 'contains', 'what buildTrigger actually emits');
+  const desc = server._registeredTools.create_gtm_tracking_tag.inputSchema.shape.trigger.shape.clickTextOperator.description;
+  assert.match(desc, /Default contains/, `the description must state the real default: ${desc}`);
+  assert.ok(!/Default equals/.test(desc), 'the old, wrong default must be gone');
+});
+
 console.log('\ntrigger reuse keys on the name that is actually stored:');
 
 await test('a trigger whose name GTM sanitises is found again, not duplicated', async () => {

@@ -367,6 +367,7 @@ async function main(): Promise<void> {
     // must never be counted as destructive, because nothing is deleted and no delete API call may
     // result. Members, all carrying Tool.approval in the registry:
     //   - create_google_ads_conversion_action (a live Ads conversion action);
+    //   - create_google_ads_user_list (a live Customer Match list this app cannot remove);
     //   - the GA4 ACCESS-BINDING create/update tools, which change WHO can access a property/account
     //     (a permission write, flagged `sensitive` in ga4-write-tools → approval:true). The delete
     //     access-binding tool is caught by isDestructive above, so only create_/update_ land here;
@@ -377,6 +378,7 @@ async function main(): Promise<void> {
     const isApprovalGated = (n: string) =>
       n === 'create_google_ads_conversion_action' ||
       n === 'create_google_ads_conversion_actions_for_tags' ||
+      n === 'create_google_ads_user_list' ||
       n === 'probe_server_runtime' ||
       ((n.startsWith('create_') || n.startsWith('update_')) && n.endsWith('_access_binding'));
     const destructiveNames = writeNames.filter(isDestructive);
@@ -411,8 +413,8 @@ async function main(): Promise<void> {
     // The gate must be REAL: a declined card means the live Ads account was never touched.
     record(
       'a declined approval card never reaches the Google Ads API',
-      !fd.calls.some((c) => c.startsWith('createConversionAction')),
-      fd.calls.filter((c) => c.startsWith('createConversionAction')).join(',') || 'no create call'
+      !fd.calls.some((c) => c.startsWith('createConversionAction') || c.startsWith('createUserList')),
+      fd.calls.filter((c) => c.startsWith('createConversionAction') || c.startsWith('createUserList')).join(',') || 'no create call'
     );
   }
 

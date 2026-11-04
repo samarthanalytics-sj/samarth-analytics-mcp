@@ -4,14 +4,15 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { gtmId } from '../utils/schemas.js';
 import type { GtmClient } from '../utils/gtmClient.js';
 import { checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
 import { paginate, paginationFields, buildListResult } from '../utils/pagination.js';
 import { jsonResult, textResult, errorResult, errorText } from '../utils/toolResponse.js';
 
 const workspaceBase = z.object({
-  accountId: z.string().describe('The GTM account ID.'),
-  containerId: z.string().describe('The GTM container ID.'),
+  accountId: gtmId.describe('The GTM account ID.'),
+  containerId: gtmId.describe('The GTM container ID.'),
 });
 
 export function registerWorkspaceTools(server: McpServer, getClient: () => GtmClient): void {
@@ -44,7 +45,7 @@ export function registerWorkspaceTools(server: McpServer, getClient: () => GtmCl
     {
       description: 'Get details of a specific GTM workspace.',
       inputSchema: workspaceBase.extend({
-        workspaceId: z.string().describe('The GTM workspace ID.'),
+        workspaceId: gtmId.describe('The GTM workspace ID.'),
       }),
     },
     async ({ accountId, containerId, workspaceId }) => {
@@ -99,7 +100,7 @@ export function registerWorkspaceTools(server: McpServer, getClient: () => GtmCl
         'relative to the latest container version, plus any merge conflicts. ' +
         'Use this to review a change diff before creating a version or publishing.',
       inputSchema: workspaceBase.extend({
-        workspaceId: z.string().describe('The GTM workspace ID.'),
+        workspaceId: gtmId.describe('The GTM workspace ID.'),
       }),
     },
     async ({ accountId, containerId, workspaceId }) => {
@@ -130,7 +131,7 @@ export function registerWorkspaceTools(server: McpServer, getClient: () => GtmCl
         'Syncs a workspace to the latest container version by updating all unmodified workspace entities. ' +
         'Returns a list of merge conflicts if any.',
       inputSchema: workspaceBase.extend({
-        workspaceId: z.string().describe('The GTM workspace ID.'),
+        workspaceId: gtmId.describe('The GTM workspace ID.'),
         confirm: z.boolean().describe('Must be true to confirm this operation.'),
       }),
     },
@@ -162,7 +163,7 @@ export function registerWorkspaceTools(server: McpServer, getClient: () => GtmCl
         'Entity envelope ({ "tag": {...} } / { "trigger": {...} } / …), which this tool builds for you. ' +
         'NOTE: This is a complex operation — review the GTM UI conflict resolution first.',
       inputSchema: workspaceBase.extend({
-        workspaceId: z.string().describe('The GTM workspace ID.'),
+        workspaceId: gtmId.describe('The GTM workspace ID.'),
         fingerprint: z
           .string()
           .describe('The workspace fingerprint at the time of conflict resolution.'),

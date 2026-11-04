@@ -544,13 +544,26 @@ export const META_STANDARD_EVENTS: string[] = [
   'Subscribe',
 ];
 
-/** Resolve free-text (e.g. "add to cart", "viewcontent", "Donate") to the CANONICAL Meta
- *  standard event, or null if it isn't a standard event (→ treat as custom). PURE. */
+/** Common GA4 (snake_case) event names → Meta standard event, ONLY where the normalized names differ
+ *  (purchase / add_to_cart / search / add_payment_info / add_to_wishlist already match directly). Keys
+ *  are normalized (lowercased, separators stripped). Without this, generate_lead would be sent as a
+ *  CUSTOM "generate_lead" event that never pairs with the Pixel's Lead for dedup. */
+const GA4_TO_META: Record<string, string> = {
+  viewitem: 'ViewContent',
+  begincheckout: 'InitiateCheckout',
+  generatelead: 'Lead',
+  signup: 'CompleteRegistration',
+  viewsearchresults: 'Search',
+};
+
+/** Resolve free-text (e.g. "add to cart", "viewcontent", "Donate") or a GA4 name (generate_lead,
+ *  begin_checkout, view_item, sign_up, view_search_results) to the CANONICAL Meta standard event, or null if it isn't a
+ *  standard event (→ treat as custom). A direct standard-name match wins over the GA4 alias. PURE. */
 export function metaStandardEvent(event: string): string | null {
   const norm = (event ?? '').trim().toLowerCase().replace(/[\s_-]/g, '');
   if (!norm) return null;
   for (const e of META_STANDARD_EVENTS) if (e.toLowerCase() === norm) return e;
-  return null;
+  return GA4_TO_META[norm] ?? null;
 }
 
 /** Recommended Meta Object Properties (event parameters) per event — the keys Meta expects for
@@ -735,41 +748,50 @@ export function buildMetaCapiServerTag(
   };
 }
 
-/** Build the Meta EMQ Event Data variables (`ed - <key>`, type `ed`, keyPath `<key>`). email/phone
- *  get a NESTED fallback: GA4 enhanced user data usually arrives nested (user_data.email_address),
- *  where a flat keyPath resolves undefined — so `ed - email_address` reads the flat key with
- *  defaultValue {{ed - user_data.email_address}} (a companion variable reading the nested path).
- *  Either shape then resolves, and the CAPI tag's explicit em/ph rows never blank a value the
- *  template would have found. PURE. */
-export function buildMetaEmqVariables(): GtmVariableResource[] {
-  const NESTED_FALLBACK = new Set(['email_address', 'phone_number']);
-  // external_id (Meta's stable-user-id field) falls back to the GA4 user_id, so it resolves whether the
-  // event carries `external_id` or `user_id`. (A missing referenced variable is a harmless empty string.)
-  const SIBLING_FALLBACK: Record<string, string> = { external_id: 'user_id' };
-  // Keys whose ed variable falls back to a REQUEST HEADER when the event omits them: `ed - user_agent`
-  // defaults to `{{rh - user-agent}}` (the request User-Agent) and `ed - ip_override` to
-  // `{{rh - x-forwarded-for}}` (the client IP the tagging host forwards). We also emit each `rh - <header>`
-  // request_header variable so the reference isn't dangling. This gives the auto-mapped client_ip_address
-  // / client_user_agent rows a real server-side source even when the incoming event carries neither, and
-  // means the row only ever resolves empty when there is genuinely no IP/UA anywhere (so it can never
-  // downgrade a value the template would otherwise have had).
-  const HEADER_FALLBACK: Record<string, string> = { user_agent: 'user-agent', ip_override: 'x-forwarded-for' };
-  const out: GtmVariableResource[] = [];
-  for (const k of META_EMQ_EVENT_DATA_KEYS) {
-    if (NESTED_FALLBACK.has(k)) {
-      out.push(buildVariable({ name: `ed - user_data.${k}`, kind: 'event_data', keyPath: `user_data.${k}` }));
-      out.push(buildVariable({ name: `ed - ${k}`, kind: 'event_data', keyPath: k, defaultValue: `{{ed - user_data.${k}}}` }));
-    } else if (SIBLING_FALLBACK[k]) {
-      out.push(buildVariable({ name: `ed - ${k}`, kind: 'event_data', keyPath: k, defaultValue: `{{ed - ${SIBLING_FALLBACK[k]}}}` }));
-    } else if (HEADER_FALLBACK[k]) {
-      const header = HEADER_FALLBACK[k];
-      out.push(buildVariable({ name: `rh - ${header}`, kind: 'request_header', headerName: header }));
-      out.push(buildVariable({ name: `ed - ${k}`, kind: 'event_data', keyPath: k, defaultValue: `{{rh - ${header}}}` }));
-    } else {
-      out.push(buildVariable({ name: `ed - ${k}`, kind: 'event_data', keyPath: k }));
-    }
+/** The `ed - <key>` (and companion) variable definitions for ONE Event Data key. Every CAPI builder that
+ *  reads a key gets it from here, because the names are SHARED across platforms in one server workspace
+ *  and provisioning skips a name that already exists: two definitions of one name would make whichever
+ *  platform was provisioned first decide it for all the others. PURE.
+ *  - email/phone get a NESTED fallback: GA4 enhanced user data usually arrives nested
+ *    (user_data.email_address), where a flat keyPath resolves undefined — so `ed - email_address` reads
+ *    the flat key with defaultValue {{ed - user_data.email_address}} (a companion variable reading the
+ *    nested path). Either shape then resolves, and the CAPI tag's explicit em/ph rows never blank a value
+ *    the template would have found.
+ *  - external_id (the stable-user-id field) falls back to the GA4 user_id, so it resolves whether the
+ *    event carries `external_id` or `user_id`. (A missing referenced variable is a harmless empty string;
+ *    the builders list `user_id` as a key so `ed - user_id` exists.)
+ *  - user_agent / ip_override fall back to a REQUEST HEADER when the event omits them: `ed - user_agent`
+ *    defaults to `{{rh - user-agent}}` (the request User-Agent) and `ed - ip_override` to
+ *    `{{rh - x-forwarded-for}}` (the client IP the tagging host forwards), and each `rh - <header>`
+ *    request_header variable is emitted too so the reference isn't dangling. This gives the auto-mapped
+ *    client IP / user agent rows a real server-side source even when the incoming event carries neither,
+ *    and means the row only ever resolves empty when there is genuinely no IP/UA anywhere (so it can never
+ *    downgrade a value the template would otherwise have had). */
+const EMQ_NESTED_FALLBACK = new Set(['email_address', 'phone_number']);
+const EMQ_SIBLING_FALLBACK: Record<string, string> = { external_id: 'user_id' };
+const EMQ_HEADER_FALLBACK: Record<string, string> = { user_agent: 'user-agent', ip_override: 'x-forwarded-for' };
+function emqEventDataVariables(k: string): GtmVariableResource[] {
+  if (EMQ_NESTED_FALLBACK.has(k)) {
+    return [
+      buildVariable({ name: `ed - user_data.${k}`, kind: 'event_data', keyPath: `user_data.${k}` }),
+      buildVariable({ name: `ed - ${k}`, kind: 'event_data', keyPath: k, defaultValue: `{{ed - user_data.${k}}}` }),
+    ];
   }
-  return out;
+  if (EMQ_SIBLING_FALLBACK[k]) return [buildVariable({ name: `ed - ${k}`, kind: 'event_data', keyPath: k, defaultValue: `{{ed - ${EMQ_SIBLING_FALLBACK[k]}}}` })];
+  if (EMQ_HEADER_FALLBACK[k]) {
+    const header = EMQ_HEADER_FALLBACK[k];
+    return [
+      buildVariable({ name: `rh - ${header}`, kind: 'request_header', headerName: header }),
+      buildVariable({ name: `ed - ${k}`, kind: 'event_data', keyPath: k, defaultValue: `{{rh - ${header}}}` }),
+    ];
+  }
+  return [buildVariable({ name: `ed - ${k}`, kind: 'event_data', keyPath: k })];
+}
+
+/** Build the Meta EMQ Event Data variables (`ed - <key>`, type `ed`, keyPath `<key>`), each with the
+ *  shared fallbacks of emqEventDataVariables. PURE. */
+export function buildMetaEmqVariables(): GtmVariableResource[] {
+  return META_EMQ_EVENT_DATA_KEYS.flatMap(emqEventDataVariables);
 }
 
 
@@ -909,7 +931,8 @@ export function buildStapeDataClient(type: string, name: string): GtmClientResou
  *  email/phone get a nested `user_data.*` fallback (GA4 enhanced data arrives nested). Created by
  *  create_tiktok_emq_variables so the auto-mapped rows resolve instead of dangling. */
 export const TIKTOK_EMQ_EVENT_DATA_KEYS: string[] = [
-  'email_address', 'phone_number', 'external_id', 'event_id',
+  // user_id: the shared `ed - external_id` falls back to {{ed - user_id}} (see emqEventDataVariables).
+  'email_address', 'phone_number', 'external_id', 'user_id', 'event_id',
   'value', 'currency', 'contents', 'content_ids', 'content_type',
   'num_items', 'transaction_id', 'search_string', 'description',
   'ip_override', 'user_agent',
@@ -929,26 +952,9 @@ const TIKTOK_ADDRESS_MATCH: Array<[tiktokKey: string, edSuffix: string, keyPath:
   ['zip_code', 'address.postal_code', 'user_data.address.postal_code'],
 ];
 export function buildTikTokEmqVariables(): GtmVariableResource[] {
-  const NESTED_FALLBACK = new Set(['email_address', 'phone_number']);
-  // user_agent + ip_override fall back to request headers (same erase-safe superset pattern as Meta):
-  // `ed - user_agent` defaults to `{{rh - user-agent}}` and `ed - ip_override` to `{{rh - x-forwarded-for}}`,
-  // and we emit each `rh - <header>` variable so the reference resolves — so ip/user_agent are populated
-  // from the request even when the incoming event omits them. These variable names are IDENTICAL to Meta's
-  // (created idempotently and shared) — intentional.
-  const HEADER_FALLBACK: Record<string, string> = { user_agent: 'user-agent', ip_override: 'x-forwarded-for' };
-  const out: GtmVariableResource[] = [];
-  for (const k of TIKTOK_EMQ_EVENT_DATA_KEYS) {
-    if (NESTED_FALLBACK.has(k)) {
-      out.push(buildVariable({ name: `ed - user_data.${k}`, kind: 'event_data', keyPath: `user_data.${k}` }));
-      out.push(buildVariable({ name: `ed - ${k}`, kind: 'event_data', keyPath: k, defaultValue: `{{ed - user_data.${k}}}` }));
-    } else if (HEADER_FALLBACK[k]) {
-      const header = HEADER_FALLBACK[k];
-      out.push(buildVariable({ name: `rh - ${header}`, kind: 'request_header', headerName: header }));
-      out.push(buildVariable({ name: `ed - ${k}`, kind: 'event_data', keyPath: k, defaultValue: `{{rh - ${header}}}` }));
-    } else {
-      out.push(buildVariable({ name: `ed - ${k}`, kind: 'event_data', keyPath: k }));
-    }
-  }
+  // Same per-key definitions as Meta (emqEventDataVariables): the names are shared in one server
+  // workspace and created idempotently, so they must be defined identically whichever tag comes first.
+  const out: GtmVariableResource[] = TIKTOK_EMQ_EVENT_DATA_KEYS.flatMap(emqEventDataVariables);
   // OPT-IN address advanced-matching variables — always created so they're available; the tag only
   // references them when matchAddress=true.
   for (const [, edSuffix, keyPath] of TIKTOK_ADDRESS_MATCH) {
@@ -2087,7 +2093,8 @@ export interface ServerMigrationPlan {
  *  init call. When the id is found the plan carries it in `derived`, so the server tag is created
  *  pre-filled and only the secret is left to type; when a typed tool's id is NOT found it is listed in
  *  `requires`, since the tool refuses without it. `idOptional` marks an id the server tool does not take
- *  (LinkedIn's Partner ID), `idArray` one the tool takes as an array (Amazon's tagIds).
+ *  (LinkedIn's Partner ID, Pinterest's Tag ID: reported for information, never pre-filled), `idArray`
+ *  one the tool takes as an array (Amazon's tagIds).
  *
  *  ORDER MATTERS (first hit wins): LinkedIn precedes Snapchat because a LinkedIn Custom HTML snippet
  *  loads from snap.licdn.com, which `/snap/` would otherwise claim. */
@@ -2095,8 +2102,9 @@ const SERVER_MIGRATION_HEURISTICS: ReadonlyArray<{
   re: RegExp; destination: string; serverTool: string; requires: string[]; note: string;
   /** Omitted for a platform whose web tag carries no public id (Yelp, Spotify): nothing to derive. */
   derivedKey?: string; idKeys?: string[]; snippetRe?: RegExp; idOptional?: boolean; idArray?: boolean;
-  /** Further ids read off the snippet (AdRoll carries advertiser AND pixel ids). */
-  extra?: Array<{ key: string; re: RegExp }>;
+  /** Further ids read off the snippet (AdRoll carries advertiser AND pixel ids). `value`, when set, is
+   *  what a match of `re` yields instead of its first capture group (StackAdapt saq('ts') = universal). */
+  extra?: Array<{ key: string; re: RegExp; value?: string }>;
   status?: ServerMigrationItem['status'];
 }> = [
   { re: /tiktok|ttq\s*\(/i, destination: 'TikTok', serverTool: 'create_tiktok_capi_server_tag', requires: ['accessToken'], note: 'TikTok Events API server tag.',
@@ -2104,8 +2112,12 @@ const SERVER_MIGRATION_HEURISTICS: ReadonlyArray<{
   { re: /linkedin|_linkedin_partner_id|lintrk|licdn\.com/i, destination: 'LinkedIn', serverTool: 'create_linkedin_capi_server_tag', requires: ['accessToken', 'conversionRuleUrn'],
     note: 'LinkedIn CAPI server tag. The web Partner ID is informational: the server tag fires on a Conversion Rule URN, which the caller must supply.',
     derivedKey: 'partnerId', idKeys: ['partnerId', 'id'], snippetRe: /_linkedin_partner_id\s*=\s*['"]([^'"]+)['"]/i, idOptional: true },
-  { re: /pinterest|pintrk\s*\(/i, destination: 'Pinterest', serverTool: 'create_pinterest_capi_server_tag', requires: ['apiAccessToken'], note: 'Pinterest CAPI server tag.',
-    derivedKey: 'advertiserId', idKeys: ['tagId', 'advertiserId'], snippetRe: /pintrk\s*\(\s*['"]load['"]\s*,\s*['"]([^'"]+)['"]/i },
+  // The web Pinterest Tag ID (pintrk load / the template's tagId) is NOT the server tag's advertiserId: that
+  // is the Ad Account ID (549 + 9 digits) from Ads Manager, which no web tag carries. Report the Tag ID as
+  // information only and always ask for the advertiserId.
+  { re: /pinterest|pintrk\s*\(/i, destination: 'Pinterest', serverTool: 'create_pinterest_capi_server_tag', requires: ['advertiserId', 'apiAccessToken'],
+    note: 'Pinterest CAPI server tag. The web Tag ID (pintrk load / tagId) is informational: the server tag needs the Pinterest Ad Account ID (advertiserId, 549 followed by 9 digits) from Ads Manager, which is not on the web tag.',
+    derivedKey: 'tagId', idKeys: ['tagId'], snippetRe: /pintrk\s*\(\s*['"]load['"]\s*,\s*['"]([^'"]+)['"]/i, idOptional: true },
   { re: /reddit|rdt\s*\(/i, destination: 'Reddit', serverTool: 'create_reddit_capi_server_tag', requires: ['accessToken'], note: 'Reddit CAPI server tag.',
     derivedKey: 'pixelId', idKeys: ['accountId', 'pixelId'], snippetRe: /rdt\s*\(\s*['"]init['"]\s*,\s*['"]([^'"]+)['"]/i },
   { re: /snap(chat)?|snaptr\s*\(/i, destination: 'Snapchat', serverTool: 'create_snapchat_capi_server_tag', requires: ['apiAccessToken'], note: 'Snapchat CAPI server tag.',
@@ -2115,8 +2127,12 @@ const SERVER_MIGRATION_HEURISTICS: ReadonlyArray<{
   // Builders + typed tools already exist for these two; they were simply never planned.
   { re: /amazon[\s_-]?(ads?|pixel|tag)|amzn\s*\(|amazon-adsystem/i, destination: 'Amazon Ads', serverTool: 'create_amazon_capi_server_tag', requires: [], note: 'Amazon Ads CAPI server tag (region defaults to NA; pass tagRegion for EU).',
     derivedKey: 'tagIds', idArray: true, idKeys: ['tagId'], snippetRe: /amzn\s*\(\s*['"]addTag['"]\s*,\s*['"]([^'"]+)['"]/i },
-  { re: /stackadapt|\bsaq\s*\(|srv\.stackadapt/i, destination: 'StackAdapt', serverTool: 'create_stackadapt_server_tag', requires: [], note: 'StackAdapt server-side pixel.',
-    derivedKey: 'pixelID', idKeys: ['pixelID', 'pixelId'], snippetRe: /saq\s*\(\s*['"]ts['"]\s*,\s*['"]([^'"]+)['"]/i },
+  // The id in saq('ts', …) is the Universal Pixel, so it carries pixelType universal (the tool otherwise
+  // defaults to conv and would send it as a conversion id); with no such snippet the type is required.
+  { re: /stackadapt|\bsaq\s*\(|srv\.stackadapt/i, destination: 'StackAdapt', serverTool: 'create_stackadapt_server_tag', requires: [],
+    note: 'StackAdapt server-side pixel. An id read from saq(\'ts\', …) is the Universal Pixel (pixelType universal); otherwise pass the pixel type (rt / lal / conv / universal).',
+    derivedKey: 'pixelID', idKeys: ['pixelID', 'pixelId'], snippetRe: /saq\s*\(\s*['"]ts['"]\s*,\s*['"]([^'"]+)['"]/i,
+    extra: [{ key: 'pixelType', re: /saq\s*\(\s*['"]ts['"]\s*,/i, value: 'universal' }] },
   // X (Twitter): the server tag needs the per-conversion X "Event ID" (tw-…) from X Ads Events Manager
   // — a different thing from a dedup id — plus a Pixel Access Token (or OAuth 1.0a keys). Neither is
   // on the web tag; only the Pixel ID is.
@@ -2241,6 +2257,29 @@ export function planWebToServerMigration(snapshot: ContainerSnapshot): ServerMig
     if (val) constants.set(String(v.name ?? '').trim().toLowerCase(), val);
   }
   const resolve = (x: string): string => x.replace(/\{\{([^}]+)\}\}/g, (m, n: string) => constants.get(n.trim().toLowerCase()) ?? m).trim();
+  // A Google tag whose id is ONE non-Constant {{variable}}: a Lookup / RegEx Table's literal outputs
+  // (map values + the default) say whether it holds GA4 ids ('ga4', with those G- ids) or only other ids
+  // such as AW- / DC- / GT- ('not-ga4': a Google Ads tag, not GA4). Anything not statically readable (a
+  // data layer or JavaScript variable, an empty table, an output that is itself a variable) is 'unknown'.
+  const variablesByName = new Map((snapshot.variables ?? []).map((v) => [String(v.name ?? '').trim().toLowerCase(), v]));
+  const googtagRefKind = (ref: string): { kind: 'ga4' | 'not-ga4' | 'unknown'; ids: string[] } => {
+    const m = /^\{\{([^}]+)\}\}$/.exec(ref);
+    const v = m ? variablesByName.get(m[1].trim().toLowerCase()) : undefined;
+    const vType = String(v?.type ?? '').toLowerCase();
+    if (!v || (vType !== 'smm' && vType !== 'remm')) return { kind: 'unknown', ids: [] };
+    type TableParam = { key?: string; value?: unknown; list?: Array<{ map?: Array<{ key?: string; value?: unknown }> }> };
+    const params = (v.parameter ?? []) as TableParam[];
+    const useDefault = String(params.find((p) => p.key === 'setDefaultValue')?.value ?? '').toLowerCase() !== 'false';
+    const outputs: string[] = [];
+    for (const p of params) {
+      if (p.key === 'defaultValue' && useDefault) outputs.push(String(p.value ?? ''));
+      if (p.key === 'map') for (const row of p.list ?? []) for (const f of row.map ?? []) if (f.key === 'value') outputs.push(String(f.value ?? ''));
+    }
+    const values = outputs.map(resolve).filter(Boolean);
+    const ids = values.filter((x) => /^G-/i.test(x)).map((x) => x.toUpperCase());
+    if (ids.length) return { kind: 'ga4', ids };
+    return values.length && !values.some((x) => x.includes('{{')) ? { kind: 'not-ga4', ids: [] } : { kind: 'unknown', ids: [] };
+  };
   // Carry the web tag's public ids into `derived`. Any {{variable}} left after Constant resolution is NOT
   // copied: the server container has no such variable, so the server tag would reference one that does
   // not exist. That id goes to `missing` (for `requires`) and the note names the web variable; a
@@ -2269,9 +2308,13 @@ export function planWebToServerMigration(snapshot: ContainerSnapshot): ServerMig
   for (const t of snapshot.tags) {
     const type = String(t.type ?? '');
     // GA4: aggregated into the relay, collect the measurement id. A {{Constant}} id resolves to its
-    // literal; any other {{variable}} id is reported in ga4.unresolvedRefs instead of dropping GA4.
-    const googtagId = type === 'googtag' ? pv(t, 'tagId') : '';
-    if ((type === 'googtag' && (/^G-/i.test(resolve(googtagId)) || /^\{\{[^}]+\}\}$/.test(resolve(googtagId)))) || type === 'gaawe') {
+    // literal; a Lookup / RegEx Table id contributes its G- outputs (one holding only AW-/GT- ids is a
+    // Google Ads tag and falls through, like a literal AW- id); any other {{variable}} id is reported in
+    // ga4.unresolvedRefs instead of dropping GA4.
+    const googtagId = type === 'googtag' ? resolve(pv(t, 'tagId')) : '';
+    const googtagRef = /^\{\{[^}]+\}\}$/.test(googtagId) ? googtagRefKind(googtagId) : null;
+    if ((type === 'googtag' && (/^G-/i.test(googtagId) || (googtagRef && googtagRef.kind !== 'not-ga4'))) || type === 'gaawe') {
+      if (googtagRef?.kind === 'ga4') { for (const id of googtagRef.ids) measurementIds.add(id); continue; }
       const keys = ['tagId', 'measurementIdOverride', 'measurementId'];
       const mid = keys.map((k) => resolve(pv(t, k))).find((x) => /^G-/i.test(x));
       if (mid) measurementIds.add(mid.toUpperCase());
@@ -2329,8 +2372,9 @@ export function planWebToServerMigration(snapshot: ContainerSnapshot): ServerMig
       continue;
     }
     // Template/Custom-HTML pixels by name or snippet. The vendor's public id is read off the template
-    // param (idKeys) or the init call in the snippet (snippetRe) and carried as `derived`, so the server
-    // tag is created pre-filled. A typed tool's id that is not found (or is a non-Constant {{variable}})
+    // param (idKeys) or the init call in the snippet (snippetRe) and carried as `derived`, which
+    // pre-fills the server tag where the web id IS the server field (an idOptional id, such as
+    // Pinterest's Tag ID, is informational only). A typed tool's id that is not found (or is a non-Constant {{variable}})
     // is listed in `requires`, because the tool refuses without it.
     const html = pv(t, 'html');
     const hay = `${t.name} ${type} ${html}`;
@@ -2338,7 +2382,10 @@ export function planWebToServerMigration(snapshot: ContainerSnapshot): ServerMig
     if (hit) {
       const pairs: Array<[string, string]> = [];
       if (hit.derivedKey) pairs.push([hit.derivedKey, (hit.idKeys ?? []).map((k) => pv(t, k)).find(Boolean) || (hit.snippetRe?.exec(html)?.[1] ?? '').trim()]);
-      for (const x of hit.extra ?? []) pairs.push([x.key, (x.re.exec(html)?.[1] ?? '').trim()]);
+      for (const x of hit.extra ?? []) {
+        const m = x.re.exec(html);
+        pairs.push([x.key, m ? (x.value ?? (m[1] ?? '').trim()) : '']);
+      }
       const typed = (hit.status ?? 'typed-tool') === 'typed-tool';
       const c = carry(pairs, typed ? pairs.map(([k]) => k) : []);
       const derived: Record<string, string | string[]> = { ...c.derived };

@@ -4,6 +4,7 @@
 import assert from 'node:assert/strict';
 import { AdsMonitoringService } from '../ads-monitoring-service';
 import { MAX_INTERVAL_MINUTES } from '../timer-limits';
+import { callerAccountView } from '../../google/account-scope';
 import type { GoogleAdsService } from '../../google/ads-service';
 import type { AccountView, AdsMonitorRun } from '../../../shared/ipc';
 
@@ -247,4 +248,36 @@ test('snapshot: the FIRST sweep reports no change alerts (nothing to compare aga
   const runs = await svc.runOnce();
   const changeAlerts = runs[0].alerts.filter((a) => a.area === 'changes');
   assert.equal(changeAlerts.length, 0, 'no change alerts on the very first sweep');
+});
+
+// Regression: the sweep read the active account once, but the Ads auth + developer token (index.ts)
+// resolve the account per call. A switch mid-sweep ran acct1's reads with acct2's credentials and left
+// a bogus permission error on acct1's target. The fake resolves the caller exactly like index.ts does.
+test('account switch mid-sweep: the Ads reads stay on the sweep account, so no stray error lands on its target', async () => {
+  const accountB: AccountView = { id: 'acct2', email: 'b@c.com', createdAt: 0, isActive: true, hasGoogleToken: true } as AccountView;
+  let current: AccountView = account;
+  const registry = { getActiveView: () => current, listViews: () => [account, accountB] };
+  const base = fakeAds({ utmCritical: true }) as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>;
+  const callers: string[] = [];
+  const ads: Record<string, (...a: unknown[]) => Promise<unknown>> = {};
+  for (const [name, fn] of Object.entries(base)) {
+    ads[name] = async (...a: unknown[]) => {
+      const who = callerAccountView(registry)?.id ?? 'none';
+      callers.push(who);
+      if (name === 'readiness') current = accountB; // the user picks another account as the sweep starts
+      if (who !== 'acct1') throw new Error('USER_PERMISSION_DENIED: The caller does not have permission.');
+      return fn(...a);
+    };
+  }
+  const svc = new AdsMonitoringService({ registry, ads: ads as unknown as GoogleAdsService, secrets: makeSecrets(), emit: () => {}, now: () => 9_000_000 });
+  svc.configure({ targets: [{ customerId: '1111111111', label: 'A', enabled: true }], enabled: false });
+  const runs = await svc.runOnce();
+  assert.equal(current.id, 'acct2', 'the active account really did change mid-sweep');
+  assert.ok(callers.length > 1, 'the sweep made its reads');
+  assert.deepEqual([...new Set(callers)], ['acct1'], 'every read used the account the sweep started on');
+  assert.equal(runs.length, 1, 'acct1 still got its run');
+  current = account;
+  const st = svc.status();
+  assert.equal(st.targetStatuses[0].lastError, null, 'no stray permission error on acct1 target');
+  assert.equal(st.lastError, null, 'no sweep error either');
 });

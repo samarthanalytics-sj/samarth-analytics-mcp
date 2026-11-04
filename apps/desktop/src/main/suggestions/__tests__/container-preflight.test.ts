@@ -18,7 +18,7 @@ check('match is case-insensitive (selected lower)', preflightDecision('gtm-examp
 check('match is case-insensitive (live lower)', preflightDecision('GTM-EXAMPLE2', ['gtm-example2']) === 'match');
 check('match tolerates surrounding whitespace', preflightDecision('  GTM-EXAMPLE2  ', [' GTM-EXAMPLE2 ']) === 'match');
 
-// ── mismatch (the ChewBox case: selected is NOT the one live) ───────────────────
+// ── mismatch (the real-site case: selected is NOT the one live) ─────────────────
 check('mismatch: a single DIFFERENT container is live', preflightDecision('GTM-EXAMPLE2', ['GTM-OTHER1']) === 'mismatch');
 check('mismatch: multiple live, selected absent', preflightDecision('GTM-EXAMPLE2', ['GTM-OTHER1', 'GTM-ABC1234']) === 'mismatch');
 check('mismatch: blank selected but a container is live (never claim a blank matches)', preflightDecision('', ['GTM-OTHER1']) === 'mismatch');

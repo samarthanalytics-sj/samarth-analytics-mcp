@@ -368,5 +368,91 @@ await test('google signals + attribution updates target their property settings 
   assert.strictEqual(at.params.updateMask, 'reportingAttributionModel');
 });
 
+// ── Identifiers cannot retarget the request ────────────────────────────────────
+// googleapis expands {+parent}/{+name} as reserved strings, so ':verb', '?', '#' and '..' in an id
+// reach the URL raw. ga4_create_audience {property:'1/customDimensions/7:archive#'} went out as
+// POST .../customDimensions/7:archive - an irreversible archive with only GA4_MCP_ENABLE_WRITES on -
+// and the delete tools accepted any name, so "delete key event" could trash an account. These call
+// the handlers directly (no schema in front), so they pin the check where the name is BUILT.
+console.log('\nGA4 ids are validated before any path is built:');
+
+await test('create with a smuggled ":archive#" property is refused, nothing sent (writes on, deletes off)', async () => {
+  setEnv({ writes: true, deletes: false });
+  const { server, calls } = buildServer();
+  for (const property of ['1/customDimensions/7:archive#', '1/audiences/9:archive#', '1:archive', '1?x=1', '1#']) {
+    const r = await callTool(server, 'ga4_create_audience', { property, confirm: true });
+    assert.ok(isErr(r) && /property/.test(text(r)), `${property} must be refused, got: ${text(r)}`);
+  }
+  assert.strictEqual(calls.length, 0, `no API call: ${JSON.stringify(calls)}`);
+});
+
+await test('a ".." parent cannot reach accessBindings:batchDelete through a create', async () => {
+  setEnv({ writes: true, deletes: false });
+  const { server, calls } = buildServer();
+  const r = await callTool(server, 'ga4_create_channel_group', {
+    property: '1/../../accounts/123/accessBindings:batchDelete#',
+    body: { requests: [{ name: 'accounts/123/accessBindings/1' }] },
+    confirm: true,
+  });
+  assert.ok(isErr(r), text(r));
+  assert.strictEqual(calls.length, 0);
+});
+
+await test('dataStream and account parents are validated too', async () => {
+  setEnv({ writes: true, deletes: false });
+  const { server, calls } = buildServer();
+  let r = await callTool(server, 'ga4_create_measurement_protocol_secret', { property: '1', dataStreamId: '9/../../../accounts/1:x#', displayName: 'S', confirm: true });
+  assert.ok(isErr(r) && /dataStreamId/.test(text(r)), text(r));
+  r = await callTool(server, 'ga4_create_account_access_binding', { accountId: '1/accessBindings:batchDelete#', user: 'a@b.com', roles: ['predefinedRoles/viewer'], confirm: true });
+  assert.ok(isErr(r) && /accountId/.test(text(r)), text(r));
+  r = await callTool(server, 'ga4_update_enhanced_measurement', { property: '1', dataStreamId: '2:archive#', streamEnabled: true, confirm: true });
+  assert.ok(isErr(r), text(r));
+  assert.strictEqual(calls.length, 0);
+});
+
+await test('delete/update/archive refuse a name of another resource kind, even with deletes on', async () => {
+  setEnv({ writes: true, deletes: true });
+  const { server, calls } = buildServer();
+  const refused = [
+    ['ga4_delete_key_event', { name: 'accounts/123' }],
+    ['ga4_delete_key_event', { name: 'properties/1/keyEvents/2:archive' }],
+    ['ga4_delete_key_event', { name: 'properties/1/keyEvents/../../../accounts/1' }],
+    ['ga4_archive_audience', { name: 'properties/1/customDimensions/7' }],
+    ['ga4_update_custom_dimension', { name: 'properties/1/customDimensions/7:archive#', displayName: 'x' }],
+    ['ga4_delete_measurement_protocol_secret', { name: 'properties/1/measurementProtocolSecrets/2' }],
+    ['ga4_delete_account_access_binding', { name: 'properties/1/accessBindings/2' }],
+  ];
+  for (const [tool, args] of refused) {
+    const r = await callTool(server, tool, { ...args, confirm: true });
+    assert.ok(isErr(r) && /name/.test(text(r)), `${tool} ${args.name} must be refused, got: ${text(r)}`);
+  }
+  assert.strictEqual(calls.length, 0, `no API call: ${JSON.stringify(calls)}`);
+  // The well-formed name of the right kind still goes through.
+  const ok = await callTool(server, 'ga4_delete_measurement_protocol_secret', { name: 'properties/1/dataStreams/2/measurementProtocolSecrets/abc_1', confirm: true });
+  assert.ok(!isErr(ok), text(ok));
+  assert.strictEqual(calls.find((c) => c.label === 'mpSecrets' && c.verb === 'delete').params.name, 'properties/1/dataStreams/2/measurementProtocolSecrets/abc_1');
+});
+
+await test('the check runs before the DRY_RUN branch, so a dry run cannot echo a smuggled path', async () => {
+  setEnv({ writes: true, deletes: true, dry: true });
+  const { server, calls } = buildServer();
+  const r = await callTool(server, 'ga4_delete_account', { accountId: '1:x', confirm: true });
+  assert.ok(isErr(r) && !/DRY RUN/.test(text(r)), text(r));
+  const r2 = await callTool(server, 'ga4_create_key_event', { property: '1#', eventName: 'x', confirm: true });
+  assert.ok(isErr(r2) && !/DRY RUN/.test(text(r2)), text(r2));
+  assert.strictEqual(calls.length, 0);
+});
+
+await test('the schemas refuse the same ids before a handler runs', () => {
+  const { server } = buildServer();
+  const shape = (tool) => server._registeredTools[tool].inputSchema;
+  assert.ok(!shape('ga4_create_audience').safeParse({ property: '1/customDimensions/7:archive#', confirm: true }).success);
+  assert.ok(shape('ga4_create_audience').safeParse({ property: 'properties/1', confirm: true }).success);
+  assert.ok(!shape('ga4_delete_key_event').safeParse({ name: 'accounts/123', confirm: true }).success);
+  assert.ok(shape('ga4_delete_key_event').safeParse({ name: 'properties/1/keyEvents/2', confirm: true }).success);
+  assert.ok(!shape('ga4_update_account').safeParse({ accountId: '1/../2', displayName: 'x', confirm: true }).success);
+  assert.ok(!shape('ga4_create_calculated_metric').safeParse({ property: '1', calculatedMetricId: 'a b', confirm: true }).success);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

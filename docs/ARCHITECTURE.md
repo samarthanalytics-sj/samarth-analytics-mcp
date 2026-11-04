@@ -14,7 +14,7 @@ are load-bearing; see `CLAUDE.md` for the rules that must not be violated.
 | Portal client | `apps/portal/client/` | Browser (Vite/React) | White-label customer UI for running GTM / Consent Mode v2 / sGTM audits. |
 | Portal API (serverless) | `apps/portal/api/` | Vercel functions | Per-request HTTP handlers: OAuth, session, GTM/GA4 proxy, audit execution. |
 | Portal dev server | `apps/portal/server/` | Node/Express (local) | Local mirror of the serverless routes; uses shared helpers the serverless routes deliberately inline. |
-| Shared audit engines | `apps/portal/shared/` | Framework-free | Pure Consent Mode v2 engine + types, with a 170-case test suite. |
+| Shared audit engines | `apps/portal/shared/` | Framework-free | Pure Consent Mode v2 engine + types, with a 188-case test suite. |
 | Runtime worker | `apps/runtime-worker/` | Node + headless Chromium | Read-only page-capture service feeding runtime evidence into audits. Cannot run on Vercel. |
 
 ## 2. MCP server
@@ -160,7 +160,7 @@ time). Anything heavier — the shared audit engine, `googleapis` — is pulled 
 via `await import(...)` **inside the handler, after session/auth validation**.
 
 Consequence: each route inlines its own copy of the session/cookie/OAuth
-machinery (cookie parse, HMAC-signed-cookie decode, token refresh, `sendJson`,
+machinery (cookie parse, encrypted-cookie decode, token refresh, `sendJson`,
 `sendGtmError`). This duplication is **intentional and load-bearing** — a prior
 attempt to import a shared `api/_lib/*` module caused
 `FUNCTION_INVOCATION_FAILED` at cold start. The duplicated blocks are annotated
@@ -172,11 +172,13 @@ the inlining it would replace.)
 
 ### 3.3 Session / OAuth lifecycle
 
-Stateless **signed-cookie** sessions: tokens live in the cookie itself, signed
-with `PORTAL_SESSION_SECRET` via HMAC-SHA256 (`HttpOnly`, `SameSite=Lax`,
-`Secure` in prod, 30-day max-age). `getValidAccessToken` decodes the cookie,
-returns the access token if unexpired, otherwise refreshes via Google's token
-endpoint and rotates the cookie. The Express dev server (`server/gtm/oauth.ts`)
+Stateless **encrypted-cookie** sessions: tokens live in the cookie itself,
+sealed with AES-256-GCM under a key derived from `PORTAL_SESSION_SECRET`
+(`v1e` format; `HttpOnly`, `SameSite=Lax`, `Secure` in prod, 30-day max-age).
+The sealed payload carries `iat` (sign-in time) and every route rejects a
+session older than 30 days on the server. `getValidAccessToken` decodes the
+cookie, returns the access token if unexpired, otherwise refreshes via Google's
+token endpoint and rotates the cookie, keeping the original `iat`. The Express dev server (`server/gtm/oauth.ts`)
 additionally keeps a legacy in-memory map — fine locally, unsuitable for
 Vercel's multi-instance model, which is exactly why production is cookie-based.
 
@@ -191,7 +193,7 @@ sync by hand.
 lazily import the relevant engine from `apps/portal/shared/`, run it against
 GTM data (and optional runtime-capture evidence), and return JSON. The Consent
 Mode v2 engine (`shared/consent-audit.ts`) is framework-free and covered by
-`shared/__tests__/consent-audit.node.test.ts` (must stay **170/170**, runner
+`shared/__tests__/consent-audit.node.test.ts` (must stay **188/188**, runner
 fails under 100 cases).
 
 ## 4. Runtime worker (`apps/runtime-worker/`)
@@ -200,9 +202,11 @@ A standalone `node:http` server exposing `POST /capture`. It drives headless
 Chromium (Playwright, lazily loaded) to load pages and emit the structured
 runtime-capture artifact the portal audits consume. It is deliberately **not**
 deployable to Vercel (needs a real browser host: Render/Fly/Railway/VPS).
-Security is opt-in via env: bearer-token auth (`RUNTIME_WORKER_TOKEN`,
-timing-safe compared), host allowlist, per-request URL cap, and navigation
-timeouts. It never writes to GTM/GA4 and never persists captures.
+Bearer-token auth (`RUNTIME_WORKER_TOKEN`, timing-safe compared) is required:
+without it the server refuses to start unless
+`RUNTIME_WORKER_ALLOW_UNAUTHENTICATED=true`, which binds 127.0.0.1 only. Also
+via env: host allowlist, per-request URL cap, a cap on captures in flight, and
+navigation timeouts. It never writes to GTM/GA4 and never persists captures.
 
 ## 5. Release / CI / deploy
 
@@ -266,5 +270,5 @@ timeouts. It never writes to GTM/GA4 and never persists captures.
 - Read-only defaults and the `confirm` + capability-flag gates (§2.5).
 - All existing tool names, routes, and response shapes.
 - The `node:*`-only top-level import rule for `api/**` (§3.2).
-- Consent v2 suite at 170/170.
+- Consent v2 suite at 188/188.
 - Portal mobile/tablet/desktop compatibility.

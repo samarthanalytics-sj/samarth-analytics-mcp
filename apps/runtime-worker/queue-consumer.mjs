@@ -31,6 +31,7 @@ import {
   summarizeCapture,
   PlaywrightMissingError,
 } from "./capture.mjs";
+import { urlAllowed } from "./url-guard.mjs";
 
 /**
  * @typedef {Object} RuntimeCaptureJobPayload
@@ -55,14 +56,51 @@ import {
  * matched to apps/portal/shared/jobs.ts so the durable Postgres/QStash client
  * drops in without touching the loop below.
  *
+ * `complete`/`fail` are fenced on the lease: they must reject unless the job
+ * is still leased to `workerId` and the lease has not expired (durable SQL:
+ * `... WHERE id = $1 AND status = 'leased' AND leased_by = $2 AND
+ * lease_expires_at > now()`), so a worker whose lease lapsed cannot overwrite
+ * or requeue a job another worker now holds.
+ *
  * @typedef {Object} QueueClient
  * @property {(workerId: string, leaseSeconds: number) => Promise<QueuedJob|null>} lease
- * @property {(id: string, result: object) => Promise<void>} complete
- * @property {(id: string, error: string) => Promise<void>} fail
+ * @property {(id: string, workerId: string, result: object) => Promise<void>} complete
+ * @property {(id: string, workerId: string, error: string) => Promise<void>} fail
  */
 
 const DEFAULT_LEASE_SECONDS = 120;
 const DEFAULT_POLL_MS = 2000;
+
+/**
+ * The same URL admission HTTP mode applies in server.mjs before any browser is
+ * launched: non-empty, at most RUNTIME_WORKER_MAX_URLS (hard cap 25), and every
+ * URL through the SSRF guard with RUNTIME_WORKER_ALLOWLIST. Read at call time so
+ * a queued job is held to the worker's current configuration.
+ *
+ * @param {unknown} rawUrls
+ * @returns {string[]} the admitted URLs
+ */
+function admitJobUrls(rawUrls) {
+  const allowlist = (process.env.RUNTIME_WORKER_ALLOWLIST ?? "")
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  const maxUrls = Math.min(Number(process.env.RUNTIME_WORKER_MAX_URLS) || 10, 25);
+  const urls = Array.isArray(rawUrls)
+    ? rawUrls.filter((u) => typeof u === "string" && u.trim())
+    : [];
+  if (urls.length === 0) {
+    throw new Error("bad_request: `urls` must be a non-empty array of http(s) URLs.");
+  }
+  if (urls.length > maxUrls) {
+    throw new Error(`too_many_urls: at most ${maxUrls} URLs per job.`);
+  }
+  for (const u of urls) {
+    const check = urlAllowed(u, allowlist);
+    if (!check.ok) throw new Error(`url_not_allowed: ${u}: ${check.reason}`);
+  }
+  return urls;
+}
 
 /**
  * Drive one runtime-capture job using the existing read-only capture core.
@@ -75,6 +113,8 @@ const DEFAULT_POLL_MS = 2000;
  * @param {{ wait?: number, timeout?: number }} [clamp]
  */
 export async function processCaptureJob(payload, clamp = {}) {
+  // Rejects (→ queue.fail) before any browser launches if a URL is not admitted.
+  const urls = admitJobUrls(payload?.urls);
   const wait = Math.min(Number(payload.wait) || 4000, clamp.wait ?? 8000);
   const timeout = Math.min(Number(payload.timeout) || 30000, clamp.timeout ?? 30000);
   const wantsMultiState =
@@ -82,11 +122,11 @@ export async function processCaptureJob(payload, clamp = {}) {
 
   const artifact = wantsMultiState
     ? await captureConsentStates(
-        { urls: payload.urls, consentStates: payload.consentStates, actions: payload.actions },
+        { urls, consentStates: payload.consentStates, actions: payload.actions },
         { wait, timeout },
       )
     : await capture(
-        { urls: payload.urls, consentState: payload.consentState, actions: payload.actions },
+        { urls, consentState: payload.consentState, actions: payload.actions },
         { wait, timeout },
       );
 
@@ -99,7 +139,7 @@ export async function processCaptureJob(payload, clamp = {}) {
     artifactUri: null,
     schema: artifact.schema ?? null,
     summary: {
-      urls: Array.isArray(payload.urls) ? payload.urls.length : 0,
+      urls: urls.length,
       consentStates: wantsMultiState ? payload.consentStates.length : undefined,
       trackerHits,
     },
@@ -137,17 +177,28 @@ export async function runQueueConsumer(queue, opts = {}) {
       continue;
     }
     log(`leased ${job.id} (${job.payload?.urls?.length ?? 0} urls)`);
+    let outcome;
     try {
-      const result = await processCaptureJob(job.payload, opts.clamp);
-      await queue.complete(job.id, result);
-      log(`completed ${job.id}`);
+      outcome = { ok: true, result: await processCaptureJob(job.payload, opts.clamp) };
     } catch (e) {
       const reason =
         e instanceof PlaywrightMissingError
           ? `playwright_missing: ${e.message}`
           : String(e?.message ?? e).slice(0, 500);
-      await queue.fail(job.id, reason);
-      log(`failed ${job.id}: ${reason}`);
+      outcome = { ok: false, reason };
+    }
+    try {
+      if (outcome.ok) {
+        await queue.complete(job.id, workerId, outcome.result);
+        log(`completed ${job.id}`);
+      } else {
+        await queue.fail(job.id, workerId, outcome.reason);
+        log(`failed ${job.id}: ${outcome.reason}`);
+      }
+    } catch (e) {
+      // Usually a stale lease: ours expired and the job was reclaimed, so the
+      // report is dropped (the current lease holder owns the job). Not retried.
+      log(`could not report ${job.id}: ${String(e?.message ?? e).slice(0, 500)}`);
     }
   }
   log("stopped");
@@ -191,19 +242,24 @@ export class InMemoryQueueClient {
     job.leasedBy = workerId;
     return { id: job.id, orgId: job.orgId, payload: job.payload };
   }
-  async complete(id, result) {
-    const job = this.byId.get(id);
-    if (job) {
-      job.status = "succeeded";
-      job.result = result;
-    }
+  async complete(id, workerId, result) {
+    const job = this.#requireLease(id, workerId);
+    job.status = "succeeded";
+    job.result = result;
+    job.leasedBy = null;
   }
-  async fail(id, error) {
+  async fail(id, workerId, error) {
+    const job = this.#requireLease(id, workerId);
+    job.status = "failed";
+    job.lastError = error;
+    job.leasedBy = null;
+  }
+  #requireLease(id, workerId) {
     const job = this.byId.get(id);
-    if (job) {
-      job.status = "failed";
-      job.lastError = error;
+    if (!job || job.status !== "leased" || job.leasedBy !== workerId) {
+      throw new Error(`stale lease: job ${id} is not leased to ${workerId}`);
     }
+    return job;
   }
 }
 

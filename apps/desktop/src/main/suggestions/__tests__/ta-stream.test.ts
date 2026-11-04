@@ -90,7 +90,7 @@ check('status: weird/absent → unknown', mapExecuteStatus('zzz') === 'unknown' 
   check('containersSeenOnPage: lists only GTM- ids', JSON.stringify(containersSeenOnPage(cap)) === JSON.stringify(['GTM-EXAMPLE1']));
 }
 
-// ── the ChewBox case: selected container IS on the page (a TA chip) but TA debugged a DIFFERENT one ─
+// ── the real-site case: selected container IS on the page (a TA chip) but TA debugged a DIFFERENT one ─
 // TA lists GTM-EXAMPLE2 among the page's Google tags, yet defaulted to debugging GTM-OTHER1 (no
 // access), so no debug frames ever streamed for GTM-EXAMPLE2. The `onPage` chip list is the only
 // signal that GTM-EXAMPLE2 is present — the diagnostic must say "installed but not in debug", NOT
@@ -100,12 +100,12 @@ check('status: weird/absent → unknown', mapExecuteStatus('zzz') === 'unknown' 
   const cap = parseTaFrames([starting('GTM-OTHER1', false), details('GTM-OTHER1', false)]);
   const onPage = ['GTM-OTHER1', 'GTM-EXAMPLE2', 'AW-111222333', 'G-EXAMPLE11'];
   const msg = containerDebugProblem(cap, 'GTM-EXAMPLE2', onPage) ?? '';
-  check('chewbox: says the selected container IS installed', /GTM-EXAMPLE2 IS installed on this page/.test(msg));
-  check('chewbox: names the container TA defaulted to', msg.includes('GTM-OTHER1'));
-  check('chewbox: never claims no container was seen', !/saw no/.test(msg));
-  check('chewbox: steers to the Preview snippet', /Preview snippet/.test(msg));
+  check('not in debug: says the selected container IS installed', /GTM-EXAMPLE2 IS installed on this page/.test(msg));
+  check('not in debug: names the container TA defaulted to', msg.includes('GTM-OTHER1'));
+  check('not in debug: never claims no container was seen', !/saw no/.test(msg));
+  check('not in debug: steers to the Preview snippet', /Preview snippet/.test(msg));
   // Lower-case selected id must still match a chip regardless of case.
-  check('chewbox: match is case-insensitive', /IS installed/.test(containerDebugProblem(cap, 'gtm-example2', onPage) ?? ''));
+  check('not in debug: match is case-insensitive', /IS installed/.test(containerDebugProblem(cap, 'gtm-example2', onPage) ?? ''));
 }
 
 // ── worst-status-wins: failed is never papered over by a later running frame ───────────────────────

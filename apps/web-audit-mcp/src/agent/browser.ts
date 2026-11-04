@@ -18,11 +18,15 @@ export interface PwResponse {
   headers(): Record<string, string>;
   /** All response headers, Set-Cookie included (multiple values joined with "\n"). */
   allHeaders(): Promise<Record<string, string>>;
+  /** The request this answered: the LAST hop of a redirect chain. */
+  request?(): PwRequest;
 }
 export interface PwRequest {
   url(): string;
   method(): string;
   resourceType(): string;
+  /** The request that redirected to this one; null when it was not reached by a redirect. */
+  redirectedFrom?(): PwRequest | null;
 }
 export interface PwElement {
   click(opts?: { timeout?: number }): Promise<void>;
@@ -165,8 +169,15 @@ export interface PageInstruments {
   consoleErrors: string[];
   pageErrors: string[];
   requestCount: () => number;
-  /** Call immediately before goto so hit timestamps are nav-relative. */
+  /** Call immediately before goto so hit timestamps are nav-relative (it also starts a new landing check). */
   markNavigationStart: () => void;
+  /**
+   * Call after goto, and again after reading the page: the refusal note when this navigation reached
+   * an address the SSRF guard refuses through a redirect hop (see watchLanding), else null. On a
+   * refusal the hits and errors recorded since markNavigationStart are dropped and the page is left
+   * on about:blank; the caller must discard anything it read from the page.
+   */
+  blockedLanding: (resp?: PwResponse | null) => Promise<string | null>;
 }
 
 const MAX_HITS = 1000;
@@ -222,9 +233,104 @@ export const DATALAYER_HOOK = `(() => {
   } catch {}
 })();`;
 
+// ── Redirect landing check ──────────────────────────────────────────────────
+
 /**
- * Open a new instrumented page: SSRF route guard on every request (private
- * ranges always blocked, even via redirects), tracker classification with
+ * Playwright calls a route handler only for the FIRST URL of a redirect chain; it continues every
+ * redirect hop itself. So a context.route guard cannot stop a public URL that 302s to a private,
+ * loopback or metadata address: the browser loads it. Stopping that request (a blind GET) needs
+ * egress control outside the browser, such as an SSRF-filtering proxy or Chromium's
+ * --host-resolver-rules. What this guarantees is that nothing is READ from such a page.
+ */
+export interface LandingWatch {
+  /** A new top-level navigation starts: hops seen before it no longer count. */
+  reset(): void;
+  /**
+   * The refusal note when this navigation reached an address the request guard refuses, through any
+   * redirect hop the page saw (main frame, iframe or subresource), the response's own redirect chain,
+   * or where the page and its frames now are; null when it did not. A refusal moves the page to
+   * about:blank and holds until reset().
+   */
+  blockedLanding(resp?: PwResponse | null): Promise<string | null>;
+}
+
+const MAX_REDIRECT_CHAIN = 25;
+
+function landingRefusal(url: string): string {
+  let where: string;
+  try {
+    where = new URL(url).host;
+  } catch {
+    where = url.slice(0, 80);
+  }
+  return `blocked: redirected to ${where}, which the SSRF guard refuses (private, loopback or metadata address); nothing was read from the page`;
+}
+
+/** Re-check every redirect hop of `page` with `requestGuard`; register before the first goto. */
+export function watchLanding(page: PwPage, requestGuard: (rawUrl: string) => Promise<boolean>): LandingWatch {
+  let generation = 0;
+  let blocked: string | null = null;
+  let left = false;
+  const pending = new Set<Promise<void>>();
+  const allowed = (url: string): Promise<boolean> => requestGuard(url).catch(() => false);
+  const refuse = (url: string, gen: number): void => {
+    if (gen === generation && blocked === null) blocked = url;
+  };
+
+  page.on('request', (req: PwRequest) => {
+    if (!req.redirectedFrom?.()) return;
+    const url = req.url();
+    const gen = generation;
+    const check = allowed(url).then((ok) => {
+      if (!ok) refuse(url, gen);
+    });
+    pending.add(check);
+    void check.finally(() => pending.delete(check));
+  });
+
+  return {
+    reset() {
+      generation += 1;
+      blocked = null;
+      left = false;
+    },
+    async blockedLanding(resp) {
+      if (blocked === null) {
+        const urls = new Set<string>();
+        let req = resp?.request?.() ?? null;
+        for (let i = 0; req && i < MAX_REDIRECT_CHAIN; i++) {
+          urls.add(req.url());
+          req = req.redirectedFrom?.() ?? null;
+        }
+        try {
+          urls.add(page.url());
+          for (const frame of page.frames()) urls.add(frame.url());
+        } catch {
+          /* page closed: nothing more to read from it */
+        }
+        await Promise.all([...pending]);
+        const gen = generation;
+        for (const url of urls) {
+          if (blocked !== null) break;
+          // about:blank, data:, chrome-error:// (a frame the route guard aborted) reach no address.
+          if (!/^https?:/i.test(url)) continue;
+          if (!(await allowed(url))) refuse(url, gen);
+        }
+      }
+      if (blocked === null) return null;
+      if (!left) {
+        left = true;
+        await page.goto('about:blank').catch(() => null);
+      }
+      return landingRefusal(blocked);
+    },
+  };
+}
+
+/**
+ * Open a new instrumented page: SSRF route guard on every routed request
+ * (private ranges always blocked) plus a landing check for the redirect hops
+ * Playwright never routes (blockedLanding), tracker classification with
  * nav-relative timing, console/page error capture, dataLayer hook.
  *
  * `requestGuard` defaults to a DNS-resolving guard scoped to this call; tests
@@ -234,11 +340,12 @@ export async function openInstrumentedPage(
   context: PwContext,
   requestGuard: (rawUrl: string) => Promise<boolean> = createRequestGuard(),
 ): Promise<PageInstruments> {
-  // Defence in depth: subresources and redirects may go anywhere public, but
-  // never to private/loopback/metadata hosts (allowlist applies only to
-  // top-level navigation, at the tool boundary). Named hosts are DNS-resolved,
-  // because a hostname-string check passes a name that resolves inside
+  // Defence in depth: subresources may go anywhere public, but never to
+  // private/loopback/metadata hosts (allowlist applies only to top-level
+  // navigation, at the tool boundary). Named hosts are DNS-resolved, because a
+  // hostname-string check passes a name that resolves inside
   // (metadata.google.internal, 127.0.0.1.nip.io, a docker service name).
+  // Redirect hops never reach this handler; watchLanding re-checks them.
   await context.route('**/*', (route) =>
     requestGuard(route.request().url()).then(
       (ok) => (ok ? route.continue() : route.abort()),
@@ -248,12 +355,15 @@ export async function openInstrumentedPage(
 
   const page = await context.newPage();
   await page.addInitScript({ content: DATALAYER_HOOK });
+  const landing = watchLanding(page, requestGuard);
 
   const trackerHits: CapturedHit[] = [];
   const consoleErrors: string[] = [];
   const pageErrors: string[] = [];
   let navStart = Date.now();
   let requests = 0;
+  // Where each record stood at markNavigationStart, so a refused landing drops only its own.
+  let marks = { hits: 0, consoleErrors: 0, pageErrors: 0 };
 
   page.on('request', (req: PwRequest) => {
     requests += 1;
@@ -301,6 +411,17 @@ export async function openInstrumentedPage(
     requestCount: () => requests,
     markNavigationStart: () => {
       navStart = Date.now();
+      landing.reset();
+      marks = { hits: trackerHits.length, consoleErrors: consoleErrors.length, pageErrors: pageErrors.length };
+    },
+    blockedLanding: async (resp) => {
+      const note = await landing.blockedLanding(resp);
+      if (note) {
+        trackerHits.length = Math.min(trackerHits.length, marks.hits);
+        consoleErrors.length = Math.min(consoleErrors.length, marks.consoleErrors);
+        pageErrors.length = Math.min(pageErrors.length, marks.pageErrors);
+      }
+      return note;
     },
   };
 }

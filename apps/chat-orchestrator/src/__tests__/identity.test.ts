@@ -7,7 +7,8 @@
  */
 import assert from 'node:assert/strict';
 import { McpConnection } from '../mcp-client.js';
-import { McpPool } from '../mcp-pool.js';
+import { McpPool, McpPoolCapacityError } from '../mcp-pool.js';
+import { deadlineHolding, DeadlineError } from '../deadline.js';
 import {
   GoogleIdentityError,
   isGoogleAuthFailure,
@@ -89,6 +90,91 @@ test('single-identity mode leaves the environment untouched', () => {
   const env = childEnv(cfgWith(AMBIENT), undefined);
   assert.equal(env.GTM_MCP_TOKEN_FILE, '/data/.gtm-mcp-tokens.json');
   assert.equal(env.GOOGLE_ACCESS_TOKEN, undefined);
+});
+
+console.log('http transport cannot carry a per-user identity');
+
+await testAsync('a per-user connection refuses http instead of silently dropping the token', async () => {
+  // The http branch only ever sends MCP_AUTH_TOKEN. Connecting anyway would run Alice's "own"
+  // session as the remote server's identity, so the connection must refuse before dialling.
+  const cfg = {
+    mcp: { transport: 'http', url: 'http://127.0.0.1:1/mcp', env: {} },
+  } as unknown as OrchestratorConfig;
+  await assert.rejects(
+    () => new McpConnection(cfg, 'ya29.alice').connect(),
+    /per-user Google identity cannot be sent over MCP_TRANSPORT=http/,
+  );
+});
+
+/** Runs `fn` with exactly these variables set (undefined = unset), restoring them afterwards. */
+function withEnv<T>(vars: Record<string, string | undefined>, fn: () => T): T {
+  const saved: Record<string, string | undefined> = {};
+  for (const [key, value] of Object.entries(vars)) {
+    saved[key] = process.env[key];
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  try {
+    return fn();
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
+
+/** A complete per-user (supabase) configuration, so the transport is the only thing under test. */
+const PER_USER_ENV: Record<string, string | undefined> = {
+  NODE_ENV: undefined,
+  ORCHESTRATOR_DEV_NO_AUTH: undefined,
+  ORCHESTRATOR_SLACK_WEBHOOK_URL: undefined,
+  ORCHESTRATOR_TIMEZONE: undefined,
+  SUPABASE_JWKS_URL: 'https://p.supabase.co/auth/v1/.well-known/jwks.json',
+  OPENAI_API_KEY: 'sk-test',
+  GOOGLE_IDENTITY_MODE: 'supabase',
+  SUPABASE_FUNCTIONS_URL: 'https://p.supabase.co/functions/v1',
+  SUPABASE_ANON_KEY: 'anon',
+  GOOGLE_OAUTH_CLIENT_ID: 'cid.apps.googleusercontent.com',
+  GOOGLE_OAUTH_CLIENT_SECRET: 'csecret',
+  GOOGLE_ACCESS_TOKEN: undefined,
+  MCP_TRANSPORT: undefined,
+  MCP_URL: undefined,
+};
+
+// Imported here, not at the top: loading config.ts reads .env files into process.env, and only these
+// tests should see that.
+const { loadConfig } = await import('../config.js');
+
+test('boot refuses MCP_TRANSPORT=http with any per-user identity mode', () => {
+  const http = { MCP_TRANSPORT: 'http', MCP_URL: 'http://127.0.0.1:3001/mcp' };
+  for (const extra of [
+    {},
+    { NODE_ENV: 'production' },
+    { GOOGLE_IDENTITY_MODE: 'static', GOOGLE_ACCESS_TOKEN: 'ya29.shared' },
+  ]) {
+    assert.throws(
+      () => withEnv({ ...PER_USER_ENV, ...http, ...extra }, () => loadConfig()),
+      /MCP_TRANSPORT=http cannot carry a per-user Google token/,
+      `accepted http with ${JSON.stringify(extra)}`,
+    );
+  }
+});
+
+test('stdio per-user mode and single-identity http still load', () => {
+  assert.equal(withEnv(PER_USER_ENV, () => loadConfig()).mcp.transport, 'stdio');
+  const inheritHttp = withEnv(
+    { ...PER_USER_ENV, GOOGLE_IDENTITY_MODE: 'inherit', MCP_TRANSPORT: 'http', MCP_URL: 'http://127.0.0.1:3001/mcp' },
+    () => loadConfig(),
+  );
+  assert.equal(inheritHttp.mcp.transport, 'http');
+});
+
+test('an unknown MCP_TRANSPORT is refused rather than read as stdio', () => {
+  assert.throws(
+    () => withEnv({ ...PER_USER_ENV, MCP_TRANSPORT: 'htp' }, () => loadConfig()),
+    /MCP_TRANSPORT must be stdio or http/,
+  );
 });
 
 console.log('auth failure detection');
@@ -272,23 +358,31 @@ console.log('pool: replacing a child under a running turn');
  * A pool whose children are never spawned. connect/close are swapped on the prototype for the
  * duration of `fn`, and every close is recorded, which is the thing under test.
  */
-async function withStubbedChildren(fn: (closed: McpConnection[]) => Promise<void>): Promise<void> {
+async function withStubbedChildren(
+  fn: (closed: McpConnection[], spawned: McpConnection[]) => Promise<void>,
+  opts: { closeDelayMs?: number } = {},
+): Promise<void> {
   const proto = McpConnection.prototype as unknown as { connect(): Promise<void>; close(): Promise<void> };
   const { connect, close } = proto;
   const closed: McpConnection[] = [];
-  proto.connect = async () => {};
+  const spawned: McpConnection[] = [];
+  proto.connect = async function (this: McpConnection) {
+    spawned.push(this);
+  };
   proto.close = async function (this: McpConnection) {
+    // A real close waits for the child process to exit, which is not instant.
+    if (opts.closeDelayMs) await new Promise((r) => setTimeout(r, opts.closeDelayMs));
     closed.push(this);
   };
   try {
-    await fn(closed);
+    await fn(closed, spawned);
   } finally {
     proto.connect = connect;
     proto.close = close;
   }
 }
 
-function poolWithTokens(): { pool: McpPool; setToken(t: string): void } {
+function poolWithTokens(maxSessions = 5): { pool: McpPool; setToken(t: string): void } {
   let current = 'ya29.first';
   const tokens: GoogleTokenProvider = {
     getIdentity: async () => ({ accessToken: current }),
@@ -297,7 +391,7 @@ function poolWithTokens(): { pool: McpPool; setToken(t: string): void } {
       return { accessToken: current };
     },
   };
-  const cfg = { pool: { maxSessions: 5, idleTtlMs: 60_000 }, mcp: { env: {} } } as unknown as OrchestratorConfig;
+  const cfg = { pool: { maxSessions, idleTtlMs: 60_000 }, mcp: { env: {} } } as unknown as OrchestratorConfig;
   return { pool: new McpPool(cfg, tokens), setToken: (t) => (current = t) };
 }
 
@@ -341,6 +435,161 @@ await testAsync('an identity refresh in one turn leaves the other turn its child
     pool.release('u', turnB);
     assert.ok(closed.includes(turnB));
     assert.equal(closed.includes(refreshed), false, 'the replacement stays pooled for the next turn');
+    assert.deepEqual(pool.stats(), { sessions: 1, busy: 0 });
+  });
+});
+
+console.log('pool: a child that has exited');
+
+/** What the SDK leaves behind once the child process exits: a client with no transport. */
+function markExited(connection: McpConnection): void {
+  Object.assign(connection as unknown as Record<string, unknown>, { client: { transport: undefined } });
+}
+
+await testAsync('an idle child that exited is replaced, not handed out again', async () => {
+  await withStubbedChildren(async (closed) => {
+    const { pool } = poolWithTokens();
+    const first = await pool.acquire('u', 'jwt');
+    pool.release('u', first);
+    markExited(first);
+
+    // Same user, same token: before, the entry was reused and every call failed "Not connected".
+    const second = await pool.acquire('u', 'jwt');
+    assert.notEqual(second, first, 'the dead child was handed out again');
+    assert.ok(closed.includes(first), 'the dead child was not cleaned up');
+    assert.deepEqual(pool.stats(), { sessions: 1, busy: 1 });
+    pool.release('u', second);
+  });
+});
+
+await testAsync('a dead child under a running turn is closed at once, not retired', async () => {
+  await withStubbedChildren(async (closed) => {
+    const { pool } = poolWithTokens();
+    const running = await pool.acquire('u', 'jwt');
+    markExited(running);
+
+    const next = await pool.acquire('u', 'jwt');
+    assert.notEqual(next, running);
+    // Retired, it would count as a live, busy session until the turn on it gave up.
+    assert.ok(closed.includes(running), 'a dead child was kept as if it were still serving');
+    pool.release('u', running);
+    assert.deepEqual(pool.stats(), { sessions: 1, busy: 1 });
+    pool.release('u', next);
+  });
+});
+
+console.log('pool: concurrent requests replacing the same child');
+
+/**
+ * Two requests from one user arrive together and both find the child unusable. Only one may start a
+ * replacement. The first used to await closing the old child before claiming the user's start slot,
+ * so the second spawned meanwhile; the first then spawned again over it, and the second's child was
+ * left in no map at all: never released, never swept, never closed, and one pool slot short forever.
+ */
+async function raceTwoAcquires(prepare: (pool: McpPool, setToken: (t: string) => void) => Promise<void>): Promise<void> {
+  await withStubbedChildren(
+    async (closed, spawned) => {
+      const { pool, setToken } = poolWithTokens();
+      await prepare(pool, setToken);
+      const before = spawned.length;
+
+      const [a, b] = await Promise.all([pool.acquire('u', 'jwt'), pool.acquire('u', 'jwt')]);
+      assert.equal(spawned.length - before, 1, `${spawned.length - before} replacement children started for one user`);
+      assert.equal(a, b, 'the two requests were handed different children');
+      assert.deepEqual(pool.stats(), { sessions: 1, busy: 1 });
+
+      pool.release('u', a);
+      pool.release('u', b);
+      await pool.shutdown();
+      const leaked = spawned.filter((c) => !closed.includes(c));
+      assert.equal(leaked.length, 0, `${leaked.length} child(ren) outlived the pool`);
+    },
+    { closeDelayMs: 20 },
+  );
+}
+
+await testAsync('two concurrent acquires after the child exited start exactly one replacement', async () => {
+  await raceTwoAcquires(async (pool) => {
+    const first = await pool.acquire('u', 'jwt');
+    pool.release('u', first);
+    markExited(first);
+  });
+});
+
+await testAsync('two concurrent acquires after a token change start exactly one replacement', async () => {
+  await raceTwoAcquires(async (pool, setToken) => {
+    const first = await pool.acquire('u', 'jwt');
+    pool.release('u', first);
+    setToken('ya29.second');
+  });
+});
+
+console.log('pool: capacity counts replaced children still finishing a turn');
+
+await testAsync('a refresh at a full, busy pool is refused rather than going past the cap', async () => {
+  await withStubbedChildren(async () => {
+    const { pool } = poolWithTokens(2);
+    const a = await pool.acquire('a', 'jwt');
+    const b = await pool.acquire('b', 'jwt');
+    // A's old child is retired, still alive under its turn, so a replacement would be a third.
+    // Its own error type, so the turn reports a capacity limit rather than an authorization failure.
+    await assert.rejects(
+      () => pool.refreshIdentity('a', 'jwt'),
+      (err: unknown) => err instanceof McpPoolCapacityError && /All 2 MCP sessions are busy/.test(err.message),
+    );
+    assert.ok(pool.stats().sessions <= 2, `${pool.stats().sessions} live children against a cap of 2`);
+    pool.release('a', a);
+    pool.release('b', b);
+  });
+});
+
+await testAsync('room for a replacement comes from an idle child, not from past the cap', async () => {
+  await withStubbedChildren(async (closed) => {
+    const { pool } = poolWithTokens(2);
+    const a = await pool.acquire('a', 'jwt');
+    const b = await pool.acquire('b', 'jwt');
+    pool.release('b', b);
+    const refreshed = await pool.refreshIdentity('a', 'jwt');
+    assert.ok(closed.includes(b), 'the idle child was kept and the cap exceeded instead');
+    assert.equal(closed.includes(a), false, 'the busy child was closed under its turn');
+    assert.deepEqual(pool.stats(), { sessions: 2, busy: 2 });
+    pool.release('a', a);
+    pool.release('a', refreshed);
+    assert.deepEqual(pool.stats(), { sessions: 1, busy: 0 });
+  });
+});
+
+await testAsync('a resource request past its deadline keeps its child until the work finishes', async () => {
+  // withUserMcp's path: a 25-tag create overruns the deadline and the client gets a 504, but the
+  // creates keep running on this child. It used to be released at the deadline, so a token change
+  // on the user's next request closed it under the batch.
+  await withStubbedChildren(async (closed) => {
+    const { pool, setToken } = poolWithTokens();
+    const child = await pool.acquire('u', 'jwt');
+    let finishBatch!: () => void;
+    const batch = new Promise<void>((r) => (finishBatch = r));
+    // The deadline's timer is unref'd, so with only a pending promise the script would exit first.
+    const keepAlive = setTimeout(() => {}, 500);
+    try {
+      await assert.rejects(
+        deadlineHolding(() => batch, 5, 'too slow', () => pool.release('u', child)),
+        DeadlineError,
+      );
+    } finally {
+      clearTimeout(keepAlive);
+    }
+
+    setToken('ya29.second');
+    const next = await pool.acquire('u', 'jwt');
+    assert.notEqual(next, child);
+    assert.equal(closed.includes(child), false, 'the child was closed while its writes were still running');
+    assert.deepEqual(pool.stats(), { sessions: 2, busy: 2 }, 'the overrunning work must still count as busy');
+
+    finishBatch();
+    await batch;
+    await new Promise((r) => setTimeout(r, 5));
+    assert.ok(closed.includes(child), 'closed once the work that held it has settled');
+    pool.release('u', next);
     assert.deepEqual(pool.stats(), { sessions: 1, busy: 0 });
   });
 });

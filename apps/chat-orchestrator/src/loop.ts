@@ -10,6 +10,7 @@ import type { OpenAiClient } from './openai.js';
 import { capToolResult, compactToolHistory, scopeTools, toOpenAiTools } from './tools.js';
 import { buildSituationalContext, buildStaticSystem } from './prompts.js';
 import { GoogleIdentityError, isGoogleAuthFailure } from './google-identity.js';
+import { McpPoolCapacityError } from './mcp-pool.js';
 import { forLog, userRef } from './redact.js';
 import { summarizeWrite, type ApprovalBroker } from './approvals.js';
 import { approvalGate } from './writeTiers.js';
@@ -38,6 +39,9 @@ import type { ToolDef } from './types.js';
 import type { ChatContext, ChatMessage, StreamEvent } from './types.js';
 import type { EventInput } from './events.js';
 import { explainError } from './explain.js';
+
+/** The MCP SDK's own per-request default, kept as the floor for a chat tool call. */
+const MIN_TOOL_TIMEOUT_MS = 60_000;
 
 export interface RunTurnArgs {
   cfg: OrchestratorConfig;
@@ -104,17 +108,34 @@ export async function runTurn(args: RunTurnArgs): Promise<void> {
   const onCallerAbort = (): void => turn.abort();
   args.signal.addEventListener('abort', onCallerAbort, { once: true });
   if (args.signal.aborted) turn.abort();
+  // Filled in by runTurnWithin once there is something to bill, so a turn that THROWS is closed too.
+  // A model call that fails on its own (its request timer, a 400 context_length_exceeded, a 429
+  // after the retries) used to leave without finish(): the tokens of every earlier round went
+  // unbilled and the assistant row was never written. The caller still reports the error.
+  const closing: { finish?: (reason: string) => void } = {};
   try {
-    await runTurnWithin(args, turn.signal);
+    await runTurnWithin(args, turn.signal, closing);
+  } catch (err) {
+    closing.finish?.('error');
+    throw err;
   } finally {
     clearTimeout(timer);
     args.signal.removeEventListener('abort', onCallerAbort);
   }
 }
 
-async function runTurnWithin(args: RunTurnArgs, turnSignal: AbortSignal): Promise<void> {
+async function runTurnWithin(
+  args: RunTurnArgs,
+  turnSignal: AbortSignal,
+  closing: { finish?: (reason: string) => void },
+): Promise<void> {
   const { cfg, llm, context, user, emit, signal } = args;
   const startedAt = Date.now();
+  // An MCP tool call may use what is left of the turn, and never less than the 60 s the SDK applied
+  // before: with no timeout passed, a slow audit or export failed at one minute with minutes to spare.
+  const toolTimeout = (): { timeoutMs: number } => ({
+    timeoutMs: Math.max(MIN_TOOL_TIMEOUT_MS, cfg.limits.maxTurnMs - (Date.now() - startedAt)),
+  });
   let mcp = args.mcp;
   // One refresh per turn. A second failure is a real authorization problem, not an expiry, and
   // looping on it would just burn tokens.
@@ -343,8 +364,14 @@ async function runTurnWithin(args: RunTurnArgs, turnSignal: AbortSignal): Promis
     propertyId: context.propertyId,
   };
 
-  /** Writes the closing record for this turn. Called on every exit path, including the budgets. */
+  /**
+   * Writes the closing record for this turn. Called on every exit path, including the budgets and,
+   * through runTurn, a thrown error. Once only, so a throw after a normal finish bills nothing twice.
+   */
+  let finished = false;
   const finish = (reason: string): void => {
+    if (finished) return;
+    finished = true;
     // Billed on every exit path, including the budget stops. A turn that was cut short still cost
     // whatever it spent before stopping, and not charging for it would let a caller get unlimited
     // work by always hitting the ceiling.
@@ -358,6 +385,7 @@ async function runTurnWithin(args: RunTurnArgs, turnSignal: AbortSignal): Promis
       stopReason: reason,
     });
   };
+  closing.finish = finish;
 
   for (;;) {
     if (signal.aborted) {
@@ -771,7 +799,7 @@ async function runTurnWithin(args: RunTurnArgs, turnSignal: AbortSignal): Promis
         parsedArgs.confirm = true;
       }
 
-      let { ok, text } = await mcp.callTool(call.function.name, parsedArgs);
+      let { ok, text } = await mcp.callTool(call.function.name, parsedArgs, toolTimeout());
 
       if (!ok && !authRetryUsed && args.onAuthFailure && isGoogleAuthFailure(text)) {
         authRetryUsed = true;
@@ -783,12 +811,18 @@ async function runTurnWithin(args: RunTurnArgs, turnSignal: AbortSignal): Promis
         );
         try {
           mcp = await args.onAuthFailure();
-          ({ ok, text } = await mcp.callTool(call.function.name, parsedArgs));
+          ({ ok, text } = await mcp.callTool(call.function.name, parsedArgs, toolTimeout()));
         } catch (err) {
           text =
-            err instanceof GoogleIdentityError
-              ? `Google authorization failed: ${err.message}`
-              : `Google authorization failed: ${err instanceof Error ? err.message : String(err)}`;
+            err instanceof McpPoolCapacityError
+              ? // The token was refreshed; there was no free slot to start a child with it. Reported
+                // as what it is, so nobody is sent to reconnect a Google account that works.
+                `The server is busy: all ${err.maxSessions} tool sessions are in use, so this call could not be ` +
+                `retried with a refreshed Google token. This is a temporary capacity limit, not a Google ` +
+                `authorization problem; try again in a moment.`
+              : err instanceof GoogleIdentityError
+                ? `Google authorization failed: ${err.message}`
+                : `Google authorization failed: ${err instanceof Error ? err.message : String(err)}`;
           ok = false;
         }
       }

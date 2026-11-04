@@ -109,6 +109,20 @@ test('every {{ed - }} / {{rh - }} variable a built tag references is provisioned
   assert.equal(capiPlatform('snapchat')?.emqVariables, 'meta');
 });
 
+test('a variable name both EMQ sets create is defined identically (provisioning order cannot change it)', () => {
+  // Provisioning skips a name that already exists, so whichever set lands first defines a shared name for
+  // every tag in the workspace: the definitions must not differ.
+  const meta = new Map(buildMetaEmqVariables().map((v) => [v.name, v]));
+  const tiktok = buildTikTokEmqVariables();
+  const shared = tiktok.filter((v) => meta.has(v.name));
+  assert.ok(shared.some((v) => v.name === 'ed - external_id'), 'external_id is shared');
+  for (const v of shared) assert.deepEqual(v, meta.get(v.name), `${v.name} differs between the Meta and TikTok sets`);
+  const ext = tiktok.find((v) => v.name === 'ed - external_id');
+  const dv = (ext?.parameter ?? []).find((p) => (p as { key?: string }).key === 'defaultValue') as { value?: string } | undefined;
+  assert.equal(dv?.value, '{{ed - user_id}}', 'TikTok external_id falls back to the GA4 user_id');
+  assert.ok(tiktok.some((v) => v.name === 'ed - user_id'), 'and that fallback variable is created');
+});
+
 test('per-conversion ids are keyed per event: two X / LinkedIn / LINE Yahoo events never share one conversion', () => {
   const x = capiPlatform('x')!;
   const shared = { 'x.pixelId': 'PX', 'x.pixelAccessToken': 'TOK' };

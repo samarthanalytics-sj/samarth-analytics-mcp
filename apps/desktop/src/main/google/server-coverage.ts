@@ -123,7 +123,7 @@ const PIXEL_SIGNS: Array<{ platform: Exclude<CoveragePlatform, 'ga4'>; nameRe: R
   { platform: 'microsoft', nameRe: /microsoft|bing|\buet\b/i, bodyRe: /bat\.bing\.com|uetq/i },
   { platform: 'amazon', nameRe: /amazon[\s_-]?(ads?|pixel|tag)/i, bodyRe: /amzn\(|amazon-adsystem/i },
   { platform: 'stackadapt', nameRe: /stackadapt/i, bodyRe: /saq\(|srv\.stackadapt/i },
-  { platform: 'x', nameRe: /\btwitter\b|\bx[\s_-]?pixel\b/i, bodyRe: /twq\(|static\.ads-twitter/i },
+  { platform: 'x', nameRe: /\btwitter\b|\bx[\s_-]?(pixel|capi)\b/i, bodyRe: /twq\(|static\.ads-twitter/i },
   { platform: 'quora', nameRe: /quora/i, bodyRe: /\bqp\(|a\.quora\.com/i },
   { platform: 'adroll', nameRe: /adroll/i, bodyRe: /__adroll|s\.adroll\.com|adroll_adv_id/i },
   { platform: 'nextdoor', nameRe: /nextdoor/i, bodyRe: /\bndp\(|ads\.nextdoor\.com/i },
@@ -176,7 +176,7 @@ function webPlatformOf(t: AuditTag): CoveragePlatform | null {
 
 /** Platform of a SERVER tag: GA4 relay by type, CAPI templates by SHAPE (every recogniser the server
  *  audit has), else by name. */
-function serverPlatformOf(t: AuditTag): CoveragePlatform | null {
+export function serverPlatformOf(t: AuditTag): CoveragePlatform | null {
   if (t.type === 'sgtmgaaw') return 'ga4';
   if (isMetaCapiServerTag(t)) return 'meta';
   if (isTikTokCapiServerTag(t)) return 'tiktok';

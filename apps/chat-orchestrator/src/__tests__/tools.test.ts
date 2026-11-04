@@ -2,14 +2,18 @@
  * Tool scoping and truncation tests. No network, no credentials.
  */
 import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
 import { capToolResult, compactToolHistory, productOf, scopeTools, toOpenAiTools } from '../tools.js';
 import { runTurn } from '../loop.js';
 import { ApprovalBroker } from '../approvals.js';
 import { approvalGate } from '../writeTiers.js';
 import type { OrchestratorConfig } from '../config.js';
 import { McpConnection } from '../mcp-client.js';
-import type { OpenAiClient } from '../openai.js';
+import { McpPool } from '../mcp-pool.js';
+import type { GoogleTokenProvider } from '../google-identity.js';
+import { OpenAiError, type OpenAiClient } from '../openai.js';
 import type { UsageMeter } from '../usage.js';
+import type { AuditRecorder } from '../audit.js';
 import type { StreamEvent, ToolDef } from '../types.js';
 
 let passed = 0;
@@ -307,6 +311,9 @@ const TURN_CFG = {
   },
 } as unknown as OrchestratorConfig;
 
+/** What reached the MCP: the tool, its arguments, and the request options the turn passed. */
+type Forwarded = { name: string; args: Record<string, unknown>; opts?: { timeoutMs?: number } };
+
 /**
  * Runs one real turn against stubs: the model makes exactly `calls`, then answers. Returns what
  * reached the MCP, what was streamed, and what was billed.
@@ -322,15 +329,15 @@ async function turnWith(
     /** Sees each event as it is streamed, e.g. to act like the user when a card appears. */
     onEmit?: (e: StreamEvent) => void;
   } = {},
-): Promise<{ forwarded: { name: string; args: Record<string, unknown> }[]; events: StreamEvent[]; billed: number | null }> {
-  const forwarded: { name: string; args: Record<string, unknown> }[] = [];
+): Promise<{ forwarded: Forwarded[]; events: StreamEvent[]; billed: number | null }> {
+  const forwarded: Forwarded[] = [];
   const events: StreamEvent[] = [];
   let billed: number | null = null;
   const mcp = {
     listTools: () => CATALOG,
     getInstructions: () => '',
-    async callTool(name: string, args: Record<string, unknown>) {
-      forwarded.push({ name, args });
+    async callTool(name: string, args: Record<string, unknown>, opts?: { timeoutMs?: number }) {
+      forwarded.push({ name, args, opts });
       return { ok: true, text: '{}' };
     },
   } as unknown as McpConnection;
@@ -425,6 +432,79 @@ await testAsync('the connection itself refuses a name its server never listed', 
   const ran = await conn.callTool('tags_list', {});
   assert.equal(ran.ok, true);
   assert.deepEqual(sent, ['tags_list'], 'only the listed tool may reach the server');
+});
+
+console.log('MCP request timeouts and child exits');
+
+/**
+ * A real stdio MCP child, so the SDK's own request timer is what is under test rather than a fake
+ * of it. `slow` answers after 400 ms; `exit` answers and then the process exits, like a crash.
+ */
+function stubChildConfig(): OrchestratorConfig {
+  const require = createRequire(import.meta.url);
+  const server = require.resolve('@modelcontextprotocol/sdk/server/mcp.js');
+  const stdio = require.resolve('@modelcontextprotocol/sdk/server/stdio.js');
+  const code = `
+    const { McpServer } = require(${JSON.stringify(server)});
+    const { StdioServerTransport } = require(${JSON.stringify(stdio)});
+    const server = new McpServer({ name: 'stub', version: '0.0.0' });
+    server.registerTool('slow', { description: 'answers after 400 ms' }, async () => {
+      await new Promise((r) => setTimeout(r, 400));
+      return { content: [{ type: 'text', text: 'done' }] };
+    });
+    server.registerTool('exit', { description: 'answers, then the process exits' }, async () => {
+      setTimeout(() => process.exit(1), 20);
+      return { content: [{ type: 'text', text: 'bye' }] };
+    });
+    server.connect(new StdioServerTransport());
+  `;
+  return {
+    mcp: { transport: 'stdio', command: process.execPath, args: ['-e', code], env: {} },
+  } as unknown as OrchestratorConfig;
+}
+
+await testAsync("a tool call runs to the caller's timeout, not the SDK's fixed one", async () => {
+  // Scaled down: the SDK's default is 60 s, and every scan past a minute failed at it whatever the
+  // scanner's own 20-minute or 170-second deadline said. The caller's number must be the one used.
+  const conn = new McpConnection(stubChildConfig());
+  await conn.connect();
+  try {
+    const cut = await conn.callTool('slow', {}, { timeoutMs: 100 });
+    assert.equal(cut.ok, false, 'a 100 ms limit was ignored');
+    assert.match(cut.text, /Request timed out/);
+    assert.deepEqual(await conn.callTool('slow', {}, { timeoutMs: 5_000 }), { ok: true, text: 'done' });
+  } finally {
+    await conn.close();
+  }
+});
+
+await testAsync('a child that exits is reported dead, so its holder can replace it', async () => {
+  // Nothing else noticed: the SDK fails every later call "Not connected", which is not an auth
+  // failure, so the pool and the scanner kept handing the dead connection out.
+  const conn = new McpConnection(stubChildConfig());
+  await conn.connect();
+  try {
+    assert.equal(conn.isDead(), false, 'a running child reported dead');
+    await conn.callTool('exit', {});
+    const until = Date.now() + 5_000;
+    while (!conn.isDead() && Date.now() < until) await new Promise((r) => setTimeout(r, 20));
+    assert.equal(conn.isDead(), true, 'a child that exited still looked alive');
+    assert.match((await conn.callTool('slow', {})).text, /Not connected/);
+  } finally {
+    await conn.close();
+  }
+});
+
+await testAsync('a chat tool call may use the rest of the turn, and never less than 60 s', async () => {
+  const withBudget = (maxTurnMs: number) =>
+    ({ ...TURN_CFG, limits: { ...TURN_CFG.limits, maxTurnMs } }) as OrchestratorConfig;
+
+  const long = await turnWith([{ name: 'tags_list', arguments: '{}' }], { cfg: withBudget(240_000) });
+  const given = long.forwarded[0]?.opts?.timeoutMs ?? 0;
+  assert.ok(given > 200_000 && given <= 240_000, `a 240 s turn gave its tool call ${given} ms`);
+
+  const short = await turnWith([{ name: 'tags_list', arguments: '{}' }], { cfg: withBudget(30_000) });
+  assert.equal(short.forwarded[0]?.opts?.timeoutMs, 60_000, 'the old 60 s is the floor');
 });
 
 console.log('tool arguments that are JSON but not an object');
@@ -531,6 +611,132 @@ await testAsync('a card nobody answers is withdrawn when the budget runs out', a
   assert.match(results(events)[0]?.summary ?? '', /ran out of time/, 'not blamed on the user');
   assert.equal(doneReason(events), 'time_budget');
   assert.equal(approvals.stats().pending, 0);
+});
+
+console.log('a model call that fails on its own still closes the turn');
+
+await testAsync('a model error after a tool round is billed and recorded, then reported', async () => {
+  // Only an aborted turn used to reach finish(). A 400 context_length_exceeded, the request's own
+  // timeout or a 429 after the retries was rethrown past it, so the tokens of every earlier round
+  // went unbilled and the assistant row was never written.
+  const bills: number[] = [];
+  const turns: { stopReason: string; promptTokens: number; completionTokens: number }[] = [];
+  const failure = new OpenAiError('maximum context length exceeded', 400, 'context_length_exceeded');
+  let round = 0;
+  const llm = {
+    async streamChat(_m: unknown, _t: unknown, cbs: { onUsage?: (u: Record<string, number>) => void }) {
+      round++;
+      if (round > 1) throw failure;
+      cbs.onUsage?.({ promptTokens: 1_000, completionTokens: 50, cachedTokens: 0 });
+      return {
+        content: '',
+        finishReason: 'tool_calls',
+        toolCalls: [{ id: 'call_0', type: 'function' as const, function: { name: 'tags_list', arguments: '{}' } }],
+      };
+    },
+  } as unknown as OpenAiClient;
+  const mcp = {
+    listTools: () => CATALOG,
+    getInstructions: () => '',
+    callTool: async () => ({ ok: true, text: '{}' }),
+  } as unknown as McpConnection;
+
+  await assert.rejects(
+    runTurn({
+      cfg: TURN_CFG,
+      mcp,
+      llm,
+      history: [{ role: 'user', content: 'zzz' }],
+      context: { product: 'gtm' },
+      user: { id: 'user-1' },
+      emit: () => {},
+      signal: new AbortController().signal,
+      usage: { record: (_user: string, tokens: number) => bills.push(tokens) } as unknown as UsageMeter,
+      audit: {
+        recordAssistantTurn: (_c: unknown, _u: unknown, t: (typeof turns)[number]) => turns.push(t),
+        recordToolEvent: () => {},
+      } as unknown as AuditRecorder,
+      conversationId: 'conv-1',
+    }),
+    (err: unknown) => err === failure,
+    'the caller must still see the error, to report it',
+  );
+  assert.deepEqual(bills, [1_050], 'the first round\'s tokens must be billed, once');
+  assert.equal(turns.length, 1, 'the assistant row must be written, once');
+  assert.equal(turns[0].stopReason, 'error');
+  assert.equal(turns[0].promptTokens, 1_000);
+});
+
+console.log('an auth retry the pool has no room for');
+
+await testAsync('a refresh refused at a full, busy pool reaches the model as capacity, not authorization', async () => {
+  // The real pool, with children that are never spawned. Both slots are serving turns, so the
+  // refresh mints a token and then has nowhere to start a child with it. That used to reach the
+  // model as "Google authorization failed: All 2 MCP sessions are busy", and the user was told to
+  // reconnect a Google account that was fine.
+  const proto = McpConnection.prototype as unknown as { connect(): Promise<void>; close(): Promise<void> };
+  const { connect, close } = proto;
+  proto.connect = async () => {};
+  proto.close = async () => {};
+  try {
+    let token = 'ya29.first';
+    const tokens: GoogleTokenProvider = {
+      getIdentity: async () => ({ accessToken: token }),
+      refresh: async () => ({ accessToken: (token = 'ya29.second') }),
+    };
+    const poolCfg = { pool: { maxSessions: 2, idleTtlMs: 60_000 }, mcp: { env: {} } } as unknown as OrchestratorConfig;
+    const pool = new McpPool(poolCfg, tokens);
+    const mine = await pool.acquire('user-1', 'jwt');
+    const theirs = await pool.acquire('user-2', 'jwt');
+
+    const mcp = {
+      listTools: () => CATALOG,
+      getInstructions: () => '',
+      callTool: async () => ({ ok: false, text: 'Request had invalid authentication credentials.' }),
+    } as unknown as McpConnection;
+    let seen: { role: string; content?: unknown }[] = [];
+    let round = 0;
+    const llm = {
+      async streamChat(messages: { role: string; content?: unknown }[]) {
+        round++;
+        if (round > 1) {
+          seen = messages;
+          return { content: 'done', toolCalls: [], finishReason: 'stop' };
+        }
+        return {
+          content: '',
+          finishReason: 'tool_calls',
+          toolCalls: [{ id: 'call_0', type: 'function' as const, function: { name: 'tags_list', arguments: '{}' } }],
+        };
+      },
+    } as unknown as OpenAiClient;
+    const events: StreamEvent[] = [];
+
+    await runTurn({
+      cfg: TURN_CFG,
+      mcp,
+      llm,
+      history: [{ role: 'user', content: 'zzz' }],
+      context: { product: 'gtm' },
+      user: { id: 'user-1' },
+      emit: (e) => events.push(e),
+      signal: new AbortController().signal,
+      onAuthFailure: () => pool.refreshIdentity('user-1', 'jwt'),
+    });
+
+    const relayed = String(seen.find((m) => m.role === 'tool')?.content ?? '');
+    assert.doesNotMatch(relayed, /authorization failed/i, 'a capacity refusal was reported as an auth failure');
+    assert.match(relayed, /all 2 tool sessions are in use/);
+    assert.match(relayed, /not a Google authorization problem/);
+    assert.equal(results(events)[0]?.ok, false);
+
+    pool.release('user-1', mine);
+    pool.release('user-2', theirs);
+    await pool.shutdown();
+  } finally {
+    proto.connect = connect;
+    proto.close = close;
+  }
 });
 
 console.log(`\n${passed} assertions passed`);

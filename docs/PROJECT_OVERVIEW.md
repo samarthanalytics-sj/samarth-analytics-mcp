@@ -233,7 +233,7 @@ These are hard rules — do not relax them:
 - **Never commit secrets** — `.env`, `*.gtm-mcp-tokens.json`, service-account
   keys, `.vercel/` are gitignored and stay that way.
 - **Consent Mode v2 suite must stay green** — `npm run test:consent` must remain
-  170/170 (and fails if fewer than 100 cases run).
+  188/188 (and fails if fewer than 100 cases run).
 - **Portal stays responsive** across mobile/tablet/desktop.
 
 ---
@@ -255,7 +255,7 @@ These are hard rules — do not relax them:
 ## 10. Testing
 
 `npm test` (root) chains the whole suite:
-`test:consent` (Consent Mode v2, must be 170/170), `test:audit`, `test:snapshot`,
+`test:consent` (Consent Mode v2, must be 188/188), `test:audit`, `test:snapshot`,
 `test:rbac`, `test:retention`, `test:storage`, `test:webaudit`, `test:tagsuggest`,
 `test:webreport`, `test:verify`, plus the guardrails / auth / pagination /
 ga4Admin / prompts unit suites. The desktop app has its own suite

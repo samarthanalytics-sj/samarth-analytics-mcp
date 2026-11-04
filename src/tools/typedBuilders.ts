@@ -26,6 +26,7 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { gtmId } from '../utils/schemas.js';
 import type { GtmClient } from '../utils/gtmClient.js';
 import { checkGuardrails, getGuardrailConfig, formatGoogleError } from '../utils/guardrails.js';
 import { jsonResult, textResult, errorResult, errorText } from '../utils/toolResponse.js';
@@ -50,9 +51,9 @@ import {
 import type { tagmanager_v2 } from 'googleapis';
 
 const wsBase = z.object({
-  accountId: z.string().describe('The GTM account ID.'),
-  containerId: z.string().describe('The GTM container ID.'),
-  workspaceId: z.string().describe('The GTM workspace ID.'),
+  accountId: gtmId.describe('The GTM account ID.'),
+  containerId: gtmId.describe('The GTM container ID.'),
+  workspaceId: gtmId.describe('The GTM workspace ID.'),
 });
 
 /**
@@ -133,8 +134,17 @@ const triggerSchema = z
     clickUrlValue: z.string().optional().describe('Scope a click trigger by {{Click URL}}, e.g. "mailto:" or "tel:".'),
     clickUrlOperator: z.string().optional().describe('equals | contains | startsWith | endsWith | matchRegex. Default contains.'),
     clickUrlIgnoreCase: z.boolean().optional().describe('For a matchRegex {{Click URL}} condition: match case-insensitively.'),
-    clickTextValue: z.string().optional().describe('Scope a click trigger by {{Click Text}}, e.g. an exact CTA label.'),
-    clickTextOperator: z.string().optional().describe('equals | contains | startsWith | endsWith | matchRegex. Default equals.'),
+    clickTextValue: z
+      .string()
+      .optional()
+      .describe('Scope a click trigger by {{Click Text}}, e.g. a CTA label. Matched with clickTextOperator (default contains).'),
+    // The default is what buildTrigger emits (src/shared/gtm-builders.ts: `?? 'contains'`). This
+    // used to say "Default equals", so a caller relying on it for an exact label got a trigger that
+    // also fired on "Apply now", "Apply coupon", ...
+    clickTextOperator: z
+      .string()
+      .optional()
+      .describe('equals | contains | startsWith | endsWith | matchRegex. Default contains. Pass "equals" to match an exact CTA label.'),
     clickTextIgnoreCase: z.boolean().optional().describe('For a matchRegex {{Click Text}} condition: match case-insensitively.'),
     // The conditions below are what scope a click trigger to ONE element. Without them a
     // link_click/all_clicks trigger fires on every link or every click on the site, so a schema that
@@ -154,7 +164,10 @@ const triggerSchema = z
     pagePathOperator: z.string().optional().describe('equals | contains | startsWith | endsWith | matchRegex.'),
     pageUrlValue: z.string().optional().describe('Scope by {{Page URL}}, e.g. a "?thanks=1" success page.'),
     pageUrlOperator: z.string().optional().describe('equals | contains | startsWith | endsWith | matchRegex. Default contains.'),
-    eventName: z.string().optional().describe('For kind "custom_event": the dataLayer event name, e.g. "generate_lead".'),
+    eventName: z
+      .string()
+      .optional()
+      .describe('For kind "custom_event": the dataLayer event name, e.g. "generate_lead". REQUIRED for custom_event (separate from the tag\'s eventName).'),
     formIdValue: z.string().optional().describe('For kind "form_submit": scope to one form by {{Form ID}}.'),
     formIdOperator: z.string().optional().describe('equals | contains | startsWith | endsWith | matchRegex. Default equals.'),
     formClassesValue: z.string().optional().describe('For kind "form_submit": scope by {{Form Classes}}.'),
@@ -398,6 +411,15 @@ export function registerTypedBuilderTools(server: McpServer, getClient: () => Gt
           return textResult(
             'trigger.kind "element_visibility" requires trigger.visibilitySelector (a CSS selector) or ' +
               'trigger.visibilityElementId. With neither, the trigger is created watching no element and never fires.',
+          );
+        }
+        // Same again for custom_event: with no trigger.eventName buildTrigger emits
+        // {{_event}} equals "", which matches no dataLayer push. The tag's own eventName is NOT
+        // reused here on purpose: the dataLayer event and the GA4 event name often differ.
+        if (triggerInput.kind === 'custom_event' && !String(triggerInput.eventName ?? '').trim()) {
+          return textResult(
+            'trigger.kind "custom_event" requires trigger.eventName (the dataLayer event it matches, e.g. "generate_lead"). ' +
+              "It is separate from the tag's eventName. With none, the trigger matches {{_event}} equals \"\" and never fires.",
           );
         }
 

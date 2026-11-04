@@ -23,13 +23,11 @@ import { z } from 'zod';
 import type { Ga4DataClient } from '../utils/ga4Client.js';
 import { jsonResult, errorText } from '../utils/toolResponse.js';
 import { formatGa4Error, toPropertyName } from '../utils/ga4Errors.js';
+import { ga4PropertyId } from '../utils/schemas.js';
 import { formatGoogleError } from '../utils/guardrails.js';
 import { googleErrorStatus } from '../utils/writeDiagnostics.js';
 
-const propertyArg = z
-  .string()
-  .min(1)
-  .describe('GA4 property ID, e.g. "123456789" or "properties/123456789".');
+const propertyArg = ga4PropertyId.describe('GA4 property ID, e.g. "123456789" or "properties/123456789".');
 
 const dimensionsArg = z
   .array(z.string().min(1))

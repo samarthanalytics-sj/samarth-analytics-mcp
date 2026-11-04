@@ -142,7 +142,10 @@ Org-scoped. Cached 10s under `cacheKey("worker_job_status", orgId, jobId)`
 Authenticated by a **worker bearer token**, not a user session. The worker posts
 the capture artifact; the API persists it to `runtime_captures`
 (`artifact` inline or `artifact_uri` offloaded) and calls `complete(jobId,
-result)`. The result the queue carries is a `RuntimeCaptureJobResult`:
+workerId, result)`. `complete`/`fail` are fenced on the lease: they are
+rejected unless the job is still leased to that worker and the lease has not
+expired, so a worker whose lease lapsed cannot overwrite or requeue a job another
+worker has reclaimed. The result the queue carries is a `RuntimeCaptureJobResult`:
 
 ```json
 {

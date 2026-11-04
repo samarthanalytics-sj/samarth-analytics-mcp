@@ -9,7 +9,7 @@ import type { GtmClient } from '../utils/gtmClient.js';
 import { checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
 import { paginate, paginationFields, buildListResult, DEFAULT_MAX_PAGES } from '../utils/pagination.js';
 import { jsonResult, textResult, errorResult } from '../utils/toolResponse.js';
-import { workspaceScope as wsBase } from '../utils/schemas.js';
+import { gtmId, workspaceScope as wsBase } from '../utils/schemas.js';
 
 export function registerFolderTools(server: McpServer, getClient: () => GtmClient): void {
   server.registerTool(
@@ -38,7 +38,7 @@ export function registerFolderTools(server: McpServer, getClient: () => GtmClien
     'folders_get',
     {
       description: 'Get a specific GTM folder.',
-      inputSchema: wsBase.extend({ folderId: z.string() }),
+      inputSchema: wsBase.extend({ folderId: gtmId }),
     },
     async ({ accountId, containerId, workspaceId, folderId }) => {
       try {
@@ -60,7 +60,7 @@ export function registerFolderTools(server: McpServer, getClient: () => GtmClien
         'List all entities (tags, triggers, variables) within a specific GTM folder. ' +
         'Automatically follows pagination to return all entities.',
       inputSchema: wsBase.extend({
-        folderId: z.string(),
+        folderId: gtmId,
         pageToken: paginationFields.pageToken,
         maxPages: paginationFields.maxPages.describe(
           `Maximum number of API pages to fetch (default ${DEFAULT_MAX_PAGES}). GTM returns one ` +
@@ -145,7 +145,7 @@ export function registerFolderTools(server: McpServer, getClient: () => GtmClien
         '[WRITE] Update a GTM folder (read-modify-write: omitted fields are preserved). ' +
         'Requires GTM_MCP_ENABLE_WRITES=true and confirm=true.',
       inputSchema: wsBase.extend({
-        folderId: z.string(),
+        folderId: gtmId,
         name: z.string().optional(),
         notes: z.string().optional(),
         fingerprint: z.string().optional(),
@@ -192,7 +192,7 @@ export function registerFolderTools(server: McpServer, getClient: () => GtmClien
     {
       description: '[DELETE] Delete a GTM folder. Requires GTM_MCP_ENABLE_DELETES=true and confirm=true. Contents of the folder will be unfoldered, not deleted.',
       inputSchema: wsBase.extend({
-        folderId: z.string(),
+        folderId: gtmId,
         confirm: z.boolean(),
       }),
     },
@@ -219,7 +219,7 @@ export function registerFolderTools(server: McpServer, getClient: () => GtmClien
     {
       description: '[WRITE] Move tags/triggers/variables into a folder. Requires GTM_MCP_ENABLE_WRITES=true and confirm=true.',
       inputSchema: wsBase.extend({
-        folderId: z.string().describe('The destination folder ID.'),
+        folderId: gtmId.describe('The destination folder ID.'),
         tagId: z.array(z.string()).optional().describe('Tag IDs to move.'),
         triggerId: z.array(z.string()).optional().describe('Trigger IDs to move.'),
         variableId: z.array(z.string()).optional().describe('Variable IDs to move.'),

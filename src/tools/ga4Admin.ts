@@ -30,18 +30,10 @@ import { z } from 'zod';
 import type { Ga4AdminClient, Ga4AdminAlphaClient } from '../utils/ga4Client.js';
 import { paginate, buildListResult, paginationFields } from '../utils/pagination.js';
 import { jsonResult, errorText } from '../utils/toolResponse.js';
-import { formatGa4Error, toPropertyName } from '../utils/ga4Errors.js';
+import { formatGa4Error, toAccountName, toDataStreamName, toPropertyName } from '../utils/ga4Errors.js';
+import { ga4AccountId, ga4DataStreamId, ga4PropertyId } from '../utils/schemas.js';
 
-/** Normalize an account identifier into the API's `accounts/{id}` form. */
-function toAccountName(account: string): string {
-  const trimmed = account.trim();
-  return trimmed.startsWith('accounts/') ? trimmed : `accounts/${trimmed}`;
-}
-
-const propertyArg = z
-  .string()
-  .min(1)
-  .describe('GA4 property ID, e.g. "123456789" or "properties/123456789".');
+const propertyArg = ga4PropertyId.describe('GA4 property ID, e.g. "123456789" or "properties/123456789".');
 
 export function registerGa4AdminTools(
   server: McpServer,
@@ -86,10 +78,7 @@ export function registerGa4AdminTools(
         'records (display name, time zone, currency, industry, service level). ' +
         'Read-only.',
       inputSchema: z.object({
-        accountId: z
-          .string()
-          .min(1)
-          .describe('Parent GA4 account ID, e.g. "123456" or "accounts/123456".'),
+        accountId: ga4AccountId.describe('Parent GA4 account ID, e.g. "123456" or "accounts/123456".'),
         showDeleted: z
           .boolean()
           .optional()
@@ -182,19 +171,13 @@ export function registerGa4AdminTools(
         'the Admin API v1alpha surface (not yet in v1beta). Read-only.',
       inputSchema: z.object({
         property: propertyArg,
-        dataStreamId: z
-          .string()
-          .min(1)
-          .describe('The data stream ID (numeric) or full "dataStreams/{id}" suffix.'),
+        dataStreamId: ga4DataStreamId.describe('The data stream ID (numeric) or full "dataStreams/{id}" suffix.'),
       }),
     },
     async ({ property, dataStreamId }) => {
       try {
         const client = getAlphaClient();
-        const streamSuffix = dataStreamId.trim().startsWith('dataStreams/')
-          ? dataStreamId.trim()
-          : `dataStreams/${dataStreamId.trim()}`;
-        const name = `${toPropertyName(property)}/${streamSuffix}/enhancedMeasurementSettings`;
+        const name = `${toDataStreamName(property, dataStreamId)}/enhancedMeasurementSettings`;
         const res = await client.properties.dataStreams.getEnhancedMeasurementSettings({ name });
         return jsonResult(res.data);
       } catch (err) {

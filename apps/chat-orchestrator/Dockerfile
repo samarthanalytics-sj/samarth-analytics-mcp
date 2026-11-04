@@ -15,7 +15,7 @@
 # memory you actually gave the container, or the OOM killer will do it for you.
 
 # ── Stage 1: build the MCP server (TypeScript → dist/) ──────────────────────
-FROM node:20-alpine AS mcp-build
+FROM node:22-alpine AS mcp-build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts
@@ -24,7 +24,7 @@ COPY src ./src
 RUN npm run build
 
 # ── Stage 2: build the orchestrator ─────────────────────────────────────────
-FROM node:20-alpine AS orchestrator-build
+FROM node:22-alpine AS orchestrator-build
 WORKDIR /app/apps/chat-orchestrator
 COPY apps/chat-orchestrator/package.json apps/chat-orchestrator/package-lock.json ./
 RUN npm ci --ignore-scripts
@@ -36,7 +36,7 @@ COPY apps/desktop/src/shared/gtm-methodology.ts /app/apps/desktop/src/shared/gtm
 RUN npm run build
 
 # ── Stage 3: runtime ────────────────────────────────────────────────────────
-FROM node:20-alpine
+FROM node:22-alpine
 WORKDIR /app
 ENV NODE_ENV=production
 

@@ -23,6 +23,7 @@ import {
   listWorkspaces,
 } from "./gtm/api";
 import { runAudit } from "./gtm/audit";
+import { revokeOnDisconnect } from "./gtm/revoke";
 import {
   runConsentAudit,
   type ConsentConfigInput,
@@ -169,10 +170,23 @@ export async function registerRoutes(
   });
 
   // ── OAuth: logout ─────────────────────────────────────────────────────
-  app.post("/api/oauth/logout", (req, res) => {
-    clearSession(getSid(req));
+  app.post("/api/oauth/logout", async (req, res) => {
+    const sid = getSid(req);
+    const tokens = getSession(sid);
+    clearSession(sid);
     clearSessionCookie(res);
-    res.json({ connected: false });
+    // Revokes the Google grant only when every check in gtm/revoke.ts passes.
+    const forwardedHost = req.headers["x-forwarded-host"];
+    const googleRevoked = await revokeOnDisconnect(
+      {
+        method: req.method,
+        origin: req.headers.origin,
+        host: req.headers.host,
+        forwardedHost: typeof forwardedHost === "string" ? forwardedHost : undefined,
+      },
+      tokens?.refreshToken,
+    );
+    res.json({ connected: false, googleRevoked });
   });
 
   // ── GTM discovery ──────────────────────────────────────────────────────

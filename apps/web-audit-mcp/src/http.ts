@@ -9,8 +9,9 @@
  * local-development opt-in, and it binds 127.0.0.1 only.
  *
  * The pure helpers (isAuthorized, buildHealthBody, resolveHttpBinding,
- * bindingBanner, decidePostRoute) are exported and unit-tested; the express
- * glue is thin and follows the proven root pattern.
+ * bindingBanner, decidePostRoute, resolveSessionTtlMs, rebindingRejection,
+ * redactSessionId) are exported and unit-tested; the express glue is thin and follows the proven
+ * root pattern.
  */
 
 import { timingSafeEqual } from 'node:crypto';
@@ -68,6 +69,47 @@ export function bindingBanner(address: string, port: number, authRequired: boole
   const shown = address === '::' || address === '0.0.0.0' ? `all interfaces (${address})` : address;
   const auth = authRequired ? 'bearer token' : 'NONE (WEB_AUDIT_HTTP_ALLOW_UNAUTHENTICATED=true)';
   return `HTTP server listening on ${shown}, port ${port} - authentication: ${auth}`;
+}
+
+/** Loopback names as the WHATWG URL parser reports a hostname (no port; IPv6 in brackets). */
+const LOOPBACK_HOSTNAMES = ['localhost', '127.0.0.1', '[::1]'];
+
+/**
+ * DNS-rebinding check for the unauthenticated opt-in, mirroring the root server
+ * (src/utils/httpBinding.ts; this package cannot import across the app boundary).
+ *
+ * Binding 127.0.0.1 stops other machines from connecting, but not a web page in the operator's own
+ * browser: a hostile site can re-point its own DNS name at 127.0.0.1, after which the browser treats
+ * requests to that name as same-origin and can drive /mcp (crawls, consent clicks, and real form
+ * submits when verify is enabled) and read the results. So the Host header must name loopback, and
+ * a browser Origin, when present, must be a loopback http(s) origin too. Returns the rejection
+ * reason, or undefined when the request may proceed. Non-browser MCP clients send no Origin.
+ */
+export function rebindingRejection(
+  hostHeader: string | undefined,
+  originHeader: string | undefined,
+): string | undefined {
+  if (!hostHeader) return 'Missing Host header';
+  let hostname: string;
+  try {
+    hostname = new URL(`http://${hostHeader}`).hostname;
+  } catch {
+    return `Invalid Host header: ${hostHeader}`;
+  }
+  if (!LOOPBACK_HOSTNAMES.includes(hostname)) return `Invalid Host: ${hostname}`;
+  if (originHeader !== undefined) {
+    let origin: URL;
+    try {
+      origin = new URL(originHeader);
+    } catch {
+      return `Invalid Origin: ${originHeader}`;
+    }
+    const webScheme = origin.protocol === 'http:' || origin.protocol === 'https:';
+    if (!webScheme || !LOOPBACK_HOSTNAMES.includes(origin.hostname)) {
+      return `Invalid Origin: ${originHeader}`;
+    }
+  }
+  return undefined;
 }
 
 /** Constant-time bearer-token check. Empty token = auth disabled, which startHttpServer only
@@ -152,9 +194,31 @@ export function decidePostRoute(
   return { kind: 'unknown-session' };
 }
 
+/**
+ * A session id shortened for logs: enough to correlate lines, not enough to address the session.
+ * Same shape as the root server's redactSessionId (src/utils/mcpSession.ts), which this package
+ * cannot import. A full id in a log line is a bearer for that session to anyone who can read logs.
+ */
+export function redactSessionId(sid: string): string {
+  return sid.length >= 16 ? `${sid.slice(0, 8)}...` : '[redacted]';
+}
+
 /** Message returned with the 404 for {@link PostRoute} `unknown-session`. */
 export const UNKNOWN_SESSION_MESSAGE =
   'Unknown or expired mcp-session-id. Start a new session with an initialize request.';
+
+/** Default idle lifetime of an HTTP session with nothing in flight (30 min), as in the root server. */
+export const DEFAULT_SESSION_TTL_MS = 30 * 60_000;
+
+/**
+ * Idle-session TTL from WEB_AUDIT_HTTP_SESSION_TTL_MS. Unset, non-numeric or negative falls back to
+ * {@link DEFAULT_SESSION_TTL_MS}; `0` turns the idle sweep off. Same parsing as the root server's
+ * GTM_MCP_HTTP_SESSION_TTL_MS (src/index.ts).
+ */
+export function resolveSessionTtlMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = parseInt(env.WEB_AUDIT_HTTP_SESSION_TTL_MS ?? '', 10);
+  return Number.isFinite(raw) && raw >= 0 ? raw : DEFAULT_SESSION_TTL_MS;
+}
 
 export interface HttpServerHandle {
   port: number;
@@ -182,6 +246,20 @@ export async function startHttpServer(createServer: () => McpServer): Promise<Ht
   const { default: express } = await import('express');
 
   const app = express();
+  // DNS-rebinding guard for the unauthenticated opt-in, which always binds loopback (see
+  // rebindingRejection). Registered before the body parser and every route, so POST, GET and
+  // DELETE /mcp and /health are all covered. A token-authenticated server is left alone: a page
+  // cannot obtain the bearer token, and a hosted proxy's Host header cannot be predicted.
+  if (!binding.authRequired) {
+    app.use((req, res, next) => {
+      const reason = rebindingRejection(req.headers.host, req.headers.origin);
+      if (reason) {
+        res.status(403).json({ jsonrpc: '2.0', error: { code: -32000, message: reason }, id: null });
+        return;
+      }
+      next();
+    });
+  }
   const bodyLimit = '8mb'; // GTM container exports can be large. Kept in step with the root server.
   app.use(express.json({ limit: bodyLimit }));
   // Body-parser failures (oversized or malformed JSON) never reach a route, so convert them here
@@ -229,7 +307,58 @@ export async function startHttpServer(createServer: () => McpServer): Promise<Ht
 
   type Transport = InstanceType<typeof StreamableHTTPServerTransport>;
   /** Each session owns its transport AND its McpServer, so closing one releases both. */
-  const sessions = new Map<string, { transport: Transport; server: McpServer }>();
+  const sessions = new Map<
+    string,
+    {
+      transport: Transport;
+      server: McpServer;
+      /** Epoch ms of the last request seen on this session. Drives the idle sweep below. */
+      lastActivity: number;
+      /** Requests being handled on this session right now (a POST, or an open GET event stream).
+       *  A session with one in flight is never swept, however old lastActivity is, so a long tool
+       *  call or a held-open stream is not torn down mid-flight. */
+      inFlight: number;
+    }
+  >();
+
+  /** Idle-session sweep, mirroring the root server (src/index.ts). The SDK closes a session only on
+   *  an explicit DELETE, and a client that exits, crashes or loses the network never sends one: its
+   *  transport and McpServer stayed in `sessions` for the life of the process, every reconnect's
+   *  initialize added another, and activeSessions and memory only ever climbed. Sessions idle for
+   *  WEB_AUDIT_HTTP_SESSION_TTL_MS with nothing in flight are closed; 0 turns the sweep off. */
+  const sessionTtlMs = resolveSessionTtlMs(process.env);
+  const sweep =
+    sessionTtlMs > 0
+      ? setInterval(() => {
+          const cutoff = Date.now() - sessionTtlMs;
+          for (const [sid, entry] of [...sessions]) {
+            if (entry.inFlight > 0 || entry.lastActivity > cutoff) continue;
+            // Drop the entry first: transport.close() fires onclose, whose delete then finds nothing,
+            // and if the transport was already closed the entry still goes away.
+            sessions.delete(sid);
+            console.error(`[${SERVER_NAME}] closing idle HTTP session: ${redactSessionId(sid)} (active: ${sessions.size})`);
+            void Promise.resolve(entry.transport.close()).catch(() => undefined);
+            void entry.server.close().catch(() => undefined);
+          }
+        }, Math.min(sessionTtlMs, 60_000))
+      : undefined;
+  // The listener is what keeps this process alive; the sweep must never be the reason it stays up.
+  sweep?.unref();
+
+  /** Guard a session against the idle sweep for the LIFE of a request: count it in flight and stamp
+   *  lastActivity now, then on the response closing (normal end, abort, or an event stream the client
+   *  finally drops) decrement and re-stamp. */
+  const trackRequest = (
+    entry: { inFlight: number; lastActivity: number },
+    res: import('express').Response,
+  ): void => {
+    entry.inFlight += 1;
+    entry.lastActivity = Date.now();
+    res.once('close', () => {
+      entry.inFlight = Math.max(0, entry.inFlight - 1);
+      entry.lastActivity = Date.now();
+    });
+  };
 
   /** JSON-RPC error body for a handler that threw, so a failure is a protocol error the client can
    *  read rather than a dead socket. Express 4 does not catch async handler rejections, and with no
@@ -246,7 +375,9 @@ export async function startHttpServer(createServer: () => McpServer): Promise<Ht
 
       let transport: Transport;
       if (route.kind === 'resume') {
-        transport = sessions.get(route.sessionId)!.transport;
+        const entry = sessions.get(route.sessionId)!;
+        trackRequest(entry, res); // in flight for the whole request, so a long call is never swept
+        transport = entry.transport;
       } else if (route.kind === 'unknown-session') {
         res.status(404).json({
           jsonrpc: '2.0',
@@ -261,15 +392,15 @@ export async function startHttpServer(createServer: () => McpServer): Promise<Ht
         transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => newSessionId,
           onsessioninitialized: (sid) => {
-            sessions.set(sid, { transport, server: sessionServer });
-            console.error(`[${SERVER_NAME}] new HTTP session: ${sid}`);
+            sessions.set(sid, { transport, server: sessionServer, lastActivity: Date.now(), inFlight: 0 });
+            console.error(`[${SERVER_NAME}] new HTTP session: ${redactSessionId(sid)}`);
           },
         });
         transport.onclose = () => {
           const sid = transport.sessionId;
           if (sid) {
             sessions.delete(sid);
-            console.error(`[${SERVER_NAME}] HTTP session closed: ${sid}`);
+            console.error(`[${SERVER_NAME}] HTTP session closed: ${redactSessionId(sid)}`);
           }
           void sessionServer.close().catch(() => undefined); // release this session's server
         };
@@ -289,7 +420,9 @@ export async function startHttpServer(createServer: () => McpServer): Promise<Ht
         res.status(400).json({ error: 'Missing or invalid mcp-session-id header.' });
         return;
       }
-      await sessions.get(sessionId)!.transport.handleRequest(req, res);
+      const entry = sessions.get(sessionId)!;
+      trackRequest(entry, res); // a held-open event stream stays in flight until the client drops it
+      await entry.transport.handleRequest(req, res);
     } catch (err) {
       console.error(`[${SERVER_NAME}] GET /mcp failed:`, err instanceof Error ? err.message : String(err));
       rpcError(res, 'Internal server error opening the event stream.');
@@ -337,6 +470,7 @@ export async function startHttpServer(createServer: () => McpServer): Promise<Ht
         host: address,
         close: () =>
           new Promise<void>((r) => {
+            clearInterval(sweep);
             for (const { transport, server } of sessions.values()) {
               void Promise.resolve(transport.close()).catch(() => undefined);
               void server.close().catch(() => undefined);

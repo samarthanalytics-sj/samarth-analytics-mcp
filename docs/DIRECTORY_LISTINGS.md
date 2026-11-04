@@ -17,7 +17,7 @@ the package must be live on npm (see "npm publish checklist" at the bottom).
 > including server-side containers. Ships read-only: writes, publishes, and
 > deletes are each gated behind separate opt-in flags, every mutation requires
 > per-call confirmation, and a dry-run mode simulates changes. Includes
-> container audits (incl. a Consent Mode v2 engine validated by a 170-case
+> container audits (incl. a Consent Mode v2 engine validated by a 188-case
 > suite), full transparent pagination, retry with exponential backoff + jitter,
 > and stdio + Streamable HTTP transports. 400+ test assertions; every tool
 > smoke-tested.

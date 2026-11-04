@@ -30,8 +30,20 @@ import {
   PostgresStore,
   StoreNotWiredError,
 } from "../db/index";
+import crypto from "node:crypto";
 import { parseCookies } from "../../server/gtm/vercel-helpers";
-import { consumeOAuthState, newOAuthState } from "../../server/gtm/oauth";
+import {
+  consumeOAuthState,
+  getSession,
+  newOAuthState,
+  setSession,
+  SESSION_MAX_AGE_MS,
+  type SessionTokens,
+} from "../../server/gtm/oauth";
+import {
+  decodeSessionCookie,
+  encodeSessionCookie,
+} from "../../server/gtm/session-cookie";
 
 let passed = 0;
 let failed = 0;
@@ -259,6 +271,117 @@ test("H02 the state matching this browser's cookie is accepted once", () => {
 test("H03 a state this server never minted is rejected even with a matching cookie", () => {
   const forged = "f".repeat(48);
   assert.strictEqual(consumeOAuthState(forged, forged), false);
+});
+
+// ── J. session cookie: sealed tokens + server-enforced absolute lifetime ────
+// Regression: the cookie was signed-only base64 JSON (refresh token readable by
+// anyone holding it) with no issued-at, so a copied cookie minted new access
+// tokens forever and a refresh never let the session age out.
+
+const SESSION_TEST_SECRET = "storage-suite-session-secret-0123456789";
+const DAY_MS = 24 * 60 * 60 * 1000;
+const SESSION: SessionTokens = {
+  accessToken: "ya29.SESSION-ACCESS",
+  refreshToken: "1//SESSION-REFRESH",
+  expiresAt: Date.now() + 3_600_000,
+  email: "someone@example.com",
+  scopes: ["https://www.googleapis.com/auth/tagmanager.readonly"],
+};
+
+function withSessionSecret<T>(fn: () => T): T {
+  const prev = process.env.PORTAL_SESSION_SECRET;
+  process.env.PORTAL_SESSION_SECRET = SESSION_TEST_SECRET;
+  try {
+    return fn();
+  } finally {
+    if (prev === undefined) delete process.env.PORTAL_SESSION_SECRET;
+    else process.env.PORTAL_SESSION_SECRET = prev;
+  }
+}
+
+test("J01 a minted session cookie round-trips and is stamped with iat", () => {
+  withSessionSecret(() => {
+    const before = Date.now();
+    const out = decodeSessionCookie(encodeSessionCookie(SESSION));
+    assert.ok(out, "fresh cookie must decode");
+    assert.strictEqual(out.accessToken, SESSION.accessToken);
+    assert.strictEqual(out.refreshToken, SESSION.refreshToken);
+    assert.ok(typeof out.iat === "number" && out.iat >= before && out.iat <= Date.now());
+  });
+});
+test("J02 the cookie does not expose the tokens (sealed, not just signed)", () => {
+  withSessionSecret(() => {
+    const value = encodeSessionCookie(SESSION);
+    const [version, body, extra] = value.split(".");
+    assert.strictEqual(version, "v1e");
+    assert.strictEqual(extra, undefined);
+    const decoded = Buffer.from(body, "base64url").toString("latin1");
+    for (const secret of [SESSION.refreshToken!, SESSION.accessToken, SESSION.email!]) {
+      assert.ok(!value.includes(secret), `cookie value leaks ${secret}`);
+      assert.ok(!decoded.includes(secret), `cookie body decodes to ${secret}`);
+    }
+  });
+});
+test("J03 a correctly sealed cookie older than the absolute lifetime is rejected", () => {
+  withSessionSecret(() => {
+    const now = Date.now();
+    const stale = encodeSessionCookie({ ...SESSION, iat: now - SESSION_MAX_AGE_MS - 60_000 });
+    assert.strictEqual(decodeSessionCookie(stale), null);
+    const old = encodeSessionCookie({ ...SESSION, iat: now - 31 * DAY_MS });
+    assert.strictEqual(decodeSessionCookie(old), null);
+    const future = encodeSessionCookie({ ...SESSION, iat: now + DAY_MS });
+    assert.strictEqual(decodeSessionCookie(future), null, "iat from the future");
+    const inside = encodeSessionCookie({ ...SESSION, iat: now - 29 * DAY_MS });
+    assert.ok(decodeSessionCookie(inside), "a 29-day-old session is still valid");
+  });
+});
+test("J04 rotating the cookie on refresh keeps the original iat (no extension)", () => {
+  withSessionSecret(() => {
+    const iat = Date.now() - 20 * DAY_MS;
+    const tokens = decodeSessionCookie(encodeSessionCookie({ ...SESSION, iat }))!;
+    const rotated = decodeSessionCookie(
+      encodeSessionCookie({ ...tokens, accessToken: "ya29.NEW", expiresAt: Date.now() + 3_600_000 }),
+    );
+    assert.ok(rotated);
+    assert.strictEqual(rotated.iat, iat);
+    assert.strictEqual(rotated.accessToken, "ya29.NEW");
+  });
+});
+test("J05 tampered, foreign-secret and legacy signed-only v1 cookies are rejected", () => {
+  withSessionSecret(() => {
+    const value = encodeSessionCookie(SESSION);
+    const [version, body] = value.split(".");
+    const flipped = body.slice(0, 20) + (body[20] === "A" ? "B" : "A") + body.slice(21);
+    assert.strictEqual(decodeSessionCookie(`${version}.${flipped}`), null, "tampered");
+    assert.strictEqual(decodeSessionCookie(`${version}.`), null, "empty body");
+    assert.strictEqual(decodeSessionCookie(`v2.${body}`), null, "wrong version");
+    const legacyPayload = `v1.${Buffer.from(
+      JSON.stringify({ ...SESSION, iat: Date.now() }),
+    ).toString("base64url")}`;
+    const legacySig = crypto
+      .createHmac("sha256", SESSION_TEST_SECRET)
+      .update(legacyPayload)
+      .digest("base64url");
+    assert.strictEqual(decodeSessionCookie(`${legacyPayload}.${legacySig}`), null, "legacy v1");
+  });
+  const minted = withSessionSecret(() => encodeSessionCookie(SESSION));
+  const prev = process.env.PORTAL_SESSION_SECRET;
+  process.env.PORTAL_SESSION_SECRET = "a-different-session-secret-9876543210";
+  try {
+    assert.strictEqual(decodeSessionCookie(minted), null, "foreign secret");
+  } finally {
+    if (prev === undefined) delete process.env.PORTAL_SESSION_SECRET;
+    else process.env.PORTAL_SESSION_SECRET = prev;
+  }
+});
+test("J06 the Express in-memory session also expires after the absolute lifetime", () => {
+  setSession("sid-fresh", { ...SESSION, iat: Date.now() - DAY_MS });
+  assert.ok(getSession("sid-fresh"), "a 1-day-old session is valid");
+  setSession("sid-stale", { ...SESSION, iat: Date.now() - 31 * DAY_MS });
+  assert.strictEqual(getSession("sid-stale"), null, "a 31-day-old session is rejected");
+  assert.strictEqual(getSession("sid-stale"), null, "and stays gone");
+  setSession("sid-no-iat", { ...SESSION });
+  assert.strictEqual(getSession("sid-no-iat"), null, "a session without iat is rejected");
 });
 
 // ── runner ────────────────────────────────────────────────────────────────--

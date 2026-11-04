@@ -12,6 +12,7 @@ import { monitorGa4, monitorHealthScore, firstMetric, noSourceSharePct, ga4DataL
 import { buildSlackPayload, buildSlackDigestPayload, buildSlackAuditPayload, buildSlackMonthlyPayload, buildSlackTestPayload, sendSlackWebhook, isValidSlackWebhook, type FetchLike } from './slack-notify';
 import { withQuotaRetry } from '../google/quota-retry';
 import { rankGa4Campaigns } from '../google/ga4-campaigns';
+import { runAsAccount } from '../google/account-scope';
 import type { GoogleDataService } from '../google/data-service';
 import type { AccountView, Ga4ExecSummaryView, Ga4MonitorConfig, Ga4MonitorRun, Ga4MonitorStatus, Ga4MonitorTarget, Ga4MonitorTargetStatus } from '../../shared/ipc';
 
@@ -508,6 +509,14 @@ export class Ga4MonitoringService {
   private async runOnceInner(only?: string | string[], trigger: 'manual' | 'scheduled' = 'scheduled'): Promise<Ga4MonitorRun[]> {
     const active = this.deps.registry.getActiveView();
     if (!active || !active.hasGoogleToken) return [];
+    // Pin every GA4 call of this sweep (data fetches + the weekly audit) to the account it started on.
+    // A sweep can take minutes; unpinned, an account switch mid-sweep queried this account's remaining
+    // properties with the NEW account's token, and those "no access" failures became a false high alert
+    // on this account's issue log, history and client Slack channel.
+    return runAsAccount(active.id, () => this.sweep(active, only, trigger));
+  }
+
+  private async sweep(active: AccountView, only: string | string[] | undefined, trigger: 'manual' | 'scheduled'): Promise<Ga4MonitorRun[]> {
     // Background sweeps may run before the tab is ever opened — stamp legacy ownerless targets and
     // migrate the legacy default webhook here too so alerts keep flowing.
     this.stampOwnerless(active.id);

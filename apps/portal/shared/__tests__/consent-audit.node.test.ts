@@ -1215,6 +1215,9 @@ test("G18b anchored tracker cookie names (incl. _ga_<id>, _gat_*, _gcl_*) are st
     "_ga", "_ga_ABC123", "_gat", "_gat_UA-1-1", "_gac_UA-1-1", "_gid", "_gcl_au", "_gcl_aw",
     "_fbp", "_fbc", "_uetsid", "_uetvid", "_ttp", "_scid", "IDE", "MUID", "test_cookie",
     "li_sugr", "li_fat_id", "_pin_unauth",
+    // Regression: the anchored rewrite dropped Snap's _scid_r / _sctr and
+    // LinkedIn's li_giant, which the old _scid / li_ prefixes covered.
+    "_scid_r", "_sctr", "li_giant",
   ];
   const f = runConsentRuntimeRules(
     rt([{ requestedUrl: "https://e/", consentState: "default_denied", cookies: names.map((name) => ({ name })) }]),
@@ -1236,6 +1239,218 @@ test("G20 reconcile gating-vs-vendor needs ads denied (analytics-only denial -> 
     rt([{ requestedUrl: "https://e/", consentState: "ads_granted_analytics_denied", trackerHits: [metaHit()] }]),
   );
   assert.ok(hasNo(f, "consent-reconcile-gating-vs-vendor"));
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// GROUP H — built-in Consent Initialization trigger + timed cookie checks
+// ════════════════════════════════════════════════════════════════════════════
+
+// GTM's built-in "Consent Initialization - All Pages" trigger. triggers.list
+// never returns built-ins, so these fixtures pass `triggers: []` like the
+// real callers do.
+const CONSENT_INIT_BUILTIN = "2147479572";
+const consentDefaultHtml = (partial: Partial<ConsentTag> = {}): ConsentTag =>
+  tag({
+    tagId: "10",
+    name: "Consent default",
+    type: "html",
+    firingTriggerId: [CONSENT_INIT_BUILTIN],
+    ...partial,
+  });
+const googleTagAllPages = tag({ tagId: "11", name: "Google tag", type: "googtag", firingTriggerId: [ALL_PAGES] });
+const consentBlob = blobWith({ hasDefault: true, fields: CONSENT_V2_FIELDS, passthrough: true, redaction: true, region: true });
+
+test("H01 consent default tag on built-in Consent Initialization -> hasConsentInitTrigger", () => {
+  const i = detectConsentInit(cfg({ tags: [consentDefaultHtml(), googleTagAllPages], textBlob: consentBlob }));
+  assert.ok(i.hasConsentInitTrigger);
+});
+test("H02 consent default on built-in Consent Initialization + Google tag on All Pages -> no ordering finding", () => {
+  // Regression: only triggers.list was consulted, so the canonical correct setup
+  // was told to "place the consent default tag on the Consent Initialization trigger".
+  const f = runConsentConfigRules(cfg({ tags: [consentDefaultHtml(), googleTagAllPages], textBlob: consentBlob }));
+  assert.ok(hasNo(f, "consent-config-ordering"));
+});
+test("H03 CMP template on built-in Consent Initialization -> no 'no consent signals' finding", () => {
+  const cmp = tag({ tagId: "12", name: "Cookiebot CMP", type: "cvt_123_45", firingTriggerId: [CONSENT_INIT_BUILTIN] });
+  const f = runConsentConfigRules(cfg({ tags: [cmp, googleTagAllPages], textBlob: "cookiebot cmp\ncvt_123_45" }));
+  assert.ok(hasNo(f, "consent-config-none"));
+});
+test("H04 paused consent tag on built-in Consent Initialization does not count -> ordering finding", () => {
+  const f = runConsentConfigRules(
+    cfg({ tags: [consentDefaultHtml({ paused: true }), googleTagAllPages], textBlob: consentBlob }),
+  );
+  assert.ok(has(f, "consent-config-ordering"));
+});
+test("H05 GA4 tag on built-in Consent Initialization is not a consent setup -> ordering finding", () => {
+  const ga4OnInit = tag({ tagId: "13", name: "GA4 config", type: "gaawc", firingTriggerId: [CONSENT_INIT_BUILTIN] });
+  const f = runConsentConfigRules(cfg({ tags: [ga4OnInit, googleTagAllPages], textBlob: consentBlob }));
+  assert.ok(has(f, "consent-config-ordering"));
+});
+test("H06 timed tracking cookie written AFTER a denied default on a denied page -> cookie-before HIGH", () => {
+  // Regression: timing was compared against the earliest consent event (the
+  // denied default), so better captures produced fewer findings than untimed ones.
+  const f = runConsentRuntimeRules(
+    rt([{
+      requestedUrl: "https://e/",
+      consentState: "default_denied",
+      consentEvents: [{ kind: "default", tMs: 100, fields: { analytics_storage: "denied", ad_storage: "denied" } }],
+      cookies: [{ name: "_ga", tMs: 300 }, { name: "_fbp", tMs: 350 }],
+    }]),
+  );
+  const m = has(f, "consent-runtime-cookie-before");
+  assert.ok(m, "denied-state tracking cookies must be flagged whether or not timing exists");
+  assert.ok(m!.id.endsWith(":_fbp,_ga"), m!.id);
+  assert.equal(m!.severity, "high");
+});
+test("H07 granted page: cookie written between the denied default and the granting update -> flagged", () => {
+  const f = runConsentRuntimeRules(
+    rt([{
+      requestedUrl: "https://e/",
+      consentState: "granted",
+      consentEvents: [
+        { kind: "default", tMs: 100, fields: { analytics_storage: "denied", ad_storage: "denied" } },
+        { kind: "update", tMs: 500, fields: { analytics_storage: "granted", ad_storage: "granted" } },
+      ],
+      cookies: [{ name: "_ga", tMs: 300 }],
+    }]),
+  );
+  const m = has(f, "consent-runtime-cookie-before");
+  assert.ok(m, "a cookie set before storage was granted must be flagged");
+  assert.equal(m!.confidence, "high");
+  assert.ok(/500ms/.test(m!.whyItMatters), m!.whyItMatters);
+});
+test("H08 granted page: cookie written after the granting update -> no cookie-before finding", () => {
+  const f = runConsentRuntimeRules(
+    rt([{
+      requestedUrl: "https://e/",
+      consentState: "granted",
+      consentEvents: [
+        { kind: "default", tMs: 100, fields: { analytics_storage: "denied", ad_storage: "denied" } },
+        { kind: "update", tMs: 500, fields: { analytics_storage: "granted", ad_storage: "granted" } },
+      ],
+      cookies: [{ name: "_ga", tMs: 600 }],
+    }]),
+  );
+  assert.ok(hasNo(f, "consent-runtime-cookie-before"));
+});
+
+// Partial states: only the denied category's cookies are "set in a denied
+// state". Regression: either category denied made the whole page a denied
+// state, so a `_ga` written after analytics was granted on
+// analytics_granted_ads_denied was flagged HIGH (and, untimed, always).
+const analyticsOnlyGrant: RuntimePage["consentEvents"] = [
+  { kind: "default", tMs: 100, fields: { analytics_storage: "denied", ad_storage: "denied" } },
+  { kind: "update", tMs: 500, fields: { analytics_storage: "granted", ad_storage: "denied" } },
+];
+const adsOnlyGrant: RuntimePage["consentEvents"] = [
+  { kind: "default", tMs: 100, fields: { analytics_storage: "denied", ad_storage: "denied" } },
+  { kind: "update", tMs: 500, fields: { analytics_storage: "denied", ad_storage: "granted" } },
+];
+
+test("H09 analytics_granted_ads_denied: _ga written after the analytics grant -> no cookie-before finding", () => {
+  const f = runConsentRuntimeRules(
+    rt([{
+      requestedUrl: "https://e/",
+      consentState: "analytics_granted_ads_denied",
+      consentEvents: analyticsOnlyGrant,
+      cookies: [{ name: "_ga", tMs: 600 }, { name: "_ga_ABC123", tMs: 610 }, { name: "_gid", tMs: 620 }],
+    }]),
+  );
+  assert.ok(hasNo(f, "consent-runtime-cookie-before"), JSON.stringify(f.map((x) => x.id)));
+});
+test("H10 analytics_granted_ads_denied: ad cookies are flagged, the granted _ga is not", () => {
+  const f = runConsentRuntimeRules(
+    rt([{
+      requestedUrl: "https://e/",
+      consentState: "analytics_granted_ads_denied",
+      consentEvents: analyticsOnlyGrant,
+      cookies: [{ name: "_ga", tMs: 600 }, { name: "_gcl_au", tMs: 650 }, { name: "_fbp", tMs: 700 }],
+    }]),
+  );
+  const m = has(f, "consent-runtime-cookie-before");
+  assert.ok(m, "ad cookies under ad_storage denied must be flagged");
+  assert.ok(m!.id.endsWith(":_fbp,_gcl_au"), m!.id);
+  assert.equal(m!.severity, "high");
+  assert.ok(/ad_storage denied/.test(m!.whyItMatters), m!.whyItMatters);
+  assert.ok(!m!.evidence?.includes("_ga"), JSON.stringify(m!.evidence));
+});
+test("H11 analytics_granted_ads_denied: _ga written BEFORE the analytics grant is still flagged by timing", () => {
+  const f = runConsentRuntimeRules(
+    rt([{
+      requestedUrl: "https://e/",
+      consentState: "analytics_granted_ads_denied",
+      consentEvents: analyticsOnlyGrant,
+      cookies: [{ name: "_ga", tMs: 300 }],
+    }]),
+  );
+  const m = has(f, "consent-runtime-cookie-before");
+  assert.ok(m, "a cookie set before its storage was granted must be flagged");
+  assert.ok(m!.id.endsWith(":_ga"), m!.id);
+  assert.ok(/500ms/.test(m!.whyItMatters), m!.whyItMatters);
+});
+test("H12 analytics_granted_ads_denied, untimed: only the ad cookie is flagged (MEDIUM)", () => {
+  const onlyGa = runConsentRuntimeRules(
+    rt([{ requestedUrl: "https://e/", consentState: "analytics_granted_ads_denied", cookies: [{ name: "_ga" }] }]),
+  );
+  assert.ok(hasNo(onlyGa, "consent-runtime-cookie-before"), "untimed _ga with analytics granted is not a violation");
+  const both = runConsentRuntimeRules(
+    rt([{ requestedUrl: "https://e/", consentState: "analytics_granted_ads_denied", cookies: [{ name: "_ga" }, { name: "_fbp" }] }]),
+  );
+  const m = has(both, "consent-runtime-cookie-before");
+  assert.ok(m);
+  assert.ok(m!.id.endsWith(":_fbp"), m!.id);
+  assert.equal(m!.confidence, "medium");
+});
+test("H13 ads_granted_analytics_denied: analytics cookies are flagged, the granted ad cookies are not", () => {
+  const f = runConsentRuntimeRules(
+    rt([{
+      requestedUrl: "https://e/",
+      consentState: "ads_granted_analytics_denied",
+      consentEvents: adsOnlyGrant,
+      cookies: [{ name: "_fbp", tMs: 600 }, { name: "_gcl_au", tMs: 610 }, { name: "_ga", tMs: 650 }, { name: "_gid", tMs: 660 }],
+    }]),
+  );
+  const m = has(f, "consent-runtime-cookie-before");
+  assert.ok(m, "analytics cookies under analytics_storage denied must be flagged");
+  assert.ok(m!.id.endsWith(":_ga,_gid"), m!.id);
+  assert.ok(/analytics_storage denied/.test(m!.whyItMatters), m!.whyItMatters);
+});
+test("H14 ads_granted_analytics_denied: ad cookies after the ads grant alone -> no cookie-before finding", () => {
+  const f = runConsentRuntimeRules(
+    rt([{
+      requestedUrl: "https://e/",
+      consentState: "ads_granted_analytics_denied",
+      consentEvents: adsOnlyGrant,
+      cookies: [{ name: "_fbp", tMs: 600 }, { name: "_gcl_au", tMs: 610 }, { name: "IDE", tMs: 620 }],
+    }]),
+  );
+  assert.ok(hasNo(f, "consent-runtime-cookie-before"), JSON.stringify(f.map((x) => x.id)));
+});
+test("H15 ads_granted_analytics_denied, untimed: only the analytics cookie is flagged", () => {
+  const onlyAds = runConsentRuntimeRules(
+    rt([{ requestedUrl: "https://e/", consentState: "ads_granted_analytics_denied", cookies: [{ name: "_gcl_au" }] }]),
+  );
+  assert.ok(hasNo(onlyAds, "consent-runtime-cookie-before"), "untimed ad cookie with ad_storage granted is not a violation");
+  const both = runConsentRuntimeRules(
+    rt([{ requestedUrl: "https://e/", consentState: "ads_granted_analytics_denied", cookies: [{ name: "_gcl_au" }, { name: "_gid" }] }]),
+  );
+  const m = has(both, "consent-runtime-cookie-before");
+  assert.ok(m);
+  assert.ok(m!.id.endsWith(":_gid"), m!.id);
+});
+test("H16 analytics_granted_ads_denied: a denied ad cookie and an early _ga are both named", () => {
+  const f = runConsentRuntimeRules(
+    rt([{
+      requestedUrl: "https://e/",
+      consentState: "analytics_granted_ads_denied",
+      consentEvents: analyticsOnlyGrant,
+      cookies: [{ name: "_ga", tMs: 300 }, { name: "_fbp", tMs: 700 }],
+    }]),
+  );
+  const m = has(f, "consent-runtime-cookie-before");
+  assert.ok(m);
+  assert.ok(m!.id.endsWith(":_fbp,_ga"), m!.id);
+  assert.ok(/ad_storage denied/.test(m!.whyItMatters) && /_ga were observed before .* at 500ms/.test(m!.whyItMatters), m!.whyItMatters);
 });
 
 // ── run summary ──────────────────────────────────────────────────────────--

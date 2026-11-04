@@ -12,6 +12,18 @@ import { McpConnection } from './mcp-client.js';
 import type { OrchestratorConfig } from './config.js';
 import { GoogleIdentityError, type GoogleTokenProvider } from './google-identity.js';
 
+/**
+ * Every slot holds a child serving a turn, so no new one can start. A capacity refusal, not an
+ * authorization failure: a refresh that hits it has already minted a good token and simply has no
+ * room to start a child with it, and saying "authorization failed" sent users to reconnect Google.
+ */
+export class McpPoolCapacityError extends Error {
+  constructor(readonly maxSessions: number) {
+    super(`All ${maxSessions} MCP sessions are busy. Raise MCP_POOL_MAX_SESSIONS or add capacity.`);
+    this.name = 'McpPoolCapacityError';
+  }
+}
+
 interface PoolEntry {
   connection: McpConnection;
   accessToken: string;
@@ -109,18 +121,28 @@ export class McpPool {
     return identity.accessToken;
   }
 
-  private async entryFor(userId: string, accessToken: string): Promise<PoolEntry> {
-    const existing = this.entries.get(userId);
-    if (existing) {
-      if (existing.accessToken === accessToken) return existing;
-      await this.evict(userId, 'token changed');
-    }
-
-    // Collapse concurrent first requests from the same user onto one spawn.
+  private entryFor(userId: string, accessToken: string): Promise<PoolEntry> {
+    // Collapse concurrent requests from the same user onto one replacement. Checked and claimed with
+    // no await in between: claiming only after awaiting the eviction below let a second request
+    // find no entry and no start in flight, spawn its own child, and then have it overwritten by
+    // this one's, leaving it in no map, so it was never released, swept or closed.
     const pending = this.starting.get(userId);
     if (pending) return pending;
 
-    const promise = this.spawn(userId, accessToken).finally(() => this.starting.delete(userId));
+    let replacing: string | null = null;
+    const existing = this.entries.get(userId);
+    if (existing) {
+      // A dead child is replaced even with the same token: reusing it fails every call "Not
+      // connected", and each failed retry refreshed lastUsedAt so the idle sweep never removed it.
+      const dead = existing.connection.isDead();
+      if (existing.accessToken === accessToken && !dead) return Promise.resolve(existing);
+      replacing = dead ? 'child exited' : 'token changed';
+    }
+
+    const promise = (async () => {
+      if (replacing) await this.evict(userId, replacing);
+      return this.spawn(userId, accessToken);
+    })().finally(() => this.starting.delete(userId));
     this.starting.set(userId, promise);
     return promise;
   }
@@ -136,21 +158,23 @@ export class McpPool {
     return entry;
   }
 
-  /** Evicts the least recently used idle child when the pool is full. */
+  /**
+   * Evicts least recently used idle children until there is room for one more.
+   *
+   * A retired child is still a live process (see stats()) and holds its slot until its last turn
+   * releases it. Counting only `entries` let a token change or mid-turn refresh at a full pool start
+   * a replacement beside it, past MCP_POOL_MAX_SESSIONS.
+   */
   private async enforceCapacity(): Promise<void> {
     const max = this.cfg.pool.maxSessions;
-    if (this.entries.size < max) return;
+    while (this.entries.size + this.retired.size >= max) {
+      const idle = [...this.entries.entries()]
+        .filter(([, e]) => e.inUse === 0)
+        .sort((a, b) => a[1].lastUsedAt - b[1].lastUsedAt);
 
-    const idle = [...this.entries.entries()]
-      .filter(([, e]) => e.inUse === 0)
-      .sort((a, b) => a[1].lastUsedAt - b[1].lastUsedAt);
-
-    if (idle.length === 0) {
-      throw new Error(
-        `All ${max} MCP sessions are busy. Raise MCP_POOL_MAX_SESSIONS or add capacity.`,
-      );
+      if (idle.length === 0) throw new McpPoolCapacityError(max);
+      await this.evict(idle[0][0], 'pool at capacity');
     }
-    await this.evict(idle[0][0], 'pool at capacity');
   }
 
   private async sweep(): Promise<void> {
@@ -166,7 +190,9 @@ export class McpPool {
     const entry = this.entries.get(userId);
     if (!entry) return;
     this.entries.delete(userId);
-    if (entry.inUse > 0) {
+    // A child that has exited serves nothing, so it is closed now rather than retired until its turn
+    // ends: the turn on it already fails "Not connected" either way.
+    if (entry.inUse > 0 && !entry.connection.isDead()) {
       // Closing it now would fail every later tool call of the turn still running on it with "MCP
       // client is not connected", which is not an auth failure, so nothing would retry it.
       this.retired.set(entry.connection, { userId, entry });

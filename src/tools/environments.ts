@@ -6,6 +6,7 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { gtmId } from '../utils/schemas.js';
 import type { GtmClient } from '../utils/gtmClient.js';
 import { checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
 import { jsonResult, textResult, errorResult } from '../utils/toolResponse.js';
@@ -13,8 +14,8 @@ import { paginate, paginationFields, buildListResult } from '../utils/pagination
 import type { tagmanager_v2 } from 'googleapis';
 
 const containerBase = z.object({
-  accountId: z.string().describe('The GTM account ID.'),
-  containerId: z.string().describe('The GTM container ID.'),
+  accountId: gtmId.describe('The GTM account ID.'),
+  containerId: gtmId.describe('The GTM container ID.'),
 });
 
 export function registerEnvironmentTools(server: McpServer, getClient: () => GtmClient): void {
@@ -46,7 +47,7 @@ export function registerEnvironmentTools(server: McpServer, getClient: () => Gtm
     'environments_get',
     {
       description: 'Get details of a specific GTM environment.',
-      inputSchema: containerBase.extend({ environmentId: z.string().describe('The GTM environment ID.') }),
+      inputSchema: containerBase.extend({ environmentId: gtmId.describe('The GTM environment ID.') }),
     },
     async ({ accountId, containerId, environmentId }) => {
       try {
@@ -102,7 +103,7 @@ export function registerEnvironmentTools(server: McpServer, getClient: () => Gtm
         '[WRITE] Update an existing GTM environment (read-modify-write: omitted fields are preserved). ' +
         'Requires GTM_MCP_ENABLE_WRITES=true and confirm=true.',
       inputSchema: containerBase.extend({
-        environmentId: z.string().describe('The GTM environment ID to update.'),
+        environmentId: gtmId.describe('The GTM environment ID to update.'),
         name: z.string().optional().describe('New environment name.'),
         description: z.string().optional().describe('New description.'),
         url: z.string().optional().describe('New default preview page URL.'),
@@ -159,7 +160,7 @@ export function registerEnvironmentTools(server: McpServer, getClient: () => Gtm
         'Requires GTM_MCP_ENABLE_PUBLISH=true and confirm=true. ' +
         '⚠️  This rotates the environment auth token; any embedded snippet using the old token stops working until updated.',
       inputSchema: containerBase.extend({
-        environmentId: z.string().describe('The GTM environment ID to reauthorize.'),
+        environmentId: gtmId.describe('The GTM environment ID to reauthorize.'),
         confirm: z.boolean().describe('Must be true to confirm this high-impact operation.'),
       }),
     },
@@ -189,7 +190,7 @@ export function registerEnvironmentTools(server: McpServer, getClient: () => Gtm
       description:
         '[DELETE] Delete a GTM environment. Requires GTM_MCP_ENABLE_DELETES=true and confirm=true.',
       inputSchema: containerBase.extend({
-        environmentId: z.string().describe('The GTM environment ID to delete.'),
+        environmentId: gtmId.describe('The GTM environment ID to delete.'),
         confirm: z.boolean().describe('Must be true to confirm this delete operation.'),
       }),
     },

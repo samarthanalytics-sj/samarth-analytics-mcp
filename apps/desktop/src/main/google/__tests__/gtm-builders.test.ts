@@ -19,6 +19,7 @@ import {
   applyTriggerWaitDefaults,
   normalizeTimerTrigger,
   customEventNameOf,
+  customEventIsExactEquals,
   describeTriggerConditions,
   findExistingTrigger,
   buildEnvironmentSnippet,
@@ -227,11 +228,11 @@ test('Floodlight Counter tag: flc + core params (ordinalType STANDARD default) +
 });
 
 test('Google Ads Call Conversion tag: awcc + exactly the 3 corpus params, conversionId stripped of AW-', () => {
-  const t = buildGoogleAdsCallConversionTag({ name: 'Call', phoneNumber: '(877) 635-4246', conversionId: 'AW-10966070237', conversionLabel: '8J53CLK87pEBEIqL88YD' });
+  const t = buildGoogleAdsCallConversionTag({ name: 'Call', phoneNumber: '(555) 010-0000', conversionId: 'AW-123456789', conversionLabel: 'TESTLABEL123' });
   assert.equal(t.type, 'awcc');
-  assert.equal(findParam(t.parameter, 'phoneConversionNumber')?.value, '(877) 635-4246');
-  assert.equal(findParam(t.parameter, 'conversionId')?.value, '10966070237');
-  assert.equal(findParam(t.parameter, 'conversionLabel')?.value, '8J53CLK87pEBEIqL88YD');
+  assert.equal(findParam(t.parameter, 'phoneConversionNumber')?.value, '(555) 010-0000');
+  assert.equal(findParam(t.parameter, 'conversionId')?.value, '123456789');
+  assert.equal(findParam(t.parameter, 'conversionLabel')?.value, 'TESTLABEL123');
   // The legacy gtag call-conversion extras are NOT part of the native awcc tag.
   assert.equal(findParam(t.parameter, 'phoneConversionCountryCode'), undefined);
 });
@@ -833,10 +834,10 @@ test('findGa4BaseTag: gaawc / G- / GT- / {{var→G-}} present; Ads ({{var→AW-}
   assert.equal(findGa4BaseTag(snap([{ ...g({ type: 'gaawc', name: 'GA4 Config' }) }]))?.name, 'GA4 Config');
   assert.equal(findGa4BaseTag(snap([g({ name: 'G tag', parameter: [{ key: 'tagId', value: 'G-ABC123' }] })]))?.name, 'G tag');
   // GT- destination id is a real GA4 base tag (was a false-negative → duplicate).
-  assert.equal(findGa4BaseTag(snap([g({ name: 'GT tag', parameter: [{ key: 'tagId', value: 'GT-P3NGJTCV' }] })]))?.name, 'GT tag');
+  assert.equal(findGa4BaseTag(snap([g({ name: 'GT tag', parameter: [{ key: 'tagId', value: 'GT-ABCD123' }] })]))?.name, 'GT tag');
   // {{variable}} tagId is resolved: a constant → G- counts; → AW- (Ads) does NOT.
-  assert.equal(findGa4BaseTag(snap([g({ name: 'var GA4', parameter: [{ key: 'tagId', value: '{{GA4 - Variable}}' }] })], [cvar('GA4 - Variable', 'G-QHQL8N71DT')]))?.name, 'var GA4');
-  assert.equal(findGa4BaseTag(snap([g({ name: 'var Ads', parameter: [{ key: 'tagId', value: '{{Conversion ID}}' }] })], [cvar('Conversion ID', 'AW-16543357089')])), null);
+  assert.equal(findGa4BaseTag(snap([g({ name: 'var GA4', parameter: [{ key: 'tagId', value: '{{GA4 - Variable}}' }] })], [cvar('GA4 - Variable', 'G-ABC1234567')]))?.name, 'var GA4');
+  assert.equal(findGa4BaseTag(snap([g({ name: 'var Ads', parameter: [{ key: 'tagId', value: '{{Conversion ID}}' }] })], [cvar('Conversion ID', 'AW-987654321')])), null);
   // An unresolvable {{var}} (not a known constant) → not counted.
   assert.equal(findGa4BaseTag(snap([g({ name: 'var ?', parameter: [{ key: 'tagId', value: '{{Some Unknown}}' }] })])), null);
   assert.equal(findGa4BaseTag(snap([g({ name: 'Ads', parameter: [{ key: 'tagId', value: 'AW-999' }] })])), null);
@@ -1580,6 +1581,27 @@ test('customEventNameOf extracts the dataLayer event from a customEvent trigger'
   const tr = buildTrigger({ name: 'CE - Product View', kind: 'custom_event', eventName: 'product_view' });
   assert.equal(customEventNameOf(tr as unknown as Record<string, unknown>), 'product_view');
   assert.equal(customEventNameOf({ type: 'pageview' }), '', 'non-custom-event → empty');
+});
+
+test('customEventIsExactEquals: only a single, non-negated, case-sensitive {{_event}} equals match', () => {
+  const ev = (type: string, extra: Array<{ key: string; value: string }> = []) => ({
+    type: 'customEvent',
+    customEventFilter: [{ type, parameter: [{ type: 'template', key: 'arg0', value: '{{_event}}' }, { type: 'template', key: 'arg1', value: 'purchase' }, ...extra.map((p) => ({ type: 'boolean', ...p }))] }],
+  });
+  const built = buildTrigger({ name: 'CE - Purchase', kind: 'custom_event', eventName: 'purchase' });
+  assert.equal(customEventIsExactEquals(built as unknown as Record<string, unknown>), true, 'the trigger the app builds is exact');
+  assert.equal(customEventIsExactEquals(ev('equals')), true);
+  // All of these decode to customEventName 'purchase' yet fire on other events.
+  assert.equal(customEventNameOf(ev('matchRegex')), 'purchase');
+  assert.equal(customEventIsExactEquals(ev('matchRegex')), false, 'regex is unanchored in GTM: also purchase_refund');
+  assert.equal(customEventIsExactEquals(ev('contains')), false);
+  assert.equal(customEventIsExactEquals(ev('equals', [{ key: 'negate', value: 'true' }])), false, 'negated: every event EXCEPT purchase');
+  assert.equal(customEventIsExactEquals(ev('equals', [{ key: 'ignore_case', value: 'true' }])), false);
+  const two = ev('equals');
+  two.customEventFilter.push({ ...two.customEventFilter[0] });
+  assert.equal(customEventIsExactEquals(two), false, 'more than one condition');
+  assert.equal(customEventIsExactEquals({ type: 'customEvent', customEventFilter: [{ type: 'equals', parameter: [{ key: 'arg0', value: '{{Page Path}}' }, { key: 'arg1', value: '/x' }] }] }), false, 'not on {{_event}}');
+  assert.equal(customEventIsExactEquals({ type: 'pageview' }), false);
 });
 
 test('describeTriggerConditions decodes filter conditions to readable strings', () => {
@@ -2830,6 +2852,25 @@ test('buildMetaPixelTag: standard event → eventName=standard + standardEventNa
   assert.equal(((atc.parameter ?? []) as Array<{ key: string; value: string }>).find((x) => x.key === 'standardEventName')?.value, 'AddToCart');
 });
 
+test('metaStandardEvent maps GA4 names onto Meta standard events, so the CAPI tag pairs with the Pixel', () => {
+  assert.equal(metaStandardEvent('generate_lead'), 'Lead');
+  assert.equal(metaStandardEvent('begin_checkout'), 'InitiateCheckout');
+  assert.equal(metaStandardEvent('view_item'), 'ViewContent');
+  assert.equal(metaStandardEvent('sign_up'), 'CompleteRegistration');
+  assert.equal(metaStandardEvent('view_search_results'), 'Search');
+  // Direct standard names still win; a genuinely custom name stays custom.
+  assert.equal(metaStandardEvent('lead'), 'Lead');
+  assert.equal(metaStandardEvent('purchase'), 'Purchase');
+  assert.equal(metaStandardEvent('my_custom'), null);
+  const pv = (t: { parameter?: unknown[] }, key: string) => ((t.parameter ?? []) as Array<{ key: string; value: string }>).find((x) => x.key === key)?.value;
+  const lead = buildMetaCapiServerTag('cvt_5TP8W', 'x', 'P', 'T', 'generate_lead');
+  assert.equal(pv(lead, 'eventName'), 'standard', 'generate_lead is the standard Lead event, not a custom one');
+  assert.equal(pv(lead, 'eventNameStandard'), 'Lead');
+  assert.equal(pv(lead, 'eventNameCustom'), undefined);
+  const checkout = buildMetaCapiServerTag('cvt_5TP8W', 'x', 'P', 'T', 'begin_checkout');
+  assert.equal(pv(checkout, 'eventNameStandard'), 'InitiateCheckout');
+});
+
 test('META_EVENT_OBJECT_PROPERTIES carries the full per-event property set', () => {
   assert.deepEqual(META_EVENT_OBJECT_PROPERTIES.Purchase, ['content_ids', 'contents', 'content_type', 'value', 'currency', 'num_items', 'order_id', 'event_id']);
   assert.deepEqual(META_EVENT_OBJECT_PROPERTIES.ViewContent, ['content_ids', 'contents', 'content_type', 'content_name', 'content_category', 'value', 'currency']);
@@ -3865,8 +3906,10 @@ test('planWebToServerMigration: classifies GA4/Ads/Floodlight/Linker natives + M
   assert.equal(by('TikTok')?.serverTool, 'create_tiktok_capi_server_tag');
   assert.deepEqual(by('TikTok')?.derived, { pixelId: 'C7TK' }, 'TikTok pixel id read from the template pixel_code param');
   assert.deepEqual(by('TikTok')?.requires, ['accessToken']);
-  assert.deepEqual(by('Pinterest')?.derived, { advertiserId: '2613' });
-  assert.deepEqual(by('Pinterest')?.requires, ['apiAccessToken'], 'matches the builder param name');
+  // The web Tag ID is NOT the server advertiserId (the 549… Ad Account ID): informational only, and the
+  // Ad Account ID is always asked for.
+  assert.deepEqual(by('Pinterest')?.derived, { tagId: '2613' }, 'the web Tag ID is never carried as advertiserId');
+  assert.deepEqual(by('Pinterest')?.requires, ['advertiserId', 'apiAccessToken'], 'the Ad Account ID is not on the web tag');
   assert.deepEqual(by('Snapchat')?.derived, { pixelId: 'ab12-cd34' });
 
   // Native types are authoritative (no name guessing) and carry their corpus-verified id keys.
@@ -3885,7 +3928,9 @@ test('planWebToServerMigration: classifies GA4/Ads/Floodlight/Linker natives + M
   assert.deepEqual(by('Amazon Ads')?.derived, { tagIds: ['tag-987'] }, 'keyed + shaped as the typed tool takes it');
   assert.deepEqual(by('Amazon Ads')?.requires, []);
   assert.equal(by('StackAdapt')?.serverTool, 'create_stackadapt_server_tag');
-  assert.deepEqual(by('StackAdapt')?.derived, { pixelID: 'SA-55' });
+  // saq('ts', …) is the Universal Pixel: carried as pixelType universal, never left to default to conv.
+  assert.deepEqual(by('StackAdapt')?.derived, { pixelID: 'SA-55', pixelType: 'universal' });
+  assert.deepEqual(by('StackAdapt')?.requires, []);
   assert.equal(by('X (Twitter)')?.status, 'typed-tool', 'X has a typed builder (Tier-1)');
   assert.equal(by('X (Twitter)')?.serverTool, 'create_x_capi_server_tag');
   assert.deepEqual(by('X (Twitter)')?.derived, { pixelId: 'o1abc' });
@@ -4573,12 +4618,12 @@ test('ga4TagFields returns a GA4 tag event name + measurement id', () => {
   const tag = {
     type: 'gaawe',
     parameter: [
-      { type: 'template', key: 'eventName', value: 'why_restaurants_choose_chewbox_for_online_ordering' },
+      { type: 'template', key: 'eventName', value: 'why_customers_choose_example_for_online_ordering' },
       { type: 'template', key: 'measurementIdOverride', value: 'G-REAL12345' },
       { type: 'template', key: 'measurementId', value: '' },
     ],
   };
-  assert.deepEqual(ga4TagFields(tag), { eventName: 'why_restaurants_choose_chewbox_for_online_ordering', measurementId: 'G-REAL12345' });
+  assert.deepEqual(ga4TagFields(tag), { eventName: 'why_customers_choose_example_for_online_ordering', measurementId: 'G-REAL12345' });
 });
 test('ga4TagFields reads a Google tag measurement id from tagId', () => {
   assert.deepEqual(ga4TagFields({ type: 'googtag', parameter: [{ type: 'template', key: 'tagId', value: 'G-ABC123' }] }), { measurementId: 'G-ABC123' });

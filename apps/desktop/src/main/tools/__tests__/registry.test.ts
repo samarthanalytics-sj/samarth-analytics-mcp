@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildToolRegistry, type GtmContextControl, type ConfirmFn } from '../registry';
+import { buildToolRegistry, describeTriggerCondition, type GtmContextControl, type ConfirmFn } from '../registry';
+import { buildTrigger, type TriggerInput } from '../../google/gtm-builders';
 import { buildGa4WriteTools } from '../ga4-write-tools';
 import { AuditHistoryStore } from '../../storage/audit-history';
 import { ManifestStore } from '../../storage/manifest-store';
@@ -515,6 +516,11 @@ function fakeAds(
         conversionId: 'AW-11122233344', conversionLabel: 'NEWLABEL123', taggable: true,
       };
     },
+    createUserList: async (customerId: string, name: string, _days?: number, loginCustomerId?: string) => {
+      calls.push(`createUserList:${customerId}:${name}:${loginCustomerId ?? ''}`);
+      boom();
+      return { resourceName: `customers/${customerId}/userLists/444`, id: '444' };
+    },
   } as unknown as GoogleAdsService;
   return { ads, calls };
 }
@@ -910,6 +916,60 @@ async function main(): Promise<void> {
     await buildToolRegistry(fd2.data, approve.fn, 'gtm').execute('probe_server_runtime', { accountId: '1', containerId: '2', workspaceId: '3', measurementId: 'G-ABC123' });
     assert.equal(approve.calls.length, 1, 'one approval, then it runs');
     assert.deepEqual(fd2.calls.filter((c) => c.startsWith('runServerRuntimeProbe')), ['runServerRuntimeProbe:1:2:3:G-ABC123'], 'exactly one probe after approval');
+  });
+
+  await test('gtm:applyFix (runAuditFix) runs ONLY audit-fix tools; a delete fix walks the two-step delete confirmation', async () => {
+    // Regression: the audit panel's applyFix ran ANY tool name the renderer sent, through a full GTM
+    // registry whose confirm fn approved every card - so batch deletes, container creates and the
+    // live-GA4 probe all ran with their approval cards silently answered.
+    const { runAuditFix, auditFixConfirm } = await import('../../suggestions/audit-fix');
+    const ws = { accountId: '1', containerId: '2', workspaceId: '3' };
+    const fd = fakeData();
+    const data = fd.data;
+    for (const fix of [
+      { tool: 'batch_delete_gtm_entities', args: { ...ws, triggers: [{ id: '7' }] } },
+      { tool: 'delete_unused_gtm_variables', args: ws },
+      { tool: 'delete_gtm_tag', args: { ...ws, tagId: '9' } },
+      { tool: 'probe_server_runtime', args: ws },
+      { tool: 'create_server_container', args: { accountId: '1', name: 'S' } },
+    ]) {
+      await assert.rejects(() => runAuditFix(data, fix), /not an audit fix/, `${fix.tool} is refused`);
+    }
+    assert.equal(fd.calls.length, 0, 'a refused fix reaches nothing');
+    await assert.rejects(() => runAuditFix(data, { tool: 'set_gtm_tag_paused' }), /Invalid fix/);
+
+    // The fixes the audit engine emits still run.
+    await runAuditFix(data, { tool: 'set_gtm_tag_paused', args: { ...ws, tagId: '5', paused: false } });
+    assert.ok(fd.calls.includes('setPaused:1:2:3:5:false'), 'a pause fix applies');
+    await runAuditFix(data, { tool: 'delete_gtm_trigger', args: { ...ws, triggerId: '7', name: 'Unused' } });
+    assert.ok(fd.calls.includes('deleteTrigger:1:2:3:7'), 'a delete fix applies after its two-step confirmation');
+
+    // That confirmation is the registry's own two-step delete sequence, answered for that tool only.
+    const seen: Array<{ tool: string; destructive?: boolean; requireTextConfirm?: string }> = [];
+    const inner = auditFixConfirm('delete_gtm_variable');
+    const spy: ConfirmFn = async (p) => { seen.push({ tool: p.tool, destructive: p.destructive, requireTextConfirm: p.requireTextConfirm }); return inner(p); };
+    const fdv = fakeData();
+    await buildToolRegistry(fdv.data, spy, 'gtm').execute('delete_gtm_variable', { ...ws, variableId: '4' });
+    assert.deepEqual(seen, [
+      { tool: 'delete_gtm_variable', destructive: true, requireTextConfirm: undefined },
+      { tool: 'delete_gtm_variable', destructive: true, requireTextConfirm: 'delete' },
+    ], 'the plan card, then the type-"delete" final card - the same two steps the chat shows');
+    assert.ok(fdv.calls.includes('deleteVar:1:2:3:4'));
+
+    // Every other card is declined: a one-click approval card (the live-GA4 probe), another tool's
+    // card, the final card out of order, or a third card.
+    const probeFd = fakeData();
+    const probeOut = JSON.parse(await buildToolRegistry(probeFd.data, auditFixConfirm('set_gtm_tag_paused'), 'gtm').execute('probe_server_runtime', ws));
+    assert.equal(probeOut.declined, true, 'an approval card is never auto-approved');
+    assert.ok(!probeFd.calls.some((c) => c.startsWith('runServerRuntimeProbe')), 'no hit sent');
+    const c = auditFixConfirm('delete_gtm_trigger');
+    const card = (o: Partial<{ tool: string; destructive: boolean; requireTextConfirm: string }>) => ({ tool: 'delete_gtm_trigger', summary: '', details: { x: 1 }, ...o });
+    assert.equal(await c(card({ tool: 'delete_gtm_variable', destructive: true })), null, 'another tool');
+    assert.equal(await c(card({ destructive: true, requireTextConfirm: 'delete' })), null, 'the final card before the plan card');
+    assert.equal(await c(card({})), null, 'a non-destructive card');
+    assert.deepEqual(await c(card({ destructive: true })), { x: 1 });
+    assert.deepEqual(await c(card({ destructive: true, requireTextConfirm: 'delete' })), { x: 1 });
+    assert.equal(await c(card({ destructive: true, requireTextConfirm: 'delete' })), null, 'no third approval');
   });
 
   await test('the approval card is told which live surface a write lands on (platform)', async () => {
@@ -1632,13 +1692,13 @@ async function main(): Promise<void> {
     const out = JSON.parse(
       await reg.execute('create_gtm_tracking_tag', {
         accountId: '1', containerId: '2', workspaceId: '3',
-        platform: 'google_ads_call_conversion', tagName: 'Call', phoneNumber: '(877) 635-4246', conversionId: 'AW-10966070237', conversionLabel: 'L1',
+        platform: 'google_ads_call_conversion', tagName: 'Call', phoneNumber: '(555) 010-0000', conversionId: 'AW-123456789', conversionLabel: 'L1',
         trigger: { name: 'All Pages', kind: 'pageview' },
       })
     );
     assert.equal(out.tag.type, 'awcc');
-    assert.equal(trkParam(out, 'conversionId'), '10966070237');
-    assert.equal(trkParam(out, 'phoneConversionNumber'), '(877) 635-4246');
+    assert.equal(trkParam(out, 'conversionId'), '123456789');
+    assert.equal(trkParam(out, 'phoneConversionNumber'), '(555) 010-0000');
   });
 
   await test('create_tracking_tag (google_ads_remarketing) dispatches sp with customParamsFormat NONE', async () => {
@@ -1889,6 +1949,52 @@ async function main(): Promise<void> {
       () => reg.execute('create_gtm_tracking_tag', { accountId: '1', containerId: '2', workspaceId: '3', platform: 'ga4_event', tagName: 'X', measurementId: 'G-1', eventName: 'e', trigger: { name: 'Broken Timer', kind: 'timer' } }),
       /requires trigger\.intervalMs/,
     );
+  });
+
+  await test('create_tracking_tag (custom_event) with no trigger.eventName fails loudly before any write', async () => {
+    // The tag's eventName is set, the trigger's is not: buildTrigger would emit {{_event}} equals "",
+    // a trigger that matches no dataLayer push, and the tag would be created dead.
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data, approveAsIs);
+    await assert.rejects(
+      () => reg.execute('create_gtm_tracking_tag', {
+        accountId: '1', containerId: '2', workspaceId: '3',
+        platform: 'ga4_event', tagName: 'GA4 - generate_lead', measurementId: 'G-XYZ', eventName: 'generate_lead',
+        trigger: { name: 'CE - generate_lead', kind: 'custom_event' },
+      }),
+      /custom_event" requires trigger\.eventName/,
+    );
+    assert.ok(!fd.calls.some((c) => /^(createTrigger|createTag|createVar|enable)/.test(c)), `nothing may be written: ${fd.calls.join(' | ')}`);
+  });
+
+  // Regression: suggest_tags_from_url described an operator-less Click Text / Click URL / Page URL /
+  // Page Path / Query String / Referrer condition as "equals", while buildTrigger emits `contains` for
+  // each. The user read an exact match ("Book A Demo") for a trigger that also fires on "Book A Demo Now".
+  await test('describeTriggerCondition states the operator buildTrigger really emits when none is given', async () => {
+    const cases: Array<{ trigger: Record<string, string>; variable: string; label: string }> = [
+      { trigger: { kind: 'link_click', clickTextValue: 'Book A Demo' }, variable: '{{Click Text}}', label: 'Click Text' },
+      { trigger: { kind: 'all_clicks', clickUrlValue: '/pricing' }, variable: '{{Click URL}}', label: 'Click URL' },
+      { trigger: { kind: 'link_click', clickClassesValue: 'cta' }, variable: '{{Click Classes}}', label: 'Click Classes' },
+      { trigger: { kind: 'link_click', clickIdValue: 'buy' }, variable: '{{Click ID}}', label: 'Click ID' },
+      { trigger: { kind: 'link_click', queryStringValue: 'utm_source' }, variable: '{{Query String}}', label: 'Query String' },
+      { trigger: { kind: 'link_click', referrerValue: 'partner' }, variable: '{{Referrer}}', label: 'Referrer' },
+      { trigger: { kind: 'link_click', pageHostnameValue: 'www.example.com' }, variable: '{{Page Hostname}}', label: 'Page Hostname' },
+      { trigger: { kind: 'pageview', pageUrlValue: '/thank-you' }, variable: '{{Page URL}}', label: 'Page URL' },
+      { trigger: { kind: 'form_submit', formIdValue: 'contact' }, variable: '{{Form ID}}', label: 'Form ID' },
+      { trigger: { kind: 'form_submit', formClassesValue: 'hs-form' }, variable: '{{Form Classes}}', label: 'Form Classes' },
+      { trigger: { kind: 'form_submit', pagePathValue: '/contact' }, variable: '{{Page Path}}', label: 'Page Path' },
+    ];
+    for (const c of cases) {
+      const built = buildTrigger({ name: 'T', ...c.trigger } as unknown as TriggerInput);
+      const cond = (built.filter ?? []).find((p) => JSON.stringify(p).includes(c.variable));
+      assert.ok(cond, `${c.label}: buildTrigger emitted a ${c.variable} condition`);
+      const emitted = String((cond as { type?: string }).type);
+      const value = Object.entries(c.trigger).find(([k]) => k.endsWith('Value'))![1];
+      const text = describeTriggerCondition(c.trigger);
+      assert.ok(text.includes(`${c.label} ${emitted} "${value}"`), `${c.trigger.kind} ${c.label}: built "${emitted}", described as: ${text}`);
+    }
+    // An explicit operator is still described as given.
+    assert.match(describeTriggerCondition({ kind: 'link_click', clickTextValue: 'Apply', clickTextOperator: 'equals' }), /Click Text equals "Apply"/);
   });
 
   await test('create_gtm_variable_typed: lookup_table + regex_table kinds build smm/remm from input+rows', async () => {
@@ -2860,7 +2966,7 @@ async function main(): Promise<void> {
     assert.ok(fa.calls.includes('listConversionActions:9876543210:'), 'a blank manager id is dropped, not sent');
   });
 
-  await test('create_google_ads_conversion_action is a LIVE write: hidden without confirm, applied in ONE CLICK', async () => {
+  await test('create_google_ads_conversion_action is a LIVE write: hidden without confirm, ONE one-click approval card', async () => {
     // No confirm fn → not registered at all, and calling it cannot reach Google Ads.
     const ro = fakeAds();
     await assert.rejects(
@@ -2869,16 +2975,18 @@ async function main(): Promise<void> {
     );
     assert.equal(ro.calls.length, 0, 'nothing reached Google Ads');
 
-    // CHANGED DELIBERATELY (owner's rule, 2026-07-23): approval is for DELETES. A create applies in
-    // one click, here as in GTM, because it is additive - it spends nothing and removes nothing.
-    // What is NOT relaxed: the tool is still write-gated, so with no confirm fn it is not even
-    // registered (asserted above). The trade accepted is that this create is LIVE with no draft
-    // stage, which is why the prompt requires the account and the exact action to be stated first.
+    // A create is additive - it spends nothing and removes nothing - so it never gets the two-step
+    // "type delete" card. But unlike a GTM create it is LIVE in the advertiser's account with no draft
+    // stage and this app cannot revert it, so it takes exactly ONE plain approval card (Tool.approval).
+    // The tool is also write-gated: with no confirm fn it is not even registered (asserted above).
     const twice = seqConfirm(true, true);
     const fa2 = fakeAds();
     const created = rec(JSON.parse(
       await adsChat(fa2.ads, twice.fn).execute('create_google_ads_conversion_action', { customerId: '9876543210', name: 'Contact form', category: 'SUBMIT_LEAD_FORM' })
     ));
+    assert.equal(twice.calls.length, 1, 'exactly one approval card');
+    assert.ok(!twice.calls[0].destructive, 'a plain card, not the two-step delete card');
+    assert.equal(twice.calls[0].platform, 'ads');
     assert.equal(created.created, true);
     assert.equal(rec(created.action).conversionLabel, 'NEWLABEL123');
     assert.ok(
@@ -2894,6 +3002,28 @@ async function main(): Promise<void> {
     assert.equal(refused.created, false);
     assert.match(String(refused.error), /already exists/);
     assert.equal(dup.calls.some((c) => c.startsWith('createConversionAction')), false, 'a refused dry run writes nothing');
+  });
+
+  await test('create_google_ads_user_list is a LIVE write: ONE one-click approval card, and a decline creates nothing', async () => {
+    // Regression: it had neither `approval` nor `destructive`, so it took the auto-apply branch and a
+    // Customer Match list was created in the live Ads account with no card at all, unlike its sibling
+    // live create (create_google_ads_conversion_action).
+    const args = { customerId: '9876543210', name: 'CRM - buyers' };
+    const yes = seqConfirm(true);
+    const fa = fakeAds();
+    const out = rec(JSON.parse(await adsChat(fa.ads, yes.fn).execute('create_google_ads_user_list', args)));
+    assert.equal(yes.calls.length, 1, 'exactly one approval card');
+    assert.ok(!yes.calls[0].destructive, 'a plain card, not the two-step delete card');
+    assert.equal(yes.calls[0].platform, 'ads');
+    assert.equal(out.userListId, '444');
+    assert.ok(fa.calls.includes('createUserList:9876543210:CRM - buyers:'), 'created after approval');
+
+    const no = seqConfirm(false);
+    const fb = fakeAds();
+    const declined = rec(JSON.parse(await adsChat(fb.ads, no.fn).execute('create_google_ads_user_list', args)));
+    assert.equal(no.calls.length, 1);
+    assert.equal(declined.declined, true);
+    assert.equal(fb.calls.some((c) => c.startsWith('createUserList')), false, 'a declined card never reaches Google Ads');
   });
 
   await test('an Ads service that is not ready answers with the fix, not a raw 403', async () => {
@@ -3320,6 +3450,25 @@ async function main(): Promise<void> {
     assert.ok(fa.calls.some((c) => c.startsWith('createConversionAction:9876543210:Contact form')), 'the duplicate was created');
   });
 
+  await test('ONE-CLICK card: a trigger the tag builder will refuse is not counted as a tag that will be built', async () => {
+    const fa = fakeAds();
+    let cardText = '';
+    const approve: ConfirmFn = async (p) => { cardText = p.summary; return p.details; };
+    const reg = buildToolRegistry(fakeData().data, approve, 'gtm', undefined, undefined, undefined, undefined, fa.ads);
+    const out = JSON.parse(await reg.execute('create_google_ads_conversion_actions_for_tags', {
+      customerId: '9876543210',
+      accountId: '1', containerId: '2', workspaceId: '3',
+      entries: [
+        { tagName: 'Book A Demo Click', trigger: { name: 'Book A Demo Click', kind: 'link_click', clickTextValue: 'Book A Demo' } },
+        { tagName: 'Lead Event', trigger: { name: 'Lead Event', kind: 'custom_event' } },
+        { tagName: 'Heartbeat', trigger: { name: 'Heartbeat', kind: 'timer' } },
+      ],
+    }));
+    assert.match(cardText, /Then 1 Google Ads conversion tag will be built on its trigger/, cardText);
+    assert.equal(out.tagsCreatedCount, 1, JSON.stringify(out));
+    assert.deepEqual(out.tagsFailed.map((t: { tagName: string }) => t.tagName).sort(), ['Heartbeat', 'Lead Event']);
+  });
+
   await test('ONE-CLICK: with GTM ids + a trigger per entry, the SAME approval also builds the tags and a Conversion Linker', async () => {
     const fa = fakeAds();
     const fd = fakeData();
@@ -3413,6 +3562,27 @@ async function main(): Promise<void> {
     assert.equal(out.conversionLinker, undefined, 'no linker without any tag');
     assert.ok(!fd.calls.some((c) => c.startsWith('createTag:')), 'nothing was written to the GTM container');
     assert.ok(!fa.calls.some((c) => c.startsWith('createConversionAction')), 'the dry run failed, so no live create happened');
+  });
+
+  // Regression: the batch tag builder guarded a timer with no interval but not a custom_event with no
+  // eventName, so it created {{_event}} equals "" (matches no dataLayer push) and a conversion tag on
+  // it that would never fire, while the run reported the tag as built.
+  await test('ONE-CLICK: a custom_event trigger with no eventName builds no trigger or tag (reported, nothing written to GTM)', async () => {
+    const fa = fakeAds();
+    const fd = fakeData();
+    const approve: ConfirmFn = async (p) => p.details;
+    const reg = buildToolRegistry(fd.data, approve, 'gtm', undefined, undefined, undefined, undefined, fa.ads);
+    const out = JSON.parse(await reg.execute('create_google_ads_conversion_actions_for_tags', {
+      customerId: '9876543210',
+      accountId: '1', containerId: '2', workspaceId: '3',
+      entries: [{ tagName: 'Lead Form', trigger: { name: 'CE - lead', kind: 'custom_event', eventName: '  ' } }],
+    }));
+    assert.equal(out.createdCount, 1, 'the conversion action itself is unaffected');
+    assert.equal(out.tagsCreatedCount, 0, 'no tag was built on a trigger that can never fire');
+    assert.equal(out.tagsFailed?.length, 1, JSON.stringify(out));
+    assert.match(out.tagsFailed[0].error, /custom_event trigger requires eventName/);
+    assert.equal(out.conversionLinker, undefined, 'no linker without any tag');
+    assert.ok(!fd.calls.some((c) => /^(createTrigger|createTag|createVar|enableVars)/.test(c)), `nothing may be written to GTM: ${fd.calls.join(' | ')}`);
   });
 
   await test('a GTM create still applies directly: the new gate did not leak onto draft writes', async () => {

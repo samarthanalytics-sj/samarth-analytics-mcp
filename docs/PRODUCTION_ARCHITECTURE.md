@@ -1,12 +1,12 @@
 # Production Architecture — Scalable Foundation
 
 A forward-looking blueprint for scaling the Samarth Analytics platform from the
-current single-tenant-feel, signed-cookie portal into a multi-tenant,
+current single-tenant-feel, encrypted-cookie portal into a multi-tenant,
 horizontally-scalable production system — **without changing today's
 user-facing behavior**.
 
 > This document is a *design + minimal foundation*. The current deployment stays
-> exactly as-is (Vercel serverless + signed-cookie sessions, no database). The
+> exactly as-is (Vercel serverless + encrypted-cookie sessions, no database). The
 > code shipped alongside this doc is **inert scaffolding**: a portable SQL
 > schema (`infra/database/0001_init.sql`), typed domain models
 > (`apps/portal/shared/production-types.ts`), a cache-key/TTL policy
@@ -41,7 +41,7 @@ These are non-negotiable and every component below is designed around them:
   `import type` at module load; heavy modules load lazily *after* auth. The new
   capability route obeys this; any future DB/cache client must be `await
   import()`-ed inside the handler after session validation.
-- **Consent Mode v2 suite stays 170/170.** No engine changes here.
+- **Consent Mode v2 suite stays 188/188.** No engine changes here.
 - **All current tool names, routes, and response shapes unchanged.** New
   surfaces are additive (`/api/system/capabilities`); existing routes keep their
   contracts.
@@ -90,7 +90,7 @@ These are non-negotiable and every component below is designed around them:
 | --- | --- | --- |
 | **Frontend** | React+Vite SPA on Vercel CDN | Unchanged. Add edge caching of static assets; client reads `/api/system/capabilities` to gate UI. |
 | **API gateway** | Vercel serverless `api/**` | Unchanged shape. Becomes the only tier that holds a backend service identity (resolves `token_ref`, talks to DB/cache). |
-| **Session/token** | Signed cookie holding tokens | Cookie holds only a session id; token bytes move to a secret-manager vault keyed by `oauth_connections.token_ref`. Backwards-compatible cutover (see §3). |
+| **Session/token** | Encrypted cookie (`v1e`) holding tokens; 30 days from sign-in, not extended by refresh | Cookie holds only a session id; token bytes move to a secret-manager vault keyed by `oauth_connections.token_ref`. Backwards-compatible cutover (see §3). |
 | **Durable state** | none | Postgres: orgs, users, audit history, captures, jobs, approvals. |
 | **Cache** | none | Redis/Upstash: discovery lists (SWR) + job/run status. |
 | **Async work** | runtime worker called ad-hoc | Postgres-backed job queue (`worker_jobs`, SKIP LOCKED) → swap to SQS/QStash later with no schema change. |
@@ -109,7 +109,7 @@ apps/portal/
   server/                     # local Express mirror (unchanged)
   shared/
     portal-types.ts           # product shapes (source of truth) — unchanged
-    consent-audit.ts          # consent engine — unchanged (170/170)
+    consent-audit.ts          # consent engine — unchanged (188/188)
     production-types.ts       # DB domain models + ProductionStore iface
     cache-keys.ts             # cache key namespace + TTL policy
     cache.ts                  # NEW: CacheStore iface + in-memory/noop + Upstash skeleton
@@ -143,10 +143,14 @@ they back is specified in [`API_JOBS.md`](./API_JOBS.md).
 
 ## 3. OAuth / session / token storage strategy
 
-**Today:** stateless signed cookie (`PORTAL_SESSION_SECRET`, HMAC-SHA256) holds
-the access/refresh tokens directly; refresh happens lazily and rotates the
-cookie. Simple, no infra, but tokens travel in the cookie and the cookie size
-grows with scope.
+**Today:** a stateless encrypted cookie (`v1e`: AES-256-GCM under a key derived
+from `PORTAL_SESSION_SECRET`) holds the access/refresh tokens; refresh happens
+lazily and rotates the cookie. The browser cannot read or alter the tokens, and
+every route rejects a session more than 30 days after sign-in (`iat` in the
+sealed payload; a refresh keeps it). Simple, no infra, but tokens travel in the
+cookie, the cookie size grows with scope, and sign-out only clears the cookie:
+a copied cookie stays usable until that 30-day limit. (`v1e` replaced the
+signed-only `v1`, whose tokens were readable; `v1` cookies are rejected.)
 
 **Production target — server-side token vault:**
 
@@ -161,12 +165,13 @@ grows with scope.
    against Google, and writes the new token back to the vault — never to
    Postgres, never to the cookie.
 
-**Migration path (no behavior change):** the cookie format is versioned (`v1`
-today). Introduce `v2` = session-id cookie. On read, accept both: `v1` keeps
-working until expiry; new logins mint `v2`. The signed-cookie code stays as the
-fallback when no DB/vault is configured — `/api/system/capabilities` reports
-`sessionMode: "signed_cookie"` until `DATABASE_URL` is present, then
-`"database"`.
+**Migration path (no behavior change):** the cookie format is versioned (`v1e`
+today). Introduce `v2` = session-id cookie. On read, accept both: `v1e` keeps
+working until expiry; new logins mint `v2`. The encrypted-cookie (`v1e`) code
+stays as the fallback when no DB/vault is configured — `/api/system/capabilities`
+reports `sessionMode: "signed_cookie"` until `DATABASE_URL` is present, then
+`"database"`. (`signed_cookie` is a stable identifier from before the cookie was
+encrypted; it names the stateless cookie mode, not the cookie format.)
 
 ---
 
@@ -233,7 +238,7 @@ partial index `worker_jobs_queue_idx` keeps dequeue O(1)-ish on the hot path.
 ## 5. API design
 
 All under same-origin `/api`. **Existing routes keep their exact contracts.**
-New/extended routes are marked. Auth = signed session cookie unless noted.
+New/extended routes are marked. Auth = encrypted session cookie (`v1e`) unless noted.
 
 ### Auth / session / profile
 | Method | Path | Notes |
@@ -423,7 +428,7 @@ worker's HTTP `/capture` are unchanged. *Done.*
 **Phase 1 — Durable identity + discovery cache.** Provision Postgres; flesh out
 the `PostgresStore` skeleton (orgs/users/memberships, discovery snapshots). Wire
 Upstash for discovery SWR behind a feature check on `DATABASE_URL`/`UPSTASH_*`.
-Cookie stays `v1`; no UX change.
+Cookie stays `v1e`; no UX change.
 
 **Phase 2 — Token vault.** Introduce `v2` session-id cookie + secret-manager
 vault; dual-read cookies for backwards compatibility. Tokens leave the browser.
@@ -448,6 +453,6 @@ read replicas if audit-history reads grow.
 - All existing tool names, routes, and response shapes.
 - `node:*`-only top-level imports in `api/**` (DB/cache clients load lazily,
   after auth).
-- Consent v2 suite at 170/170.
+- Consent v2 suite at 188/188.
 - No secrets in repo or Postgres; token bytes only in the vault.
 - Portal mobile/tablet/desktop compatibility.

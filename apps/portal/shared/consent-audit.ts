@@ -58,6 +58,8 @@ export interface ConsentTag {
   type?: string;
   parameter?: ConsentParam[];
   firingTriggerId?: string[];
+  /** Paused tags never fire. */
+  paused?: boolean;
   /** GTM per-tag consent settings (consentStatus: NOT_SET | NEEDED | NOT_NEEDED). */
   consentSettings?: { consentStatus?: string; consentType?: { value?: string } };
   /** Sequencing — a tag that must fire before this one (setup) / after (teardown). */
@@ -295,6 +297,14 @@ function push(out: ConsentFinding[], f: ConsentFinding): void {
 // 1. CONFIG checks — inspect GTM configuration only. Source: CONFIG.
 // ════════════════════════════════════════════════════════════════════════════
 
+/**
+ * GTM built-in "Consent Initialization - All Pages" trigger. triggers.list never
+ * returns built-in triggers, so a consent-default / CMP tag firing on it is only
+ * visible from the tag side (mirrors CONSENT_INIT_TRIGGER_ID in
+ * apps/desktop/src/main/google/gtm-builders.ts).
+ */
+const CONSENT_INIT_TRIGGER_ID = "2147479572";
+
 /** Detect consent initialisation: a Consent Mode default in tags/triggers/text. */
 export function detectConsentInit(cfg: ConsentConfigInput): {
   hasDefault: boolean;
@@ -307,9 +317,20 @@ export function detectConsentInit(cfg: ConsentConfigInput): {
     || /consent[_\s-]?default/.test(blob);
   const hasUpdate = /consent['"\s,]*update|gtag\(['"]consent['"],\s*['"]update/.test(blob)
     || /consent[_\s-]?update/.test(blob);
-  const hasConsentInitTrigger = cfg.triggers.some(
-    (t) => lc(t.type) === "consentinit" || /consent[\s_-]?initialization/.test(lc(t.name)),
-  );
+  const hasConsentInitTrigger =
+    cfg.triggers.some(
+      (t) => lc(t.type) === "consentinit" || /consent[\s_-]?initialization/.test(lc(t.name)),
+    ) ||
+    // A live consent-default / CMP tag on the BUILT-IN Consent Initialization
+    // trigger. A data sender (GA4, Ads, vendor pixel) placed there is not a
+    // consent setup, and a paused tag never fires, so neither counts.
+    cfg.tags.some(
+      (t) =>
+        !t.paused &&
+        !isMarketingOrAnalyticsTag(t) &&
+        !isGa4Config(t) &&
+        (t.firingTriggerId ?? []).map(String).includes(CONSENT_INIT_TRIGGER_ID),
+    );
   const fieldsSeen = new Set<ConsentField>();
   for (const f of CONSENT_V2_FIELDS) {
     if (blob.includes(f)) fieldsSeen.add(f);
@@ -691,32 +712,78 @@ function ruleRuntimeCookiesBeforeConsent(rt: RuntimeInput, out: ConsentFinding[]
   // Anchored per cookie name (not bare prefixes), so first-party cookies such as
   // `identity_session`, `ident` or `li_session` are not flagged. Based on the
   // verify engine's list (web-audit-mcp/src/verify/assert/helpers.ts) plus the
-  // GA/DoubleClick/LinkedIn cookies the previous prefix list already covered.
+  // GA/DoubleClick/LinkedIn/Snap cookies the previous prefix list already
+  // covered (incl. Snap's `_scid_r` and LinkedIn's `li_giant`), plus Snap's
+  // `_sctr`.
   const TRACKING_COOKIE =
-    /^(_ga($|_)|_gat($|_)|_gid$|_gac_|_gcl_|_fbp$|_fbc$|_uetsid$|_uetvid$|_uetmsclkid$|_ttp$|_scid$|_tt_|IDE$|MUID$|test_cookie$|li_gc$|li_sugr$|li_fat_id$|_pin_unauth$)/i;
+    /^(_ga($|_)|_gat($|_)|_gid$|_gac_|_gcl_|_fbp$|_fbc$|_uetsid$|_uetvid$|_uetmsclkid$|_ttp$|_scid($|_r$)|_sctr$|_tt_|IDE$|MUID$|test_cookie$|li_gc$|li_sugr$|li_fat_id$|li_giant$|_pin_unauth$)/i;
+  // Google Analytics' own cookies are governed by analytics_storage; every
+  // other cookie on the list (Google Ads/Floodlight `_gcl_*`/`_gac_*`/IDE,
+  // Meta, Microsoft, TikTok, Snap, LinkedIn, Pinterest) by ad_storage.
+  const ANALYTICS_COOKIE = /^(_ga($|_)|_gat($|_)|_gid$)/i;
   for (const page of rt.pages) {
     const cookies = page.cookies ?? [];
     if (cookies.length === 0) continue;
     const cls = classifyState(page.consentState);
+    const fullyDenied = cls.analytics === "denied" && cls.ads === "denied";
+    const events = page.consentEvents ?? [];
     // Determine when consent default/update happened.
-    const consentTs = (page.consentEvents ?? [])
+    const consentTs = events
       .map((e) => e.tMs)
       .filter((t): t is number => typeof t === "number");
     const firstConsentTMs = consentTs.length ? Math.min(...consentTs) : undefined;
-    const offenders: string[] = [];
+    // The earliest consent event is usually the denied default, which permits
+    // nothing. Measure against the first event that actually grants analytics
+    // or ad storage; fall back to the earliest event when no granting event was
+    // captured (conservative: never flags more than the earliest-event rule).
+    const grantTs = events
+      .filter(
+        (e) =>
+          typeof e.tMs === "number" &&
+          (e.fields?.analytics_storage === "granted" || e.fields?.ad_storage === "granted"),
+      )
+      .map((e) => e.tMs as number);
+    const grantTMs = grantTs.length ? Math.min(...grantTs) : firstConsentTMs;
+    const deniedOffenders: string[] = [];
+    const timedOffenders: string[] = [];
     for (const c of cookies) {
       const name = c.name ?? "";
       if (!TRACKING_COOKIE.test(name)) continue;
-      // Two ways to flag: explicit timing before consent, OR a tracking cookie
-      // present at all under a denied state.
-      if (typeof c.tMs === "number" && typeof firstConsentTMs === "number") {
-        if (c.tMs < firstConsentTMs) offenders.push(name);
-      } else if (cls.analytics === "denied" || cls.ads === "denied") {
-        offenders.push(name);
+      // Two ways to flag: a tracking cookie present at all while ITS storage
+      // category is denied (timed or not — that storage stays denied for the
+      // whole capture), OR explicit timing showing it was written before
+      // consent granted storage. On a partial state only the denied category's
+      // cookies are in the first group: a `_ga` written after analytics was
+      // granted on analytics_granted_ads_denied is allowed.
+      const categoryState = ANALYTICS_COOKIE.test(name) ? cls.analytics : cls.ads;
+      if (categoryState === "denied") {
+        deniedOffenders.push(name);
+      } else if (typeof c.tMs === "number" && typeof grantTMs === "number" && c.tMs < grantTMs) {
+        timedOffenders.push(name);
       }
     }
+    const offenders = [...deniedOffenders, ...timedOffenders];
     if (offenders.length === 0) continue;
     const where = pageWhere(page);
+    const grantLabel = grantTs.length
+      ? "the consent update that granted storage"
+      : "the consent event";
+    const deniedStorage = cls.analytics === "denied" ? "analytics_storage" : "ad_storage";
+    const why: string[] = [];
+    if (deniedOffenders.length > 0) {
+      why.push(
+        fullyDenied
+          ? `On "${page.consentState}" (a denied state), these tracking cookies were present even though storage should be denied.`
+          : `On "${page.consentState}" (${deniedStorage} denied), ${Array.from(new Set(deniedOffenders)).join(", ")} were present even though ${deniedStorage} should be denied.`,
+      );
+    }
+    if (timedOffenders.length > 0) {
+      why.push(
+        deniedOffenders.length > 0
+          ? `${Array.from(new Set(timedOffenders)).join(", ")} were observed before ${grantLabel} at ${grantTMs}ms.`
+          : `On "${page.consentState}", these tracking cookies were observed before ${grantLabel} at ${grantTMs}ms.`,
+      );
+    }
     push(out, {
       id: `consent-runtime-cookie-before:${where}:${Array.from(new Set(offenders)).sort().join(",")}`,
       domain: "consent",
@@ -726,10 +793,7 @@ function ruleRuntimeCookiesBeforeConsent(rt: RuntimeInput, out: ConsentFinding[]
       finding: `Tracking cookie(s) set before/without consent (${Array.from(new Set(offenders)).join(", ")})`,
       entity: { path: where },
       affected: [where],
-      whyItMatters:
-        typeof firstConsentTMs === "number"
-          ? `On "${page.consentState}", these tracking cookies were observed before the consent event at ${firstConsentTMs}ms.`
-          : `On "${page.consentState}" (a denied state), these tracking cookies were present even though storage should be denied.`,
+      whyItMatters: why.join(" "),
       suggestedFix:
         "Ensure storage-setting tags are gated on consent and that no tracking cookies are written before the consent default applies.",
       businessImpact:

@@ -233,13 +233,26 @@ export interface JobQueue {
    * not hand the same job to two workers concurrently.
    */
   lease(workerId: string, leaseSeconds: number): Promise<QueuedJob | null>;
-  /** Mark a leased job succeeded with its result. */
-  complete(id: string, result: RuntimeCaptureJobResult): Promise<void>;
+  /**
+   * Mark a leased job succeeded with its result. Fenced on the lease: rejects
+   * unless the job is still `leased` to `workerId` and the lease has not
+   * expired, so a worker whose lease lapsed (and was reclaimed by another
+   * worker) cannot overwrite the job. A durable backend must do the same in one
+   * statement — `UPDATE worker_jobs ... WHERE id = $1 AND status = 'leased' AND
+   * leased_by = $2 AND lease_expires_at > now()` — and treat rowCount 0 as a
+   * stale lease.
+   */
+  complete(
+    id: string,
+    workerId: string,
+    result: RuntimeCaptureJobResult,
+  ): Promise<void>;
   /**
    * Mark a leased job failed. If attempts remain it returns to `queued` for
-   * retry; otherwise it lands in the terminal `failed` state.
+   * retry; otherwise it lands in the terminal `failed` state. Fenced on the
+   * lease exactly like `complete`.
    */
-  fail(id: string, error: string): Promise<void>;
+  fail(id: string, workerId: string, error: string): Promise<void>;
   /** Request cancellation (from queued or leased). */
   cancel(id: string): Promise<void>;
   /** Read a single job, org-scoped. */
@@ -319,16 +332,20 @@ export class InMemoryJobQueue implements JobQueue {
     return { ...next };
   }
 
-  async complete(id: string, result: RuntimeCaptureJobResult): Promise<void> {
-    const job = this.require(id);
+  async complete(
+    id: string,
+    workerId: string,
+    result: RuntimeCaptureJobResult,
+  ): Promise<void> {
+    const job = this.requireLease(id, workerId);
     this.applyWorkerTransition(job, "succeeded");
     job.result = result;
     job.leasedBy = null;
     job.leaseExpiresAt = null;
   }
 
-  async fail(id: string, error: string): Promise<void> {
-    const job = this.require(id);
+  async fail(id: string, workerId: string, error: string): Promise<void> {
+    const job = this.requireLease(id, workerId);
     job.lastError = error;
     if (job.attempts < job.maxAttempts) {
       // Retry: back to the queue. attempts already incremented on lease.
@@ -363,6 +380,24 @@ export class InMemoryJobQueue implements JobQueue {
   private require(id: string): QueuedJob {
     const job = this.jobs.get(id);
     if (!job) throw new Error(`unknown job: ${id}`);
+    return job;
+  }
+
+  /**
+   * Lease fence for worker reports. Without it a worker whose lease expired
+   * could requeue/fail/complete a job another worker now holds (two workers
+   * running one job), and a second `complete()` silently overwrote the result.
+   */
+  private requireLease(id: string, workerId: string): QueuedJob {
+    const job = this.require(id);
+    if (
+      job.status !== "leased" ||
+      job.leasedBy !== workerId ||
+      job.leaseExpiresAt === null ||
+      job.leaseExpiresAt <= this.now()
+    ) {
+      throw new Error(`stale lease: job ${id} is not leased to ${workerId}`);
+    }
     return job;
   }
 

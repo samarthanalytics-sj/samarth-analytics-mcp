@@ -23,6 +23,7 @@ import {
 } from 'googleapis/build/src/apis/analyticsdata/index.js';
 import type { OAuth2Client } from 'google-auth-library';
 import { buildRetryOptions } from './apiRetry.js';
+import { buildRequestGuardOptions } from './googleRequestGuard.js';
 
 export type Ga4AdminClient = analyticsadmin_v1beta.Analyticsadmin;
 export type Ga4AdminAlphaClient = analyticsadmin_v1alpha.Analyticsadmin;
@@ -31,6 +32,8 @@ export type Ga4DataClient = analyticsdata_v1beta.Analyticsdata;
 // One client per auth identity (not a single global), so the process can serve
 // multiple Google identities — see auth/identityContext.ts and docs/adr/0001.
 // Keyed by the OAuth2Client instance; entries GC'd when the auth goes away.
+// Every client also carries the request guard (googleRequestGuard.ts), which refuses a request
+// whose URL a path argument has retargeted (an extra ':verb', '?' or '#').
 let _clients = new WeakMap<OAuth2Client, Ga4AdminClient>();
 let _alphaClients = new WeakMap<OAuth2Client, Ga4AdminAlphaClient>();
 let _dataClients = new WeakMap<OAuth2Client, Ga4DataClient>();
@@ -41,7 +44,7 @@ export function getGa4AdminClient(auth: OAuth2Client): Ga4AdminClient {
     // Default retry set only, which means no POST. The Admin WRITE tools drive this same client with
     // POST/PATCH/DELETE, and retrying a non-idempotent create is how you get duplicates. The GA4 Data
     // client below opts POST in separately because its POSTs are pure reads. See apiRetry.ts.
-    client = analyticsadmin({ version: 'v1beta', auth, ...buildRetryOptions() });
+    client = analyticsadmin({ version: 'v1beta', auth, ...buildRetryOptions(), ...buildRequestGuardOptions() });
     _clients.set(auth, client);
   }
   return client;
@@ -54,7 +57,7 @@ export function getGa4AdminClient(auth: OAuth2Client): Ga4AdminClient {
 export function getGa4AdminAlphaClient(auth: OAuth2Client): Ga4AdminAlphaClient {
   let client = _alphaClients.get(auth);
   if (!client) {
-    client = analyticsadmin({ version: 'v1alpha', auth, ...buildRetryOptions() });
+    client = analyticsadmin({ version: 'v1alpha', auth, ...buildRetryOptions(), ...buildRequestGuardOptions() });
     _alphaClients.set(auth, client);
   }
   return client;
@@ -74,6 +77,7 @@ export function getGa4DataClient(auth: OAuth2Client): Ga4DataClient {
       version: 'v1beta',
       auth,
       ...buildRetryOptions(process.env, { extraMethodsToRetry: ['POST'] }),
+      ...buildRequestGuardOptions(),
     });
     _dataClients.set(auth, client);
   }

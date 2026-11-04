@@ -216,17 +216,40 @@ export function roleAtLeast(role: MembershipRole, min: MembershipRole): boolean 
 
 /**
  * Guard for the one privileged operation the matrix can't express positionally:
- * a role may only assign/modify a membership role that is strictly below its
- * own (an admin cannot mint another owner or admin; only an owner can grant
- * admin). Returns whether `actorRole` may set a membership to `targetRole`.
+ * a non-owner may only modify a membership that is strictly below its own role
+ * (`currentRole`), and only to a role that is also strictly below its own
+ * (`newRole`). So an admin cannot mint another owner or admin, and cannot demote
+ * the owner or a fellow admin either; only an owner can grant or revoke admin.
+ * Returns whether `actorRole` may change a `currentRole` membership to `newRole`.
+ *
+ * Owners may change any membership (including transferring ownership). The
+ * caller must still refuse to demote the org's LAST owner — this pure helper
+ * does not know how many owners the org has.
  */
 export function canAssignRole(
   actorRole: MembershipRole,
-  targetRole: MembershipRole,
+  currentRole: MembershipRole,
+  newRole: MembershipRole,
 ): boolean {
   if (!roleCan(actorRole, "member:update_role")) return false;
-  // Owners may assign any role (including transferring ownership). Everyone else
-  // may only assign roles strictly below their own.
+  if (actorRole === "owner") return true;
+  return (
+    compareRoles(actorRole, currentRole) > 0 &&
+    compareRoles(actorRole, newRole) > 0
+  );
+}
+
+/**
+ * Removal counterpart of `canAssignRole`: `member:remove` alone would let an
+ * admin remove the owner or another admin. A non-owner may only remove a
+ * membership strictly below its own role. Owners may remove anyone; the caller
+ * must still refuse to remove the org's LAST owner.
+ */
+export function canRemoveMember(
+  actorRole: MembershipRole,
+  targetRole: MembershipRole,
+): boolean {
+  if (!roleCan(actorRole, "member:remove")) return false;
   if (actorRole === "owner") return true;
   return compareRoles(actorRole, targetRole) > 0;
 }

@@ -21,7 +21,7 @@ import { AuditRecorder } from './audit.js';
 import { UsageMeter, quotaMessage } from './usage.js';
 import { planFix, FIXABLE_CATEGORIES, type AuditFinding } from './audit-fix.js';
 import { onClientGone, SseStream } from './sse.js';
-import { deadline, DeadlineError } from './deadline.js';
+import { deadline, deadlineHolding, DeadlineError } from './deadline.js';
 import { installTimestampedLogging } from './log-time.js';
 import { scopeTools } from './tools.js';
 import { checkAllowlistAgainstServer } from './integrations.js';
@@ -285,8 +285,26 @@ async function main(): Promise<void> {
   // A catalog probe at boot: it proves the MCP binary is reachable and gives the tool inventory,
   // which is identical across user sessions. Deliberately built with no Google token.
   console.log('[orchestrator] probing MCP server...');
-  const probe = new McpConnection(cfg, cfg.googleIdentity.mode === 'inherit' ? undefined : 'probe');
+  const probeToken = cfg.googleIdentity.mode === 'inherit' ? undefined : 'probe';
+  let probe = new McpConnection(cfg, probeToken);
   await probe.connect();
+  /**
+   * The probe, respawned if its child has exited since boot. Kept as it was, every slash command
+   * would answer unknown_command until a restart. Concurrent callers share one respawn.
+   */
+  let probeRespawn: Promise<McpConnection> | null = null;
+  const liveProbe = (): Promise<McpConnection> => {
+    if (!probe.isDead()) return Promise.resolve(probe);
+    probeRespawn ??= (async () => {
+      const next = new McpConnection(cfg, probeToken);
+      await next.connect();
+      probe = next;
+      return next;
+    })().finally(() => {
+      probeRespawn = null;
+    });
+    return probeRespawn;
+  };
 
   const all = probe.listTools();
   const reads = all.filter((t) => !t.isWrite).length;
@@ -990,7 +1008,7 @@ async function main(): Promise<void> {
     try {
       // Prompt templates are static text, identical for every user, so the probe connection serves
       // them without needing a per-user session.
-      const text = await probe.getPromptText(req.params.name, args);
+      const text = await (await liveProbe()).getPromptText(req.params.name, args);
       res.json({ text });
     } catch (err) {
       res.status(400).json({
@@ -1127,12 +1145,15 @@ async function main(): Promise<void> {
 
     try {
       res.json(
-        await deadline(
-          Promise.resolve(fn(mcp, user)),
+        // Released when fn settles, not here: after a 504 the work carries on on this child, and
+        // releasing it at the deadline let the pool close it under a still-running batch of writes.
+        await deadlineHolding(
+          () => fn(mcp, user),
           cfg.limits.resourceDeadlineMs,
           opts?.mutates
             ? 'This is taking longer than expected. The changes were not cancelled and may still be finishing, so check the workspace before running it again.'
             : 'That lookup took too long and was stopped.',
+          () => pool.release(user.id, mcp),
         ),
       );
     } catch (err) {
@@ -1151,8 +1172,6 @@ async function main(): Promise<void> {
         code,
         message: err instanceof Error ? err.message : 'Could not complete that request.',
       });
-    } finally {
-      pool.release(user.id, mcp);
     }
   }
 
@@ -1812,6 +1831,14 @@ async function main(): Promise<void> {
       return sendAuthError(res, err);
     }
 
+    // Watched from here, before the awaits below, not from where the stream opens. Acquiring a
+    // session (a cold child takes seconds) and reading attachments both come first, and a Stop
+    // pressed during them used to be missed entirely: the turn then ran to the end for nobody,
+    // spending the model budget and applying its writes. Aborting this turn's signal stops its model
+    // call and declines only the approval it parked (the signal is passed to the broker in loop.ts).
+    const controller = new AbortController();
+    onClientGone(res, () => controller.abort());
+
     if (paused) {
       res.setHeader('Retry-After', '120');
       return res.status(503).json({
@@ -1931,6 +1958,19 @@ async function main(): Promise<void> {
       });
     }
 
+    /**
+     * True when the client left during one of the awaits before the stream opened. The session
+     * acquired above is released here because the turn's finally, its only other release, is never
+     * reached; and nothing is begun, billed or run for a reader who is gone.
+     */
+    const leftBeforeStart = (): boolean => {
+      if (!controller.signal.aborted) return false;
+      pool.release(user.id, userMcp);
+      console.log(`[chat] client left before the turn started for user ${userRef(user.id)}; nothing was run`);
+      return true;
+    };
+    if (leftBeforeStart()) return;
+
     // Opened before the stream so a failure here is a plain log line rather than a mid-stream error.
     // Returns null when auditing is off or unreachable, and the turn then records nothing.
     // Extracted before the stream opens, so a refusal ("that .doc is the old format") is a clean
@@ -1957,6 +1997,7 @@ async function main(): Promise<void> {
         console.warn(`[chat] ${rejected.length} attachment(s) rejected:`, rejected.map((r) => r.name).join(', '));
       }
     }
+    if (leftBeforeStart()) return;
 
     const lastUserMessage = body.messages[body.messages.length - 1]?.content ?? '';
     const conversationId = await audit.beginConversation(
@@ -1968,15 +2009,11 @@ async function main(): Promise<void> {
     audit.recordUserMessage(conversationId, user.id, lastUserMessage);
 
     const stream = new SseStream(res);
-    const controller = new AbortController();
     // Not req.on('close'): that had already fired by here, so a client that left kept its turn
     // running and spending tokens. And not per user: finishing one turn must not withdraw the cards
-    // of the same user's other conversation. Aborting this turn's signal stops its model call and
-    // declines only the approval it parked (the signal is passed to the broker in loop.ts).
-    onClientGone(res, () => {
-      controller.abort();
-      stream.close();
-    });
+    // of the same user's other conversation. The abort itself is wired at the top of the handler;
+    // this only stops writing to a stream nobody is reading.
+    onClientGone(res, () => stream.close());
 
     if (conversationId) stream.send({ type: 'conversation', conversationId });
 

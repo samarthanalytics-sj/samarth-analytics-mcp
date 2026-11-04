@@ -7,15 +7,25 @@
 // browser cannot run inside a serverless function. Deploy it to Render / Fly /
 // Railway / a VPS (see README).
 //
-// SECURITY (all opt-in via env):
-//   RUNTIME_WORKER_TOKEN     If set, every request must send
-//                            `Authorization: Bearer <token>`. Strongly
-//                            recommended for any internet-exposed deployment.
+// SECURITY (env):
+//   RUNTIME_WORKER_TOKEN     REQUIRED. Every /capture request must send
+//                            `Authorization: Bearer <token>`. Without it the
+//                            worker REFUSES TO START (mirrors the root server's
+//                            src/utils/httpBinding.ts and web-audit's http.ts).
+//   RUNTIME_WORKER_ALLOW_UNAUTHENTICATED
+//                            Local-development opt-in: exactly "true" lets the
+//                            worker start without a token, and it then binds
+//                            127.0.0.1 only.
 //   RUNTIME_WORKER_ALLOWLIST Comma-separated host suffixes the worker is
 //                            allowed to load (e.g. "example.com,shop.example").
 //                            When unset, ANY http(s) URL is allowed — only do
 //                            this for a private/internal deployment.
 //   RUNTIME_WORKER_MAX_URLS  Max URLs per request (default 10, hard cap 25).
+//   RUNTIME_WORKER_MAX_CONCURRENT
+//                            Max /capture requests in flight (default 2; 0 or
+//                            less means 1). Each one launches its own Chromium;
+//                            extra requests get 429 instead of exhausting the
+//                            host's memory.
 //   RUNTIME_WORKER_MAX_WAIT  Max per-page settle time in ms (default 8000).
 //   RUNTIME_WORKER_TIMEOUT   Max navigation timeout in ms (default 30000).
 //   PORT                     Listen port (default 8080).
@@ -35,9 +45,36 @@ const ALLOWLIST = (process.env.RUNTIME_WORKER_ALLOWLIST ?? "")
   .map((s) => s.trim().toLowerCase())
   .filter(Boolean);
 const MAX_URLS = Math.min(Number(process.env.RUNTIME_WORKER_MAX_URLS) || 10, 25);
+// 0 or a negative value clamps to 1: `Math.floor(0) || 2` used to read an explicit 0 as unset and
+// allow 2. Only a missing, empty or non-numeric value takes the default.
+const MAX_CONCURRENT = (() => {
+  const raw = (process.env.RUNTIME_WORKER_MAX_CONCURRENT ?? "").trim();
+  const n = raw === "" ? NaN : Math.floor(Number(raw));
+  return Number.isFinite(n) ? Math.max(1, n) : 2;
+})();
 const MAX_WAIT = Number(process.env.RUNTIME_WORKER_MAX_WAIT) || 8000;
 const NAV_TIMEOUT = Number(process.env.RUNTIME_WORKER_TIMEOUT) || 30000;
 const MAX_BODY_BYTES = 256 * 1024;
+const LOOPBACK = "127.0.0.1";
+
+// Without a token tokenOk() lets every request through, and the listener used
+// to bind every interface — so anyone who could reach the port could make this
+// host launch Chromium. Refuse to start unless the operator explicitly opts in
+// for local development, and then listen on loopback only.
+const ALLOW_UNAUTHENTICATED = process.env.RUNTIME_WORKER_ALLOW_UNAUTHENTICATED === "true";
+if (!TOKEN && !ALLOW_UNAUTHENTICATED) {
+  console.error(
+    "[runtime-worker] refusing to start: RUNTIME_WORKER_TOKEN is not set, so /capture would let " +
+      "anyone who can reach the port drive this host's headless browser. Set RUNTIME_WORKER_TOKEN " +
+      "(e.g. `openssl rand -hex 32`). For local development only, set " +
+      `RUNTIME_WORKER_ALLOW_UNAUTHENTICATED=true (it then binds ${LOOPBACK} only).`,
+  );
+  process.exit(1);
+}
+// Token set: all interfaces, exactly as authenticated deployments always listened.
+const HOST = TOKEN ? undefined : LOOPBACK;
+
+let capturesInFlight = 0;
 
 function sendJson(res, status, body) {
   const text = JSON.stringify(body);
@@ -65,8 +102,10 @@ function tokenOk(req) {
 // SSRF admission check. Delegates to the hardened, unit-tested guard in
 // url-guard.mjs (covers loopback/RFC-1918/link-local + the cloud metadata IP,
 // IPv6 private ranges, IPv4-mapped IPv6, and decimal/octal/hex IP encodings).
-// The same guard is re-applied to every in-browser navigation in capture.mjs so
-// a redirect from an allowlisted page to an internal host is still blocked.
+// The same guard is re-applied to every routed in-browser request in capture.mjs,
+// and to every redirect hop after navigation: Playwright never routes a redirect,
+// so a redirect from an allowlisted page to an internal host still LOADS (stopping
+// that request needs egress control), but nothing from that page is recorded.
 function urlAllowed(rawUrl) {
   return guardUrlAllowed(rawUrl, ALLOWLIST);
 }
@@ -107,6 +146,8 @@ const server = createServer(async (req, res) => {
       playwrightAvailable: Boolean(pw),
       authRequired: Boolean(TOKEN),
       allowlist: ALLOWLIST.length ? ALLOWLIST : "open (no allowlist set)",
+      capturesInFlight,
+      maxConcurrent: MAX_CONCURRENT,
     });
   }
 
@@ -122,81 +163,108 @@ const server = createServer(async (req, res) => {
       });
     }
 
-    let body;
+    // Every capture launches its own Chromium, so cap how many run at once.
+    // The slot is held until the capture itself settles (not until the client
+    // disconnects), so hanging up early cannot be used to pile up browsers.
+    if (capturesInFlight >= MAX_CONCURRENT) {
+      res.setHeader("Retry-After", "10");
+      return sendJson(res, 429, {
+        error: "busy",
+        message: `At most ${MAX_CONCURRENT} captures run at once; retry shortly.`,
+      });
+    }
+    capturesInFlight += 1;
     try {
-      body = await readBody(req);
-    } catch (e) {
-      return sendJson(res, 400, { error: "bad_request", message: String(e.message ?? e) });
-    }
-
-    const urls = Array.isArray(body.urls)
-      ? body.urls.filter((u) => typeof u === "string" && u.trim())
-      : [];
-    if (urls.length === 0) {
-      return sendJson(res, 400, {
-        error: "bad_request",
-        message: "`urls` must be a non-empty array of http(s) URLs.",
-      });
-    }
-    if (urls.length > MAX_URLS) {
-      return sendJson(res, 400, {
-        error: "too_many_urls",
-        message: `At most ${MAX_URLS} URLs per request.`,
-      });
-    }
-    for (const u of urls) {
-      const check = urlAllowed(u);
-      if (!check.ok) {
-        return sendJson(res, 400, {
-          error: "url_not_allowed",
-          message: `${u}: ${check.reason}`,
-        });
-      }
-    }
-
-    const wait = Math.min(Number(body.wait) || 4000, MAX_WAIT);
-    const timeout = Math.min(Number(body.timeout) || NAV_TIMEOUT, NAV_TIMEOUT);
-
-    try {
-      // Multi-state proof capture when `consentStates` is supplied; otherwise a
-      // single-state (or no-consent) capture for backwards compatibility.
-      const wantsMultiState =
-        Array.isArray(body.consentStates) && body.consentStates.length > 0;
-      const artifact = wantsMultiState
-        ? await captureConsentStates(
-            { urls, consentStates: body.consentStates, actions: body.actions },
-            { wait, timeout },
-          )
-        : await capture(
-            { urls, consentState: body.consentState, actions: body.actions },
-            { wait, timeout },
-          );
-      return sendJson(res, 200, {
-        ...artifact,
-        summary: summarizeCapture(artifact),
-      });
-    } catch (e) {
-      if (e instanceof PlaywrightMissingError) {
-        return sendJson(res, 503, {
-          error: "playwright_missing",
-          message: e.message,
-        });
-      }
-      console.error("[runtime-worker] capture failed:", e?.message ?? e);
-      return sendJson(res, 500, {
-        error: "capture_failed",
-        message: String(e?.message ?? e).slice(0, 500),
-      });
+      return await handleCapture(req, res);
+    } finally {
+      capturesInFlight -= 1;
     }
   }
 
   return sendJson(res, 404, { error: "not_found" });
 });
 
-server.listen(PORT, () => {
-  console.log(`[runtime-worker] listening on :${PORT}`);
-  console.log(`[runtime-worker] auth ${TOKEN ? "REQUIRED" : "DISABLED (set RUNTIME_WORKER_TOKEN)"}`);
+async function handleCapture(req, res) {
+  let body;
+  try {
+    body = await readBody(req);
+  } catch (e) {
+    return sendJson(res, 400, { error: "bad_request", message: String(e.message ?? e) });
+  }
+
+  const urls = Array.isArray(body.urls)
+    ? body.urls.filter((u) => typeof u === "string" && u.trim())
+    : [];
+  if (urls.length === 0) {
+    return sendJson(res, 400, {
+      error: "bad_request",
+      message: "`urls` must be a non-empty array of http(s) URLs.",
+    });
+  }
+  if (urls.length > MAX_URLS) {
+    return sendJson(res, 400, {
+      error: "too_many_urls",
+      message: `At most ${MAX_URLS} URLs per request.`,
+    });
+  }
+  for (const u of urls) {
+    const check = urlAllowed(u);
+    if (!check.ok) {
+      return sendJson(res, 400, {
+        error: "url_not_allowed",
+        message: `${u}: ${check.reason}`,
+      });
+    }
+  }
+
+  const wait = Math.min(Number(body.wait) || 4000, MAX_WAIT);
+  const timeout = Math.min(Number(body.timeout) || NAV_TIMEOUT, NAV_TIMEOUT);
+
+  try {
+    // Multi-state proof capture when `consentStates` is supplied; otherwise a
+    // single-state (or no-consent) capture for backwards compatibility.
+    const wantsMultiState =
+      Array.isArray(body.consentStates) && body.consentStates.length > 0;
+    const artifact = wantsMultiState
+      ? await captureConsentStates(
+          { urls, consentStates: body.consentStates, actions: body.actions },
+          { wait, timeout },
+        )
+      : await capture(
+          { urls, consentState: body.consentState, actions: body.actions },
+          { wait, timeout },
+        );
+    return sendJson(res, 200, {
+      ...artifact,
+      summary: summarizeCapture(artifact),
+    });
+  } catch (e) {
+    if (e instanceof PlaywrightMissingError) {
+      return sendJson(res, 503, {
+        error: "playwright_missing",
+        message: e.message,
+      });
+    }
+    console.error("[runtime-worker] capture failed:", e?.message ?? e);
+    return sendJson(res, 500, {
+      error: "capture_failed",
+      message: String(e?.message ?? e).slice(0, 500),
+    });
+  }
+}
+
+const onListening = () => {
+  // Report the address ACTUALLY bound, never a hardcoded one.
+  const { address, port } = server.address();
+  const shown = address === "::" || address === "0.0.0.0" ? `all interfaces (${address})` : address;
+  console.log(`[runtime-worker] listening on ${shown}, port ${port}`);
+  console.log(
+    `[runtime-worker] auth ${TOKEN ? "REQUIRED (bearer token)" : "DISABLED (RUNTIME_WORKER_ALLOW_UNAUTHENTICATED=true, loopback only)"}`,
+  );
+  console.log(`[runtime-worker] max concurrent captures: ${MAX_CONCURRENT}`);
   console.log(
     `[runtime-worker] allowlist: ${ALLOWLIST.length ? ALLOWLIST.join(", ") : "OPEN (set RUNTIME_WORKER_ALLOWLIST)"}`,
   );
-});
+};
+if (HOST) server.listen(PORT, HOST, onListening);
+else server.listen(PORT, onListening);

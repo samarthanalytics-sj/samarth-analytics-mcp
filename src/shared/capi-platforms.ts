@@ -146,7 +146,8 @@ export const CAPI_PLATFORMS: readonly CapiPlatformSpec[] = [
   },
   {
     platform: 'x', label: 'X (Twitter) CAPI', gallery: ['stape-io', 'twitter-tag'],
-    nameRe: /\btwitter\b|\bx[\s_-]?pixel\b/i, bodyRe: /twq\(|static\.ads-twitter/i,
+    nameRe: /\btwitter\b|\bx[\s_-]?(pixel|capi)\b/i, bodyRe: /twq\(|static\.ads-twitter/i,
+    // "X CAPI" is the default name both create_x_capi_server_tag tools give the server tag.
     // eventId is the per-conversion X Event ID (tw-...), so one tag is one X conversion event: it is
     // collected per event, never shared across them.
     fields: [

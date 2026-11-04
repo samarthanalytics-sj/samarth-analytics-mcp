@@ -1,7 +1,7 @@
 /**
  * Helpers shared by Vercel serverless API route handlers.
  *
- * Wraps cookie parsing, signed-cookie session reads/writes, and a tiny
+ * Wraps cookie parsing, encrypted-cookie session reads/writes, and a tiny
  * Express-compatible Request/Response surface so the handlers stay short.
  * The Express server (server/routes.ts) also uses parseCookies from here.
  */
@@ -112,7 +112,7 @@ export function readSessionFromCookies(
 }
 
 /**
- * Get a valid access token from the signed-cookie session, refreshing if
+ * Get a valid access token from the encrypted-cookie session, refreshing if
  * needed. If the token was refreshed, we rotate the cookie too so future
  * requests pick up the new expiry.
  */

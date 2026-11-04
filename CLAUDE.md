@@ -76,7 +76,7 @@ already used in `apps/portal/api/gtm/audit.ts`:
 
 ### Consent Mode v2 test suite must stay green
 `npm run test:consent` runs `apps/portal/shared/__tests__/consent-audit.node.test.ts`
-and must remain **170/170 passing**. The runner also fails if fewer than 100
+and must remain **188/188 passing**. The runner also fails if fewer than 100
 cases run. If you change the consent engine, update/extend the tests and keep
 them all passing.
 
@@ -94,7 +94,7 @@ npm run build          # tsc
 npm test               # guardrails + auth + pagination + ga4Admin + consent
 ```
 
-Consent suite alone (fast, must be 170/170):
+Consent suite alone (fast, must be 188/188):
 
 ```bash
 npm run test:consent

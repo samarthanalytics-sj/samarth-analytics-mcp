@@ -17,8 +17,12 @@ const isIpLiteral = (hostname: string): boolean => /^[\d.]+$/.test(hostname) || 
 /** The slice of dns.promises.lookup this module uses; injectable so the guard is testable offline. */
 export type HostLookup = (hostname: string, options: { all: true }) => Promise<{ address: string; family: number }[]>;
 
-/** True when every address `hostname` resolves to is public. Fails closed on a resolution error. */
-async function resolvesPublic(hostname: string, lookup: HostLookup): Promise<boolean> {
+/**
+ * True when every address `hostname` resolves to is public, false when any is private. Null when
+ * the lookup itself failed: callers fail closed on it, but it is not an answer about the host, so a
+ * memo must not keep it (one EAI_AGAIN would otherwise block that host for the rest of the scan).
+ */
+async function resolvesPublic(hostname: string, lookup: HostLookup): Promise<boolean | null> {
   try {
     const addrs = await lookup(hostname, { all: true });
     for (const { address, family } of addrs) {
@@ -27,7 +31,7 @@ async function resolvesPublic(hostname: string, lookup: HostLookup): Promise<boo
     }
     return addrs.length > 0;
   } catch {
-    return false; // fail closed on resolution error
+    return null; // resolution error: refused by the caller, never remembered
   }
 }
 
@@ -42,7 +46,7 @@ export async function requestAllowed(rawUrl: string): Promise<boolean> {
     return false;
   }
   if (isIpLiteral(hostname)) return true; // already covered by urlAllowed above
-  return resolvesPublic(hostname, dnsLookup);
+  return (await resolvesPublic(hostname, dnsLookup)) === true; // fail closed on a lookup error
 }
 
 /** Bound on remembered hosts, so a page that fans out to thousands of hosts cannot grow it forever. */
@@ -54,6 +58,10 @@ const MAX_GUARDED_HOSTS = 500;
  * from one CDN costs one lookup rather than 200. Create one per browser context so the memo lives
  * no longer than the page load it serves.
  *
+ * Only a real answer is remembered. A failed lookup refuses the requests waiting on it and is then
+ * forgotten, so the next request for that host asks again: one guard can serve every page a scan
+ * worker or crawl loads, and a transient resolver error must not block a host for all of them.
+ *
  * This checks the name before Chromium resolves it itself, so a host that re-points between the
  * two lookups (DNS rebinding) is still not fully closed; that needs Chromium's own resolver pinned
  * (--host-resolver-rules) or an egress proxy. What it does close is the common case the string
@@ -61,7 +69,7 @@ const MAX_GUARDED_HOSTS = 500;
  * 127.0.0.1.nip.io, a docker service name).
  */
 export function createRequestGuard(lookup: HostLookup = dnsLookup): (rawUrl: string) => Promise<boolean> {
-  const byHost = new Map<string, Promise<boolean>>();
+  const byHost = new Map<string, Promise<boolean | null>>();
   return async (rawUrl: string): Promise<boolean> => {
     if (!urlAllowed(rawUrl, []).ok) return false;
     let hostname: string;
@@ -74,10 +82,16 @@ export function createRequestGuard(lookup: HostLookup = dnsLookup): (rawUrl: str
     let verdict = byHost.get(hostname);
     if (!verdict) {
       if (byHost.size >= MAX_GUARDED_HOSTS) byHost.clear();
-      verdict = resolvesPublic(hostname, lookup);
-      byHost.set(hostname, verdict);
+      const pending = resolvesPublic(hostname, lookup);
+      verdict = pending;
+      byHost.set(hostname, pending);
+      // Registered before any caller awaits, so it runs first: by the time this request is
+      // refused, the failed lookup is already gone and the next request retries it.
+      void pending.then((v) => {
+        if (v === null && byHost.get(hostname) === pending) byHost.delete(hostname);
+      });
     }
-    return verdict;
+    return (await verdict) === true; // a lookup error (null) still fails closed
   };
 }
 
@@ -88,6 +102,36 @@ export interface SafeFetchResult {
   status: number;
   finalUrl: string;
   body: string;
+}
+
+/** Discard a body we will not read, so its socket is released now rather than at timeout or GC. */
+async function discardBody(res: Response): Promise<void> {
+  await res.body?.cancel().catch(() => {});
+}
+
+/**
+ * Read at most `max` bytes of the body, then cancel the rest. res.text() would buffer ALL of it
+ * before any slice: a chunked body with no Content-Length, or a small gzip body that inflates (fetch
+ * decodes Content-Encoding before res.body), costs hundreds of MB. res.body is already decoded, so
+ * counting bytes here bounds the decoded size too.
+ */
+async function readCapped(res: Response, max: number): Promise<string> {
+  if (!res.body) return '';
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let kept = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const take = Math.min(value.byteLength, max - kept);
+    chunks.push(take === value.byteLength ? value : value.subarray(0, take));
+    kept += take;
+    if (kept >= max) {
+      await reader.cancel().catch(() => {});
+      break;
+    }
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks));
 }
 
 /**
@@ -109,15 +153,24 @@ export async function safeFetch(
       signal: AbortSignal.timeout(timeoutMs),
     });
     if (res.status >= 300 && res.status < 400) {
+      await discardBody(res);
       const loc = res.headers.get('location');
       if (!loc) return { status: res.status, finalUrl: current, body: '' };
       current = new URL(loc, current).href;
       continue;
     }
-    // Bound memory: reject a declared-huge body, and cap what we keep/parse.
+    // Bound memory: reject a declared-huge body, and stop READING at the cap (a declared length
+    // cannot be trusted: chunked bodies have none, and a gzip body declares its compressed size).
     const declared = Number(res.headers.get('content-length') || 0);
-    if (declared > MAX_BODY_BYTES) throw new Error('response too large');
-    const body = res.status >= 400 ? '' : (await res.text()).slice(0, MAX_BODY_BYTES);
+    if (declared > MAX_BODY_BYTES) {
+      await discardBody(res);
+      throw new Error('response too large');
+    }
+    if (res.status >= 400) {
+      await discardBody(res);
+      return { status: res.status, finalUrl: current, body: '' };
+    }
+    const body = await readCapped(res, MAX_BODY_BYTES);
     return { status: res.status, finalUrl: current, body };
   }
   throw new Error('too many redirects');

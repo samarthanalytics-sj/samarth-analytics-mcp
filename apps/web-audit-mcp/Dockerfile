@@ -5,12 +5,18 @@
 # consent engine from apps/portal/shared):
 #   docker build -f apps/web-audit-mcp/Dockerfile -t samarth-web-audit-mcp .
 #   docker run -p 8080:8080 -e WEB_AUDIT_HTTP_AUTH_TOKEN=... -e WEB_AUDIT_ALLOWLIST=client.com samarth-web-audit-mcp
-FROM mcr.microsoft.com/playwright:v1.48.0-jammy
+#
+# The image only ships the browser builds for ONE Playwright version (under
+# /ms-playwright), and nothing here runs `playwright install`. So the tag below
+# MUST equal the "playwright" version pinned in package-lock.json, or every
+# chromium.launch() fails with "Executable doesn't exist". Bump both together
+# (the web-audit test suite fails if they drift).
+FROM mcr.microsoft.com/playwright:v1.60.0-jammy
 
 WORKDIR /app/apps/web-audit-mcp
 
-# Install deps first for layer caching. Playwright is already in the base image,
-# so the optional dependency resolves to the preinstalled browser.
+# Install deps first for layer caching. npm installs the playwright version the
+# lockfile pins; its browsers come from the base image above.
 COPY apps/web-audit-mcp/package.json apps/web-audit-mcp/package-lock.json apps/web-audit-mcp/tsconfig.json ./
 RUN npm install --no-audit --no-fund
 

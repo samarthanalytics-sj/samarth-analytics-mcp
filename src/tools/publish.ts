@@ -8,16 +8,17 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { gtmId } from '../utils/schemas.js';
 import type { GtmClient } from '../utils/gtmClient.js';
 import { checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
 import { jsonResult, textResult, errorResult, errorText } from '../utils/toolResponse.js';
 
 const containerBase = z.object({
-  accountId: z.string(),
-  containerId: z.string(),
+  accountId: gtmId,
+  containerId: gtmId,
 });
 
-const wsBase = containerBase.extend({ workspaceId: z.string() });
+const wsBase = containerBase.extend({ workspaceId: gtmId });
 
 export function registerPublishTools(server: McpServer, getClient: () => GtmClient): void {
   // ── workspace/quick_preview ──────────────────────────────────────────────
@@ -64,7 +65,7 @@ export function registerPublishTools(server: McpServer, getClient: () => GtmClie
         'Requires GTM_MCP_ENABLE_PUBLISH=true and confirm=true. ' +
         '⚠️  This immediately makes the version live in production.',
       inputSchema: containerBase.extend({
-        containerVersionId: z.string().describe('The version ID to publish.'),
+        containerVersionId: gtmId.describe('The version ID to publish.'),
         confirm: z.boolean().describe('Must be true to confirm this publish operation.'),
       }),
     },
