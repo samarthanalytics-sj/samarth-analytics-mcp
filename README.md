@@ -535,14 +535,27 @@ Set env vars in Vercel Dashboard → Settings → Environment Variables.
 
 ### Render
 
-1. Create a new **Web Service** in [Render](https://render.com)
-2. Connect your GitHub repo
-3. Build command: `npm install && npm run build`
-4. Start command: `GTM_MCP_TRANSPORT=http node dist/index.js`
-5. Add environment variables in Render Dashboard
-6. **Important**: Set `RENDER=true` env var and ensure your health check hits `/health`
+The repo ships a Render Blueprint, [`render.yaml`](./render.yaml). It defines one web service, `samarth-gtm-mcp`:
 
-Render supports persistent long-lived connections — recommended for SSE/streaming.
+- **Runtime**: Docker. Render builds the [`Dockerfile`](./Dockerfile) on every deploy. There is no build command and no start command to set.
+- **Health check path**: `/health`.
+- **Branch**: `render.yaml` has no `branch` key. Render deploys the branch you select when you create the Blueprint. `autoDeploy: true` deploys every new commit on that branch.
+- **Port**: do not set one. Render provides `PORT` and the server listens on it.
+
+To deploy: Render Dashboard → **New** → **Blueprint** → select this repo.
+
+`render.yaml` sets only `GTM_MCP_TRANSPORT=http`, a generated `GTM_MCP_HTTP_AUTH_TOKEN`, and the three GTM guardrail flags as `false`. Add the other variables by hand in the **Environment** tab of the service. Never put their values in `render.yaml`.
+
+| Mode | Variables to add by hand |
+|---|---|
+| **Shared token** (one Google identity for every client) | `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, `GOOGLE_REFRESH_TOKEN`. Leave `STYTCH_PROJECT_ID` unset. Clients send `Authorization: Bearer <GTM_MCP_HTTP_AUTH_TOKEN>`. |
+| **Per-user OAuth** (each user signs in with their own Google account) | `STYTCH_PROJECT_ID`, `STYTCH_SECRET`, `STYTCH_PUBLIC_TOKEN`, and `GTM_MCP_PUBLIC_URL=https://<your-domain>` (the origin only, with no `/mcp` at the end). When `STYTCH_PROJECT_ID` is set, the server ignores the shared token. |
+
+Guardrails: `GTM_MCP_ENABLE_WRITES`, `GTM_MCP_ENABLE_PUBLISH`, `GTM_MCP_ENABLE_DELETES`, `GA4_MCP_ENABLE_WRITES` and `GA4_MCP_ENABLE_DELETES` are off unless the value is exactly `true`. Keep all five off on a public host. `GET /health` must show `"readOnly":true`. Never set `GTM_MCP_HTTP_ALLOW_UNAUTHENTICATED` on a public host.
+
+Custom domain: add the domain under **Settings** → **Custom Domains** of the service. Then create a `CNAME` record at your DNS provider that points to `<service>.onrender.com`. On Cloudflare, set the record to **DNS only**. Start the service and check it before you add the DNS record.
+
+For the checks, the restore order, the DNS values, rollback and retiring the endpoint, see [docs/HOSTED_ENDPOINT_RUNBOOK.md](./docs/HOSTED_ENDPOINT_RUNBOOK.md).
 
 ### Fly.io
 
