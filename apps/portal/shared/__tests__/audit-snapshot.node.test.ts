@@ -22,7 +22,7 @@
 
 import assert from "node:assert";
 import crypto from "node:crypto";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
@@ -49,6 +49,7 @@ import workspacesHandler from "../../api/gtm/accounts/[accountId]/containers/[co
 import oauthStatusHandler from "../../api/oauth/status";
 import oauthCallbackHandler from "../../api/oauth/callback";
 import oauthLogoutHandler from "../../api/oauth/logout";
+import healthHandler from "../../api/health";
 import {
   decodeSessionCookie,
   encodeOAuthStateCookie,
@@ -553,6 +554,271 @@ test("R-guard: every relative runtime import reachable from api/** names its .js
   for (const engine of ["consent-audit.ts", "audit-accuracy.ts"]) {
     assert.ok([...seen].some((f) => f.endsWith(path.join("shared", engine))), `${engine} was not reached`);
   }
+});
+
+// ── Function budget: one function answers /api/health and /api/system/capabilities ──
+// Vercel builds every .js, .mjs, .ts and .tsx file under api/ as one Serverless
+// Function, and the Hobby plan refuses a deployment with more than 12. The
+// capabilities probe has no file of its own: a rewrite in vercel.json sends its
+// URL to the health function, and api/health.ts answers both.
+// fixtures/system-probes.golden.json holds what the two separate handlers
+// answered before the fold.
+
+const MAX_ROUTE_FILES = 12;
+const CAPABILITIES_URL = "/api/system/capabilities";
+const CAPABILITIES_FLAG = "capabilities";
+const PORTAL_DIR = fileURLToPath(new URL("../../", import.meta.url));
+
+// True for a file that Vercel builds as a function. `rel` is the path below api/.
+// Vercel's zero-config pattern for Node is api/**/*.+(js|mjs|ts|tsx). It skips
+// names that end in .d.ts and paths with a segment that starts with "_" or ".".
+function isRouteFile(rel: string): boolean {
+  if (rel.split(path.sep).some((segment) => segment.startsWith("_") || segment.startsWith("."))) return false;
+  return /\.(js|mjs|ts|tsx)$/.test(rel) && !rel.endsWith(".d.ts");
+}
+
+type ProbeGolden = { status: number; headers: Record<string, string>; body: Record<string, unknown> };
+type ProbeCase = {
+  name: string;
+  env: Record<string, string>;
+  failFirstSetHeader?: boolean;
+  health: ProbeGolden;
+  capabilities: ProbeGolden;
+};
+type ProbeResponse = { status: number; headers: Record<string, string>; body: string };
+
+const PROBES = JSON.parse(
+  readFileSync(new URL("./fixtures/system-probes.golden.json", import.meta.url), "utf8"),
+) as { envKeys: string[]; cases: ProbeCase[] };
+
+/** What the old handler sent for this case: status, headers and the exact body text. */
+function probeGolden(g: ProbeGolden): ProbeResponse {
+  const body = "node" in g.body ? { ...g.body, node: process.version } : g.body;
+  return { status: g.status, headers: g.headers, body: JSON.stringify(body) };
+}
+
+/** Call the health function with only the case's env set. Nothing else is stubbed. */
+async function callProbe(c: ProbeCase, req: object): Promise<ProbeResponse> {
+  const saved: Record<string, string | undefined> = {};
+  for (const k of PROBES.envKeys) {
+    saved[k] = process.env[k];
+    if (k in c.env) process.env[k] = c.env[k];
+    else delete process.env[k];
+  }
+  try {
+    const headers: Record<string, string> = {};
+    let body = "";
+    let ended = 0;
+    let failNext = c.failFirstSetHeader === true;
+    const res = {
+      statusCode: 0,
+      setHeader(k: string, v: unknown) {
+        if (failNext) {
+          failNext = false;
+          throw new Error("setHeader failed");
+        }
+        headers[k.toLowerCase()] = String(v);
+      },
+      end(chunk?: string) {
+        ended++;
+        body = chunk ?? "";
+      },
+    };
+    await healthHandler(req as IncomingMessage, res as unknown as ServerResponse);
+    assert.equal(ended, 1, "the handler must end the response once");
+    return { status: res.statusCode, headers, body };
+  } finally {
+    for (const k of PROBES.envKeys) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+  }
+}
+
+/** A request as the handler sees it. `query` is the @vercel/node helper; it may be absent. */
+function probeReq(url: string | undefined, extra: Record<string, unknown> = {}): object {
+  return { method: "GET", headers: {}, url, ...extra };
+}
+
+/** Every fixture case x every request must give the document `pick` names, unchanged. */
+async function expectProbe(
+  pick: "health" | "capabilities",
+  requests: Array<[label: string, req: object]>,
+): Promise<void> {
+  for (const c of PROBES.cases) {
+    for (const [label, req] of requests) {
+      const got = await callProbe(c, req);
+      try {
+        assert.deepStrictEqual(got, probeGolden(c[pick]));
+      } catch (e) {
+        throw new Error(`[${c.name}] ${label} should answer the old ${pick} response: ${(e as Error).message}`);
+      }
+    }
+  }
+}
+
+test("R-guard: api/** holds at most 12 route files (Vercel Hobby function limit)", () => {
+  const found: string[] = [];
+  const walk = (dir: string): void => {
+    for (const name of readdirSync(dir)) {
+      const p = path.join(dir, name);
+      const rel = path.relative(API_DIR, p);
+      if (statSync(p).isDirectory()) walk(p);
+      else if (isRouteFile(rel)) found.push(rel);
+    }
+  };
+  walk(API_DIR);
+  assert.ok(
+    found.length <= MAX_ROUTE_FILES,
+    `apps/portal/api holds ${found.length} route files; the limit is ${MAX_ROUTE_FILES}. ` +
+      `Vercel builds every .js, .mjs, .ts and .tsx file under api/ as one Serverless Function, and the Hobby plan ` +
+      `refuses a deployment with more than ${MAX_ROUTE_FILES}. Do not add a route file for a new endpoint. ` +
+      `Fold it into an existing function, the way /api/system/capabilities is served by api/health.ts: ` +
+      `(1) in apps/portal/vercel.json add a rewrite from the new URL to the existing function with a query flag, ` +
+      `before the SPA fallback; (2) in that handler choose the response from the request path or the flag; ` +
+      `(3) cover both URLs in this file. Route files found: ${found.sort().join(", ")}`,
+  );
+});
+
+test("R-guard: vercel.json rewrites /api/system/capabilities to the health function", () => {
+  const config = JSON.parse(readFileSync(path.join(PORTAL_DIR, "vercel.json"), "utf8")) as {
+    rewrites?: Array<{ source?: string; destination?: string }>;
+  };
+  const rewrites = config.rewrites ?? [];
+  const fallback = rewrites.findIndex((r) => r.destination === "/index.html");
+  // A rewrite source matches the whole path, so the URL with a trailing slash
+  // needs its own entry. Without it that form falls through to the /api 404.
+  for (const source of [CAPABILITIES_URL, `${CAPABILITIES_URL}/`]) {
+    const at = rewrites.findIndex((r) => r.source === source);
+    assert.ok(at !== -1, `vercel.json has no rewrite with source ${source}`);
+    assert.equal(rewrites[at].destination, `/api/health?${CAPABILITIES_FLAG}=1`);
+    // Rewrites are tried in order and the first match wins.
+    assert.ok(fallback === -1 || at < fallback, `the rewrite for ${source} must come before the SPA fallback`);
+  }
+  // The destination must be a function that Vercel builds.
+  assert.ok(statSync(path.join(API_DIR, "health.ts")).isFile(), "api/health.ts is missing");
+  // A file is served before any rewrite is tried, and it would be one more function.
+  assert.ok(
+    !existsSync(path.join(API_DIR, "system", "capabilities.ts")),
+    "api/system/capabilities.ts is back: Vercel would serve the file, not the rewrite, and count it as a function",
+  );
+});
+
+test("R-fold: the fixture holds two different documents and both error responses", () => {
+  assert.ok(PROBES.cases.length >= 10, `only ${PROBES.cases.length} fixture cases`);
+  for (const c of PROBES.cases) {
+    assert.notEqual(probeGolden(c.health).body, probeGolden(c.capabilities).body, c.name);
+  }
+  const failing = PROBES.cases.filter((c) => c.failFirstSetHeader);
+  assert.equal(failing.length, 1);
+  assert.equal(failing[0].health.status, 500);
+  assert.equal(failing[0].health.body.error, "health_check_failed");
+  // The old health handler sent no Cache-Control on its 500; the old capabilities handler did.
+  assert.deepEqual(failing[0].health.headers, { "content-type": "application/json; charset=utf-8" });
+  assert.equal(failing[0].capabilities.status, 500);
+  assert.equal(failing[0].capabilities.body.error, "capabilities_check_failed");
+  assert.deepEqual(failing[0].capabilities.headers, {
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": "no-store",
+  });
+});
+
+testAsync("R-fold: /api/health answers exactly as before the fold", async () => {
+  await expectProbe("health", [
+    ["GET /api/health", probeReq("/api/health")],
+    ["GET /api/health with an empty query helper", probeReq("/api/health", { query: {} })],
+    ["GET /api/health?t=… (cache buster)", probeReq("/api/health?t=1700000000000", { query: { t: "1700000000000" } })],
+    ["GET /api/health/", probeReq("/api/health/")],
+    ["HEAD /api/health", probeReq("/api/health", { method: "HEAD" })],
+    ["POST /api/health", probeReq("/api/health", { method: "POST" })],
+  ]);
+});
+
+testAsync("R-fold: /api/system/capabilities answers exactly as the old capabilities route", async () => {
+  await expectProbe("capabilities", [
+    // The function may see the URL the browser asked for, or the rewrite destination.
+    ["original path", probeReq(CAPABILITIES_URL)],
+    ["original path, empty query helper", probeReq(CAPABILITIES_URL, { query: {} })],
+    [
+      "original path with the rewrite query merged in",
+      probeReq(`${CAPABILITIES_URL}?${CAPABILITIES_FLAG}=1`, { query: { [CAPABILITIES_FLAG]: "1" } }),
+    ],
+    [
+      "rewrite destination",
+      probeReq(`/api/health?${CAPABILITIES_FLAG}=1`, { query: { [CAPABILITIES_FLAG]: "1" } }),
+    ],
+    ["rewrite destination, no query helper", probeReq(`/api/health?${CAPABILITIES_FLAG}=1`)],
+    ["rewrite flag only in the query helper", probeReq("/api/health", { query: { [CAPABILITIES_FLAG]: "1" } })],
+    ["no url, rewrite flag in the query helper", probeReq(undefined, { query: { [CAPABILITIES_FLAG]: "1" } })],
+    ["trailing slash", probeReq(`${CAPABILITIES_URL}/`)],
+    ["the caller's own query", probeReq(`${CAPABILITIES_URL}?t=1&foo=bar`, { query: { t: "1", foo: "bar" } })],
+    [
+      "the caller's own query, rewrite destination",
+      probeReq(`/api/health?${CAPABILITIES_FLAG}=1&t=1`, { query: { [CAPABILITIES_FLAG]: "1", t: "1" } }),
+    ],
+    ["HEAD", probeReq(CAPABILITIES_URL, { method: "HEAD" })],
+    ["POST", probeReq(CAPABILITIES_URL, { method: "POST" })],
+  ]);
+});
+
+testAsync("R-fold: a rewrite flag typed by hand cannot produce a third response", async () => {
+  // `vercel dev` lets the caller's own query value replace the value the rewrite
+  // adds, so the handler may only trust that the flag is there, never its value.
+  const byHand = ["0", "", "false", "1", "health"];
+  const stillCapabilities: Array<[string, object]> = [];
+  for (const v of byHand) {
+    const q = `${CAPABILITIES_FLAG}=${v}`;
+    stillCapabilities.push(
+      [`${CAPABILITIES_URL}?${q}`, probeReq(`${CAPABILITIES_URL}?${q}`, { query: { [CAPABILITIES_FLAG]: v } })],
+      // The same request when the function sees the destination and the caller's value won.
+      [`/api/health?${q}`, probeReq(`/api/health?${q}`, { query: { [CAPABILITIES_FLAG]: v } })],
+      [`/api/health?${q} (no query helper)`, probeReq(`/api/health?${q}`)],
+    );
+  }
+  stillCapabilities.push(
+    ["flag without a value", probeReq(`${CAPABILITIES_URL}?${CAPABILITIES_FLAG}`)],
+    ["flag without a value, destination", probeReq(`/api/health?${CAPABILITIES_FLAG}`)],
+    [
+      "flag given twice",
+      probeReq(`/api/health?${CAPABILITIES_FLAG}=0&${CAPABILITIES_FLAG}=1`, { query: { [CAPABILITIES_FLAG]: ["0", "1"] } }),
+    ],
+    ["flag after another parameter", probeReq(`/api/health?t=1&${CAPABILITIES_FLAG}=0`)],
+    ["percent-encoded flag", probeReq("/api/health?%63apabilities=0")],
+    ["fragment after the path", probeReq(`${CAPABILITIES_URL}#top`)],
+  );
+  await expectProbe("capabilities", stillCapabilities);
+
+  // Anything that is not the flag leaves /api/health alone.
+  await expectProbe("health", [
+    ["flag in another letter case", probeReq("/api/health?Capabilities=1", { query: { Capabilities: "1" } })],
+    ["longer names", probeReq("/api/health?xcapabilities=1&capabilitiesx=1")],
+    ["flag name used as a value", probeReq("/api/health?probe=capabilities", { query: { probe: "capabilities" } })],
+    ["flag name in a fragment", probeReq("/api/health#capabilities")],
+    ["flag inside a fragment", probeReq(`/api/health#?${CAPABILITIES_FLAG}=1`)],
+    ["a path that only starts like the capabilities URL", probeReq(`${CAPABILITIES_URL}x`)],
+    ["a path below the capabilities URL", probeReq(`${CAPABILITIES_URL}/extra`)],
+  ]);
+});
+
+testAsync("R-fold: odd request shapes get the health response and never throw", async () => {
+  const throwingQuery = probeReq("/api/health");
+  Object.defineProperty(throwingQuery, "query", {
+    get() {
+      throw new TypeError("Invalid URL");
+    },
+  });
+  await expectProbe("health", [
+    ["no url", probeReq(undefined)],
+    ["empty url", probeReq("")],
+    ["url //", probeReq("//")],
+    ["url ?", probeReq("?")],
+    ["broken percent-encoding", probeReq("/api/health?%E0%A4%A=%")],
+    ["query helper is null", probeReq("/api/health", { query: null })],
+    ["query helper is a string", probeReq("/api/health", { query: CAPABILITIES_FLAG })],
+    ["query helper is an array", probeReq("/api/health", { query: [CAPABILITIES_FLAG] })],
+    ["query helper throws", throwingQuery],
+    ["flag only on the query helper's prototype", probeReq("/api/health", { query: Object.create({ [CAPABILITIES_FLAG]: "1" }) })],
+  ]);
 });
 
 testAsync("R-auth: /api/gtm/audit without a session is a clean 401", async () => {

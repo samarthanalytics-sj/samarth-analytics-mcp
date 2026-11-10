@@ -133,6 +133,10 @@ The portal deploys as a Vite client plus serverless functions
 
 - Framework: `vite`; build: `npm run vercel-build`; output: `dist/public`.
 - Every `api/**/*.ts` is a serverless route on the `@vercel/node` runtime.
+- The Vercel Hobby plan allows 12 functions per deployment, and `api/` holds 12
+  route files. Do not add a 13th file. Serve a new URL from an existing function
+  with a rewrite in `vercel.json`, the way `/api/system/capabilities` is served
+  by `api/health.ts`. A guard in `npm run test:snapshot` fails above 12.
 
 Set env vars in **Vercel Dashboard → Settings → Environment Variables** (never
 in code or images). When editing `apps/portal/api/**`, follow the serverless

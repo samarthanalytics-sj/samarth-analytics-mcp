@@ -11,8 +11,9 @@ user-facing behavior**.
 > schema (`infra/database/0001_init.sql`), typed domain models
 > (`apps/portal/shared/production-types.ts`), a cache-key/TTL policy
 > (`apps/portal/shared/cache-keys.ts`), and a read-only capability probe
-> (`apps/portal/api/system/capabilities.ts`). Nothing here wires a live external
-> service. For the system *as it is today*, see [`ARCHITECTURE.md`](./ARCHITECTURE.md).
+> (`/api/system/capabilities`, in `apps/portal/api/health.ts`). Nothing here
+> wires a live external service. For the system *as it is today*, see
+> [`ARCHITECTURE.md`](./ARCHITECTURE.md).
 >
 > **Current state: foundation only.** No live Postgres, token vault, Redis/Upstash,
 > job queue, deployed runtime worker, or metrics exporter is wired — the code seams
@@ -103,8 +104,8 @@ These are non-negotiable and every component below is designed around them:
 apps/portal/
   client/                     # React SPA (unchanged)
   api/                        # Vercel serverless routes (Vercel-safe)
-    system/capabilities.ts    # NEW: read-only subsystem probe
-    health.ts                 # existing
+    health.ts                 # existing; also answers /api/system/capabilities
+                              # (read-only subsystem probe, via a vercel.json rewrite)
     oauth/*, gtm/*, ga4/*     # existing — contracts unchanged
   server/                     # local Express mirror (unchanged)
   shared/

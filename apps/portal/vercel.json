@@ -10,6 +10,8 @@
     }
   },
   "rewrites": [
+    { "source": "/api/system/capabilities", "destination": "/api/health?capabilities=1" },
+    { "source": "/api/system/capabilities/", "destination": "/api/health?capabilities=1" },
     { "source": "/((?!api/).*)", "destination": "/index.html" }
   ]
 }
