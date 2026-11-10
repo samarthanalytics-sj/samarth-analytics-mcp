@@ -541,7 +541,7 @@ The repo ships a Render Blueprint, [`render.yaml`](./render.yaml). It defines on
 
 - **Runtime**: Docker. Render builds the [`Dockerfile`](./Dockerfile) on every deploy. There is no build command and no start command to set.
 - **Health check path**: `/health`.
-- **Branch**: `render.yaml` has no `branch` key. Render deploys the branch you select when you create the Blueprint. `autoDeploy: true` deploys every new commit on that branch.
+- **Branch**: `render.yaml` has no `branch` key. Render deploys the branch you select when you create the Blueprint. `autoDeployTrigger: commit` deploys every new commit on that branch.
 - **Port**: do not set one. Render provides `PORT` and the server listens on it.
 
 To deploy: Render Dashboard → **New** → **Blueprint** → select this repo.
@@ -717,14 +717,17 @@ samarth-gtm-mcp/
 Releases are fully automated via [semantic-release](https://semantic-release.gitbook.io/) and GitHub Actions. Every push to `main` triggers the [`release.yml`](.github/workflows/release.yml) workflow, which:
 
 1. Installs dependencies, type-checks, builds, and runs tests.
-2. Inspects commits since the last tag using the [Conventional Commits](https://www.conventionalcommits.org/) spec.
-3. Determines the next semantic version (`MAJOR.MINOR.PATCH`).
-4. Updates `CHANGELOG.md` and bumps the `version` in `package.json` / `package-lock.json`.
-5. Commits those files back to `main` with `chore(release): x.y.z [skip ci]` (the `[skip ci]` marker prevents an infinite release loop).
-6. Publishes the package to npm as [`samarth-gtm-mcp`](https://www.npmjs.com/package/samarth-gtm-mcp) with a provenance attestation.
-7. Creates a Git tag (`vX.Y.Z`) and a GitHub Release with auto-generated notes.
+2. Checks that it can publish. If no npm trusted publisher entry matches this workflow, the run stops here, before any commit or tag.
+3. Inspects commits since the last tag using the [Conventional Commits](https://www.conventionalcommits.org/) spec and determines the next semantic version (`MAJOR.MINOR.PATCH`).
+4. Writes the new section of `CHANGELOG.md`.
+5. Bumps the version: `npm version` writes `package.json` and `package-lock.json`, and its `version` lifecycle script ([`scripts/sync-server-json.mjs`](scripts/sync-server-json.mjs)) writes the same version into `server.json`.
+6. Commits those four files to `main` as `chore(release): x.y.z [skip ci]` and pushes the commit (the `[skip ci]` marker prevents an infinite release loop).
+7. Creates the Git tag `vX.Y.Z` and pushes it.
+8. Publishes the package to npm as [`samarth-gtm-mcp`](https://www.npmjs.com/package/samarth-gtm-mcp) with a provenance attestation, then creates a GitHub Release with the generated notes.
 
-npm publishing uses [Trusted Publishing](https://docs.npmjs.com/trusted-publishers): the job's GitHub OIDC token is exchanged for a short-lived npm token, so there is no npm token secret to rotate. The trusted publisher is configured on npmjs.com (GitHub Actions, this repository, workflow `release.yml`, no environment). Because `main` is protected, the release commit is pushed with a `RELEASE_TOKEN` secret (a fine-grained token of a repo admin with Contents, Issues and Pull requests read/write).
+The order follows the plugins in [`.releaserc.json`](.releaserc.json). The tag is pushed before the npm publish, so a failure in step 8 leaves the release commit and tag in place without an npm release. `server.json` is only updated in the repo; publishing it to the MCP Registry is a separate, manual step (see [docs/DIRECTORY_LISTINGS.md](docs/DIRECTORY_LISTINGS.md)).
+
+npm publishing uses [Trusted Publishing](https://docs.npmjs.com/trusted-publishers): the job's GitHub OIDC token is exchanged for a short-lived npm token, so there is no npm token secret to rotate. The trusted publisher is configured on npmjs.com (GitHub Actions, this repository, workflow `release.yml`, no environment); setup steps and limits are in the [npm publish checklist](docs/DIRECTORY_LISTINGS.md#npm-publish-checklist-one-time). Because `main` is protected, the release commit is pushed with a `RELEASE_TOKEN` secret (a fine-grained token of a repo admin with Contents, Issues and Pull requests read/write).
 
 ### Conventional Commit Examples
 

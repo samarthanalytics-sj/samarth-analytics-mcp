@@ -27,7 +27,7 @@ services:
     runtime: docker
     plan: starter
     healthCheckPath: /health
-    autoDeploy: true
+    autoDeployTrigger: commit
     envVars:
       - key: GTM_MCP_TRANSPORT
         value: http

@@ -69,8 +69,12 @@ already used in `apps/portal/api/gtm/audit.ts`:
   **inside the handler, after session/auth validation**. This guarantees
   unauthenticated probes get a clean 401 before heavy modules evaluate, and any
   import failure surfaces as JSON instead of `FUNCTION_INVOCATION_FAILED`.
-- **Each file under `api/` is a route, not a helper.** Every `.ts` there is
-  treated as an invocable function (`api/**/*.ts` in `vercel.json`). Do not drop
+- **Each file under `api/` is a route, not a helper.** Vercel builds every
+  `.js`, `.mjs`, `.ts` and `.tsx` file there as its own function, not only the
+  `.ts` files that `api/**/*.ts` in `vercel.json` gives a runtime. It skips
+  `.d.ts` files and paths with a segment that starts with `_` or `.`. The guard
+  in `apps/portal/shared/__tests__/audit-snapshot.node.test.ts` counts files the
+  same way and fails above 12, the Hobby plan limit. Do not drop
   shared helper modules inside `api/` — put shared code in `apps/portal/shared/`
   or `apps/portal/server/` and import it lazily.
 
