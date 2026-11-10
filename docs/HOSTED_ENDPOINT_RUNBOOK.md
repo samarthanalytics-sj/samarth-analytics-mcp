@@ -461,7 +461,14 @@ These must be true at all times. Check them after every deploy and every
 settings change.
 
 1. **No token, no access.** Check 2 answers `401`. A `200` means the endpoint
-   is open. Suspend the service first. Removing the DNS record does not close
+   is open. An open endpoint that answers through Render also means
+   `GTM_MCP_HTTP_HOST` is set to a non-loopback value: with no auth mode the
+   server binds `127.0.0.1` unless that variable says otherwise, and Render
+   cannot reach a loopback address. The start-up logs then show
+   `WARNING: SERVING UNAUTHENTICATED ON <host>`. That host value is fine once
+   an auth mode is set, so the steps below leave it alone
+   ([section 3](#3-environment-variables-on-the-host) still says to leave it
+   unset, so you can remove it in a later deploy). Suspend the service first. Removing the DNS record does not close
    the endpoint: Render still answers for the hostname
    ([section 6](#6-two-ways-the-endpoint-goes-down)) and, unless that address
    is turned off, for the `onrender.com` name. Then do the next four steps in
@@ -508,8 +515,9 @@ settings change.
 
 How a deploy happens:
 
-- `render.yaml` has `autoDeploy: true`. Every new commit on the deployed
-  branch starts a deploy. `render.yaml` has no `branch` key, so the deployed
+- `render.yaml` has `autoDeployTrigger: commit` (the current name for the
+  deprecated `autoDeploy: true`). Every new commit on the deployed branch
+  starts a deploy. `render.yaml` has no `branch` key, so the deployed
   branch is the one that was selected when the Blueprint was created.
 - Render builds the Docker image from [`Dockerfile`](../Dockerfile) on every
   deploy.

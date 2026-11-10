@@ -210,9 +210,17 @@ navigation timeouts. It never writes to GTM/GA4 and never persists captures.
 
 ## 5. Release / CI / deploy
 
-- **CI** (`.github/workflows/ci.yml`): on push/PR to `main` — `npm ci`,
-  `typecheck`, `build`, `test`. `npm test` chains guardrails + auth + pagination
-  + ga4Admin node tests and the Consent v2 suite.
+- **CI** (`.github/workflows/ci.yml`): on push/PR to `main`, two jobs.
+  - `build`, the only required check: `npm ci`, `typecheck`, `build`, `test`,
+    then the checks of the app packages (authorize UI, chat orchestrator,
+    desktop, portal, web-audit). `npm test` chains guardrails + auth +
+    pagination + ga4Admin node tests and the Consent v2 suite.
+  - `docker` (not a required check): builds the image from the `Dockerfile`
+    and starts it with the HTTP transport and a made-up bearer token (no
+    Google credentials). It then checks that `GET /health` returns 200 with
+    `guardrails.readOnly: true`, that an `initialize` POST to `/mcp` without
+    the token gets 401, and that the same request with the token gets 200 with
+    `serverInfo` in the result.
 - **Release** (`.github/workflows/release.yml`): on push to `main`,
   `semantic-release` derives the version and changelog from Conventional Commits
   (`feat:`→minor, `fix:`→patch, `BREAKING CHANGE:`→major). `chore:`/`docs:` do

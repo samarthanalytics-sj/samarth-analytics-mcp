@@ -370,15 +370,25 @@ Google Cloud project no other app signs users in with (see Limitations below).
 redirect URI on the Google OAuth client. For preview deployments add the
 preview-URL callback too, or pin a stable alias.
 
-**Deploy from the workspace root:**
+**Deploy from the repository root of a fresh clone:**
+
+With the project's Root Directory set to `apps/portal`, run the Vercel CLI
+from the repository root, not from `apps/portal`. The CLI joins the folder
+you run it in with the Root Directory, so `vercel` (or
+`vercel --cwd apps/portal`) inside `apps/portal` looks for
+`apps/portal/apps/portal` and stops with "The provided path … does not
+exist".
 
 ```bash
 # one-time
 npm i -g vercel
 vercel login
 
-# link this folder to a Vercel project (run inside the portal directory)
-cd apps/portal
+# a fresh clone holds only committed files (see the note below)
+git clone https://github.com/samarthanalytics-sj/samarth-analytics-mcp.git portal-deploy
+cd portal-deploy
+
+# link the repository root to the portal project (writes .vercel/ here)
 vercel link
 
 # deploy a preview build
@@ -388,9 +398,16 @@ vercel
 vercel --prod
 ```
 
-Note: Vercel needs to be invoked from `apps/portal` (the project root). If
-you prefer to drive deploys from the workspace root, run
-`vercel --cwd apps/portal --prod`.
+Use a fresh clone, not your working copy. From the repository root the CLI
+uploads every file except its built-in list (`node_modules`, `.git`,
+`.vercel`, `.env.local` and a few others) and a `.vercelignore` at the
+repository root, which this repo does not have. It does not read
+`.gitignore`, so a local `.env`, `.gtm-mcp-tokens.json` or
+`apps/portal/data.db` in a working copy would be uploaded.
+
+`apps/portal/.vercelignore` is then applied at build time, not at upload: the
+build reads the `.vercelignore` in the Root Directory, while the CLI upload
+reads only the one at the top of the folder it uploads.
 
 **Limitations on Vercel:**
 - OAuth tokens live in an encrypted cookie on the user's browser, not in a
