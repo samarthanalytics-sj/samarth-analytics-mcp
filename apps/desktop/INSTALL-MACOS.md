@@ -24,7 +24,7 @@ There are two ways to get it running on a Mac:
   ```
 - **Xcode Command Line Tools** (for building): `xcode-select --install`
 - A **Google "Desktop app" OAuth client** (Client ID + Secret) — see
-  [Appendix A](#appendix-a--create-a-google-desktop-oauth-client). The same
+  [Appendix A](#appendix-a--create-a-google-desktop-app-oauth-client). The same
   client you used on Windows works here.
 - At least one **LLM API key** (OpenAI, Anthropic, or Gemini).
 
@@ -114,7 +114,7 @@ Default locations:
 
 The app also accepts Google's downloaded credentials JSON
 (`{"installed":{...}}`) as-is. To create a client, see
-[Appendix A](#appendix-a--create-a-google-desktop-oauth-client).
+[Appendix A](#appendix-a--create-a-google-desktop-app-oauth-client).
 
 ### 2. Connect your Google account(s)
 
