@@ -350,7 +350,7 @@ General → Root Directory*).
 - Build Command: *inherited from `vercel.json`* → `npm run vercel-build`
 - Output Directory: *inherited from `vercel.json`* → `dist/public`
 - Install Command: *default* (`npm install`)
-- Node.js Version: 20.x (set under *Project → Settings → General*)
+- Node.js Version: 22.x, pinned by `engines.node` in `apps/portal/package.json` (this overrides the value under *Project → Settings*)
 
 **Required environment variables (Project → Settings → Environment
 Variables):**
