@@ -231,6 +231,8 @@ For Google Workspace organizations:
 | `GTM_MCP_ENABLE_WRITES` | `false` | Allow create/update operations |
 | `GTM_MCP_ENABLE_PUBLISH` | `false` | Allow publish operations |
 | `GTM_MCP_ENABLE_DELETES` | `false` | Allow delete operations |
+| `GA4_MCP_ENABLE_WRITES` | `false` | Allow GA4 Admin create and update operations. Also needs the `analytics.edit` scope (`analytics.manage.users` for user access bindings). The GA4 Data API stays read-only. |
+| `GA4_MCP_ENABLE_DELETES` | `false` | Allow GA4 Admin delete and archive operations. Archiving a custom dimension, custom metric or audience cannot be undone. |
 | `DRY_RUN` | `false` | Simulate all writes without calling the API |
 | `GTM_MCP_RETRY_MAX` | `3` | Retry attempts for transient read failures (408/429/5xx, network). `0` disables retries. Mutations are never auto-retried. |
 | `GTM_MCP_RETRY_MAX_DELAY_MS` | `30000` | Cap on a single backoff sleep (exponential backoff with jitter) |
@@ -547,27 +549,40 @@ Render supports persistent long-lived connections — recommended for SSE/stream
 ### Fly.io
 
 ```bash
-fly launch
+fly launch --no-deploy
 fly secrets set GOOGLE_CLIENT_ID=xxx GOOGLE_CLIENT_SECRET=xxx GOOGLE_REFRESH_TOKEN=xxx
+TOKEN="$(openssl rand -hex 32)"   # keep this value: clients send it as the bearer token
+fly secrets set GTM_MCP_HTTP_AUTH_TOKEN="$TOKEN"
 fly secrets set GTM_MCP_TRANSPORT=http GTM_MCP_HTTP_PORT=3001
 fly deploy
 ```
 
-Fly.io has no request timeout limitations and supports persistent WebSocket/SSE connections. Recommended for production.
+The HTTP transport refuses to start without an auth mode, so set one before the first deploy:
+
+- **Shared token**: `GTM_MCP_HTTP_AUTH_TOKEN`, as above. Clients send `Authorization: Bearer <token>`.
+- **Per-user OAuth**: `STYTCH_PROJECT_ID`, `STYTCH_SECRET`, `STYTCH_PUBLIC_TOKEN` and `GTM_MCP_PUBLIC_URL` (the app's public origin) as Fly secrets instead. When `STYTCH_PROJECT_ID` is set, the server ignores the shared token.
+
+Never set `GTM_MCP_HTTP_ALLOW_UNAUTHENTICATED` on Fly.io. Make sure `internal_port` in the generated `fly.toml` matches `GTM_MCP_HTTP_PORT`.
+
+Fly.io keeps long-lived connections open, which suits the SSE stream. This repo ships no `fly.toml` and does not test Fly.io deploys, so check `GET /health` and an authenticated `initialize` after the first deploy.
 
 ### Docker
 
-```dockerfile
-FROM node:22-alpine
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci --omit=dev
-COPY dist/ ./dist/
-ENV GTM_MCP_TRANSPORT=http
-ENV GTM_MCP_HTTP_PORT=3001
-EXPOSE 3001
-CMD ["node", "dist/index.js"]
+Use the repo's [`Dockerfile`](./Dockerfile) rather than writing your own. It is a three-stage build: the first stage compiles the server to `dist/`, the second builds the authorize app in `apps/mcp-authorize`, and the runtime stage installs production dependencies only and copies both outputs in. The image runs the stdio transport by default. It sets no port and has no `EXPOSE`.
+
+For the HTTP transport, pass the transport and an auth variable at run time:
+
+```bash
+docker build -t samarth-gtm-mcp .
+TOKEN="$(openssl rand -hex 32)"   # keep this value: clients send it as the bearer token
+docker run --rm -p 3001:3001 \
+  -e GTM_MCP_TRANSPORT=http \
+  -e GTM_MCP_HTTP_AUTH_TOKEN="$TOKEN" \
+  -e GOOGLE_OAUTH_CLIENT_ID=... -e GOOGLE_OAUTH_CLIENT_SECRET=... -e GOOGLE_REFRESH_TOKEN=... \
+  samarth-gtm-mcp
 ```
+
+The server listens on `GTM_MCP_HTTP_PORT`, then `PORT`, then `3001`. For the full stack with Docker Compose, see [docs/SELF_HOSTING_DOCKER.md](./docs/SELF_HOSTING_DOCKER.md).
 
 ---
 
