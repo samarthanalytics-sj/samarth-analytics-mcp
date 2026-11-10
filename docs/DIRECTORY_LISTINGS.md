@@ -102,20 +102,90 @@ short server name (`samarth-gtm`) to stay under client name-length limits.
 
 ## npm publish checklist (one-time)
 
-The repo is already wired for automated publishing — semantic-release runs on
-every push to `main` and now has `npmPublish: true`. To make the first publish
-work:
+Publishing is automated. semantic-release runs on every push to `main`
+(`.github/workflows/release.yml`) and has `npmPublish: true`. It publishes
+with npm Trusted Publishing (OIDC) from GitHub Actions. No `NPM_TOKEN` secret
+is used, so do not create an npm token. npm generates a provenance
+attestation by default for a trusted publish of a public package from a
+public repository, and `publishConfig.provenance` in `package.json` asks for
+it too.
 
-1. Create an npm account (or org) and generate a **granular access token**
-   with publish rights.
-2. Add it as the `NPM_TOKEN` secret in the GitHub repo
-   (Settings → Secrets and variables → Actions).
-3. Merge any `feat:`/`fix:` commit to `main` — the release workflow
-   typechecks, builds, tests, then publishes `samarth-gtm-mcp` to npm with
-   provenance attestation automatically.
+The setup is one Trusted Publisher entry on npmjs.com:
+
+1. On npmjs.com, open the package `samarth-gtm-mcp`, then **Settings**, then
+   **Trusted publishing**
+   (<https://www.npmjs.com/package/samarth-gtm-mcp/access>).
+2. Add an entry with exactly these values:
+
+   | Field | Value |
+   | --- | --- |
+   | Publisher | GitHub Actions |
+   | Organization or user | `samarthanalytics-sj` |
+   | Repository | `samarth-analytics-mcp` |
+   | Workflow filename | `release.yml` |
+   | Environment name | leave empty |
+   | Allowed actions | allow `npm publish`; leave `npm dist-tag` off |
+
+3. Merge a `feat:` or `fix:` commit to `main` soon after (see the 2-day limit
+   below). If `main` already holds unreleased `feat:` or `fix:` commits,
+   re-running the failed Release run on the head of `main` is enough (GitHub
+   allows a re-run for 30 days; after that a new push to `main` is needed).
+   The release workflow typechecks, builds, tests, then publishes
+   `samarth-gtm-mcp` to npm with a provenance attestation.
 4. Verify: `npx -y samarth-gtm-mcp` should boot the server (stdio), and
    `npx -y -p samarth-gtm-mcp samarth-gtm-auth` should start the OAuth
    onboarding flow.
 
-After the first publish, update the README Quick Start to lead with the npx
-path instead of git clone.
+Open to-do, not part of this setup: the first command in the README Quick
+Start is still `git clone`. Decide whether it should lead with the npx path.
+
+### Limits of the Trusted Publisher entry
+
+Source: <https://docs.npmjs.com/trusted-publishers>,
+<https://github.blog/changelog/2026-09-03-multiple-trusted-publishing-configurations-for-npm/>
+and
+<https://github.blog/changelog/2026-10-02-unvalidated-npm-trusted-publishing-configurations-now-expire/>
+(checked 2026-11-10).
+
+- **Direct `npm publish` must be allowed.** An entry created after 2026-09-03
+  allows only staged publishing unless `npm publish` is allowed too. Without
+  it the release would then fail at the publish step, after the git tag is
+  pushed. This is reasoned from the release order (tag first, publish
+  second); no such run was observed.
+- **The main fields cannot be changed.** npm fixes the provider, Organization
+  or user, Repository and Workflow filename when the entry is created. To
+  change one of them, delete the entry and create a new one (this starts a
+  new 2-day window). npm's documentation speaks of enabling an allowed action
+  (`npm dist-tag`) on an entry that a workflow already uses. So if only the
+  `npm publish` action is wrong, try to change it on the entry first. This
+  was not tried on npmjs.com.
+- **A new entry expires.** Since 2026-10-02 a new entry expires unless its
+  first successful publish happens within 2 days. Create the entry only when
+  a release can follow soon.
+- **The match can break.** The values must match exactly (npm: all fields are
+  case-sensitive), so the entry stops matching if `release.yml` is renamed.
+  npm does not say what the next cases do (it says only that the first
+  successful publish binds the entry to the repository's immutable
+  identity), so treat them as likely, not certain: the entry will probably
+  stop matching if the repository is renamed or transferred or if the owner
+  name changes, and it may stop matching if the `release` job gets an
+  `environment:` while Environment name is empty. If a release then fails
+  with the OIDC error below, delete the entry and create a new one. After a
+  rename also update `repository.url` in `package.json`; npm requires it to
+  match the GitHub repository.
+
+### If the release fails
+
+- When the OIDC token exchange fails, the semantic-release log shows a line
+  such as `404 OIDC token exchange error - package not found` (seen in
+  Release runs 1028 and 1029; npm does not document which message a
+  missing, mismatched or expired entry gives), followed by `ENONPMTOKEN`.
+  That line is the cause. `ENONPMTOKEN` only follows from it, and its text
+  asks for an `NPM_TOKEN`. Adding a token is not the fix. Check that the
+  entry exists, that it has not expired (see "A new entry expires" above;
+  npm keeps expired entries visible in the settings), and that every value
+  matches the table above. If it has expired or a main field is wrong,
+  delete the entry, create a new one, and start a release within 2 days
+  (step 3).
+- Do not run `npm publish` by hand and do not reuse a version number. npm
+  never allows a version to be published twice.
