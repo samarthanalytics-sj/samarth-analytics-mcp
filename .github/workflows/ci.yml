@@ -102,3 +102,105 @@ jobs:
       - name: Test runtime worker SSRF guard
         working-directory: apps/runtime-worker
         run: node --test url-guard.test.mjs
+
+  # The hosted service builds the root Dockerfile when it deploys, and no job here built it. So a
+  # change that broke the image (a new base image, a dependency bump) was first seen during a
+  # deploy. This job builds the image, starts it on the HTTP transport, and checks it with curl.
+  # It pushes nothing and uses no secret.
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Build Docker image
+        run: docker build -t samarth-gtm-mcp:ci .
+
+      # The token is a made-up value, not a secret. No Google credential is passed: the server
+      # starts without one. GTM_MCP_HTTP_PORT pins the port (the default is also 3001), so a PORT
+      # value added to the image later cannot move it. With a token set the server listens on
+      # every interface, which the port mapping needs.
+      - name: Start container
+        id: start
+        run: |
+          docker run -d --name samarth-gtm-mcp-ci \
+            -p 127.0.0.1:3001:3001 \
+            -e GTM_MCP_TRANSPORT=http \
+            -e GTM_MCP_HTTP_PORT=3001 \
+            -e GTM_MCP_HTTP_AUTH_TOKEN=ci-fake-token-not-a-secret \
+            samarth-gtm-mcp:ci
+
+      # No write flag is passed, so the image must report its read-only defaults.
+      - name: Check /health reports read-only
+        run: |
+          code=000
+          for attempt in $(seq 1 30); do
+            code="$(curl -s --max-time 5 -o "$RUNNER_TEMP/health.json" -w '%{http_code}' \
+              http://127.0.0.1:3001/health || true)"
+            if [ "$code" = "200" ]; then
+              break
+            fi
+            echo "Attempt $attempt of 30: GET /health gave HTTP $code (000 = no answer yet)."
+            sleep 1
+          done
+          if [ "$code" != "200" ]; then
+            echo "GET /health did not return 200."
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/health.json"
+          echo
+          if ! jq -e '.status == "ok" and .guardrails.readOnly == true' "$RUNNER_TEMP/health.json" > /dev/null; then
+            echo 'Expected "status":"ok" and guardrails.readOnly true.'
+            exit 1
+          fi
+
+      # A full initialize request without the token must get 401. A 200 would mean the image
+      # serves MCP calls to a caller that has no token.
+      - name: Check POST /mcp without a token returns 401
+        run: |
+          code="$(curl -s --max-time 10 -o "$RUNNER_TEMP/mcp.json" -w '%{http_code}' -X POST \
+            -H 'Content-Type: application/json' \
+            -H 'Accept: application/json, text/event-stream' \
+            -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci","version":"1.0.0"}}}' \
+            http://127.0.0.1:3001/mcp || true)"
+          echo "POST /mcp without a token: HTTP $code"
+          if [ "$code" != "401" ]; then
+            echo "Expected 401. Answer body:"
+            cat "$RUNNER_TEMP/mcp.json" || true
+            exit 1
+          fi
+
+      # The same initialize request with the made-up token. The two checks above return before
+      # the server builds an MCP server for the session. This request builds one and answers
+      # through the MCP transport. If building it throws, the answer is 500, not 200. If the
+      # initialize handler fails, the answer is still 200 but carries a JSON-RPC error. So the
+      # check also requires "serverInfo", a field of the initialize result.
+      - name: Check POST /mcp with the token returns 200
+        run: |
+          code="$(curl -s --max-time 10 -o "$RUNNER_TEMP/mcp-auth.txt" -w '%{http_code}' -X POST \
+            -H 'Content-Type: application/json' \
+            -H 'Accept: application/json, text/event-stream' \
+            -H 'Authorization: Bearer ci-fake-token-not-a-secret' \
+            -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci","version":"1.0.0"}}}' \
+            http://127.0.0.1:3001/mcp || true)"
+          echo "POST /mcp with the token: HTTP $code"
+          if [ "$code" != "200" ]; then
+            echo "Expected 200. Answer body:"
+            cat "$RUNNER_TEMP/mcp-auth.txt" || true
+            exit 1
+          fi
+          if ! grep -q '"serverInfo"' "$RUNNER_TEMP/mcp-auth.txt"; then
+            echo 'Expected an initialize result with "serverInfo". Answer body:'
+            cat "$RUNNER_TEMP/mcp-auth.txt" || true
+            exit 1
+          fi
+
+      - name: Print container logs
+        if: failure() && steps.start.outcome == 'success'
+        run: docker logs samarth-gtm-mcp-ci
+
+      - name: Stop container
+        if: always()
+        run: docker rm -f samarth-gtm-mcp-ci
