@@ -41,8 +41,16 @@ mcp-publisher login github   # authenticates the io.github.samarthanalytics-sj n
 mcp-publisher publish
 ```
 
-Note: `server.json` carries a `version` that should match the npm version on
-each release. Until that's automated, bump it manually when publishing.
+Note: `server.json` carries the npm version in two places (the top-level
+`version` and the `version` of the npm package entry). The release keeps both
+in step. When semantic-release runs `npm version`, the `version` script in
+`package.json` runs `scripts/sync-server-json.mjs`, and the release commit
+includes `server.json`. Do not edit these numbers by hand.
+
+Publishing to the MCP Registry is still a manual step for the repo owner: run
+`mcp-publisher login github`, then `mcp-publisher publish` (the commands
+above). This only works for a version that exists on npm, so run it after the
+release has reached npm.
 
 ## 2. awesome-mcp-servers (github.com/punkpeye/awesome-mcp-servers)
 
