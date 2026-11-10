@@ -53,12 +53,26 @@ jobs:
         #
         # npm publishes through Trusted Publishing: @semantic-release/npm exchanges
         # this job's GitHub OIDC token (id-token: write above) for a short-lived
-        # npm token, so no NPM_TOKEN secret is used. The trusted publisher is set
-        # on npmjs.com for samarth-gtm-mcp: GitHub Actions, samarthanalytics-sj/
-        # samarth-analytics-mcp, workflow release.yml, no environment. Without a
-        # token fallback, a broken trusted-publisher setup now fails in
-        # verifyConditions, BEFORE a version commit or tag is created, instead of
-        # tagging a release that never reaches npm.
+        # npm token, so no NPM_TOKEN secret is used. The trusted publisher entry
+        # on npmjs.com for samarth-gtm-mcp must be: GitHub Actions,
+        # samarthanalytics-sj/samarth-analytics-mcp, workflow release.yml, no
+        # environment. When no entry matches, the run fails in verifyConditions
+        # with ENONPMTOKEN, BEFORE a version commit or tag is created. Adding a
+        # token is not the fix.
+        #
+        # Rules for the npmjs.com entry (setup steps: docs/DIRECTORY_LISTINGS.md):
+        # - Allowed actions: direct publishing with npm publish must be allowed.
+        #   Without it a new entry allows only staged publishing, and the
+        #   release would then fail at the publish step, AFTER the git tag is
+        #   pushed (reasoned from the release order, not observed).
+        # - A new entry expires unless a publish succeeds within 2 days.
+        # - The provider, user, repository and workflow filename of an entry
+        #   cannot be changed. To change one, delete the entry and create a new
+        #   one.
+        # - The match breaks if this file is renamed. It may also break if this
+        #   job gets an environment:, or if the repository or owner name changes
+        #   (npm does not document these cases). If the run then fails as
+        #   described above, recreate the entry.
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
         run: npx semantic-release
