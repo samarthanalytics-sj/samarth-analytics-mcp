@@ -98,6 +98,17 @@ async function main(): Promise<void> {
     assert.ok(typeof httpDate === 'number' && httpDate > 20_000 && httpDate <= 30_000, `HTTP-date -> ~30s, got ${httpDate}`);
   });
 
+  // Regression: gaxios 7 is fetch based, so on a real GaxiosError `response.headers` is a WHATWG
+  // Headers object. Index access on it is undefined (only .get() reads a value), so the hint was
+  // silently dropped and a real Google 429 fell back to exponential backoff.
+  await test('readRetryAfterMs reads Retry-After from a WHATWG Headers object (the gaxios 7 shape)', () => {
+    const withHeaders = (v: string): unknown => ({ response: { headers: new Headers({ 'Retry-After': v }) } });
+    assert.equal(readRetryAfterMs(withHeaders('45')), 45_000, 'delta-seconds -> ms');
+    assert.equal(readRetryAfterMs({ response: { headers: new Headers() } }), undefined, 'Headers without Retry-After -> undefined');
+    const httpDate = readRetryAfterMs(withHeaders(new Date(Date.now() + 30_000).toUTCString()));
+    assert.ok(typeof httpDate === 'number' && httpDate > 20_000 && httpDate <= 30_000, `HTTP-date -> ~30s, got ${httpDate}`);
+  });
+
   await test('honors the reset hint: waits AT LEAST Retry-After, capped by maxDelayMs', async () => {
     const delays: number[] = [];
     const err = Object.assign(new Error('Error 429: Queries per minute per user'), {
@@ -113,6 +124,27 @@ async function main(): Promise<void> {
     );
     // Each wait is max(exponential, 50s hint) — so the retry resumes when the quota actually resets.
     assert.deepEqual(delays, [50_000, 50_000]);
+  });
+
+  await test('honors the reset hint carried on a Headers object (honorRetryAfter on a real Google 429)', async () => {
+    const delays: number[] = [];
+    const err = Object.assign(new Error('Error 429: Queries per minute per user'), {
+      response: { headers: new Headers({ 'Retry-After': '45' }) },
+    });
+    const rule = (honorRetryAfter: boolean): RetryRule => ({
+      label: 'quota',
+      match: (_e, m) => QUOTA_RE.test(m),
+      maxRetries: 2,
+      baseDelayMs: 2000, // exponential would be 2s, 4s
+      maxDelayMs: 65_000,
+      honorRetryAfter,
+    });
+    await assert.rejects(withRetry(async () => Promise.reject(err), { rules: [rule(true)], sleep: async (ms) => { delays.push(ms); } }));
+    assert.deepEqual(delays, [45_000, 45_000], 'each wait is the 45s the server asked for, not the 2s/4s guess');
+    // The same error under a rule that does not opt in keeps plain exponential backoff.
+    delays.length = 0;
+    await assert.rejects(withRetry(async () => Promise.reject(err), { rules: [rule(false)], sleep: async (ms) => { delays.push(ms); } }));
+    assert.deepEqual(delays, [2000, 4000]);
   });
 
   await test('onBackoff fires once per retry with the attempt number and the delay', async () => {
