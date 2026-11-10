@@ -112,6 +112,9 @@
   "overrides": {
     "drizzle-kit": {
       "@esbuild-kit/esm-loader": "npm:tsx@^4.20.4"
+    },
+    "@tailwindcss/typography": {
+      "postcss-selector-parser": "^6.1.5"
     }
   }
 }
