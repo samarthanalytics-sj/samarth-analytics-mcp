@@ -20,7 +20,7 @@ flip a flag.**
 > - Worker queue mode: [`apps/runtime-worker/queue-consumer.mjs`](../apps/runtime-worker/queue-consumer.mjs)
 > - Observability: [`apps/portal/shared/observability.ts`](../apps/portal/shared/observability.ts) +
 >   [`metrics.ts`](../apps/portal/shared/metrics.ts)
-> - Readiness probe: [`apps/portal/api/system/capabilities.ts`](../apps/portal/api/system/capabilities.ts)
+> - Readiness probe (`/api/system/capabilities`): [`apps/portal/api/health.ts`](../apps/portal/api/health.ts)
 >
 > This runbook is **provider-neutral**. It does not pick Supabase over Neon, or
 > Datadog over Grafana — it gives the generic steps plus concrete examples so the

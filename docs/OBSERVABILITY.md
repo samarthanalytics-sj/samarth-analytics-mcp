@@ -17,8 +17,8 @@ Backing code:
   [`apps/portal/shared/observability.ts`](../apps/portal/shared/observability.ts)
 - Metric naming convention + catalog:
   [`apps/portal/shared/metrics.ts`](../apps/portal/shared/metrics.ts)
-- Readiness/caveats probe:
-  [`apps/portal/api/system/capabilities.ts`](../apps/portal/api/system/capabilities.ts)
+- Readiness/caveats probe (`/api/system/capabilities`):
+  [`apps/portal/api/health.ts`](../apps/portal/api/health.ts) (see §6)
 - Smoke test for critical surfaces: [`scripts/smoke-test.mjs`](../scripts/smoke-test.mjs)
   (`npm run smoke -- --base-url <url> --mcp dist/index.js`)
 
@@ -209,6 +209,13 @@ Thresholds are **starting points** — tune to observed baselines. Evaluate over
 Both are unauthenticated, read-only descriptors derived purely from env
 *presence* (never a secret value), and follow the `api/**` rule (only `node:*`
 + `import type` at module load).
+
+One Vercel function answers both URLs:
+[`apps/portal/api/health.ts`](../apps/portal/api/health.ts).
+`/api/system/capabilities` has no file of its own. A rewrite in
+`apps/portal/vercel.json` sends it to the health function. This keeps the portal
+at 12 functions, which is the limit of the Vercel Hobby plan. The URLs and the
+responses are the same as before.
 
 **Smoke test:** `npm run smoke -- --base-url <url> --mcp dist/index.js` probes
 `/api/health`, `/api/system/capabilities` (asserting shape + a no-secret guard),

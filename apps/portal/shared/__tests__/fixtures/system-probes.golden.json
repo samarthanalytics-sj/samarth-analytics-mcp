@@ -1,0 +1,724 @@
+{
+  "about": "What /api/health and /api/system/capabilities answered before they became one Vercel function. Captured at commit 3a22e82 by calling the two old handlers (apps/portal/api/health.ts and apps/portal/api/system/capabilities.ts) once per case, with the env of that case set and every other name in envKeys unset. Body keys are in the order the old handler wrote them. \"<process.version>\" stands for the running Node version. If you change one of these responses on purpose, update the matching entry in the same commit.",
+  "envKeys": [
+    "PORTAL_SESSION_SECRET",
+    "SESSION_SECRET",
+    "PORTAL_GOOGLE_OAUTH_CLIENT_ID",
+    "GOOGLE_OAUTH_CLIENT_ID",
+    "GOOGLE_CLIENT_ID",
+    "PORTAL_GOOGLE_OAUTH_CLIENT_SECRET",
+    "GOOGLE_OAUTH_CLIENT_SECRET",
+    "GOOGLE_CLIENT_SECRET",
+    "PORTAL_GOOGLE_OAUTH_REDIRECT_URI",
+    "GOOGLE_OAUTH_REDIRECT_URI",
+    "PORTAL_PUBLIC_URL",
+    "DATABASE_URL",
+    "PORTAL_DATABASE_URL",
+    "REDIS_URL",
+    "UPSTASH_REDIS_REST_URL",
+    "KV_REST_API_URL",
+    "RUNTIME_WORKER_URL",
+    "PORTAL_RUNTIME_WORKER_URL",
+    "TOKEN_VAULT_URL",
+    "GCP_SECRET_MANAGER_PROJECT",
+    "AWS_SECRETS_MANAGER_REGION",
+    "VERCEL",
+    "VERCEL_ENV"
+  ],
+  "cases": [
+    {
+      "name": "nothing set",
+      "env": {},
+      "health": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": "no-store"
+        },
+        "body": {
+          "ok": true,
+          "runtime": "vercel",
+          "node": "<process.version>",
+          "hasSessionSecret": false,
+          "oauthConfigured": false,
+          "envPresence": {
+            "PORTAL_SESSION_SECRET": false,
+            "SESSION_SECRET": false,
+            "PORTAL_GOOGLE_OAUTH_CLIENT_ID": false,
+            "PORTAL_GOOGLE_OAUTH_CLIENT_SECRET": false,
+            "PORTAL_GOOGLE_OAUTH_REDIRECT_URI": false,
+            "PORTAL_PUBLIC_URL": false,
+            "VERCEL": false,
+            "VERCEL_ENV": null
+          }
+        }
+      },
+      "capabilities": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": "no-store"
+        },
+        "body": {
+          "ok": true,
+          "runtime": "vercel",
+          "node": "<process.version>",
+          "vercelEnv": null,
+          "capabilities": {
+            "session": false,
+            "oauth": false,
+            "database": false,
+            "cache": false,
+            "runtimeWorker": false,
+            "tokenVault": false
+          },
+          "readiness": {
+            "auth": "unconfigured",
+            "persistence": "unconfigured",
+            "cache": "unconfigured",
+            "tokenVault": "unconfigured",
+            "runtimeCapture": "unconfigured"
+          },
+          "caveats": [],
+          "sessionMode": "signed_cookie"
+        }
+      }
+    },
+    {
+      "name": "production, nothing configured",
+      "env": {
+        "VERCEL": "1",
+        "VERCEL_ENV": "production"
+      },
+      "health": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": "no-store"
+        },
+        "body": {
+          "ok": true,
+          "runtime": "vercel",
+          "node": "<process.version>",
+          "hasSessionSecret": false,
+          "oauthConfigured": false,
+          "envPresence": {
+            "PORTAL_SESSION_SECRET": false,
+            "SESSION_SECRET": false,
+            "PORTAL_GOOGLE_OAUTH_CLIENT_ID": false,
+            "PORTAL_GOOGLE_OAUTH_CLIENT_SECRET": false,
+            "PORTAL_GOOGLE_OAUTH_REDIRECT_URI": false,
+            "PORTAL_PUBLIC_URL": false,
+            "VERCEL": true,
+            "VERCEL_ENV": "production"
+          }
+        }
+      },
+      "capabilities": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": "no-store"
+        },
+        "body": {
+          "ok": true,
+          "runtime": "vercel",
+          "node": "<process.version>",
+          "vercelEnv": "production",
+          "capabilities": {
+            "session": false,
+            "oauth": false,
+            "database": false,
+            "cache": false,
+            "runtimeWorker": false,
+            "tokenVault": false
+          },
+          "readiness": {
+            "auth": "unconfigured",
+            "persistence": "unconfigured",
+            "cache": "unconfigured",
+            "tokenVault": "unconfigured",
+            "runtimeCapture": "unconfigured"
+          },
+          "caveats": [
+            "No database configured: sessions are signed-cookie only and audit history is not persisted.",
+            "No cache configured: every discovery read hits the Google API (no SWR, higher latency/quota use).",
+            "No runtime worker configured: runtime-capture (live tag) audits are unavailable."
+          ],
+          "sessionMode": "signed_cookie"
+        }
+      }
+    },
+    {
+      "name": "production, sign-in only",
+      "env": {
+        "VERCEL": "1",
+        "VERCEL_ENV": "production",
+        "PORTAL_SESSION_SECRET": "0123456789abcdef",
+        "PORTAL_GOOGLE_OAUTH_CLIENT_ID": "x",
+        "PORTAL_GOOGLE_OAUTH_CLIENT_SECRET": "x",
+        "PORTAL_GOOGLE_OAUTH_REDIRECT_URI": "x"
+      },
+      "health": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": "no-store"
+        },
+        "body": {
+          "ok": true,
+          "runtime": "vercel",
+          "node": "<process.version>",
+          "hasSessionSecret": true,
+          "oauthConfigured": true,
+          "envPresence": {
+            "PORTAL_SESSION_SECRET": true,
+            "SESSION_SECRET": false,
+            "PORTAL_GOOGLE_OAUTH_CLIENT_ID": true,
+            "PORTAL_GOOGLE_OAUTH_CLIENT_SECRET": true,
+            "PORTAL_GOOGLE_OAUTH_REDIRECT_URI": true,
+            "PORTAL_PUBLIC_URL": false,
+            "VERCEL": true,
+            "VERCEL_ENV": "production"
+          }
+        }
+      },
+      "capabilities": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": "no-store"
+        },
+        "body": {
+          "ok": true,
+          "runtime": "vercel",
+          "node": "<process.version>",
+          "vercelEnv": "production",
+          "capabilities": {
+            "session": true,
+            "oauth": true,
+            "database": false,
+            "cache": false,
+            "runtimeWorker": false,
+            "tokenVault": false
+          },
+          "readiness": {
+            "auth": "ready",
+            "persistence": "unconfigured",
+            "cache": "unconfigured",
+            "tokenVault": "unconfigured",
+            "runtimeCapture": "unconfigured"
+          },
+          "caveats": [
+            "No database configured: sessions are signed-cookie only and audit history is not persisted.",
+            "No cache configured: every discovery read hits the Google API (no SWR, higher latency/quota use).",
+            "No runtime worker configured: runtime-capture (live tag) audits are unavailable."
+          ],
+          "sessionMode": "signed_cookie"
+        }
+      }
+    },
+    {
+      "name": "production, everything configured",
+      "env": {
+        "VERCEL": "1",
+        "VERCEL_ENV": "production",
+        "PORTAL_SESSION_SECRET": "0123456789abcdef",
+        "PORTAL_GOOGLE_OAUTH_CLIENT_ID": "x",
+        "PORTAL_GOOGLE_OAUTH_CLIENT_SECRET": "x",
+        "PORTAL_GOOGLE_OAUTH_REDIRECT_URI": "x",
+        "PORTAL_PUBLIC_URL": "x",
+        "DATABASE_URL": "x",
+        "REDIS_URL": "x",
+        "RUNTIME_WORKER_URL": "x",
+        "TOKEN_VAULT_URL": "x"
+      },
+      "health": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": "no-store"
+        },
+        "body": {
+          "ok": true,
+          "runtime": "vercel",
+          "node": "<process.version>",
+          "hasSessionSecret": true,
+          "oauthConfigured": true,
+          "envPresence": {
+            "PORTAL_SESSION_SECRET": true,
+            "SESSION_SECRET": false,
+            "PORTAL_GOOGLE_OAUTH_CLIENT_ID": true,
+            "PORTAL_GOOGLE_OAUTH_CLIENT_SECRET": true,
+            "PORTAL_GOOGLE_OAUTH_REDIRECT_URI": true,
+            "PORTAL_PUBLIC_URL": true,
+            "VERCEL": true,
+            "VERCEL_ENV": "production"
+          }
+        }
+      },
+      "capabilities": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": "no-store"
+        },
+        "body": {
+          "ok": true,
+          "runtime": "vercel",
+          "node": "<process.version>",
+          "vercelEnv": "production",
+          "capabilities": {
+            "session": true,
+            "oauth": true,
+            "database": true,
+            "cache": true,
+            "runtimeWorker": true,
+            "tokenVault": true
+          },
+          "readiness": {
+            "auth": "ready",
+            "persistence": "ready",
+            "cache": "ready",
+            "tokenVault": "ready",
+            "runtimeCapture": "ready"
+          },
+          "caveats": [],
+          "sessionMode": "database"
+        }
+      }
+    },
+    {
+      "name": "production, database without a token vault",
+      "env": {
+        "VERCEL": "1",
+        "VERCEL_ENV": "production",
+        "PORTAL_SESSION_SECRET": "0123456789abcdef",
+        "PORTAL_GOOGLE_OAUTH_CLIENT_ID": "x",
+        "PORTAL_GOOGLE_OAUTH_CLIENT_SECRET": "x",
+        "PORTAL_PUBLIC_URL": "x",
+        "DATABASE_URL": "x",
+        "KV_REST_API_URL": "x",
+        "RUNTIME_WORKER_URL": "x"
+      },
+      "health": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": "no-store"
+        },
+        "body": {
+          "ok": true,
+          "runtime": "vercel",
+          "node": "<process.version>",
+          "hasSessionSecret": true,
+          "oauthConfigured": true,
+          "envPresence": {
+            "PORTAL_SESSION_SECRET": true,
+            "SESSION_SECRET": false,
+            "PORTAL_GOOGLE_OAUTH_CLIENT_ID": true,
+            "PORTAL_GOOGLE_OAUTH_CLIENT_SECRET": true,
+            "PORTAL_GOOGLE_OAUTH_REDIRECT_URI": false,
+            "PORTAL_PUBLIC_URL": true,
+            "VERCEL": true,
+            "VERCEL_ENV": "production"
+          }
+        }
+      },
+      "capabilities": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": "no-store"
+        },
+        "body": {
+          "ok": true,
+          "runtime": "vercel",
+          "node": "<process.version>",
+          "vercelEnv": "production",
+          "capabilities": {
+            "session": true,
+            "oauth": true,
+            "database": true,
+            "cache": true,
+            "runtimeWorker": true,
+            "tokenVault": false
+          },
+          "readiness": {
+            "auth": "ready",
+            "persistence": "ready",
+            "cache": "ready",
+            "tokenVault": "unconfigured",
+            "runtimeCapture": "ready"
+          },
+          "caveats": [
+            "Database present but no token vault: confirm OAuth token bytes are not being written to Postgres."
+          ],
+          "sessionMode": "database"
+        }
+      }
+    },
+    {
+      "name": "preview, session secret one character too short",
+      "env": {
+        "VERCEL": "1",
+        "VERCEL_ENV": "preview",
+        "PORTAL_SESSION_SECRET": "0123456789abcde",
+        "GOOGLE_CLIENT_ID": "x",
+        "GOOGLE_CLIENT_SECRET": "x",
+        "PORTAL_PUBLIC_URL": "x"
+      },
+      "health": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": "no-store"
+        },
+        "body": {
+          "ok": true,
+          "runtime": "vercel",
+          "node": "<process.version>",
+          "hasSessionSecret": false,
+          "oauthConfigured": true,
+          "envPresence": {
+            "PORTAL_SESSION_SECRET": true,
+            "SESSION_SECRET": false,
+            "PORTAL_GOOGLE_OAUTH_CLIENT_ID": false,
+            "PORTAL_GOOGLE_OAUTH_CLIENT_SECRET": false,
+            "PORTAL_GOOGLE_OAUTH_REDIRECT_URI": false,
+            "PORTAL_PUBLIC_URL": true,
+            "VERCEL": true,
+            "VERCEL_ENV": "preview"
+          }
+        }
+      },
+      "capabilities": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": "no-store"
+        },
+        "body": {
+          "ok": true,
+          "runtime": "vercel",
+          "node": "<process.version>",
+          "vercelEnv": "preview",
+          "capabilities": {
+            "session": false,
+            "oauth": true,
+            "database": false,
+            "cache": false,
+            "runtimeWorker": false,
+            "tokenVault": false
+          },
+          "readiness": {
+            "auth": "degraded",
+            "persistence": "unconfigured",
+            "cache": "unconfigured",
+            "tokenVault": "unconfigured",
+            "runtimeCapture": "unconfigured"
+          },
+          "caveats": [],
+          "sessionMode": "signed_cookie"
+        }
+      }
+    },
+    {
+      "name": "legacy names, redirect only in GOOGLE_OAUTH_REDIRECT_URI",
+      "env": {
+        "SESSION_SECRET": "0123456789abcdef",
+        "GOOGLE_OAUTH_CLIENT_ID": "x",
+        "GOOGLE_OAUTH_CLIENT_SECRET": "x",
+        "GOOGLE_OAUTH_REDIRECT_URI": "x"
+      },
+      "health": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": "no-store"
+        },
+        "body": {
+          "ok": true,
+          "runtime": "vercel",
+          "node": "<process.version>",
+          "hasSessionSecret": true,
+          "oauthConfigured": true,
+          "envPresence": {
+            "PORTAL_SESSION_SECRET": false,
+            "SESSION_SECRET": true,
+            "PORTAL_GOOGLE_OAUTH_CLIENT_ID": false,
+            "PORTAL_GOOGLE_OAUTH_CLIENT_SECRET": false,
+            "PORTAL_GOOGLE_OAUTH_REDIRECT_URI": false,
+            "PORTAL_PUBLIC_URL": false,
+            "VERCEL": false,
+            "VERCEL_ENV": null
+          }
+        }
+      },
+      "capabilities": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": "no-store"
+        },
+        "body": {
+          "ok": true,
+          "runtime": "vercel",
+          "node": "<process.version>",
+          "vercelEnv": null,
+          "capabilities": {
+            "session": true,
+            "oauth": false,
+            "database": false,
+            "cache": false,
+            "runtimeWorker": false,
+            "tokenVault": false
+          },
+          "readiness": {
+            "auth": "degraded",
+            "persistence": "unconfigured",
+            "cache": "unconfigured",
+            "tokenVault": "unconfigured",
+            "runtimeCapture": "unconfigured"
+          },
+          "caveats": [],
+          "sessionMode": "signed_cookie"
+        }
+      }
+    },
+    {
+      "name": "second name of every subsystem",
+      "env": {
+        "VERCEL": "1",
+        "VERCEL_ENV": "production",
+        "PORTAL_DATABASE_URL": "x",
+        "UPSTASH_REDIS_REST_URL": "x",
+        "PORTAL_RUNTIME_WORKER_URL": "x",
+        "GCP_SECRET_MANAGER_PROJECT": "x"
+      },
+      "health": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": "no-store"
+        },
+        "body": {
+          "ok": true,
+          "runtime": "vercel",
+          "node": "<process.version>",
+          "hasSessionSecret": false,
+          "oauthConfigured": false,
+          "envPresence": {
+            "PORTAL_SESSION_SECRET": false,
+            "SESSION_SECRET": false,
+            "PORTAL_GOOGLE_OAUTH_CLIENT_ID": false,
+            "PORTAL_GOOGLE_OAUTH_CLIENT_SECRET": false,
+            "PORTAL_GOOGLE_OAUTH_REDIRECT_URI": false,
+            "PORTAL_PUBLIC_URL": false,
+            "VERCEL": true,
+            "VERCEL_ENV": "production"
+          }
+        }
+      },
+      "capabilities": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": "no-store"
+        },
+        "body": {
+          "ok": true,
+          "runtime": "vercel",
+          "node": "<process.version>",
+          "vercelEnv": "production",
+          "capabilities": {
+            "session": false,
+            "oauth": false,
+            "database": true,
+            "cache": true,
+            "runtimeWorker": true,
+            "tokenVault": true
+          },
+          "readiness": {
+            "auth": "unconfigured",
+            "persistence": "ready",
+            "cache": "ready",
+            "tokenVault": "ready",
+            "runtimeCapture": "ready"
+          },
+          "caveats": [],
+          "sessionMode": "database"
+        }
+      }
+    },
+    {
+      "name": "third vault name, development",
+      "env": {
+        "VERCEL_ENV": "development",
+        "DATABASE_URL": "x",
+        "AWS_SECRETS_MANAGER_REGION": "x"
+      },
+      "health": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": "no-store"
+        },
+        "body": {
+          "ok": true,
+          "runtime": "vercel",
+          "node": "<process.version>",
+          "hasSessionSecret": false,
+          "oauthConfigured": false,
+          "envPresence": {
+            "PORTAL_SESSION_SECRET": false,
+            "SESSION_SECRET": false,
+            "PORTAL_GOOGLE_OAUTH_CLIENT_ID": false,
+            "PORTAL_GOOGLE_OAUTH_CLIENT_SECRET": false,
+            "PORTAL_GOOGLE_OAUTH_REDIRECT_URI": false,
+            "PORTAL_PUBLIC_URL": false,
+            "VERCEL": false,
+            "VERCEL_ENV": "development"
+          }
+        }
+      },
+      "capabilities": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": "no-store"
+        },
+        "body": {
+          "ok": true,
+          "runtime": "vercel",
+          "node": "<process.version>",
+          "vercelEnv": "development",
+          "capabilities": {
+            "session": false,
+            "oauth": false,
+            "database": true,
+            "cache": false,
+            "runtimeWorker": false,
+            "tokenVault": true
+          },
+          "readiness": {
+            "auth": "unconfigured",
+            "persistence": "ready",
+            "cache": "unconfigured",
+            "tokenVault": "ready",
+            "runtimeCapture": "unconfigured"
+          },
+          "caveats": [],
+          "sessionMode": "database"
+        }
+      }
+    },
+    {
+      "name": "empty string values",
+      "env": {
+        "VERCEL": "1",
+        "VERCEL_ENV": "production",
+        "PORTAL_SESSION_SECRET": "",
+        "SESSION_SECRET": "0123456789abcdef",
+        "PORTAL_GOOGLE_OAUTH_CLIENT_ID": "x",
+        "PORTAL_GOOGLE_OAUTH_CLIENT_SECRET": "x",
+        "PORTAL_GOOGLE_OAUTH_REDIRECT_URI": "",
+        "PORTAL_PUBLIC_URL": "",
+        "DATABASE_URL": "",
+        "REDIS_URL": "",
+        "RUNTIME_WORKER_URL": "",
+        "TOKEN_VAULT_URL": ""
+      },
+      "health": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": "no-store"
+        },
+        "body": {
+          "ok": true,
+          "runtime": "vercel",
+          "node": "<process.version>",
+          "hasSessionSecret": false,
+          "oauthConfigured": false,
+          "envPresence": {
+            "PORTAL_SESSION_SECRET": false,
+            "SESSION_SECRET": true,
+            "PORTAL_GOOGLE_OAUTH_CLIENT_ID": true,
+            "PORTAL_GOOGLE_OAUTH_CLIENT_SECRET": true,
+            "PORTAL_GOOGLE_OAUTH_REDIRECT_URI": false,
+            "PORTAL_PUBLIC_URL": false,
+            "VERCEL": true,
+            "VERCEL_ENV": "production"
+          }
+        }
+      },
+      "capabilities": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": "no-store"
+        },
+        "body": {
+          "ok": true,
+          "runtime": "vercel",
+          "node": "<process.version>",
+          "vercelEnv": "production",
+          "capabilities": {
+            "session": false,
+            "oauth": false,
+            "database": false,
+            "cache": false,
+            "runtimeWorker": false,
+            "tokenVault": false
+          },
+          "readiness": {
+            "auth": "unconfigured",
+            "persistence": "unconfigured",
+            "cache": "unconfigured",
+            "tokenVault": "unconfigured",
+            "runtimeCapture": "unconfigured"
+          },
+          "caveats": [
+            "No database configured: sessions are signed-cookie only and audit history is not persisted.",
+            "No cache configured: every discovery read hits the Google API (no SWR, higher latency/quota use).",
+            "No runtime worker configured: runtime-capture (live tag) audits are unavailable."
+          ],
+          "sessionMode": "signed_cookie"
+        }
+      }
+    },
+    {
+      "name": "error path: the first setHeader call throws",
+      "env": {
+        "VERCEL": "1",
+        "VERCEL_ENV": "production",
+        "PORTAL_SESSION_SECRET": "0123456789abcdef"
+      },
+      "failFirstSetHeader": true,
+      "health": {
+        "status": 500,
+        "headers": {
+          "content-type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "ok": false,
+          "error": "health_check_failed",
+          "detail": "Error: setHeader failed"
+        }
+      },
+      "capabilities": {
+        "status": 500,
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": "no-store"
+        },
+        "body": {
+          "ok": false,
+          "error": "capabilities_check_failed",
+          "detail": "Error: setHeader failed"
+        }
+      }
+    }
+  ]
+}
