@@ -105,7 +105,9 @@ Desktop/Code via a Streamable HTTP connector, Cursor, or your own portal) at
 
 ---
 
-## Exposing a home/office box: Cloudflare Tunnel {#cloudflare-tunnel}
+<a id="cloudflare-tunnel"></a>
+
+## Exposing a home/office box: Cloudflare Tunnel
 
 A residential connection has a dynamic IP and no open inbound ports. Cloudflare
 Tunnel gives you a stable HTTPS hostname with **no port forwarding** and hides
@@ -129,7 +131,7 @@ callbacks and browser clients require.
 
 ---
 
-## Enabling writes {#enabling-writes}
+## Enabling writes
 
 The server is read-only until you opt in - matching the repo's guardrails.
 To allow GTM changes, set in `.env.docker` and recreate the `mcp` service:
@@ -166,7 +168,9 @@ docker compose down                    # stop and remove containers
 in `.env.docker` (and `.gtm-mcp-tokens.json` if you mint locally). Back those up
 securely; there is no database in this stack yet.
 
-### Alternative: mount the token file instead of pasting the refresh token {#alt-token-file}
+<a id="alt-token-file"></a>
+
+### Alternative: mount the token file instead of pasting the refresh token
 
 If you would rather not paste the refresh token into `.env.docker`, mount the
 token file into the `mcp` service and point the server at it. Add to the `mcp`
