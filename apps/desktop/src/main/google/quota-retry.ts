@@ -23,14 +23,19 @@ const realSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r
 /**
  * Read the server's reset hint from a quota error, in ms — so the wait lines up with when the quota
  * actually resets instead of a blind exponential guess. Honors the standard `Retry-After` header
- * (delta-seconds or an HTTP date) that googleapis surfaces on the GaxiosError; returns undefined when
- * there is none, in which case the caller falls back to exponential backoff. Defensive: any odd shape
- * yields undefined rather than throwing.
+ * (delta-seconds or an HTTP date) that googleapis surfaces on the GaxiosError - as a Headers object
+ * (gaxios 7) or a plain header object; returns undefined when there is none, in which case the caller
+ * falls back to exponential backoff. Defensive: any odd shape yields undefined rather than throwing.
  */
 export function readRetryAfterMs(error: unknown): number | undefined {
   try {
     const headers = (error as { response?: { headers?: Record<string, unknown> } })?.response?.headers;
-    const raw = headers?.['retry-after'] ?? headers?.['Retry-After'];
+    // gaxios 7 is fetch based: `response.headers` is a WHATWG Headers object, where index access is
+    // undefined and only .get() reads a value. Anything else is read as a plain header object.
+    const raw =
+      typeof headers?.get === 'function'
+        ? (headers as unknown as Headers).get('retry-after')
+        : headers?.['retry-after'] ?? headers?.['Retry-After'];
     if (raw == null) return undefined;
     const s = String(raw).trim();
     if (/^\d+$/.test(s)) return Number(s) * 1_000; // delta-seconds
