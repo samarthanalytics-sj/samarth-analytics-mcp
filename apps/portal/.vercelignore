@@ -8,7 +8,11 @@ node_modules
 .env.*
 !.env.example
 
-# A Vercel CLI upload from this folder reads this file, not .gitignore. List local files in both.
+# Vercel reads this file, not .gitignore. List local files in both.
+# With the project's Root Directory set to apps/portal and the CLI run from the
+# repository root (README.md), Vercel applies this file at build time, not at
+# upload. The upload uses only a .vercelignore at the repository root, so deploy
+# from a fresh clone.
 
 # SQLite database files (opened by server/storage.ts)
 data.db
