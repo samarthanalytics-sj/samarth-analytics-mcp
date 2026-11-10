@@ -3,15 +3,23 @@
 # Deploy: Render dashboard → New + → Blueprint → select this repo.
 # After the first deploy:
 #   1. Service → Settings → Custom Domains → add mcp.YOUR-DOMAIN.com.
-#   2. At the DNS provider (Hostinger), add the CNAME Render shows
-#      (mcp → <service>.onrender.com). TLS is provisioned automatically.
+#   2. At the DNS provider, add the CNAME Render shows
+#      (mcp → <service>.onrender.com). On Cloudflare, set the record to
+#      "DNS only". TLS is provisioned automatically.
 #   3. GTM_MCP_HTTP_AUTH_TOKEN is auto-generated — copy it from the service's
 #      Environment tab; clients connect with `Authorization: Bearer <token>`.
 #
 # Google credentials are intentionally NOT listed here. The single-identity
 # team mode takes GOOGLE_OAUTH_CLIENT_ID / GOOGLE_OAUTH_CLIENT_SECRET /
 # GOOGLE_REFRESH_TOKEN added by hand in the dashboard (never in this file).
-# The multi-user OAuth broker is a separate workstream.
+#
+# Per-user OAuth mode is in the server now. It turns on when STYTCH_PROJECT_ID
+# is set; it also needs STYTCH_SECRET, STYTCH_PUBLIC_TOKEN and
+# GTM_MCP_PUBLIC_URL (the https origin, no /mcp). These are added by hand in
+# the dashboard too. In that mode requests to /mcp do not use
+# GTM_MCP_HTTP_AUTH_TOKEN or the GOOGLE_* variables above.
+#
+# Checks, restore order, DNS and rollback: docs/HOSTED_ENDPOINT_RUNBOOK.md
 
 services:
   - type: web
@@ -27,6 +35,7 @@ services:
         generateValue: true
       # Guardrails stay at their read-only defaults; flip deliberately in the
       # dashboard if this instance should ever write.
+      # The public instance never writes. See docs/HOSTED_ENDPOINT_RUNBOOK.md section 10.
       - key: GTM_MCP_ENABLE_WRITES
         value: "false"
       - key: GTM_MCP_ENABLE_PUBLISH

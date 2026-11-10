@@ -4,6 +4,7 @@
 **Date:** 2026-06-15
 **Deciders:** Samarth Analytics (product owner)
 **Decision:** Option B (managed) — **Stytch Connected Apps** as the Authorization Server.
+**Operations:** [`docs/HOSTED_ENDPOINT_RUNBOOK.md`](../HOSTED_ENDPOINT_RUNBOOK.md) (how the hosted endpoint is checked, restored and retired).
 
 ## Context
 
