@@ -8,7 +8,7 @@
 | **Subject** | Integrating the Samarth Analytics MCP into the live AI Tag Manager platform, first feature: the GTM AI Chat Assistant |
 | **Date** | 5 August 2026 |
 | **Status** | For engineering planning, infrastructure design, and production deployment |
-| **Revised** | 21 September 2026: the MCP tool and prompt counts in 1.1 were re-measured at commit `19f2475b` (203 tools, up from 173 at v1.450.8), and 1.1 now describes the web-to-server migration surface added since the original analysis. Everything else in this report is unchanged and still reflects the August analysis. |
+| **Revised** | 21 September 2026: the MCP tool and prompt counts in 1.1 were re-measured at commit `19f2475b` (203 tools, up from 173 at v1.450.8), and 1.1 now describes the web-to-server migration surface added since the original analysis. Everything else in this report is unchanged and still reflects the August analysis. 10 November 2026: the Consent Mode v2 suite count was updated from 170 to 188 cases, the number `npm run test:consent` prints at commit `3a22e82`. Other figures, such as the 1,048-line engine size, are still from the August analysis. |
 | **Sources analyzed** | `samarth-analytics-mcp` (npm `samarth-gtm-mcp` v1.450.8, working copy) and `gtm-ai-automator` (the live AI Tag Manager platform, read from the repository and a supplied archive), plus the live site. Platform database facts are derived from the 146 migration files and the generated types in that repository, not from a live connection to its Supabase project, which this analysis did not have access to. The repository's own audit notes roughly 120 remote-only migrations applied outside version control, so treat the schema described here as the committed schema rather than a guaranteed match for production. |
 
 ---
@@ -17,7 +17,7 @@
 
 **Recommendation: proceed, with a short remediation phase first.**
 
-The integration is technically feasible with high confidence. It is an assembly and hardening project rather than a research project, because the difficult parts already exist and are tested: a working agentic GTM chat (in the monorepo's Electron app), 203 GTM and GA4 tools with default-off write guardrails, 7 curated expert prompts, a Consent Mode v2 engine with a 170-case test suite, and a fully specified production architecture with a reversible cutover runbook.
+The integration is technically feasible with high confidence. It is an assembly and hardening project rather than a research project, because the difficult parts already exist and are tested: a working agentic GTM chat (in the monorepo's Electron app), 203 GTM and GA4 tools with default-off write guardrails, 7 curated expert prompts, a Consent Mode v2 engine with a 188-case test suite, and a fully specified production architecture with a reversible cutover runbook.
 
 **What changes for users.** Today the platform's assistant runs a single blocking `gpt-4o` call with no tools, no streaming, no memory across a page refresh, and keyword-matching retrieval. It cannot see the user's container. After integration it reads live GTM and GA4 state, runs curated workflows (audit, debug a non-firing tag, build a GA4 event tag, set up server-side GTM, install an ecommerce funnel), and proposes changes that a human approves before anything is written.
 
@@ -141,7 +141,7 @@ For the integration this matters in two ways. The planner is read-only, so it si
 |---|---|---|
 | `apps/desktop` | Electron app: the **already-working GTM AI chat** with 213 tools, an agentic loop, approvals, memory, corpus grounding, and three LLM providers | The reference implementation. Most of it is portable (see 2.3) |
 | `apps/portal` | White-label customer portal: Vite/React client plus Vercel serverless `api/**` routes running capability-aware GTM audits (the audit route alone is 3,752 lines) | Audit engine and evidence discipline are reusable; its stateless signed-cookie session model is not what the platform needs |
-| `apps/portal/shared` | Framework-free engines: Consent Mode v2 audit (1,048 lines, 170/170 test suite), audit-accuracy invariants, job state machines, cache + cache-key policy, observability taxonomy, `sa_*` metric catalog, RBAC matrix, retention policy, token-vault seam, web-audit report parser | Drop-in reusable server-side. This is the production plumbing the platform lacks |
+| `apps/portal/shared` | Framework-free engines: Consent Mode v2 audit (1,048 lines, 188/188 test suite), audit-accuracy invariants, job state machines, cache + cache-key policy, observability taxonomy, `sa_*` metric catalog, RBAC matrix, retention policy, token-vault seam, web-audit report parser | Drop-in reusable server-side. This is the production plumbing the platform lacks |
 | `apps/web-audit-mcp` | Second MCP server: Playwright crawl, form inventory, CMP detection across 16+ vendors, consent scenario capture, Consent Mode v2 compliance audit with a 0-100 score, GTM container reconciliation, tag suggestions, and the gated `verify` engine (7 checks, real form submits, `WEB_AUDIT_ENABLE_VERIFY` off by default) | Directly replaces and exceeds the platform's Python Cloud Run scanner |
 | `apps/runtime-worker` | Read-only headless-Chromium capture worker with consent-state presets, shared-secret auth, and an SSRF guard | The runtime-evidence half of audits |
 | `apps/mcp-authorize` | Stytch B2B authorize/consent UI, served statically by the MCP server | Only needed if you keep Stytch; the platform already has its own auth |
@@ -271,7 +271,7 @@ Ranked by value. "As-is" means no logic change, only dependency injection at the
 | 6 | `context-budget.ts` (`capToolResult`, `boundChatHistory`) | Structure-preserving truncation with a model-readable partial-result note | None |
 | 7 | Chat memory core with secret redaction (9 credential patterns) and ranked retrieval | Per-client memory without leaking tokens into storage or prompts | Swap JSON file store for Postgres |
 | 8 | Corpus pattern library (310 KB, 490 containers, k-anonymity floor) plus lookup | Grounding with honest counts, no network, no per-tenant data | None |
-| 9 | Consent Mode v2 engine (1,048 lines, 170/170 tests) and the web-audit MCP | Replaces and far exceeds the platform's Python scanner | Host it, do not rewrite it |
+| 9 | Consent Mode v2 engine (1,048 lines, 188/188 tests) and the web-audit MCP | Replaces and far exceeds the platform's Python scanner | Host it, do not rewrite it |
 | 10 | Shared production plumbing: RBAC matrix, cache and cache-key policy, retention policy, observability taxonomy, `sa_*` metrics, job state machines, `infra/database/0001_init.sql` | Exactly the layer the platform lacks | Wire it (the runbook already sequences this) |
 | 11 | Platform side: `GTMChatAssistantUI.tsx`, `_shared/ssrf.ts`, `_shared/validation.ts`, `secure-token-manager`, the admin/MFA/RBAC stack, webhook signature validation | Keep and build on | Extend the UI for streaming and approvals |
 
@@ -1040,7 +1040,7 @@ Branching: trunk-based.
 
 Stage 1: CI on every PR
 
-- MCP repo: `npm run typecheck`, `npm test` (the repo's full suite, including the 170/170 consent suite and guardrail tests), `npm run webaudit:check`, Docker build of changed services.
+- MCP repo: `npm run typecheck`, `npm test` (the repo's full suite, including the 188/188 consent suite and guardrail tests), `npm run webaudit:check`, Docker build of changed services.
 - Platform repo: `npm run lint`, `vite build`, Deno tests for Edge Functions, `supabase db diff` check so schema drift is visible in review.
 - Secret scanning (gitleaks) and dependency audit (npm audit + Dependabot/Renovate PRs).
 
@@ -1077,7 +1077,7 @@ Stage 3: production deploy (manual approval on the tag)
 
 - All changes by PR, one approval minimum, CI green required (branch protection).
 - Guardrail-sensitive paths (MCP write gating, auth, token handling) get a CODEOWNERS entry so they cannot merge without your review.
-- The MCP repo's rule stands in CI: consent suite must be 170/170 and the guardrail tests must pass, or the pipeline fails.
+- The MCP repo's rule stands in CI: consent suite must be 188/188 and the guardrail tests must pass, or the pipeline fails.
 - Release notes generated from Conventional Commits; CHANGELOG stays machine-managed.
 
 
