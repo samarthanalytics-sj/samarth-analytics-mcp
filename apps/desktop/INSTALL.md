@@ -59,7 +59,7 @@ cd ~\samarth-analytics-mcp\apps\desktop; npm run dev
   - **Windows:** install from <https://nodejs.org> and <https://git-scm.com>
   - **macOS:** `brew install node git` (and `xcode-select --install` for build tools)
   - Verify: `node -v` → `v22.12` or higher
-- A **Google "Desktop app" OAuth client** (Client ID + Secret) — see [Appendix A](#appendix-a--create-a-google-oauth-client)
+- A **Google "Desktop app" OAuth client** (Client ID + Secret) — see [Appendix A](#appendix-a--create-a-google-oauth-client-detailed--fix-sign-in-errors)
 - At least one **LLM API key** (OpenAI / Anthropic / Gemini)
 
 ---

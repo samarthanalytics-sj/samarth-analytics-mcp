@@ -7,7 +7,7 @@ between **Testing** and **In production**, whether you need Google
 exactly what to submit.
 
 > Creating the OAuth **client** itself is covered in
-> [INSTALL.md → Appendix A](../INSTALL.md#appendix-a--create-a-google-oauth-client).
+> [INSTALL.md → Appendix A](../INSTALL.md#appendix-a--create-a-google-oauth-client-detailed--fix-sign-in-errors).
 > This doc is about the **consent screen** and **publishing/verification**.
 
 ---
