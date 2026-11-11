@@ -33,7 +33,7 @@
     "cheerio": "^1.2.0",
     "exceljs": "^4.4.0",
     "google-auth-library": "10.5.0",
-    "mammoth": "^1.12.2",
+    "mammoth": "^1.12.3",
     "pdf-parse": "^1.1.1",
     "word-extractor": "^1.0.4"
   },
