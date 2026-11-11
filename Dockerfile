@@ -7,11 +7,14 @@
 #           -e GOOGLE_REFRESH_TOKEN=... \
 #           samarth-gtm-mcp
 #
-# For the Streamable HTTP transport instead:
-#   docker run --rm -p 3001:3001 -e GTM_MCP_TRANSPORT=http samarth-gtm-mcp
+# For the Streamable HTTP transport instead. It refuses to start without an
+# auth mode, so pass a bearer token (or the STYTCH_* variables):
+#   docker run --rm -p 3001:3001 -e GTM_MCP_TRANSPORT=http \
+#     -e GTM_MCP_HTTP_AUTH_TOKEN=<a strong secret> samarth-gtm-mcp
 #
-# The server starts without credentials (tools respond with auth guidance),
-# so introspection (initialize / tools/list) works on a bare container.
+# The server starts without Google credentials (tools respond with auth
+# guidance), so introspection (initialize / tools/list) works on a bare
+# container.
 
 # ── Stage 1: build the MCP server (TypeScript → dist/) ──────────────────────
 FROM node:22-alpine AS build
