@@ -1,3 +1,10 @@
+## [1.497.5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.497.4...v1.497.5) (2026-11-11)
+
+### Bug Fixes
+
+* apps/chat-orchestrator/package.json & apps/chat-orchestrator/package-lock.json to reduce vulnerabilities ([#1009](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/1009)) ([a51ffc7](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a51ffc70f57fe6c4a840b026255ae9edc89b8a9c))
+* apps/desktop/package.json & apps/desktop/package-lock.json to reduce vulnerabilities ([#1008](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/1008)) ([a2d2147](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a2d2147158a26f91ff70edfa5110b08537c2abb1))
+
 ## [1.497.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.497.3...v1.497.4) (2026-11-11)
 
 ### Bug Fixes
