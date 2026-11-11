@@ -1,3 +1,11 @@
+## [1.497.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.497.3...v1.497.4) (2026-11-11)
+
+### Bug Fixes
+
+* **desktop:** read Retry-After from the Headers object gaxios 7 returns ([#1005](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/1005)) ([580e534](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/580e534b4623248a9c455c00e759fe4e2b0cef00))
+* **release:** publish to npm through Trusted Publishing only, and fail before tagging when it is not set up ([#991](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/991)) ([fbb2de9](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/fbb2de97f9f41efacab41f24e5d7ca0daf57eda0))
+* zod 4, portal audit routes on Vercel, opt-in Google revocation on Disconnect (follow-up to [#993](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/993)) ([#994](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/994)) ([3a22e82](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/3a22e820aef227943a4b0fab74b0d894806d9cbc)), closes [#cookie-banner](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/cookie-banner) [#3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/3) [#3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/3)
+
 ## [1.497.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.497.2...v1.497.3) (2026-10-05)
 
 ### Bug Fixes
