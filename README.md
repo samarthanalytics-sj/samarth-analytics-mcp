@@ -3,6 +3,7 @@
 [![CI](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/samarth-gtm-mcp)](https://www.npmjs.com/package/samarth-gtm-mcp)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+[![M8ven Verified](https://m8ven.ai/badge/mcp/samarthanalytics-sj-samarth-analytics-mcp-ka7c5u?variant=verified)](https://m8ven.ai/mcp/samarthanalytics-sj-samarth-analytics-mcp-ka7c5u?s=readme)
 
 An open-source [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that lets AI assistants such as Claude Desktop, Claude Code and Cursor work with **Google Tag Manager** and **GA4**. It covers the full GTM API v2 surface (100+ tools, including server-side containers), the GA4 Admin and Data APIs, a built-in implementation audit, and a second server that crawls a website to check its tags and Consent Mode v2 setup. Built by [Samarth Analytics](https://samarthanalytics.com) for our own client work and released under the MIT license for the analytics community.
 
